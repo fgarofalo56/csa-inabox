@@ -89,6 +89,9 @@ param sparkPoolSparkVersion string = '3.4'
 @maxValue(10080)
 param sparkPoolAutoPauseDelay int = 15
 
+@description('Enable compute isolation on the Spark pool. Required for IL5 (dedicated physical hosts); incurs additional cost. Leave false for Commercial/GCC.')
+param sparkPoolIsolatedCompute bool = false
+
 @description('Dedicated SQL pool name (must match a SQL identifier; no dashes).')
 param dedicatedPoolName string = 'loompool'
 
@@ -166,7 +169,7 @@ resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (
       delayInMinutes: sparkPoolAutoPauseDelay
     }
     sparkVersion: sparkPoolSparkVersion
-    isComputeIsolationEnabled: false
+    isComputeIsolationEnabled: sparkPoolIsolatedCompute
     sessionLevelPackagesEnabled: false
     dynamicExecutorAllocation: {
       enabled: true
@@ -349,6 +352,51 @@ done
   }
 }
 
+// Grant the Loom Console UAMI the Synapse data-plane role "Synapse Compute
+// Operator" scoped to the loompool Spark pool so it can submit Livy interactive
+// sessions + notebook statements (F16 — per-cell execution). This is a Synapse
+// RBAC role (data plane), NOT an ARM IAM role — it must be applied via
+// `az synapse role assignment create`, not Microsoft.Authorization/roleAssignments.
+//
+// Synapse Compute Operator allows the UAMI to: submit + cancel Spark jobs /
+// notebooks and view pool logs. It does NOT grant artifact publish/delete or
+// SQL pool access (those stay with Synapse Administrator / SQL admin).
+//
+// Requires synapseRoleAssignmentUamiId to already hold Synapse Administrator
+// (the same prerequisite as roleAssignmentScript above).
+resource consoleSparkSubmitRoleScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (!empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants) {
+  name: 'assign-console-spark-submit-${domainName}'
+  location: location
+  tags: complianceTags
+  kind: 'AzureCLI'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${synapseRoleAssignmentUamiId}': {}
+    }
+  }
+  properties: {
+    azCliVersion: '2.64.0'
+    retentionInterval: 'PT1H'
+    timeout: 'PT15M'
+    arguments: '${synapseWs.name} ${consolePrincipalId} ${sparkPoolName}'
+    scriptContent: '''
+WORKSPACE=$1
+PRINCIPAL=$2
+POOL=$3
+echo "Assigning 'Synapse Compute Operator' to SP $PRINCIPAL on $WORKSPACE/bigDataPools/$POOL..."
+az synapse role assignment create \
+  --workspace-name "$WORKSPACE" \
+  --role "Synapse Compute Operator" \
+  --assignee-object-id "$PRINCIPAL" \
+  --assignee-principal-type ServicePrincipal \
+  --scope "workspaces/${WORKSPACE}/bigDataPools/${POOL}" \
+  || echo "  (already assigned or insufficient permissions — verify manually)"
+'''
+  }
+  dependsOn: [ sparkPool ]
+}
+
 // =====================================================================
 // Server-level SQL audit (sends events to LAW)
 // =====================================================================
@@ -517,3 +565,4 @@ output dedicatedPoolName string = deployDedicatedPool ? dedicatedPool.name : ''
 output dedicatedPoolId string = deployDedicatedPool ? dedicatedPool.id : ''
 output sparkPoolName string = deploySparkPool ? sparkPool.name : ''
 output sparkPoolId string = deploySparkPool ? sparkPool.id : ''
+output consoleSparkSubmitRoleAssigned bool = !empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants

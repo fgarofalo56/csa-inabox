@@ -17,18 +17,28 @@
 
 **Loom surface:**
 - UI: `apps/fiab-console/lib/editors/synapse-notebook-editor.tsx` — `SynapseNotebookEditor`
-  (workspace-notebook tree, multi-cell IPYNB editor, NotebookCellView with Monaco).
+  (workspace-notebook tree, multi-cell IPYNB editor, NotebookCellView with Monaco,
+  rich `display(df)` table / HTML / image output, Databricks-backend badge + cluster picker).
 - BFF: `apps/fiab-console/app/api/synapse/notebooks/route.ts` (list/create),
-  `…/[name]/route.ts` (open/save/delete), `…/[name]/run-cell/route.ts` (Livy run + poll).
-- Attach picker: `app/api/items/synapse-spark-pool/list` (ARM bigDataPools).
+  `…/[name]/route.ts` (open/save/delete), `…/[name]/run-cell/route.ts` (legacy Livy run + poll),
+  **`app/api/notebook/[id]/session/route.ts`** (F16 — Livy session create/reuse + keepalive + kill),
+  **`app/api/notebook/[id]/execute/route.ts`** (F16 — per-cell submit + poll, %%-magic + %%configure).
+- Livy client: `apps/fiab-console/lib/azure/synapse-livy-client.ts` (sessions, statements,
+  magic parsing, output normalizer, backend resolver).
+- Attach picker: `app/api/items/synapse-spark-pool/list` (ARM bigDataPools);
+  Databricks opt-in cluster picker → `app/api/admin/scaling/databricks-cluster`.
 
 **Backend reality check.** List/open/save/delete call the Synapse **dev-plane
-artifact REST** (notebooks, api-version 2020-12-01); run-cell creates a real
-**Livy** interactive session and submits a statement, polling to `available`.
-Cells round-trip through canonical IPYNB (`ipynbToCells`/`cellsToIpynb`) with the
-Synapse `%%sql`/`%%spark`/`%%sparkr` magic carried in cell source. Honest 503
-`not_configured` gate keyed on `LOOM_SYNAPSE_WORKSPACE`; the full designer still
-renders behind the MessageBar. No `return []`, no `MOCK_`, no `useState(SAMPLE)`.
+artifact REST** (notebooks, api-version 2020-12-01); the F16 per-cell path creates a real
+**Livy** interactive session (`POST …/sessions`), submits a statement, and polls to `available`,
+**reusing the warm session across cells** with a 4-min keepalive and kill-on-unmount. `%%sql` /
+`%%pyspark` / `%%spark` / `%%sparkr` magics override the statement kind (magic line stripped);
+`%%configure` is intercepted and merged into the next session create. `display(df)` rich output
+(`text/html`, `application/json` df grid, `image/png`) is normalized and rendered. Databricks is
+**strictly opt-in** via `LOOM_NOTEBOOK_BACKEND=databricks` (Execution Context API) — the Azure-native
+Synapse Livy path is the default and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset. Honest 503
+`not_configured` gate keyed on `LOOM_SYNAPSE_WORKSPACE`; the full designer still renders behind the
+MessageBar. No `return []`, no `MOCK_`, no `useState(SAMPLE)`.
 
 ---
 
@@ -71,11 +81,11 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | # | Synapse Studio capability | Loom | Where / backend |
 |---|---|---|---|
 | C1 | **Attach to** a Big Data (Spark) pool | ✅ built | Attach dropdown → `GET /api/items/synapse-spark-pool/list` (ARM) |
-| C2 | Live session state badge (none/starting/idle/busy) | ✅ built | `sessionState` badge; warmed session reused across cells |
-| C3 | Cold-start warm-up (poll session to idle, then submit) | ✅ built | run-cell POST loop on `sessionWarming` |
-| C4 | **Configure session** pane (executors, size, timeout) / `%%configure` | ❌ MISSING | attach + default session only |
-| C5 | Restart / stop session; cancel running cell(s) | ❌ MISSING | no stop/cancel control |
-| C6 | Spark **progress indicator** + drill to Spark UI | ⚠️ partial | session badge only; no per-job progress bar / Spark-UI link |
+| C2 | Live session state badge (none/starting/idle/busy) | ✅ built | `sessionState` badge; warmed session reused across cells via `POST /api/notebook/[id]/session` |
+| C3 | Cold-start warm-up (poll session to idle, then submit) | ✅ built | session POST + GET poll loop on non-idle state |
+| C4 | **Configure session** pane (executors, size, timeout) / `%%configure` | ✅ built | `%%configure` cell parsed → merged into next `createLivySession` (driver/executor cores, numExecutors, conf) |
+| C5 | Restart / stop session; cancel running cell(s) | ⚠️ partial | session **kill** on unmount + on `%%configure` (`DELETE /api/notebook/[id]/session`); no in-toolbar stop/cancel button yet |
+| C6 | Spark **progress indicator** + drill to Spark UI | ⚠️ partial | session badge + statement `progress`; no per-job progress bar / Spark-UI link |
 
 ### D. Run & output
 
@@ -84,10 +94,10 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | D1 | Run a single cell | ✅ built | per-cell Run → `POST …/run-cell` (Livy submit) + poll |
 | D2 | Run all (in sequence) | ✅ built | ribbon "Run all" → loops `runCell` |
 | D3 | Shift+Enter / Ctrl+Enter run shortcut | ⚠️ partial | Run buttons present; per-cell keybind not wired (other editors do Shift+Enter) |
-| D4 | Text output (text/plain) | ✅ built | `out.text` from Livy `data['text/plain']` |
+| D4 | Text output (text/plain) | ✅ built | `out.textPlain` from normalized Livy `data['text/plain']` |
 | D5 | Error output (ename/evalue/traceback) | ✅ built | `outputErr` block renders the traceback |
 | D6 | Run **cells above / below** | ❌ MISSING | run-cell + run-all only |
-| D7 | `display(df)` rich **table** + chart builder | ❌ MISSING | text/plain only; no table/chart render |
+| D7 | `display(df)` rich **table** + chart builder | ⚠️ partial | rich **table** (`application/json` df grid), HTML (`text/html`), and image (`image/png`) rendered via `normalizeLivyOutput`; interactive **chart builder** UI not yet built |
 | D8 | **Variable explorer** (PySpark vars table) | ❌ MISSING | not surfaced |
 | D9 | `%run <notebook>` cross-notebook reference | ❌ MISSING | per-cell REPL only |
 | D10 | mssparkutils (`%%configure`, secrets, fs) helpers | ❌ MISSING | not surfaced |
@@ -102,29 +112,29 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 ## Coverage tally
 
-- **built ✅: 18**
-- **partial ⚠️: 4**
+- **built ✅: 19**
+- **partial ⚠️: 6**
 - **honest-gate ⚠️: 1**
-- **MISSING ❌: 14**
+- **MISSING ❌: 11**
 
-## Honest grade: **B−**
+## Honest grade: **B**
 
 This is a genuine, **production-grade** Spark-notebook authoring surface — a real
 1:1 with the core Develop-hub workflow: list/create/open/save(publish)/delete on
 the Synapse artifact REST, a multi-cell IPYNB editor with per-cell %% language
 magics, Attach-to-pool against real ARM Big Data pools, and **real Livy execution**
-(create session → submit statement → poll → render text/error output) reusing the
-warm session across cells. **No vaporware** — Spark code actually runs. This flips
-the `synapse-analytics.md` "Synapse notebook editor (absent)" gap from ❌ to a built
-surface.
+(create session → submit statement → poll → render output) reusing the warm session
+across cells with keepalive + kill-on-unmount. **F16** closed the biggest gaps:
+**`display(df)` rich output** (df table grid, HTML, image), **`%%configure`** session
+tuning, and **session lifecycle** (keepalive + kill). Databricks is a real opt-in
+backend (Execution Context API) — Synapse Livy stays the Azure-native default. **No
+vaporware** — Spark code actually runs.
 
-Held to **B−** (not A) by `ui-parity.md`'s completeness bar: no **`display(df)`
-rich table/chart builder** (the marquee output experience — text/plain only), no
-**variable explorer**, no **Configure-session / `%%configure`**, no **restart /
-stop / cancel**, no **Spark progress bar or Spark-UI drill-in**, no **`%run`**, no
-**C# cell**, and no **Studio Git/Publish shell**. The output panel is the biggest
-parity gap: Synapse's notebook is defined by `display()` visualization, and Loom
-shows raw text.
+Held to **B** (not A) by `ui-parity.md`'s completeness bar: no interactive
+**chart builder** over `display(df)` (table/HTML/image render, but not the Vega chart
+UI), no **variable explorer**, no in-toolbar **restart/stop/cancel** button (kill is
+automatic), no **Spark progress bar or Spark-UI drill-in**, no **`%run`**, no **C#
+cell**, and no **Studio Git/Publish shell**.
 
 ## Highest-value gaps to build first
 
@@ -145,15 +155,27 @@ shows raw text.
 | Save / Publish | `PUT /api/synapse/notebooks/[name]` | Notebook create-or-update |
 | Delete notebook | `DELETE /api/synapse/notebooks/[name]` | Notebook delete |
 | Attach-pool list | `GET /api/items/synapse-spark-pool/list` | ARM `Microsoft.Synapse/workspaces/bigDataPools` |
-| Run cell (submit) | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement |
-| Run cell (poll) | `GET …/run-cell?pool=&session=&stmt=` | Livy get statement |
+| Create / reuse session | `POST /api/notebook/[id]/session` | Livy `POST …/sessions` (or reuse via `GET …/sessions/{id}`) |
+| Keepalive + state poll | `GET /api/notebook/[id]/session` | Livy `PUT …/sessions/{id}/keepalive` + `GET …/sessions/{id}` |
+| Kill session | `DELETE /api/notebook/[id]/session` | Livy `DELETE …/sessions/{id}` |
+| Run cell (submit) | `POST /api/notebook/[id]/execute` | Livy create-statement (magic-stripped; %%configure intercepted) |
+| Run cell (poll) | `GET /api/notebook/[id]/execute?pool=&sessionId=&stmtId=` | Livy `GET …/statements/{id}` → `normalizeLivyOutput` |
+| Databricks opt-in (cluster list) | `GET /api/admin/scaling/databricks-cluster` | Databricks `/api/2.0/clusters/list` |
+| Legacy run cell | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement (kept for the artifact-name path) |
 
 ## Bicep / env sync
 
-- Env var consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name). The gate
-  MessageBar names it explicitly.
-- Role: Loom UAMI needs **Synapse Artifact Publisher** on the workspace (and Spark
-  job submission rights for Livy). Bicep: `platform/fiab/bicep/modules/synapse/*.bicep`.
+- Env var consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name) — gate
+  MessageBar names it explicitly. Optional: **`LOOM_NOTEBOOK_BACKEND`** (`synapse`
+  default / `databricks` opt-in), **`LOOM_CLOUD_TIER`** (`IL5` blocks the Databricks
+  opt-in), **`LOOM_DATABRICKS_HOSTNAME`** (required only when backend=databricks).
+  All three wired in `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- Role: the Loom Console UAMI needs the Synapse data-plane role **Synapse Compute
+  Operator** at the Spark-pool scope to submit Livy sessions/statements. Granted by
+  `consoleSparkSubmitRoleScript` in `platform/fiab/bicep/modules/landing-zone/synapse.bicep`
+  (`az synapse role assignment create --role "Synapse Compute Operator"`).
+- IL5: set `sparkPoolIsolatedCompute=true` (same module) to enable compute isolation
+  on `loompool`; the `peDev` private endpoint is required in GCC-High/IL5.
 - No new Cosmos container.
 
 ## Verification
