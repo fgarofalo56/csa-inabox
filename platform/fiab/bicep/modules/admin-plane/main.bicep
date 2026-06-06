@@ -315,6 +315,20 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+// ---------------------------------------------------------------------
+// Copy Job watermark control table (F14 — Fabric Copy job parity)
+// ---------------------------------------------------------------------
+
+@description('FQDN of the Azure SQL server holding the copy-job watermark control table (dbo.copy_watermark), e.g. sql-loom-ctrl.database.windows.net. Empty = incremental copy surfaces an honest-gate MessageBar; full copy still works.')
+param loomCopyJobControlSqlServer string = ''
+
+@description('Database name for the copy-job watermark control table.')
+param loomCopyJobControlSqlDb string = 'loom-control'
+
+@description('Deploy the copy-job control table + stored procedure (and grant the ADF factory + console UAMI) via a deployment script. Requires loomCopyJobControlSqlServer set and the console UAMI configured as an Entra admin on that SQL server.')
+param copyJobControlEnabled bool = false
+
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -510,6 +524,28 @@ module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlSe
 }
 
 // =====================================================================
+// 8b. Copy Job watermark control table (F14) — dbo.copy_watermark +
+// dbo.usp_write_watermark in the control SQL DB, plus grants for the ADF
+// factory MI + console UAMI. Opt-in; the console also self-heals the DDL.
+// =====================================================================
+
+module copyJobControl 'copy-job-control.bicep' = if (copyJobControlEnabled && !empty(loomCopyJobControlSqlServer)) {
+  name: 'copy-job-control'
+  params: {
+    sqlServerFqdn: loomCopyJobControlSqlServer
+    sqlDatabase: loomCopyJobControlSqlDb
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
+    consoleUamiName: identity.outputs.uamiConsoleName
+    adfFactoryName: loomAdfName
+    azureCloud: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud'
+    location: location
+    complianceTags: complianceTags
+  }
+}
+
+
+// =====================================================================
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
@@ -657,6 +693,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Copy Job (F14) — watermark control table address. When the server
+            // is unset, incremental copy surfaces an honest-gate MessageBar and
+            // full copy still works; see data/copy-job-control.bicep.
+            { name: 'LOOM_COPYJOB_CONTROL_SQL_SERVER', value: loomCopyJobControlSqlServer }
+            { name: 'LOOM_COPYJOB_CONTROL_SQL_DB', value: loomCopyJobControlSqlDb }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
             { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
