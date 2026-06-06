@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export function jerr(error: string, status = 500, code?: string) {
@@ -153,6 +154,9 @@ export async function createOwnedItem(
   const { resource } = await items.items.create<WorkspaceItem>(item);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
+  // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
+  // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
+  void autoOnboardToPurview(resource!, session.claims.oid);
   return { ok: true, item: resource! };
 }
 
