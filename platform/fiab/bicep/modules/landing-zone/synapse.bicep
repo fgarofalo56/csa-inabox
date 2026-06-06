@@ -302,6 +302,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
   params: {
     defaultStorageAccountName: defaultStorageAccountName
     synapseManagedIdentityPrincipalId: synapseWs.identity.principalId
+    // Console UAMI gets Storage Blob Data Reader on the lakehouse SA so the BFF
+    // live Tables catalog scan can read _delta_log without Contributor.
+    consolePrincipalId: skipRoleGrants ? '' : consolePrincipalId
   }
 }
 

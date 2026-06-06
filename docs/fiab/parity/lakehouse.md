@@ -28,8 +28,8 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 
 | # | Status | Notes |
 |---|---|---|
-| 1 | ✅ | Tables + Files tabs/tree rendered |
-| 2 | ✅ | ADLS Gen2 tree via lakehouse API |
+| 1 | ✅ | Tables + Files tabs/tree rendered. The **Tables** tree is the live Delta catalog (real `_delta_log` scan), grouped by schema, with Delta/non-Delta icons and broken/empty status badges. |
+| 2 | ✅ | ADLS Gen2 tree via lakehouse API. Tables tab additionally renders a per-schema grid: format, status (ok/broken/empty), Delta version, row count, size, last-modified — all from the live scan. |
 | 3 | ✅ | New folder + upload wired (`canFileAction`) |
 | 4 | ✅ | `preview` tab — sample rows |
 | 5 | ✅ | `Query this file` → SQL tab, runs through serverless `/query` |
@@ -47,6 +47,7 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
+- **Live Tables catalog** → `GET /api/lakehouse/tables` → `synapse-catalog-client.scanLakehouseTables`: ADLS Gen2 directory scan of each container's `Tables/` dir + `_delta_log` read for Delta detection / latest commit version / status, parquet-byte size aggregation, and optional Synapse Serverless `OPENROWSET COUNT(*)` row counts (`rowCounts=true`). Row counts are `null` — never a fabricated 0 — when Serverless is offline. No Fabric / OneLake dependency. Requires the Console UAMI hold **Storage Blob Data Reader** on the lakehouse storage account (granted by `synapse-storage-rbac.bicep` via the `consolePrincipalId` param). Honest-empty `{ ok: true, tables: [], gate }` when no `LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL` is set.
 - T-SQL query → Synapse serverless TDS (`executeQuery` / `serverlessTarget`) via `/api/items/lakehouse/[id]/query`.
 - Download → ADLS `readToBuffer` (`downloadFile`) via `/api/lakehouse/download`.
 - Context-menu commands → reuse the above backends (no separate / dead paths).
