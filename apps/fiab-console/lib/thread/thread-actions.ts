@@ -18,7 +18,7 @@ export interface ThreadField {
   name: string;
   label: string;
   /** dropdown of the caller's Loom items of `itemTypes` (via /api/items/by-type). */
-  kind: 'loom-item' | 'select' | 'text' | 'toggle';
+  kind: 'loom-item' | 'select' | 'text' | 'textarea' | 'toggle';
   required?: boolean;
   hint?: string;
   /** loom-item: which item types to list. */
@@ -145,12 +145,33 @@ export const THREAD_ACTIONS: ThreadAction[] = [
         hint: 'The Power BI workspace to create the model in. The Console identity must be a Member/Contributor.',
       },
       {
+        name: 'sourceMode',
+        label: 'Model source',
+        kind: 'select',
+        options: [
+          { value: 'table', label: 'An existing table' },
+          { value: 'query', label: 'A custom SQL query' },
+        ],
+        default: 'table',
+        required: true,
+        hint: 'Build the model from a warehouse table, or from the result of a SQL query you write.',
+      },
+      {
         name: 'table',
         label: 'Table',
         kind: 'select',
         optionsRoute: '/api/thread/warehouse-tables?fromType={fromType}&fromId={fromId}',
         required: true,
+        showWhen: { field: 'sourceMode', equals: 'table' },
         hint: 'The warehouse table to publish as a model.',
+      },
+      {
+        name: 'query',
+        label: 'SQL query',
+        kind: 'textarea',
+        required: true,
+        showWhen: { field: 'sourceMode', equals: 'query' },
+        hint: 'A SELECT against the Azure-native warehouse. Its result columns become the model table; a sample of rows is pushed.',
       },
       { name: 'modelName', label: 'Model name', kind: 'text', required: true, hint: 'A name for the new Power BI semantic model.' },
       { name: 'includeRows', label: 'Push a sample of rows now', kind: 'toggle', default: true, hint: 'Push up to 500 rows so the model is immediately queryable. Refresh in Power BI to load all rows.' },
@@ -170,12 +191,33 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     icon: 'api',
     fields: [
       {
+        name: 'sourceMode',
+        label: 'API source',
+        kind: 'select',
+        options: [
+          { value: 'table', label: 'An existing table' },
+          { value: 'query', label: 'A custom SQL query (exposed as a view)' },
+        ],
+        default: 'table',
+        required: true,
+        hint: 'Expose a warehouse table, or wrap a SQL query as a view and expose that.',
+      },
+      {
         name: 'table',
         label: 'Table',
         kind: 'select',
         optionsRoute: '/api/thread/warehouse-tables?fromType={fromType}&fromId={fromId}',
         required: true,
+        showWhen: { field: 'sourceMode', equals: 'table' },
         hint: 'The warehouse table to expose as an API entity.',
+      },
+      {
+        name: 'query',
+        label: 'SQL query',
+        kind: 'textarea',
+        required: true,
+        showWhen: { field: 'sourceMode', equals: 'query' },
+        hint: 'A SELECT against the Azure-native warehouse. Loom creates a view from it and exposes that view as the API entity.',
       },
       { name: 'apiName', label: 'API name', kind: 'text', required: true, hint: 'A name for the new Data API Builder item.' },
       { name: 'requireAuth', label: 'Require authentication', kind: 'toggle', default: true, hint: 'On: only authenticated callers (Entra ID). Off: anonymous read. You can refine roles/actions in the editor.' },
