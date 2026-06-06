@@ -9,6 +9,16 @@ Reflex / Data Activator parity service. Declarative rules over
 streaming + tabular events with stateful object tracking + diverse
 action surface.
 
+!!! warning "Shipped action set (2026-06-06)"
+    The C# engine (`apps/fiab-activator-engine`, `ActionDispatcher.cs`) currently
+    dispatches **four** action types: **Teams, Email, Logic App, Webhook**. The
+    Console activator editor additionally lets you configure **ADF Pipeline run,
+    Notebook run, and Power Automate flow** actions. **Databricks Job** and
+    **User Data Function** actions referenced elsewhere in these docs are **not
+    implemented** in either backend — treat them as roadmap. The Azure-native
+    default rule backend is an **Azure Monitor scheduled-query alert** (Fabric
+    Reflex is opt-in via `LOOM_ACTIVATOR_BACKEND=fabric`).
+
 ## Service shape
 
 | Aspect | Value |
