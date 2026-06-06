@@ -406,6 +406,33 @@ heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
 
 **Next:** task-015 PP import/export, task-016 remainder, 017/018 UI, 022 docs.
 
+## Operator-driven feature requests (2026-06-06, live stress-test) — QUEUE
+The operator is exercising the live console and forwarding gaps to fix durably:
+1. ✅ Cost Mgmt Reader + Monitoring Contributor grants (#748) — done live+bootstrap.
+2. ✅ Copilot build-assist tool bugs (#747).
+3. ✅ App-install gateway-timeout message (#746).
+4. ⏳ Mirroring **wizard** + KV-backed **Connections** (auth types so no
+   "token-identified principal" login errors). FOUNDATION shipped this PR:
+   - `lib/azure/kv-secrets-client.ts` (KV REST put/get/delete secrets),
+     `lib/azure/connections-store.ts` (+ `connections` Cosmos container), CRUD
+     route `/api/connections`, reusable `ConnectionBuilder` dialog, `/connections`
+     page + nav. Secrets → Key Vault, only secretRef in Cosmos. 5 auth methods
+     (entra-mi / sql-password / connection-string / account-key / service-principal).
+   - Bicep-synced: keyvault.bicep grants UAMI **Key Vault Secrets Officer**;
+     main.bicep adds `LOOM_KEY_VAULT_URI` env. Granted + env set LIVE on
+     loom-console (kv-loom-m56yejezt7bjo). Documented in v3-tenant-bootstrap.md.
+   - REMAINING: the per-source-type **mirrored-database creation wizard** (web-3.0,
+     consumes Connections) + wire Connections into ADF/Synapse linked services.
+5. ⏳ Purview auto-governance: everything auto-registers/scans/classifies; kill the
+   "Set LOOM_PURVIEW_ACCOUNT + grant Data Curator" gate via deploy/bootstrap +
+   auto-onboard on item create. NOT STARTED.
+6. ⏳ Unified Catalog "OneLake (Fabric)" tab shows a real Fabric workspace
+   ('fabric-csa-dev') — should be Azure-native/Loom workspaces (no-fabric). NOT STARTED.
+7. ⏳ Verify Weave + Lineage actually work end-to-end. NOT STARTED.
+
+**Next:** mirroring wizard (consume Connections), then Purview auto-gov, OneLake-tab
+reframe, Weave/Lineage verification.
+
 ### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
 - Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
   **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm

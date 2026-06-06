@@ -272,3 +272,27 @@ scripts/csa-loom/grant-cost-monitoring-rbac.sh [subscriptionId ...]   # default:
 
 Idempotent; requires az logged in as Owner / User Access Administrator on the sub.
 (Granted live on 363ef5d1-…-bf8c 2026-06-06.)
+
+## Loom Connections (Key Vault-backed source credentials)
+
+Loom **Connections** (`/connections`) let users register a data-source connection
+once; any secret (password / connection string / account key / SPN secret) is
+written to **Key Vault** and only a reference is stored. Reused by mirroring,
+ADF / Synapse linked services, and datasets.
+
+Wiring (auto on deploy):
+- `LOOM_KEY_VAULT_URI` → console env (`admin-plane/main.bicep`, from the keyvault
+  module output).
+- The Console UAMI is granted **Key Vault Secrets Officer** on the vault
+  (`keyvault.bicep`, `consolePrincipalId` param).
+
+For an existing deployment, set the env + grant once:
+```bash
+az containerapp update --name <loom-console> -g <loom-admin-rg> \
+  --set-env-vars "LOOM_KEY_VAULT_URI=https://<vault>.vault.azure.net/"
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets Officer" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>
+```
+(Granted live on kv-loom-… 2026-06-06.)
