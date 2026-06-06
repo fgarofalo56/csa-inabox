@@ -286,6 +286,25 @@ resource consoleArmContributor 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+// Synapse workspace MSI needs "Storage Blob Data Contributor" on its DEFAULT
+// ADLS Gen2 storage account, or Spark fails to init the Hive metastore
+// (HiveExternalCatalog.createDatabase → InvalidAbfsRestOperationException). The
+// grant is scoped to the storage account's RG (may differ from the workspace's).
+@description('Resource group of the default Synapse storage account (defaults to this RG).')
+param defaultStorageResourceGroup string = resourceGroup().name
+
+@description('Grant the Synapse workspace MSI Storage Blob Data Contributor on the default SA (needed for Spark Hive metastore). Disable only if granted out-of-band.')
+param grantSynapseStorageRole bool = true
+
+module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorageRole && !skipRoleGrants) {
+  name: 'synapse-storage-rbac-${domainName}'
+  scope: resourceGroup(defaultStorageResourceGroup)
+  params: {
+    defaultStorageAccountName: defaultStorageAccountName
+    synapseManagedIdentityPrincipalId: synapseWs.identity.principalId
+  }
+}
+
 // =====================================================================
 // Synapse RBAC roles (data plane) — Workspace Admin + SQL Admin
 // =====================================================================
