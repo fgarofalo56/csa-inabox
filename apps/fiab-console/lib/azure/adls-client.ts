@@ -245,11 +245,30 @@ export async function createDirectory(
   return { ok: true };
 }
 
-/** Build the full abfss-style URL for OPENROWSET BULK. */
-export function pathToHttpsUrl(container: string, path: string): string {
-  const account = getAccountName();
+/** Build the full https URL for OPENROWSET BULK against a SPECIFIC account. */
+export function pathToHttpsUrlFor(account: string, container: string, path: string): string {
   const clean = path.replace(/^\/+/, '');
   return `https://${account}.dfs.core.windows.net/${container}/${clean}`;
+}
+
+/** Build the full abfss-style URL for OPENROWSET BULK on the PRIMARY account. */
+export function pathToHttpsUrl(container: string, path: string): string {
+  return pathToHttpsUrlFor(getAccountName(), container, path);
+}
+
+/**
+ * Probe whether the Console UAMI can reach a filesystem (container) on a given
+ * account. Used by Reference-Lakehouse federation to flag references whose
+ * containers the UAMI lacks Storage Blob Data Reader on (cross-account refs).
+ * Returns false on any auth/network/404 error rather than throwing.
+ */
+export async function containerExistsOn(account: string, container: string): Promise<boolean> {
+  try {
+    const fs = getServiceClientFor(account).getFileSystemClient(container);
+    return await fs.exists();
+  } catch {
+    return false;
+  }
 }
 
 // Re-export to suppress unused-import warning when tree-shaken.

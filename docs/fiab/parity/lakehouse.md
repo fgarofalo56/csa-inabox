@@ -22,6 +22,7 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | Download a file | Explorer context menu |
 | 14 | Object Properties | Explorer context menu |
 | 15 | List / delete existing shortcuts | Explorer (shortcuts appear as folders/tables) |
+| 16 | **Reference / add another lakehouse** to the explorer for read-only side-by-side browse + preview; primary distinguished; writes blocked on references | Lakehouse explorer "Add lakehouse" (reference lakehouses) |
 
 ## Loom coverage
 
@@ -42,6 +43,7 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | ✅ (built) | Download via `/api/lakehouse/download` (ADLS byte passthrough, `attachment` disposition). |
 | 14 | ✅ (built) | Properties dialog from the real ADLS metadata already in state. |
 | 15 | ⚠️ (honest-gate) | Folds into row 7 — list/delete of native shortcuts ships with the Azure-native engine build (tracked design doc). No Fabric REST. |
+| 16 | ✅ (built) | **Reference Lakehouses federation (F8).** Left explorer shows the **primary lakehouse (bold)** plus a **References** section; the **+** picker lists in-workspace lakehouses (from Cosmos `items`) and adds them via `/api/lakehouse/references` (persisted on `state.referencedLakehouseIds` — no new container). Each reference is an expandable tree node (containers → real ADLS files via the **read-only** `/api/lakehouse/references/paths` route). Selecting a reference file runs a real OPENROWSET preview through the account-scoped `/api/lakehouse/preview?...&account=` route (pass-through RBAC). **Write actions (Upload / New folder / Delete) render disabled with a Tooltip** in the reference pane — there is no write BFF route for references, so the disable is enforced, not cosmetic. Unreachable references (UAMI lacks Storage Blob Data Reader) show an error icon + the exact remediation tooltip. Zero Fabric dependency — same-account refs use the primary LOOM ADLS account; cross-account refs use the lakehouse's `state.storageAccount`. |
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
@@ -51,5 +53,6 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 - Context-menu commands → reuse the above backends (no separate / dead paths).
 - Settings → `defaultSparkPool` is an enumerated Dropdown bound to real Synapse Spark pools from `/api/loom/compute-targets` (no freeform compute input); honest empty-state when none deployed.
 - Shortcuts → **no backend yet, by design.** Honest infra-gate only. The Azure-native engine (ADLS Gen2 + Synapse Serverless / Databricks UC + Cosmos registry) is tracked in `docs/fiab/design/lakehouse-shortcuts.md`. The prior Fabric REST path (`/api/catalog/shortcut`) was removed from this editor to eliminate the lakehouse's last hard Fabric dependency.
+- Reference Lakehouses (F8) → `/api/lakehouse/references` (GET list + workspace picker, POST add/remove) over Cosmos `items` (`state.referencedLakehouseIds`, validated to the same workspace to prevent reference-injection); `/api/lakehouse/references/paths` (GET only — read-only ADLS `listPaths` with optional `state.storageAccount`); read-only preview via `/api/lakehouse/preview?...&account=` (account-scoped OPENROWSET, validated `^[a-z0-9]{3,24}$`). Cross-account references require the Console UAMI to hold **Storage Blob Data Reader** on the referenced storage account — see `docs/fiab/v3-tenant-bootstrap.md#reference-lakehouse-cross-account-rbac`. Same-account references work out of the box (the UAMI already holds Storage Blob Data Contributor on the primary LOOM ADLS account).
 
 Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**
