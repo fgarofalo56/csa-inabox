@@ -411,6 +411,12 @@ function ItemDetails({
     typeof item.state?.['provisioningStatus'] === 'string'
       ? String(item.state['provisioningStatus'])
       : 'Active';
+  // Governance signals are Azure-native — read from the item's own metadata
+  // (set in the editor / Governance). Microsoft Purview *enriches* them with
+  // scan-based classifications + lineage when connected; it is NOT required.
+  const endorsement = (item.state?.['endorsement'] as string) || (item.state?.['certified'] ? 'Certified' : null);
+  const sensitivity = (item.state?.['sensitivityLabel'] as string) || null;
+  const classifications = Array.isArray(item.state?.['classifications']) ? (item.state!['classifications'] as string[]) : [];
 
   return (
     <aside className={styles.details} aria-label={`Details for ${item.displayName}`}>
@@ -483,15 +489,34 @@ function ItemDetails({
             </span>
           </div>
 
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Endorsement, Sensitivity &amp; Lineage</MessageBarTitle>
-              These governance signals come from Microsoft Purview. Set{' '}
-              <code>LOOM_PURVIEW_ACCOUNT</code> (Purview account name) and grant the
-              Loom managed identity the <em>Data Curator</em> role to surface
-              endorsement badges, sensitivity labels, and lineage here.
-            </MessageBarBody>
-          </MessageBar>
+          <div className={styles.metaGrid}>
+            <span className={styles.metaKey}>Endorsement</span>
+            <span className={styles.metaVal}>
+              {endorsement
+                ? <Badge appearance="filled" size="small" color={endorsement === 'Certified' ? 'success' : 'brand'}>{endorsement}</Badge>
+                : <Badge appearance="outline" size="small">Not endorsed</Badge>}
+            </span>
+            <span className={styles.metaKey}>Sensitivity</span>
+            <span className={styles.metaVal}>
+              {sensitivity
+                ? <Badge appearance="filled" size="small" color={sensitivity === 'Highly Confidential' ? 'danger' : sensitivity === 'Confidential' ? 'warning' : 'subtle'}>{sensitivity}</Badge>
+                : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>}
+            </span>
+            <span className={styles.metaKey}>Classifications</span>
+            <span className={styles.metaVal}>
+              {classifications.length
+                ? <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>{classifications.map((c) => <Badge key={c} appearance="tint" size="small" color="informative">{c}</Badge>)}</span>
+                : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>}
+            </span>
+            <span className={styles.metaKey}>Lineage</span>
+            <span className={styles.metaVal}>
+              <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => router.push('/governance/lineage')}>View lineage</Button>
+            </span>
+          </div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
+            Set endorsement, sensitivity &amp; classifications in the item editor or Governance. Microsoft Purview
+            enriches these with scan-based classifications &amp; cross-asset lineage when connected.
+          </Caption1>
         </>
       )}
 
