@@ -19,7 +19,16 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM host is cloud-aware: Azure Government (GCC-High / IL5) targets
+// management.usgovcloudapi.net, Commercial / GCC targets management.azure.com.
+// Without this, the Gov ADF path silently signs tokens for the Commercial
+// authority and every call 401s. AZURE_CLOUD is the same selector the rest of
+// the BFF uses (set by the admin-plane container env).
+const ARM_HOST =
+  process.env.AZURE_CLOUD === 'AzureUSGovernment'
+    ? 'management.usgovcloudapi.net'
+    : 'management.azure.com';
+const ARM_SCOPE = `https://${ARM_HOST}/.default`;
 const API = '2018-06-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -41,7 +50,7 @@ function rg():  string { return required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
 function base(): string {
-  return `https://management.azure.com/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+  return `https://${ARM_HOST}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
 }
 
 /**
@@ -563,6 +572,119 @@ export async function deleteDataFlow(name: string): Promise<void> {
 }
 
 // ============================================================
+// Power Query (Wrangling) Data Flows — the Azure-native backend for
+// Dataflow Gen2 (Power Query Online). The Fabric "RefreshDataflow"
+// activity does not exist in ADF's ARM schema; ADF instead models a
+// Power Query mashup as a `WranglingDataFlow` resource that a pipeline
+// invokes via an `ExecuteWranglingDataflow` activity. ADF compiles the
+// M script to a Data Flow script and runs it on the Spark IR. This is
+// what backs the no-Fabric Dataflow Gen2 editor.
+//
+// Refs (grounded in @azure/arm-datafactory + Microsoft Learn):
+//   - WranglingDataFlow.typeProperties = { sources[], script, documentLocale }
+//   - ExecuteWranglingDataflowActivity.typeProperties = {
+//       dataFlow, integrationRuntime, compute, sinks{}, queries[] }
+//   - PowerQuerySinkMapping = { queryName, dataflowSinks[] }
+// ============================================================
+
+/** A Power Query source binding (maps a query name to a dataset). */
+export interface WranglingSource {
+  /** Query name in the M script that reads from this source. */
+  name: string;
+  /** ADF dataset the query reads from (omit for inline/literal sources). */
+  datasetName?: string;
+}
+
+/** A Power Query sink binding (maps an output query name to a dataset). */
+export interface WranglingSink {
+  /** The output query whose result is written. */
+  queryName: string;
+  /** Unique sink name within the activity. */
+  sinkName: string;
+  /** ADF dataset the result is written to (ADLS Parquet/CSV or Azure SQL). */
+  datasetName: string;
+}
+
+/**
+ * Idempotently publish a `WranglingDataFlow` resource carrying the authored
+ * Power Query (M) mashup. `sources` binds query names to datasets when the M
+ * reads from a connector; an inline `#table(...)` query needs no source.
+ */
+export async function upsertWranglingDataFlow(
+  name: string,
+  mScript: string,
+  sources: WranglingSource[] = [],
+): Promise<AdfDataFlow> {
+  return upsertDataFlow(name, {
+    name,
+    properties: {
+      type: 'WranglingDataFlow',
+      typeProperties: {
+        sources: sources.map((s) => ({
+          name: s.name,
+          ...(s.datasetName
+            ? { dataset: { referenceName: s.datasetName, type: 'DatasetReference' } }
+            : {}),
+        })),
+        script: mScript,
+        documentLocale: 'en-US',
+      },
+    },
+  });
+}
+
+/**
+ * Run a published `WranglingDataFlow` by materialising a single-activity
+ * wrapper pipeline (`loom-pq-run-<df>`) with one `ExecuteWranglingDataflow`
+ * activity, then triggering it. The output query → sink dataset mapping is
+ * carried on the activity's `queries[]`/`sinks{}` so the same pipeline can be
+ * reused on every run. Returns the runId + the wrapper pipeline name.
+ */
+export async function runWranglingDataFlow(
+  dataFlowName: string,
+  sinks: WranglingSink[] = [],
+  opts?: { computeType?: string; coreCount?: number },
+): Promise<{ runId: string; pipelineName: string }> {
+  const pipelineName = `loom-pq-run-${dataFlowName}`;
+  const sinkRef = (s: WranglingSink) => ({
+    name: s.sinkName,
+    dataset: { referenceName: s.datasetName, type: 'DatasetReference' },
+  });
+  const activity = {
+    name: 'RunDataflow',
+    type: 'ExecuteWranglingDataflow',
+    dependsOn: [],
+    typeProperties: {
+      dataFlow: { referenceName: dataFlowName, type: 'DataFlowReference' },
+      integrationRuntime: {
+        referenceName: 'AutoResolveIntegrationRuntime',
+        type: 'IntegrationRuntimeReference',
+      },
+      compute: { computeType: opts?.computeType || 'General', coreCount: opts?.coreCount ?? 8 },
+      ...(sinks.length
+        ? {
+            sinks: Object.fromEntries(sinks.map((s) => [s.sinkName, sinkRef(s)])),
+            queries: sinks.map((s) => ({
+              queryName: s.queryName,
+              dataflowSinks: [sinkRef(s)],
+            })),
+          }
+        : {}),
+    },
+  };
+  await upsertPipeline(pipelineName, {
+    name: pipelineName,
+    properties: {
+      description: `Loom Power Query (Dataflow Gen2) run for ${dataFlowName}`,
+      activities: [activity],
+      annotations: ['loom', 'dataflow-gen2'],
+    },
+  });
+  const run = await runPipeline(pipelineName);
+  return { runId: run.runId, pipelineName };
+}
+
+// ============================================================
 // Triggers
 // ============================================================
 
@@ -756,7 +878,7 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
 // ============================================================
 
 function externalBase(subscriptionId: string, resourceGroup: string, factoryName: string): string {
-  return `https://management.azure.com/subscriptions/${encodeURIComponent(subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(factoryName)}`;
+  return `https://${ARM_HOST}/subscriptions/${encodeURIComponent(subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(factoryName)}`;
 }
 
 export interface MountedFactoryRef {

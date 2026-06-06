@@ -38,6 +38,9 @@ param workspaceId string
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
+@description('DLZ ADLS Gen2 storage account NAME (same RG). When set, the ADF system-assigned MI is granted Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
+param adlsAccountName string = ''
+
 // =====================================================================
 // Data Factory
 // =====================================================================
@@ -99,6 +102,28 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '673868aa-7521-48a0-acc6-0f60742d39f5')
+  }
+}
+
+// =====================================================================
+// RBAC — ADF system-assigned MI → Storage Blob Data Contributor on the DLZ
+// ADLS Gen2 account (built-in role: ba92f5b4-2d11-453d-a403-e96b0029c9fe).
+// Required so Dataflow Gen2 (WranglingDataFlow) can write its Parquet/CSV
+// sink to ADLS via the factory MI. Scoped to the storage account; assumes
+// it lives in this RG (the DLZ orchestrator passes its name).
+// =====================================================================
+
+resource adlsAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(adlsAccountName)) {
+  name: empty(adlsAccountName) ? 'placeholder' : adlsAccountName
+}
+
+resource adfAdlsBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adlsAccountName)) {
+  scope: adlsAccount
+  name: guid(adf.id, adlsAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  properties: {
+    principalId: adf.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
 }
 
