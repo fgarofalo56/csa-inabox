@@ -225,6 +225,43 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     route: '/api/thread/publish-as-api',
     submitLabel: 'Weave',
   },
+  {
+    id: 'mirror-explore-notebook',
+    label: 'Explore mirrored data in a Notebook',
+    description:
+      'Create a Loom Notebook that reads this mirror’s replicated tables from ADLS Bronze with Spark — ' +
+      'one read per table, no paths to type. Start the mirror first so there is data to read.',
+    group: 'Explore',
+    fromTypes: ['mirrored-database'],
+    icon: 'notebook',
+    fields: [
+      { name: 'notebookName', label: 'Notebook name', kind: 'text', required: true, hint: 'A name for the new notebook.' },
+    ],
+    route: '/api/thread/mirror-to-notebook',
+    submitLabel: 'Weave',
+  },
+  {
+    id: 'mirror-to-lakehouse',
+    label: 'Add mirrored tables to a Lakehouse',
+    description:
+      'Create file shortcuts in a Lakehouse pointing at this mirror’s replicated tables in ADLS Bronze, ' +
+      'so you can work with the mirrored data inside the lakehouse. Start the mirror first.',
+    group: 'Explore',
+    fromTypes: ['mirrored-database'],
+    icon: 'api',
+    fields: [
+      {
+        name: 'lakehouseId',
+        label: 'Lakehouse',
+        kind: 'loom-item',
+        itemTypes: ['lakehouse'],
+        required: true,
+        hint: 'The lakehouse to add the shortcuts to (one shortcut per replicated table).',
+      },
+    ],
+    route: '/api/thread/mirror-to-lakehouse',
+    submitLabel: 'Weave',
+  },
   // More edges land per the Thread PRP (docs/fiab/thread/PRP-loom-thread.md):
   // PR2 notebook/lakehouse → SQL warehouse · PR3 table/query → API ·
   // PR4 medallion promotion + mesh viewer · PR5 gold → Power BI model/report.

@@ -124,6 +124,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  // Edit-existing-mirror + Test-connection state.
+  const [editing, setEditing] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState<{ intent: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   // create wizard
   const [createOpen, setCreateOpen] = useState(false);
@@ -234,19 +238,62 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       const definition = {
         parts: [{ path: 'mirroring.json', payload: toB64(JSON.stringify(mirroringDef, null, 2)), payloadType: 'InlineBase64' }],
       };
-      const r = await fetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      // connectionId binds the Key Vault-backed creds so the source accepts the
+      // connection (avoids the Entra-token-only "Login failed" error). server /
+      // database are persisted flat so the mirror engine can read them on Start.
+      const payload = {
+        displayName: createName.trim(), definition, sourceType: createSrc,
+        server: createServer.trim(), database: createDb.trim(),
+        connectionId: connId || undefined,
+      };
+      // Edit an existing mirror (PATCH) vs. create a new one (POST).
+      const r = editing && mirrorId
+        ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+            method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+          })
+        : await fetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+          });
+      const j = await r.json();
+      if (!j.ok) { setCreateErr(j.error || (editing ? 'save failed' : 'create failed')); return; }
+      setCreateOpen(false); setEditing(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId('');
+      await loadList(workspaceId);
+      const newId = j.mirroredDatabase?.id;
+      if (newId) setMirrorId(newId);
+      if (editing && workspaceId && mirrorId) loadDetail(workspaceId, mirrorId);
+    } finally { setCreateBusy(false); }
+  }, [workspaceId, createName, createSrc, createServer, createDb, connId, editing, mirrorId, loadList, loadDetail]);
+
+  // Open the wizard pre-filled to EDIT the selected mirror's config.
+  const openEdit = useCallback(() => {
+    const sc = (detail?.source || {}) as any;
+    setEditing(true);
+    setCreateName(detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '');
+    setCreateSrc(sc.sourceType || 'AzureSqlDatabase');
+    setCreateServer(sc.server || '');
+    setCreateDb(sc.database || '');
+    setConnId(sc.connectionId || '');
+    setCreateErr(null);
+    setCreateOpen(true);
+  }, [detail, mirrors, mirrorId]);
+
+  // Test the selected mirror's stored source connection (reuses /verify).
+  const testConnection = useCallback(async () => {
+    const sc = (detail?.source || {}) as any;
+    if (!sc.server || !sc.database) { setTestMsg({ intent: 'error', text: 'This mirror has no source server/database set. Edit it first.' }); return; }
+    setTesting(true); setTestMsg(null);
+    try {
+      const r = await fetch('/api/items/mirrored-database/verify', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        // connectionId binds the Key Vault-backed creds so the source accepts
-        // the connection (avoids the Entra-token-only "Login failed" error).
-        body: JSON.stringify({ displayName: createName.trim(), definition, sourceType: createSrc, connectionId: connId || undefined }),
+        body: JSON.stringify({ sourceType: sc.sourceType, server: sc.server, database: sc.database }),
       });
       const j = await r.json();
-      if (!j.ok) { setCreateErr(j.error || 'create failed'); return; }
-      setCreateOpen(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId('');
-      await loadList(workspaceId);
-      if (j.mirroredDatabase?.id) setMirrorId(j.mirroredDatabase.id);
-    } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, createServer, createDb, connId, loadList]);
+      if (j.ok && j.verified) setTestMsg({ intent: 'success', text: j.detail });
+      else if (j.ok) setTestMsg({ intent: 'info', text: j.detail });
+      else setTestMsg({ intent: 'error', text: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'verification failed') });
+    } catch (e: any) { setTestMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setTesting(false); }
+  }, [detail]);
 
   const del = useCallback(async () => {
     if (!workspaceId || !mirrorId) return;
@@ -266,9 +313,13 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Item', actions: [
-        { label: 'New mirror', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId,
+        { label: 'New mirror', onClick: workspaceId ? () => { setEditing(false); setCreateOpen(true); } : undefined, disabled: !workspaceId,
           title: !workspaceId ? 'Select a workspace first' : undefined },
+        { label: 'Edit', onClick: mirrorId && detail ? openEdit : undefined, disabled: !mirrorId || !detail, title: 'Edit this mirror’s source config' },
         { label: 'Delete', onClick: mirrorId ? del : undefined, disabled: !mirrorId },
+      ]},
+      { label: 'Source', actions: [
+        { label: 'Test connection', onClick: mirrorId && detail && !testing ? testConnection : undefined, disabled: !mirrorId || !detail || testing },
       ]},
       { label: 'Replication', actions: [
         { label: 'Start', onClick: mirrorId && !acting ? () => act('start') : undefined, disabled: !mirrorId || acting },
@@ -279,7 +330,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
         { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
       ]},
     ]},
-  ], [workspaceId, mirrorId, acting, del, act, loadDetail, loadList]);
+  ], [workspaceId, mirrorId, detail, acting, testing, del, act, loadDetail, loadList, openEdit, testConnection]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -314,13 +365,13 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               </Select>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh list</Button>
-            <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
-              <DialogTrigger disableButtonEnhancement>
-                <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New mirror</Button>
-              </DialogTrigger>
+            <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId} onClick={() => { setEditing(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateErr(null); setCreateOpen(true); }}>New mirror</Button>
+            {mirrorId && detail && <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={openEdit}>Edit</Button>}
+            {mirrorId && detail && <Button appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={testing} onClick={testConnection}>{testing ? 'Testing…' : 'Test connection'}</Button>}
+            <Dialog open={createOpen} onOpenChange={(_, d) => { setCreateOpen(d.open); if (!d.open) setEditing(false); }}>
               <DialogSurface style={{ maxWidth: '680px' }}>
                 <DialogBody>
-                  <DialogTitle><span className={s.connRow}><Database20Regular /> Create mirrored database</span></DialogTitle>
+                  <DialogTitle><span className={s.connRow}><Database20Regular /> {editing ? 'Edit mirrored database' : 'Create mirrored database'}</span></DialogTitle>
                   <DialogContent>
                     <div className={s.wizard}>
                       {/* Step 1 — source type (icon cards) */}
@@ -407,8 +458,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                     </div>
                   </DialogContent>
                   <DialogActions>
-                    <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create mirror'}</Button>
+                    <Button appearance="secondary" onClick={() => { setCreateOpen(false); setEditing(false); }}>Cancel</Button>
+                    <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={create}>
+                      {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
+                    </Button>
                   </DialogActions>
                 </DialogBody>
               </DialogSurface>
@@ -444,6 +497,21 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           )}
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
           {actionMsg && <MessageBar intent="info"><MessageBarBody>{actionMsg}</MessageBarBody></MessageBar>}
+          {testMsg && <MessageBar intent={testMsg.intent}><MessageBarBody><MessageBarTitle>Connection test</MessageBarTitle>{testMsg.text}</MessageBarBody></MessageBar>}
+          {detail?.lastRun?.gate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Mirror not started</MessageBarTitle>
+                {detail.lastRun.gate.message}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detail?.source?.server && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
+              {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
+            </Caption1>
+          )}
 
           {mirrorId && detail && (
             <>
@@ -463,19 +531,28 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                     <TableHeaderCell>Rows</TableHeaderCell>
                     <TableHeaderCell>Bytes</TableHeaderCell>
                     <TableHeaderCell>Last sync</TableHeaderCell>
+                    <TableHeaderCell>Query</TableHeaderCell>
                   </TableRow></TableHeader>
                   <TableBody>
                     {(!tables || tables.length === 0) && (
-                      <TableRow><TableCell colSpan={6}>No tables status yet. Start mirroring to begin replication.</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={7}>No tables status yet. Start mirroring to begin replication.</TableCell></TableRow>
                     )}
                     {(tables || []).map((t, i) => (
                       <TableRow key={`${t.sourceSchemaName || ''}.${t.sourceTableName || i}`}>
                         <TableCell>{t.sourceSchemaName || '—'}</TableCell>
                         <TableCell>{t.sourceTableName || '—'}</TableCell>
-                        <TableCell>{t.status || '—'}</TableCell>
-                        <TableCell className={s.cell}>{t.metrics?.processedRows ?? '—'}</TableCell>
+                        <TableCell>
+                          {t.status || '—'}
+                          {t.error && <Caption1 style={{ display: 'block', color: tokens.colorPaletteRedForeground1 }}>{t.error}</Caption1>}
+                        </TableCell>
+                        <TableCell className={s.cell}>{t.metrics?.processedRows ?? '—'}{t.truncated ? ' (capped)' : ''}</TableCell>
                         <TableCell className={s.cell}>{t.metrics?.processedBytes ?? '—'}</TableCell>
                         <TableCell className={s.cell}>{t.metrics?.lastSyncDateTime || '—'}</TableCell>
+                        <TableCell>
+                          {t.openrowset
+                            ? <Button size="small" appearance="subtle" onClick={() => { try { void navigator.clipboard.writeText(t.openrowset); setActionMsg(`Copied the Synapse Serverless query for ${t.sourceSchemaName}.${t.sourceTableName}. Paste it into a Synapse serverless SQL query.`); } catch { /* clipboard unavailable */ } }}>Copy SQL</Button>
+                            : '—'}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

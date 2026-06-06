@@ -56,10 +56,23 @@ export async function POST(req: NextRequest) {
     if (!ws) return err('workspace not found', 404);
     const items = await itemsContainer();
     const now = new Date().toISOString();
+    // Persist the source config in a flat, engine-readable shape (sourceType +
+    // server/database + connectionId + optional table subset) so Start can run
+    // the Azure-native mirror without re-deriving everything from definition.
+    const definition = body?.definition || {};
+    const srcProps = definition?.properties?.source?.typeProperties || {};
     const item: WorkspaceItem = {
       id: crypto.randomUUID(), workspaceId, itemType: 'mirrored-database',
       displayName, description: body?.description,
-      state: { definition: body?.definition || {} },
+      state: {
+        definition,
+        sourceType: body?.sourceType || definition?.properties?.source?.type || '',
+        server: body?.server || srcProps.server || '',
+        database: body?.database || srcProps.database || '',
+        connectionId: body?.connectionId || undefined,
+        tables: Array.isArray(body?.tables) ? body.tables : [],
+        mirroringStatus: 'NotStarted',
+      },
       createdBy: s.claims.upn || s.claims.email || s.claims.oid,
       createdAt: now, updatedAt: now,
     };
