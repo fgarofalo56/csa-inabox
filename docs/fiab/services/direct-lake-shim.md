@@ -1,5 +1,12 @@
 # Loom Direct-Lake Shim service
 
+!!! warning "Design doc — not the shipped Console path (2026-06-06)"
+    This service (TOM/XMLA partition refresh, refresh-policy engine, refresh-latency
+    SLAs) describes a target standalone backend. **The shipped semantic-model
+    path is Power BI push datasets** via the Loom Thread "Build a Power BI model"
+    edge (`/api/thread/build-powerbi-model`) — no XMLA. `apps/fiab-direct-lake-shim`
+    is not invoked by the Console. Treat the SLAs + APIs below as roadmap.
+
 Per [ADR fiab-0004](../adr/0004-direct-lake-parity.md) and [Direct
 Lake parity workload](../workloads/direct-lake-parity.md).
 

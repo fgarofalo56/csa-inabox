@@ -3,6 +3,16 @@
 > **This is the hardest single workload to parity.** Loom is honest
 > about the gap.
 
+!!! warning "Shipped reality vs. design (2026-06-06)"
+    **What ships today** is the Loom Thread **"Build a Power BI model"** edge
+    (`/api/thread/build-powerbi-model`): it reads a warehouse table (or a custom
+    SQL query) and creates a real Power BI **push dataset** with typed columns +
+    a sample of rows — *no XMLA required*. The **TOM/XMLA partition-refresh
+    engine, TMDL editor, and visual model designer described below are the target
+    DESIGN**, not the current Console path; `apps/fiab-direct-lake-shim` is not
+    wired into the Console. Treat the sections below as roadmap until this banner
+    is removed.
+
 ## What Fabric does
 
 Direct Lake is Power BI semantic-model storage mode where the
