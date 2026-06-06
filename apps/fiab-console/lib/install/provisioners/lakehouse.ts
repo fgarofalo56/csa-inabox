@@ -366,11 +366,16 @@ async function provisionAzureNative(
   const folders: Array<{ path: string; description?: string }> = Array.isArray(content?.folders)
     ? content.folders
     : [];
-  const deltaTables: Array<{ name: string; ddl?: string; sampleRows?: any[][] }> = Array.isArray(
+  const deltaTables: Array<{ name: string; ddl?: string; schema?: string; sampleRows?: any[][] }> = Array.isArray(
     content?.deltaTables,
   )
     ? content.deltaTables
     : [];
+  // F9 — multi-schema support. When schemasEnabled, tables live under
+  // Tables/<schema>/<table>/ and register as `<schema>.<view>` in the serverless
+  // user DB; otherwise the classic flat Tables/<table>/ layout is used.
+  const schemasEnabled: boolean = content?.schemasEnabled === true;
+  const declaredSchemas: Array<{ name: string }> = Array.isArray(content?.schemas) ? content.schemas : [];
 
   // Root path for this lakehouse inside the container — keeps multiple
   // installed lakehouses isolated and browsable side-by-side.
@@ -463,7 +468,10 @@ async function provisionAzureNative(
   for (const t of deltaTables) {
     const tName = safeRelPath(t?.name || '');
     if (!tName) continue;
-    const tableDir = `${root}/Tables/${tName}`;
+    // F9 — when schemasEnabled, namespace the table under its schema folder
+    // (Tables/<schema>/<table>/); 'dbo' is the default when none is declared.
+    const tSchema = schemasEnabled ? (String(t.schema || 'dbo').replace(/[^A-Za-z0-9_]/g, '_') || 'dbo') : '';
+    const tableDir = schemasEnabled ? `${root}/Tables/${tSchema}/${tName}` : `${root}/Tables/${tName}`;
     try {
       await adlsCreateDirectory(container, tableDir);
     } catch (e: any) {
@@ -506,11 +514,15 @@ async function provisionAzureNative(
     if (synapse) {
       const httpsUrl = pathToHttpsUrl(container, csvPath);
       const viewLeaf = `${tName}`.replace(/[^A-Za-z0-9_]/g, '_');
-      const obj = `lakehouse.${viewLeaf}`;
+      // F9 — when schemasEnabled, register the view under the table's schema
+      // (so the 4-part name workspace.lakehouse.schema.table resolves);
+      // otherwise the classic single `lakehouse` schema.
+      const viewSchema = schemasEnabled ? tSchema : 'lakehouse';
+      const obj = `${viewSchema}.${viewLeaf}`;
       // Doubled single-quotes for the inner EXEC string literal.
       const urlLiteral = httpsUrl.replace(/'/g, "''");
       const ddl =
-        `IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse');\n` +
+        `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
         `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
         `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
         `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE) AS r');`;

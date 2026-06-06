@@ -37,6 +37,7 @@ let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
+let _lakehouseSchemas: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
@@ -116,6 +117,11 @@ async function ensure() {
   // hits a single physical partition. Created lazily so a fresh environment
   // needs no extra ARM/Bicep step beyond the account+database.
   _lakehouseShortcuts = await mk('lakehouse-shortcuts', '/lakehouseId');
+  // Lakehouse multi-schema registry (F9) — one row per schema per lakehouse.
+  // Azure-native parity with Fabric's schema-enabled lakehouse. Partitioned by
+  // the lakehouse id so every Tables-tree lookup hits a single physical
+  // partition. 'dbo' is synthetic (never stored) and always present.
+  _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
   // Copilot & Agents config — tenant-wide default Foundry account + model
   // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
   // and per-workspace data-agent config (PK /workspaceId) set by workspace
@@ -142,6 +148,7 @@ export async function connectionsContainer(): Promise<Container> { await ensure(
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
+export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
@@ -199,7 +206,7 @@ const KNOWN_CONTAINER_IDS = [
   'shares', 'folders', 'downloads', 'search-history',
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
-  'feature-permissions', 'lakehouse-shortcuts', 'thread-edges', 'connections',
+  'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
 ];
 
 /** List all Loom containers with their current throughput shape. */

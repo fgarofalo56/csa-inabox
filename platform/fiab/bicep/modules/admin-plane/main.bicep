@@ -139,6 +139,12 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Synapse dev-endpoint DNS suffix for sovereign clouds. Commercial = azuresynapse.net (default); GCC-High / DoD = azuresynapse.us. Empty resolves to azuresynapse.net in code.')
+param loomSynapseDevSuffix string = ''
+
+@description('Default Synapse Spark pool used for lakehouse schema DDL (CREATE/ALTER/DROP SCHEMA via Livy). Matches the synapse.bicep sparkPool default.')
+param loomDefaultSparkPool string = 'loompool'
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -653,6 +659,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA
+            // DDL via Livy, and the sovereign-cloud dev-endpoint DNS suffix.
+            { name: 'LOOM_DEFAULT_SPARK_POOL', value: loomDefaultSparkPool }
+            { name: 'LOOM_SYNAPSE_DEV_SUFFIX', value: loomSynapseDevSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }

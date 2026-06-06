@@ -33,6 +33,7 @@ interface LakehouseSettingsDoc {
   sparkConfig?: Record<string, string>;
   timeTravelDays?: number;     // Delta vacuum retention (default 7)
   deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
+  schemasEnabled?: boolean;    // multi-schema namespace (workspace.lakehouse.schema.table)
   updatedAt?: string;
   updatedBy?: string;
 }
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest) {
         timeTravelDays: 7,
         sparkConfig: {},
         deltaDefaults: { autoOptimize: true, tableProperties: {} },
+        schemasEnabled: false,
       },
     });
   } catch (e: any) {
@@ -90,6 +92,7 @@ export async function PUT(req: NextRequest) {
     sparkConfig: body.sparkConfig && typeof body.sparkConfig === 'object' ? body.sparkConfig : {},
     timeTravelDays: typeof body.timeTravelDays === 'number' && body.timeTravelDays >= 0 ? body.timeTravelDays : 7,
     deltaDefaults: body.deltaDefaults && typeof body.deltaDefaults === 'object' ? body.deltaDefaults : { autoOptimize: true },
+    schemasEnabled: typeof body.schemasEnabled === 'boolean' ? body.schemasEnabled : undefined,
     updatedAt: new Date().toISOString(),
     updatedBy: session.claims.upn,
   };

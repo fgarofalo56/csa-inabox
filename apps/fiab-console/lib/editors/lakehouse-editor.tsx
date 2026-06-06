@@ -209,6 +209,7 @@ export function LakehouseEditor({ item, id }: Props) {
     sparkConfig?: Record<string, string>;
     timeTravelDays?: number;
     deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
+    schemasEnabled?: boolean;
   }
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LakehouseSettings>({});
@@ -280,6 +281,39 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scFormat, setScFormat] = useState<'delta' | 'parquet' | 'csv' | 'json'>('delta');
   const [scSubmitting, setScSubmitting] = useState(false);
   const [scSubmitError, setScSubmitError] = useState<string | null>(null);
+  // Schema shortcut entry (F9) — when registering a Tables shortcut on a
+  // schema-enabled lakehouse, target a named schema (dropdown, never freeform).
+  const [scTargetSchema, setScTargetSchema] = useState<string>('dbo');
+
+  // ---- Schemas tab (F9 — multi-schema namespace, Azure-native, NO Fabric) ----
+  // A schema is a named namespace; tables live under Tables/<schema>/<table>/ and
+  // are queryable via the 4-part name workspace.lakehouse.schema.table. 'dbo' is
+  // the immutable default. CREATE/ALTER/DROP SCHEMA + ALTER TABLE … RENAME TO run
+  // on a Synapse Spark pool via Livy; the Cosmos `lakehouse-schemas` registry is
+  // the source of truth. See app/api/lakehouse/schemas/route.ts.
+  interface SchemaRow {
+    id: string; lakehouseId: string; name: string; description?: string;
+    isDefault: boolean; status: 'active' | 'pending' | 'error'; statusDetail?: string;
+    createdBy?: string; createdAt?: string;
+  }
+  const [schemasEnabled, setSchemasEnabled] = useState<boolean>(false);
+  const [schemas, setSchemas] = useState<SchemaRow[] | null>(null);
+  const [schemasBusy, setSchemasBusy] = useState(false);
+  const [schemasError, setSchemasError] = useState<string | null>(null);
+  // New schema dialog
+  const [newSchemaOpen, setNewSchemaOpen] = useState(false);
+  const [newSchemaName, setNewSchemaName] = useState('');
+  const [newSchemaDesc, setNewSchemaDesc] = useState('');
+  const [newSchemaBusy, setNewSchemaBusy] = useState(false);
+  const [newSchemaError, setNewSchemaError] = useState<string | null>(null);
+  // Move-table dialog
+  const [moveTableOpen, setMoveTableOpen] = useState(false);
+  const [moveTableName, setMoveTableName] = useState('');
+  const [moveTableFrom, setMoveTableFrom] = useState('dbo');
+  const [moveTableTo, setMoveTableTo] = useState('');
+  const [moveTableBusy, setMoveTableBusy] = useState(false);
+  const [moveTableError, setMoveTableError] = useState<string | null>(null);
+  const [moveTableStatus, setMoveTableStatus] = useState<string | null>(null);
 
   // Discover in-tenant storage accounts for the ADLS picker when the wizard is
   // on the ADLS source in picker mode.
@@ -311,7 +345,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setScStep(1); setScType('internal'); setScTargetUri('');
     setScInternalContainer(''); setScInternalPath(''); setScKvSecret('');
     setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
-    setScFormat('delta'); setScSubmitError(null);
+    setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
   }, []);
 
   const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
@@ -337,13 +371,20 @@ export function LakehouseEditor({ item, id }: Props) {
     const credentialRef = scKvSecret.trim()
       ? { kind: scType === 's3' ? 'awsKeys' : scType === 'gcs' ? 'gcsServiceAccount' : 'sas', keyVaultSecret: scKvSecret.trim() }
       : undefined;
+    // F9 — on a schema-enabled lakehouse a Tables shortcut lands inside its
+    // target schema folder (Tables/<schema>/<name>), mirroring Fabric's schema
+    // shortcut. This is a real registry effect (fullPath includes the schema).
+    const effectiveParent = schemasEnabled && scKind === 'tables'
+      ? [scTargetSchema, scParentPath.trim()].filter(Boolean).join('/')
+      : scParentPath.trim();
     try {
       const r = await fetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           lakehouseId: shortcutLakehouseId, name: scName.trim(), kind: scKind,
-          parentPath: scParentPath.trim(), targetType: scType, targetUri,
+          parentPath: effectiveParent, targetType: scType, targetUri,
           format: scKind === 'tables' ? scFormat : undefined, credentialRef,
+          schemaName: schemasEnabled && scKind === 'tables' ? scTargetSchema : undefined,
         }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create shortcut');
@@ -352,7 +393,7 @@ export function LakehouseEditor({ item, id }: Props) {
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, loadShortcuts]);
 
   // Register a PLANNED bundle shortcut into the live registry (one click) — the
   // bundle only carries metadata, so this materializes it against the real
@@ -416,6 +457,90 @@ export function LakehouseEditor({ item, id }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, shortcutLakehouseId]);
 
+  // ---- Schemas (F9) ---------------------------------------------------
+  const loadSchemas = useCallback(async () => {
+    if (!shortcutLakehouseId) return;
+    setSchemasBusy(true); setSchemasError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; schemas?: SchemaRow[] }>(r, 'List schemas');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSchemas(j.schemas || []);
+    } catch (e: any) { setSchemasError(e?.message || String(e)); setSchemas([]); }
+    finally { setSchemasBusy(false); }
+  }, [shortcutLakehouseId]);
+
+  const createSchema = useCallback(async () => {
+    if (!shortcutLakehouseId || !newSchemaName.trim()) return;
+    setNewSchemaBusy(true); setNewSchemaError(null);
+    try {
+      const r = await fetch('/api/lakehouse/schemas', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create schema');
+      // The row persists even on an honest Spark gate (503) — close + refresh so
+      // the new (pending) schema appears in the catalog immediately.
+      if (!j.ok && r.status !== 503) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      setNewSchemaOpen(false); setNewSchemaName(''); setNewSchemaDesc('');
+      await loadSchemas();
+    } catch (e: any) { setNewSchemaError(e?.message || String(e)); }
+    finally { setNewSchemaBusy(false); }
+  }, [shortcutLakehouseId, newSchemaName, newSchemaDesc, loadSchemas]);
+
+  const deleteSchema = useCallback(async (name: string) => {
+    if (!shortcutLakehouseId) return;
+    // eslint-disable-next-line no-alert
+    const ok = typeof window !== 'undefined'
+      ? window.confirm(`Delete schema "${name}"? This runs DROP SCHEMA … CASCADE and removes the catalog entry.`)
+      : false;
+    if (!ok) return;
+    setSchemasBusy(true); setSchemasError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSchemas();
+    } catch (e: any) { setSchemasError(e?.message || String(e)); }
+    finally { setSchemasBusy(false); }
+  }, [shortcutLakehouseId, loadSchemas]);
+
+  const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
+    setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
+    setMoveTableTo(''); setMoveTableError(null); setMoveTableStatus(null);
+    setMoveTableOpen(true);
+    if (schemas === null) loadSchemas();
+  }, [schemas, loadSchemas]);
+
+  const submitMoveTable = useCallback(async () => {
+    if (!shortcutLakehouseId || !moveTableName.trim() || !moveTableTo.trim()) return;
+    setMoveTableBusy(true); setMoveTableError(null);
+    try {
+      const r = await fetch('/api/lakehouse/schemas', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
+      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${shortcutLakehouseId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
+      // Refresh the Tables listing so the table appears under its new schema.
+      if (activeContainer) loadPaths(activeContainer, 'Tables');
+    } catch (e: any) { setMoveTableError(e?.message || String(e)); }
+    finally { setMoveTableBusy(false); }
+  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, loadPaths]);
+
+  // Load schemas when the Schemas tab opens or the lakehouse changes.
+  useEffect(() => {
+    if (tab === 'schemas' && shortcutLakehouseId) loadSchemas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, shortcutLakehouseId]);
+
+  // Populate the schema dropdown for the shortcut wizard (schema-enabled lakehouse).
+  useEffect(() => {
+    if (scWizardOpen && schemasEnabled && schemas === null && shortcutLakehouseId) loadSchemas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scWizardOpen, schemasEnabled, schemas, shortcutLakehouseId]);
+
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null);
@@ -474,6 +599,7 @@ export function LakehouseEditor({ item, id }: Props) {
       const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
+      setSchemasEnabled(j.settings?.schemasEnabled ?? false);
       const cfg = j.settings?.sparkConfig || {};
       setSettingsSparkConfText(Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join('\n'));
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
@@ -502,6 +628,20 @@ export function LakehouseEditor({ item, id }: Props) {
     if (sparkPools === null) loadSparkPools();
   }, [loadSettings, loadSparkPools, sparkPools]);
 
+  // Resolve schemasEnabled for the active container without opening Settings —
+  // the Tables/Schemas tabs need it. Bundle's schemasEnabled is the install-time
+  // default; the persisted settings doc (if any) is authoritative.
+  useEffect(() => {
+    if (!activeContainer) return;
+    let cancelled = false;
+    if (lhContent?.schemasEnabled) setSchemasEnabled(true);
+    fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`)
+      .then((r) => parseJsonOrError<{ ok: boolean; settings?: { schemasEnabled?: boolean } }>(r, 'Load settings'))
+      .then((j) => { if (!cancelled && j.ok && typeof j.settings?.schemasEnabled === 'boolean') setSchemasEnabled(j.settings.schemasEnabled); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeContainer, lhContent?.schemasEnabled]);
+
   const saveSettings = useCallback(async () => {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
@@ -522,11 +662,13 @@ export function LakehouseEditor({ item, id }: Props) {
           sparkConfig,
           timeTravelDays: settings.timeTravelDays ?? 7,
           deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
+          schemasEnabled: settings.schemasEnabled ?? false,
         }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Save settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || settings);
+      setSchemasEnabled(j.settings?.schemasEnabled ?? settings.schemasEnabled ?? false);
       setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
       setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
@@ -995,6 +1137,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
               <Tab value="tables">Tables</Tab>
+              <Tab value="schemas">Schemas</Tab>
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
               <Tab value="shortcuts">Shortcuts</Tab>
@@ -1201,6 +1344,84 @@ export function LakehouseEditor({ item, id }: Props) {
                       </>
                     );
                   }
+                  // F9 — schema-enabled lakehouse: the Tables/ children are
+                  // schema folders; tables live one level deeper under
+                  // Tables/<schema>/. Render schema groups, each lazily loading
+                  // its tables, with a "Move to schema…" action per table.
+                  if (schemasEnabled) {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <Caption1>
+                          Schema-enabled lakehouse — tables are grouped by schema. Manage schemas in the <strong>Schemas</strong> tab.
+                        </Caption1>
+                        {tables.map((schemaDir) => {
+                          const schemaName = leafName(schemaDir.name);
+                          const childKey = cacheKey(activeContainer, schemaDir.name);
+                          const childListing = openPrefixes[childKey];
+                          const childTables = childListing && childListing !== 'loading' && !('error' in (childListing as any))
+                            ? (childListing as PathEntry[]).filter((e) => e.isDirectory) : [];
+                          return (
+                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <Database20Regular />
+                                <Subtitle2>{schemaName}</Subtitle2>
+                                {schemaName === 'dbo' && <Badge appearance="tint" color="informative" size="small">default</Badge>}
+                                <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />}
+                                  onClick={() => loadPaths(activeContainer, schemaDir.name)} style={{ marginLeft: 'auto' }}>
+                                  {childListing ? 'Refresh' : 'Load tables'}
+                                </Button>
+                              </div>
+                              {childListing === 'loading' && <Spinner size="tiny" label="Listing tables…" labelPosition="after" />}
+                              {childListing && childListing !== 'loading' && 'error' in (childListing as any) && (
+                                <Caption1>{(childListing as { error: string }).error}</Caption1>
+                              )}
+                              {childListing && childListing !== 'loading' && !('error' in (childListing as any)) && (
+                                childTables.length === 0
+                                  ? <Caption1>No tables in this schema yet.</Caption1>
+                                  : (
+                                    <Table aria-label={`Tables in ${schemaName}`} size="small">
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHeaderCell>Table</TableHeaderCell>
+                                          <TableHeaderCell>4-part name</TableHeaderCell>
+                                          <TableHeaderCell></TableHeaderCell>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {childTables.map((t) => {
+                                          const tableName = leafName(t.name);
+                                          return (
+                                            <TableRow key={t.name}>
+                                              <TableCell><strong>{tableName}</strong></TableCell>
+                                              <TableCell><code style={{ fontSize: 11 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                              <TableCell>
+                                                <span style={{ display: 'inline-flex', gap: 6 }}>
+                                                  <Button size="small" appearance="primary"
+                                                    onClick={() => {
+                                                      setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                                      setTab('sql');
+                                                    }}>
+                                                    Query
+                                                  </Button>
+                                                  <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
+                                                    onClick={() => openMoveTable(tableName, schemaName)}>
+                                                    Move to schema…
+                                                  </Button>
+                                                </span>
+                                              </TableCell>
+                                            </TableRow>
+                                          );
+                                        })}
+                                      </TableBody>
+                                    </Table>
+                                  )
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  }
                   return (
                     <Table aria-label="Tables">
                       <TableHeader>
@@ -1235,6 +1456,83 @@ export function LakehouseEditor({ item, id }: Props) {
                     </Table>
                   );
                 })()}
+              </>
+            )}
+
+            {tab === 'schemas' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+                  <Caption1>
+                    Multi-schema namespace — <code>workspace.lakehouse.schema.table</code>. <strong>dbo</strong> is the default (immutable).
+                  </Caption1>
+                  <Button appearance="primary" icon={<Add20Regular />}
+                    disabled={!schemasEnabled || !shortcutLakehouseId}
+                    onClick={() => { setNewSchemaName(''); setNewSchemaDesc(''); setNewSchemaError(null); setNewSchemaOpen(true); }}
+                    style={{ marginLeft: 'auto' }}>
+                    New schema
+                  </Button>
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={schemasBusy || !shortcutLakehouseId} onClick={loadSchemas}>
+                    Refresh
+                  </Button>
+                </div>
+                {!schemasEnabled && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Schemas are disabled for this lakehouse</MessageBarTitle>
+                      Enable <strong>Schemas enabled</strong> in the Settings dialog (gear icon) to use
+                      multi-schema namespaces. Schema DDL runs on a Synapse Spark pool via Livy — set
+                      <code> LOOM_SYNAPSE_WORKSPACE</code> (and grant the Console UAMI Synapse Administrator)
+                      to execute it. The catalog still records schemas without it.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {schemasError && (
+                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Schemas error</MessageBarTitle>{schemasError}</MessageBarBody></MessageBar>
+                )}
+                {schemasBusy && schemas === null && <Spinner size="small" label="Loading schemas…" labelPosition="after" />}
+                {schemas !== null && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Lakehouse schemas" size="small">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Schema</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Description</TableHeaderCell>
+                          <TableHeaderCell></TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {schemas.map((sc) => (
+                          <TableRow key={sc.name}>
+                            <TableCell>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <Database20Regular />
+                                <strong>{sc.name}</strong>
+                                {sc.isDefault && <Badge appearance="tint" color="informative" size="small">default</Badge>}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              {sc.status === 'active' && <Badge appearance="tint" color="success" size="small">active</Badge>}
+                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" size="small" title={sc.statusDetail}>pending</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" size="small" title={sc.statusDetail}>error</Badge>}
+                            </TableCell>
+                            <TableCell><Caption1>{sc.description || '—'}</Caption1></TableCell>
+                            <TableCell>
+                              {!sc.isDefault && (
+                                <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                                  disabled={schemasBusy} onClick={() => deleteSchema(sc.name)}>
+                                  Delete
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </>
             )}
 
@@ -1690,6 +1988,20 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Dropdown>
                         </Field>
                       )}
+                      {scKind === 'tables' && schemasEnabled && (
+                        <Field label="Target schema"
+                          hint="The schema-enabled lakehouse places this Tables shortcut under the chosen schema (Tables/<schema>/). 'dbo' is the default.">
+                          <Dropdown
+                            selectedOptions={[scTargetSchema || 'dbo']}
+                            value={scTargetSchema || 'dbo'}
+                            onOptionSelect={(_, d) => setScTargetSchema(d.optionValue || 'dbo')}
+                          >
+                            {(schemas || [{ name: 'dbo', isDefault: true } as SchemaRow]).map((sch) => (
+                              <Option key={sch.name} value={sch.name}>{sch.name}{sch.isDefault ? ' (default)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      )}
                       <MessageBar intent="info">
                         <MessageBarBody>
                           Will create <strong>{scKind === 'tables' ? 'Tables' : 'Files'}/{[scParentPath.trim(), scName.trim()].filter(Boolean).join('/')}</strong>
@@ -1866,6 +2178,16 @@ export function LakehouseEditor({ item, id }: Props) {
                       label={settings.deltaDefaults?.autoOptimize ?? true ? 'Enabled' : 'Disabled'}
                     />
                   </Field>
+                  <Field
+                    label="Schemas enabled"
+                    hint="Multi-schema namespace (workspace.lakehouse.schema.table). Tables live under Tables/<schema>/. Schema DDL runs on a Synapse Spark pool via Livy (LOOM_SYNAPSE_WORKSPACE). 'dbo' is always the immutable default."
+                  >
+                    <Switch
+                      checked={settings.schemasEnabled ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, schemasEnabled: d.checked }))}
+                      label={settings.schemasEnabled ? 'Enabled' : 'Disabled'}
+                    />
+                  </Field>
                   <Field label="Spark conf (one KEY=VALUE per line)">
                     <Textarea
                       rows={6}
@@ -1879,6 +2201,86 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>
                   <Button appearance="primary" onClick={saveSettings} disabled={settingsBusy}>
                     {settingsBusy ? 'Saving…' : 'Save settings'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* New schema dialog (F9) — name = letters/digits/underscores; 'dbo' reserved. */}
+          <Dialog open={newSchemaOpen} onOpenChange={(_, d) => setNewSchemaOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 480 }}>
+              <DialogBody>
+                <DialogTitle>New schema</DialogTitle>
+                <DialogContent>
+                  <Field label="Schema name" required
+                    hint="Letters, digits, and underscores only. 'dbo' is reserved (the immutable default).">
+                    <Input
+                      value={newSchemaName}
+                      onChange={(_, d) => setNewSchemaName(d.value)}
+                      placeholder="marketing"
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <Input value={newSchemaDesc} onChange={(_, d) => setNewSchemaDesc(d.value)} placeholder="Marketing-domain tables" />
+                  </Field>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Runs <code>CREATE SCHEMA IF NOT EXISTS</code> on the Synapse Spark pool via Livy and adds it to the catalog.
+                      Tables placed here are addressable as <code>{shortcutLakehouseId}.{newSchemaName || '<schema>'}.&lt;table&gt;</code>.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {newSchemaError && <MessageBar intent="error"><MessageBarBody>{newSchemaError}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNewSchemaOpen(false)} disabled={newSchemaBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={createSchema}
+                    disabled={newSchemaBusy || !newSchemaName.trim() || !/^[A-Za-z0-9_]+$/.test(newSchemaName) || newSchemaName === 'dbo'}>
+                    {newSchemaBusy ? 'Creating…' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Move table to schema dialog (F9) — ALTER TABLE … RENAME TO via Livy. */}
+          <Dialog open={moveTableOpen} onOpenChange={(_, d) => setMoveTableOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 480 }}>
+              <DialogBody>
+                <DialogTitle>Move table to schema</DialogTitle>
+                <DialogContent>
+                  <Field label="Table">
+                    <Input value={moveTableName} readOnly />
+                  </Field>
+                  <Field label="From schema">
+                    <Input value={moveTableFrom} readOnly />
+                  </Field>
+                  <Field label="To schema" required hint="Pick the destination schema. Create new schemas in the Schemas tab.">
+                    <Dropdown
+                      selectedOptions={moveTableTo ? [moveTableTo] : []}
+                      value={moveTableTo}
+                      placeholder="Select a schema"
+                      onOptionSelect={(_, d) => setMoveTableTo(d.optionValue || '')}
+                    >
+                      {(schemas || []).filter((sch) => sch.name !== moveTableFrom).map((sch) => (
+                        <Option key={sch.name} value={sch.name}>{sch.name}{sch.isDefault ? ' (default)' : ''}</Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Runs <code>ALTER TABLE {moveTableFrom}.{moveTableName} RENAME TO {moveTableTo || '<schema>'}.{moveTableName}</code> on the Spark pool.
+                      The table stays queryable via its new 4-part name.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {moveTableStatus && <MessageBar intent="success"><MessageBarBody>{moveTableStatus}</MessageBarBody></MessageBar>}
+                  {moveTableError && <MessageBar intent="error"><MessageBarBody>{moveTableError}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setMoveTableOpen(false)} disabled={moveTableBusy}>Close</Button>
+                  <Button appearance="primary" onClick={submitMoveTable}
+                    disabled={moveTableBusy || !moveTableTo.trim() || moveTableTo === moveTableFrom}>
+                    {moveTableBusy ? 'Moving…' : 'Move'}
                   </Button>
                 </DialogActions>
               </DialogBody>
