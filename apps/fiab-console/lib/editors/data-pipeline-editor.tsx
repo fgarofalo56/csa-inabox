@@ -42,6 +42,7 @@ import {
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
+  ArrowDownload20Regular, ArrowUpload20Regular, AppsList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
@@ -51,6 +52,8 @@ import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
+import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
+import type { PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
 } from '@/lib/components/pipeline/activity-catalog';
@@ -232,6 +235,11 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
+
+  // ── Import / Export / Template gallery (F3 + F28) ──
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ============ Loaders ============
   const loadList = useCallback(async (wsId: string) => {
@@ -574,6 +582,78 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
+  // ── Export: GET the packaged .zip and trigger a browser download ──
+  const exportPipeline = useCallback(async () => {
+    if (!workspaceId || !pipelineId) return;
+    try {
+      const r = await fetch(
+        `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/export?workspaceId=${encodeURIComponent(workspaceId)}`,
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({} as any));
+        dispatchToast(<Toast><ToastTitle>Export failed: {j.error || r.statusText}</ToastTitle></Toast>, { intent: 'error' });
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(spec.name || 'pipeline').replace(/[^\w\s-]/g, '_')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      dispatchToast(<Toast><ToastTitle>Exported.</ToastTitle></Toast>, { intent: 'success' });
+    } catch (e: any) {
+      dispatchToast(<Toast><ToastTitle>Export error: {e?.message || e}</ToastTitle></Toast>, { intent: 'error' });
+    }
+  }, [workspaceId, pipelineId, spec.name, dispatchToast]);
+
+  // ── Import: POST the .zip; on success reload the list and select it ──
+  const importPipeline = useCallback(async (file: File) => {
+    if (!workspaceId) return;
+    setImportErr(null);
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const r = await fetch(
+        `/api/items/data-pipeline/import?workspaceId=${encodeURIComponent(workspaceId)}&displayName=${encodeURIComponent(file.name.replace(/\.zip$/i, ''))}`,
+        { method: 'POST', body: form },
+      );
+      const j = await r.json().catch(() => ({ ok: false, error: r.statusText }));
+      if (!j.ok) {
+        setImportErr(j.error || 'import failed');
+        dispatchToast(<Toast><ToastTitle>Import failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+        return;
+      }
+      await loadList(workspaceId);
+      if (j.pipeline?.id) setPipelineId(j.pipeline.id);
+      dispatchToast(
+        <Toast><ToastTitle>Imported &ldquo;{j.pipeline?.displayName}&rdquo;
+          {j.gate ? ` (Loom only — ${j.gate.reason})` : j.adfPublished ? ' and published to ADF.' : '.'}
+        </ToastTitle></Toast>,
+        { intent: j.gate ? 'warning' : 'success' },
+      );
+    } catch (e: any) {
+      setImportErr(e?.message || String(e));
+      dispatchToast(<Toast><ToastTitle>Import error: {e?.message || e}</ToastTitle></Toast>, { intent: 'error' });
+    }
+  }, [workspaceId, loadList, dispatchToast]);
+
+  // ── Template gallery: instantiate the selected spec onto the canvas ──
+  const instantiateTemplate = useCallback((templateSpec: PipelineSpec, t: PipelineTemplate) => {
+    patchSpec(() => ({
+      ...templateSpec,
+      name: `${templateSpec.name || t.id}_${Date.now().toString(36)}`,
+    }));
+    setSelectedActivity(null);
+    setTopTab('pipeline');
+    dispatchToast(
+      <Toast><ToastTitle>Template &ldquo;{t.title}&rdquo; loaded — wire in linked services and datasets, then Save.</ToastTitle></Toast>,
+      { intent: 'info' },
+    );
+  }, [dispatchToast]);
+
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
   const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
     if (!workspaceId || !pipelineId || !name.trim()) return;
@@ -641,6 +721,11 @@ export function DataPipelineEditor({ item, id }: Props) {
         { label: 'Delete', actions: [
           { label: 'Delete', icon: <Delete20Regular />, onClick: canDelete ? del : undefined, disabled: !canDelete },
         ]},
+        { label: 'Import / Export', actions: [
+          { label: 'Export', icon: <ArrowDownload20Regular />, onClick: pipelineId ? exportPipeline : undefined, disabled: !pipelineId, title: 'Download this pipeline as a .zip (pipeline-content.json)' },
+          { label: 'Import', icon: <ArrowUpload20Regular />, onClick: workspaceId ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId, title: 'Import a pipeline from a .zip' },
+          { label: 'Templates', icon: <AppsList20Regular />, onClick: () => setGalleryOpen(true), title: 'Open the curated template gallery' },
+        ]},
       ],
     },
     {
@@ -668,6 +753,7 @@ export function DataPipelineEditor({ item, id }: Props) {
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
+    exportPipeline,
   ]);
 
   // ============ Render ============
@@ -1025,6 +1111,32 @@ export function DataPipelineEditor({ item, id }: Props) {
             onCreate={createTriggerWith}
             busy={triggerBusy}
             error={triggerErr}
+          />
+
+          {/* Hidden file input for Import (.zip) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importPipeline(f);
+              e.target.value = '';  // reset so the same file can be re-selected
+            }}
+          />
+
+          {importErr && (
+            <MessageBar intent="error">
+              <MessageBarBody>Import failed: {importErr}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          {/* Template gallery flyout */}
+          <TemplateGalleryFlyout
+            open={galleryOpen}
+            onOpenChange={setGalleryOpen}
+            onSelect={instantiateTemplate}
           />
         </div>
       }
