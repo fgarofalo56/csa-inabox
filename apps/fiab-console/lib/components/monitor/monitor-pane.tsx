@@ -141,13 +141,23 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security' | 'maintenance';
+
+const TAB_KEYS: TabKey[] = ['overview', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'alerts', 'cost', 'security', 'maintenance'];
 
 export function MonitorPane() {
   const styles = useStyles();
   const [tab, setTab] = useState<TabKey>('overview');
   const [unauth, setUnauth] = useState(false);
   const onUnauth = useCallback(() => setUnauth(true), []);
+
+  // Deep-link support: /monitor?tab=maintenance (used by the Delta-maintenance
+  // job toast). Runs once on mount.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && (TAB_KEYS as string[]).includes(t)) setTab(t as TabKey);
+  }, []);
 
   return (
     <div>
@@ -166,6 +176,7 @@ export function MonitorPane() {
         <Tab value="alerts">Alerts</Tab>
         <Tab value="cost">Cost</Tab>
         <Tab value="security">Security</Tab>
+        <Tab value="maintenance">Maintenance</Tab>
       </TabList>
 
       {/* Only the active tab mounts → its fetch only fires when shown. */}
@@ -178,6 +189,7 @@ export function MonitorPane() {
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
       {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
       {tab === 'security' && <SecurityTab onUnauth={onUnauth} />}
+      {tab === 'maintenance' && <MaintenanceTab onUnauth={onUnauth} />}
     </div>
   );
 }
@@ -935,6 +947,116 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
           loading={events === null}
           empty={gate ? 'Configure the Loom subscription to read the Activity Log.' : 'No control-plane activity in this window.'}
           ariaLabel="Azure Activity Log"
+        />
+      </Section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Maintenance — Delta Lake OPTIMIZE / VACUUM / ZORDER BY jobs (Synapse Spark)
+// ---------------------------------------------------------------------------
+
+interface MaintenanceJob {
+  id: string;
+  container: string;
+  tableName: string;
+  pool: string;
+  ops: string[];
+  sessionId: number;
+  statementId?: number;
+  state: 'starting' | 'submitting' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  detail?: string;
+  submittedAt: string;
+  updatedAt: string;
+  submittedBy: string;
+}
+
+function maintBadge(state: string) {
+  const s = (state || '').toLowerCase();
+  if (s === 'succeeded') return <Badge color="success" appearance="filled">Succeeded</Badge>;
+  if (s === 'failed') return <Badge color="danger" appearance="filled">Failed</Badge>;
+  if (s === 'running') return <Badge color="brand" appearance="filled">Running</Badge>;
+  if (s === 'cancelled') return <Badge color="subtle" appearance="filled">Cancelled</Badge>;
+  return <Badge color="informative" appearance="outline">{state || 'starting'}</Badge>;
+}
+
+function MaintenanceTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [jobs, setJobs] = useState<MaintenanceJob[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setJobs(null); setErr(null);
+    fetch('/api/lakehouse/maintenance').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setJobs([]); return; }
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to load maintenance jobs'); setJobs([]); return; }
+      setJobs(j.jobs || []);
+    }).catch((e) => { if (alive) { setErr(String(e)); setJobs([]); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
+  const kpis = useMemo(() => {
+    const j = jobs ?? [];
+    const running = j.filter((x) => x.state === 'running' || x.state === 'starting' || x.state === 'submitting').length;
+    const succeeded = j.filter((x) => x.state === 'succeeded').length;
+    const failed = j.filter((x) => x.state === 'failed').length;
+    return [
+      { label: 'Jobs', value: j.length, accent: undefined as string | undefined },
+      { label: 'In progress', value: running, accent: undefined },
+      { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
+      { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
+    ];
+  }, [jobs, styles]);
+
+  const columns: LoomColumn<MaintenanceJob>[] = useMemo(() => [
+    { key: 'tableName', label: 'Table', width: 220, render: (j) => `${j.container}/${j.tableName}` },
+    { key: 'ops', label: 'Operations', width: 280, render: (j) => (j.ops || []).join(', ') },
+    { key: 'pool', label: 'Spark pool', width: 150, render: (j) => j.pool },
+    { key: 'state', label: 'Status', width: 130, filterable: true, render: (j) => maintBadge(j.state) },
+    { key: 'submittedAt', label: 'Submitted', width: 180, getValue: (j) => new Date(j.submittedAt).getTime(), render: (j) => new Date(j.submittedAt).toLocaleString() },
+    { key: 'submittedBy', label: 'Submitted by', width: 200, render: (j) => j.submittedBy },
+    { key: 'detail', label: 'Result', width: 320, render: (j) => j.detail ?? '—' },
+  ], []);
+
+  return (
+    <div>
+      <Section
+        title="Delta table maintenance"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 12 }}>
+          OPTIMIZE / VACUUM / ZORDER BY jobs submitted from a lakehouse editor and run on Synapse Spark. Refreshing
+          advances each job by polling its Livy session — a cold Spark pool takes a couple minutes to warm up before
+          the statement runs.
+        </Caption1>
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {jobs === null ? (
+          <StatCardSkeleton />
+        ) : (
+          <div className={styles.stats}>
+            {kpis.map((k) => (
+              <div key={k.label} className={styles.stat}>
+                <span className={styles.statLabel}>{k.label}</span>
+                <span className={`${styles.statValue} ${k.accent ?? ''}`}>{k.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Jobs">
+        <LoomDataTable
+          columns={columns}
+          rows={jobs ?? []}
+          getRowId={(r) => r.id}
+          loading={jobs === null}
+          empty="No Delta maintenance jobs yet. Open a lakehouse, go to the Tables tab, and choose Maintain on a table."
+          ariaLabel="Delta maintenance jobs"
         />
       </Section>
     </div>

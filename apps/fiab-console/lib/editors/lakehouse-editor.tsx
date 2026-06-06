@@ -36,8 +36,11 @@ import {
   BookOpen20Regular, TableSimple20Regular,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
+  Wrench20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
+import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -218,6 +221,16 @@ export function LakehouseEditor({ item, id }: Props) {
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
+
+  // ---- Delta maintenance dialog (OPTIMIZE / VACUUM / ZORDER BY) ----
+  const [maintainOpen, setMaintainOpen] = useState(false);
+  const [maintainTable, setMaintainTable] = useState('');
+  // Resolve ZORDER candidate columns from the installed bundle's DDL (available
+  // even before the live ADLS schema is read). Falls back to [] when unknown.
+  const maintainColumns = useMemo(() => {
+    const def = bundleDeltaTables.find((t) => t.name === maintainTable || leafName(t.name) === maintainTable);
+    return def?.ddl ? parseDdlColumns(def.ddl) : [];
+  }, [bundleDeltaTables, maintainTable]);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -886,9 +899,10 @@ export function LakehouseEditor({ item, id }: Props) {
       { label: 'Manage', actions: [
         { label: 'Permissions', onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
         { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
+        { label: 'Maintain…', onClick: (tab === 'tables' && maintainTable) ? () => setMaintainOpen(true) : undefined, disabled: !(tab === 'tables' && maintainTable), title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
+  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings, tab, maintainTable]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -1190,6 +1204,12 @@ export function LakehouseEditor({ item, id }: Props) {
                                           }}>
                                           Query template
                                         </Button>
+                                        <Button size="small" appearance="outline" icon={<Wrench20Regular />} style={{ marginLeft: 8 }}
+                                          disabled={!activeContainer}
+                                          title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                          onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                          Maintain
+                                        </Button>
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -1226,6 +1246,10 @@ export function LakehouseEditor({ item, id }: Props) {
                                     setTab('sql');
                                   }}>
                                   Query
+                                </Button>
+                                <Button size="small" appearance="outline" icon={<Wrench20Regular />} style={{ marginLeft: 8 }}
+                                  onClick={() => { setMaintainTable(tableName); setMaintainOpen(true); }}>
+                                  Maintain
                                 </Button>
                               </TableCell>
                             </TableRow>
@@ -1884,6 +1908,14 @@ export function LakehouseEditor({ item, id }: Props) {
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <DeltaMaintenanceDialog
+            open={maintainOpen}
+            onOpenChange={setMaintainOpen}
+            container={activeContainer || ''}
+            tableName={maintainTable}
+            columns={maintainColumns}
+          />
         </>
       }
     />

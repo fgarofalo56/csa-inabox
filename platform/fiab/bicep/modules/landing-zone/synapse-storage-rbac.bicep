@@ -4,6 +4,13 @@
 // InvalidAbfsRestOperationException) because the workspace MSI cannot write the
 // default-database directory under the default filesystem.
 //
+// This grant ALSO covers Delta Lake OPTIMIZE / VACUUM / ZORDER BY maintenance
+// jobs (F19) submitted via Livy interactive sessions: the Spark executor nodes
+// run as the workspace MSI and must write compacted Parquet files + update the
+// Delta transaction log (_delta_log) back to the same ADLS account. VACUUM also
+// deletes tombstoned files. Storage Blob Data Contributor is required for all of
+// these — no additional role assignment is needed for maintenance.
+//
 // Deployed at the storage account's resource group scope (it may differ from the
 // workspace RG), so the parent passes the storage RG via a module scope.
 targetScope = 'resourceGroup'

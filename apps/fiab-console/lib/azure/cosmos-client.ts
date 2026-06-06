@@ -42,6 +42,7 @@ let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
+let _maintenanceJobs: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -131,6 +132,10 @@ async function ensure() {
   // Loom Connections — reusable data-source connection metadata (secrets live in
   // Key Vault; only the secretRef is stored here). PK /tenantId.
   _connections = await mk('connections', '/tenantId');
+  // Delta maintenance jobs — one row per OPTIMIZE / VACUUM / ZORDER BY job
+  // submitted to a Synapse Spark Livy session, partitioned by tenant so the
+  // Monitor "Maintenance" view hits a single physical partition.
+  _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
   _ensured = true;
 }
 
@@ -139,6 +144,7 @@ export async function workspaceAgentConfigContainer(): Promise<Container> { awai
 export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
+export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -200,6 +206,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'thread-edges', 'connections',
+  'maintenance-jobs',
 ];
 
 /** List all Loom containers with their current throughput shape. */
