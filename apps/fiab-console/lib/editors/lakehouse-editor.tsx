@@ -219,6 +219,27 @@ export function LakehouseEditor({ item, id }: Props) {
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
 
+  // Share dialog state — Azure RBAC role assignment at the container scope.
+  // Mirrors Fabric's "Share" affordance (Loom-native, no Fabric workspace).
+  // Reuses the existing /api/lakehouse/permissions POST route.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharePrincipal, setSharePrincipal] = useState('');
+  const [sharePrincipalType, setSharePrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
+  const [shareRole, setShareRole] = useState('Storage Blob Data Reader');
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
+
+  // Semantic model honest-gate dialog. DirectLake (Fabric) has no Azure-native
+  // 1:1 (it needs a Fabric/Power BI capacity); the dialog documents the
+  // Azure-native equivalent path instead of pretending to provision one.
+  const [semanticModelGateOpen, setSemanticModelGateOpen] = useState(false);
+
+  // Reference-lakehouse flag — when this lakehouse was attached as a secondary
+  // read-only source ("Add lakehouses" in the Explorer sidebar), write
+  // operations (Get data, Settings, Refresh) gray out, matching Fabric.
+  const isReferenceLakehouse = (itemQ.data?.state as any)?.isReference === true;
+
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
   // Fabric lakehouse explorer right-click menu. Each item invokes the SAME
@@ -465,6 +486,30 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
   }, [loadPerms]);
+
+  // Share — grant a principal RBAC access to this container. Mirrors Fabric's
+  // "Share" affordance via Azure RBAC (the same /api/lakehouse/permissions POST
+  // backing the Permissions dialog). No Fabric workspace involved.
+  const grantShare = useCallback(async () => {
+    if (!activeContainer || !sharePrincipal.trim()) return;
+    setShareBusy(true); setShareError(null); setShareSuccess(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          container: activeContainer,
+          principalId: sharePrincipal.trim(),
+          principalType: sharePrincipalType,
+          role: shareRole,
+        }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Share');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setShareSuccess(`Granted ${shareRole} to ${sharePrincipal.trim()} at ${new Date().toLocaleTimeString()}.`);
+      setSharePrincipal('');
+    } catch (e: any) { setShareError(e?.message || String(e)); }
+    finally { setShareBusy(false); }
+  }, [activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
 
   const loadSettings = useCallback(async () => {
     if (!activeContainer) return;
@@ -872,23 +917,110 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const canFileAction = !!activeContainer;
   const hasFile = !!activePath && !activePath.isDirectory;
+  // Pre-attached secondary (reference) lakehouses are read-only — write
+  // commands gray out, matching Fabric's behavior when you "Add lakehouses".
+  const writeBlocked = !canFileAction || isReferenceLakehouse;
+  const writeTitle = isReferenceLakehouse
+    ? 'Read-only — reference lakehouse (write operations disabled)'
+    : !canFileAction ? 'Select a container first' : undefined;
+  const notebookHref = activeContainer
+    ? `/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}`
+    : '/items/notebook/new';
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Files', actions: [
-        { label: uploading ? 'Uploading…' : 'Upload file', onClick: canFileAction && !uploading ? onUploadClick : undefined, disabled: !canFileAction || uploading },
-        { label: 'New folder', onClick: canFileAction ? onNewFolder : undefined, disabled: !canFileAction },
-        { label: 'Refresh', onClick: canFileAction ? refreshActive : undefined, disabled: !canFileAction },
+      { label: 'Refresh', actions: [
+        {
+          label: 'Refresh', icon: <ArrowSync20Regular />,
+          onClick: writeBlocked ? undefined : refreshActive,
+          disabled: writeBlocked, title: writeTitle,
+        },
+      ]},
+      { label: 'Get data', actions: [
+        {
+          label: 'Get data', disabled: writeBlocked, title: writeTitle,
+          dropdownItems: [
+            {
+              label: uploading ? 'Uploading…' : 'Upload', icon: <ArrowUpload20Regular />,
+              onClick: writeBlocked || uploading ? undefined : onUploadClick,
+              disabled: writeBlocked || uploading, title: writeTitle,
+            },
+            {
+              label: 'New shortcut', icon: <LinkMultiple20Regular />,
+              onClick: writeBlocked ? undefined : () => { setTab('shortcuts'); openShortcutWizard(); },
+              disabled: writeBlocked, title: writeTitle,
+            },
+            {
+              label: 'New dataflow', icon: <Database20Regular />,
+              onClick: () => router.push('/items/dataflow/new'),
+            },
+            {
+              label: 'New pipeline', icon: <Database20Regular />,
+              onClick: () => router.push('/items/data-pipeline/new'),
+            },
+            {
+              label: 'New notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push(notebookHref),
+            },
+            {
+              label: 'Copy activity', icon: <ArrowDownload20Regular />,
+              onClick: () => router.push('/items/copy-job/new'),
+            },
+          ],
+        },
+      ]},
+      { label: 'Analyze data', actions: [
+        {
+          label: 'Analyze data',
+          dropdownItems: [
+            {
+              label: 'SQL endpoint', icon: <Database20Regular />,
+              onClick: () => setTab('sql'),
+            },
+            {
+              label: 'New notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push(notebookHref),
+            },
+            {
+              label: 'Existing notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push('/items/notebook/new'),
+            },
+          ],
+        },
+      ]},
+      { label: 'Data model', actions: [
+        {
+          label: 'New semantic model', icon: <TableSimple20Regular />,
+          onClick: () => setSemanticModelGateOpen(true),
+          title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path',
+        },
       ]},
       { label: 'Query', actions: [
-        { label: 'Preview', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
-        { label: 'Query this file', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
+        { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
+        { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-        { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
+        {
+          label: 'Settings', icon: <Info20Regular />,
+          onClick: writeBlocked ? undefined : openSettings,
+          disabled: writeBlocked, title: writeTitle,
+        },
+        {
+          label: 'Permissions', icon: <LinkMultiple20Regular />,
+          onClick: activeContainer ? openPerms : undefined,
+          disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined,
+        },
+        {
+          label: 'Share', icon: <Add20Regular />,
+          onClick: activeContainer ? () => { setShareError(null); setShareSuccess(null); setShareOpen(true); } : undefined,
+          disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined,
+        },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
+  ], [
+    writeBlocked, writeTitle, uploading, onUploadClick, refreshActive,
+    openShortcutWizard, router, notebookHref, hasFile, activePath, selectFile,
+    activeContainer, openPerms, openSettings,
+  ]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -1879,6 +2011,123 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>
                   <Button appearance="primary" onClick={saveSettings} disabled={settingsBusy}>
                     {settingsBusy ? 'Saving…' : 'Save settings'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Share dialog — Azure RBAC role assignment at the container scope.
+              Loom-native mirror of Fabric's "Share" affordance; reuses the
+              same /api/lakehouse/permissions POST as the Permissions dialog.
+              No Fabric workspace required. */}
+          <Dialog open={shareOpen} onOpenChange={(_, d) => {
+            setShareOpen(d.open);
+            if (!d.open) { setSharePrincipal(''); setShareError(null); setShareSuccess(null); }
+          }}>
+            <DialogSurface style={{ maxWidth: '560px' }}>
+              <DialogBody>
+                <DialogTitle>Share — {activeContainer || 'lakehouse'}</DialogTitle>
+                <DialogContent>
+                  <Caption1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
+                    Grant a user, group, or service principal access to this lakehouse
+                    container via Azure RBAC. Provide the Entra ID object id of the
+                    recipient. Sharing is applied directly on the storage scope — no
+                    Fabric or Power BI workspace is involved.
+                  </Caption1>
+                  {shareError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>Share failed</MessageBarTitle>{shareError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {shareSuccess && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>{shareSuccess}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  <Field label="Principal object id" required hint="Entra ID user, group, or service principal object id (GUID)">
+                    <Input
+                      value={sharePrincipal}
+                      onChange={(_, d) => setSharePrincipal(d.value)}
+                      placeholder="11111111-2222-3333-4444-555555555555"
+                    />
+                  </Field>
+                  <Field label="Principal type" style={{ marginTop: 8 }}>
+                    <Dropdown
+                      selectedOptions={[sharePrincipalType]}
+                      value={sharePrincipalType}
+                      onOptionSelect={(_, d) => setSharePrincipalType((d.optionValue as any) || 'User')}
+                    >
+                      <Option value="User">User</Option>
+                      <Option value="Group">Group</Option>
+                      <Option value="ServicePrincipal">Service principal</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Permission level" style={{ marginTop: 8 }}>
+                    <Dropdown
+                      selectedOptions={[shareRole]}
+                      value={shareRole}
+                      onOptionSelect={(_, d) => setShareRole(d.optionValue || shareRole)}
+                    >
+                      <Option value="Storage Blob Data Reader">Read (Storage Blob Data Reader)</Option>
+                      <Option value="Storage Blob Data Contributor">Read + Write (Storage Blob Data Contributor)</Option>
+                      <Option value="Storage Blob Data Owner">Full control (Storage Blob Data Owner)</Option>
+                    </Dropdown>
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" disabled={shareBusy} onClick={() => setShareOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={shareBusy || !sharePrincipal.trim()} onClick={grantShare}>
+                    {shareBusy ? 'Granting…' : 'Grant access'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* New semantic model — honest gate. In Fabric this creates a
+              DirectLake Power BI model over the lakehouse Delta tables, which
+              requires a Fabric/Power BI capacity. There is no Azure-native 1:1
+              (per no-fabric-dependency.md the lakehouse itself is 100% Azure-
+              native, but DirectLake specifically needs a capacity). The dialog
+              documents the supported Azure-native reporting path instead. */}
+          <Dialog open={semanticModelGateOpen} onOpenChange={(_, d) => setSemanticModelGateOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '600px' }}>
+              <DialogBody>
+                <DialogTitle>New semantic model</DialogTitle>
+                <DialogContent>
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Requires Power BI / Fabric capacity</MessageBarTitle>
+                      In Microsoft Fabric, a Lakehouse semantic model uses{' '}
+                      <strong>DirectLake</strong> storage mode — the model reads Delta
+                      Parquet directly from OneLake without import. That path needs a
+                      Fabric capacity (F2+) and the Lakehouse SQL analytics endpoint, so
+                      it has no Azure-native 1:1 and is intentionally not provisioned here.
+                      <br /><br />
+                      <strong>Azure-native path (no Fabric capacity):</strong> connect
+                      Power BI Desktop to this lakehouse over the Synapse Serverless SQL
+                      endpoint (<code>&lt;workspace&gt;-ondemand.sql.azuresynapse.net</code>)
+                      using Import or DirectQuery, then publish. Or use{' '}
+                      <strong>Analyze data &rarr; SQL endpoint</strong> on this ribbon to
+                      query the Delta tables with T-SQL and build reports from there.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
+                    If your org runs a Fabric capacity alongside Loom, set{' '}
+                    <code>LOOM_LAKEHOUSE_BACKEND=fabric</code> with a bound workspace to
+                    enable the native "New semantic model" command — it stays strictly
+                    opt-in and never gates the default Azure-native lakehouse.
+                  </Caption1>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSemanticModelGateOpen(false)}>Close</Button>
+                  <Button
+                    appearance="primary"
+                    icon={<Database20Regular />}
+                    onClick={() => { setSemanticModelGateOpen(false); setTab('sql'); }}
+                  >
+                    Open SQL endpoint
                   </Button>
                 </DialogActions>
               </DialogBody>

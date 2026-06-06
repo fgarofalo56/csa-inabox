@@ -22,6 +22,11 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | Download a file | Explorer context menu |
 | 14 | Object Properties | Explorer context menu |
 | 15 | List / delete existing shortcuts | Explorer (shortcuts appear as folders/tables) |
+| 16 | **Get data** ribbon menu (Upload, New shortcut, New dataflow, New pipeline, New notebook, Copy activity) | Home ribbon → Get data ▼ |
+| 17 | **Analyze data** ribbon menu (SQL endpoint, New/Existing notebook) | Home ribbon → Analyze data ▼ |
+| 18 | **New semantic model** (DirectLake over Delta) | Home ribbon |
+| 19 | **Share** the lakehouse | Home ribbon → Share |
+| 20 | **Reference (secondary) lakehouse** is read-only — write commands gray out | Explorer "Add lakehouses" |
 
 ## Loom coverage
 
@@ -42,6 +47,11 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | ✅ (built) | Download via `/api/lakehouse/download` (ADLS byte passthrough, `attachment` disposition). |
 | 14 | ✅ (built) | Properties dialog from the real ADLS metadata already in state. |
 | 15 | ⚠️ (honest-gate) | Folds into row 7 — list/delete of native shortcuts ships with the Azure-native engine build (tracked design doc). No Fabric REST. |
+| 16 | ✅ (built) | `Get data ▼` Fluent Menu in the ribbon (`ribbon.tsx` `dropdownItems`). Upload → `onUploadClick`; New shortcut → `setTab('shortcuts')` + `openShortcutWizard()`; New dataflow/pipeline/notebook/Copy activity → `router.push('/items/<type>/new')` (real registered editors). Every item navigates to a real surface — no toast. Grays out on a reference lakehouse. |
+| 17 | ✅ (built) | `Analyze data ▼` menu. SQL endpoint → `setTab('sql')` (Synapse Serverless OPENROWSET, row 6 backend); New notebook → `/items/notebook/new?lakehouse=`; Existing notebook → `/items/notebook/new`. |
+| 18 | ⚠️ (honest-gate) | `New semantic model` opens a `MessageBar intent="warning"` dialog: Fabric DirectLake needs a Power BI/Fabric capacity (no Azure-native 1:1), documents the Synapse-Serverless + Power BI Desktop path, and offers an in-app "Open SQL endpoint" action. Strictly opt-in via `LOOM_LAKEHOUSE_BACKEND=fabric`; never gates the default Azure-native lakehouse. |
+| 19 | ✅ (built) | `Share` dialog grants Entra principals container-scope RBAC via the existing `/api/lakehouse/permissions` POST (Storage Blob Data Reader/Contributor/Owner). Real ARM role assignment — no Fabric/Power BI workspace. |
+| 20 | ✅ (built) | `isReferenceLakehouse = state.isReference === true` drives `writeBlocked`; Refresh, Get data, Settings disable with a "Read-only — reference lakehouse" tooltip. Analyze data, Preview, Query, Permissions, Share (read/admin) stay enabled, matching Fabric. |
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
@@ -50,5 +60,8 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 - Context-menu commands → reuse the above backends (no separate / dead paths).
 - Settings → `defaultSparkPool` is an enumerated Dropdown bound to real Synapse Spark pools from `/api/loom/compute-targets` (no freeform compute input); honest empty-state when none deployed.
 - Shortcuts → **no backend yet, by design.** Honest infra-gate only. The Azure-native engine (ADLS Gen2 + Synapse Serverless / Databricks UC + Cosmos registry) is tracked in `docs/fiab/design/lakehouse-shortcuts.md`. The prior Fabric REST path (`/api/catalog/shortcut`) was removed from this editor to eliminate the lakehouse's last hard Fabric dependency.
+- Get data / Analyze data menus → client-side `router.push` to existing item editors (`/items/dataflow|data-pipeline|notebook|copy-job/new`) + tab switches (`setTab('sql'|'shortcuts')`); upload/shortcut reuse the existing ADLS/wizard handlers. No new BFF route.
+- Share → existing `/api/lakehouse/permissions` POST (ARM `Microsoft.Authorization/roleAssignments` at the container scope) — same backend the Permissions dialog uses.
+- New semantic model → no backend (intentional honest-gate). DirectLake is Fabric-capacity-only and strictly opt-in; the dialog points to the Synapse-Serverless + Power BI Desktop Azure-native path.
 
 Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**
