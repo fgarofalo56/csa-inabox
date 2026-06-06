@@ -1,5 +1,13 @@
 # Data Science parity
 
+!!! warning "Shipped reality vs. design (2026-06-06)"
+    The shipped data-science surfaces are the **`ml-model`** editor (Azure ML
+    model registry + online endpoints), **`prompt-flow`**, and the **AI Foundry**
+    agents/evals editors — all on real Azure REST. The **`apps/fiab-ai-functions`
+    PyPI library and the dedicated Models/Endpoints panes described below do NOT
+    exist** (an `mlflow-client.ts` exists but is not surfaced as a pane). Treat
+    the `fiab_ai_functions` import + those panes as design/roadmap.
+
 ## What Fabric does
 
 Fabric Data Science = Notebook + ML Model + ML Experiment + ML Job

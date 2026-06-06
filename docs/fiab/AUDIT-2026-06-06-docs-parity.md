@@ -33,16 +33,16 @@ editors (`lib/editors/*`), API routes (`app/api/**`), Azure clients
 | `services/activator-engine.md` | 8 action types (Teams/Email/Power Automate/Logic App/Databricks Job/ADF/UDF/Webhook) | engine `ActionType` = 4 (Teams, Email, LogicApp, Webhook) | **fixed in this batch** |
 | `workloads/data-activator-parity.md` | same 8-action surface table | same — 4 implemented | **fixed in this batch** |
 | `workloads/activator.md` | Fabric REST documented as the default backend | code default = Azure-native (Cosmos + Monitor); Fabric opt-in via `LOOM_ACTIVATOR_BACKEND=fabric`. Also understates shipped start/stop | **fixed in this batch** |
-| `workloads/direct-lake-parity.md`, `services/direct-lake-shim.md` | TOM/XMLA partition refresh; TMDL editor; visual model designer; <30s refresh SLA | semantic-model build uses Power BI **push datasets** ("no XMLA required"); no TMDL editor / designer in `lib/editors` | tracked (banner added) |
-| `workloads/onelake-parity.md` | `apps/fiab-shortcuts-service` Container App + Redis cache | no such app; shortcut logic is in-Console (`shortcut-engines.ts`) | tracked |
-| `workloads/data-science.md` | `apps/fiab-ai-functions/` PyPI library; Models/Endpoints panes | no such app/package; no models/endpoints pane | tracked |
+| `workloads/direct-lake-parity.md`, `services/direct-lake-shim.md` | TOM/XMLA partition refresh; TMDL editor; visual model designer; <30s refresh SLA | semantic-model build uses Power BI **push datasets** ("no XMLA required"); no TMDL editor / designer in `lib/editors` | **fixed — banners added** |
+| `workloads/onelake-parity.md` | `apps/fiab-shortcuts-service` Container App + Redis cache | no such app; shortcut logic is in-Console (`shortcut-engines.ts`) | **fixed — banner added** |
+| `workloads/data-science.md` | `apps/fiab-ai-functions/` PyPI library; Models/Endpoints panes | no such app/package; no models/endpoints pane | **fixed — banner added** |
 | `tutorials/01–08` | per-workspace left-rail panes; `loom-dl-shim`/`loom-mirroring`/`loom-marketplace`/`fiab-migrate` CLIs; Databricks-Job activator action; `POST /api/agent/<id>/chat` | console uses a flat workspace item tree + global nav + "+ New item" editors; no such CLIs/endpoint; activator actions are Teams/Email/Webhook/ADF/Notebook/PowerAutomate | **tracked — rewrite 01–08** |
 
 ## Direction 2 — shipped but undocumented
 
 | feature | file | status |
 |---|---|---|
-| `/api/network/private-endpoints` route group | `app/api/network/private-endpoints/route.ts` | tracked (add to a networking/admin doc) |
+| `/api/network/private-endpoints` route group | `app/api/network/private-endpoints/route.ts` | **fixed — `docs/fiab/admin/network-private-dns.md`** |
 
 Everything else recent (mirroring Weave edges, API-marketplace mini-app,
 connections, data-agent, data-api-builder) is documented.
@@ -51,9 +51,7 @@ connections, data-agent, data-api-builder) is documented.
 
 1. Rewrite tutorials 01–08 against the real navigation (flat workspace item tree
    + global nav + "+ New item"); remove/relabel the non-existent CLIs; fix the
-   activator action list and the agent endpoint.
-2. Reconcile `direct-lake-*`, `onelake-parity.md`, `data-science.md` to the
-   shipped Console paths (push datasets; in-Console shortcuts; the real
-   ML/Foundry surfaces) — or clearly mark the standalone-app architecture as
-   roadmap, not shipped.
-3. Document `/api/network/private-endpoints`.
+   activator action list and the agent endpoint. **(still open)**
+2. ✅ Reconciled `direct-lake-*`, `onelake-parity.md`, `data-science.md` with
+   honest shipped-vs-design banners.
+3. ✅ Documented `/api/network/private-endpoints` (`docs/fiab/admin/network-private-dns.md`).
