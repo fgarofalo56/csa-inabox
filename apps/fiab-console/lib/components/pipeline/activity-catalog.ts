@@ -75,6 +75,10 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
         source: { type: 'BlobSource' },
         sink: { type: 'BlobSink' },
         enableStaging: false,
+        enableSkipIncompatibleRow: false,
+        validateDataConsistency: false,
+        // dataIntegrationUnits / parallelCopies omitted = Auto.
+        // translator omitted = default column-name mapping.
       },
       inputs: [],
       outputs: [],
