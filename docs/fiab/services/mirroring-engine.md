@@ -15,6 +15,19 @@
     documentation before making decisions.
 
 
+!!! warning "Shipped reality vs. design (2026-06-06)"
+    **What ships today** is the Azure-native mirror in
+    `apps/fiab-console/lib/azure/mirror-engine.ts`: on **Start**, the source
+    **change feed** is enabled (`sys.sp_change_feed_enable_db`) and each table is
+    **snapshotted to ADLS Bronze as CSV**, then surfaced for query via Synapse
+    Serverless `OPENROWSET`, a notebook, or a lakehouse shortcut (see
+    [`workloads/mirrored-database.md`](../workloads/mirrored-database.md)). The
+    **continuous Spark Structured Streaming / Debezium / Delta-MERGE pipeline and
+    the sub-60s CDC-lag SLAs described below are the target DESIGN**, not the
+    current Console path — the `loom_replicator.py` / Debezium pieces are not
+    wired to the editor. Treat the sections below as the roadmap design until this
+    banner is removed.
+
 Per [ADR fiab-0006](../adr/0006-mirroring-engine.md) and [Mirroring
 parity workload](../workloads/mirroring-parity.md).
 
