@@ -4,6 +4,14 @@ Author + test a Loom Data Agent that answers natural-language questions
 about your Silver table from [Tutorial 02](02-first-lakehouse.md).
 **30 minutes.**
 
+!!! warning "Navigation accuracy (2026-06-06)"
+    There is **no per-workspace “Data Agents” pane.** Create one with **+ New
+    item → Data agent** (or the global **Data agents** left-nav). Configure it on
+    the **Build** tab (sources + instructions + few-shot examples), try it on the
+    **Test** tab, and **Publish** to the Foundry Agent Service. There is **no
+    `POST /api/agent/<id>/chat` endpoint** — test in the editor or call the
+    published Foundry agent.
+
 ## Prerequisites
 
 - Workspace with `noaa_silver_daily` table from Tutorial 02

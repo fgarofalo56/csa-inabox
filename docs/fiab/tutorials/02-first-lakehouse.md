@@ -3,6 +3,14 @@
 Create a Bronze Delta table from sample data and run a Spark transform
 into Silver. **30 minutes.**
 
+!!! warning "Navigation accuracy (2026-06-06)"
+    Loom uses **top-level left-nav surfaces + a flat workspace item tree**;
+    create items with **“+ New item”** (each opens at `/items/<type>/<id>`).
+    **Lakehouse / Notebook / Warehouse are item editors (or global pages), not
+    per-workspace “panes.”** Where this tutorial says “click the Lakehouse pane in
+    the workspace left rail,” instead open the lakehouse item from the workspace
+    tree (or **+ New item → Lakehouse**). A full step refresh is tracked.
+
 ## Prerequisites
 
 - Workspace from [Tutorial 01](01-first-workspace.md)

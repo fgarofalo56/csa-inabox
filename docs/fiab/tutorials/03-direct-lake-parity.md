@@ -4,6 +4,14 @@ Author a TMDL semantic model over the Silver table from
 [Tutorial 02](02-first-lakehouse.md), configure the Direct-Lake-Shim
 refresh policy, build a Power BI report. **45 minutes.**
 
+!!! warning "Shipped vs. roadmap (2026-06-06)"
+    The **`loom-dl-shim` / `loom-semantic-model` CLIs and the TMDL/XMLA shim
+    described here do NOT exist.** The shipped way to publish a model is the
+    item's **Weave → “Build a Power BI model”** edge (it reads a warehouse table
+    or a custom SQL query and creates a real Power BI **push dataset** — no XMLA).
+    See [`direct-lake-parity`](../workloads/direct-lake-parity.md). The CLI steps
+    below are roadmap design, not the current product.
+
 ## Prerequisites
 
 - Workspace + `noaa_silver_daily` Silver table from Tutorial 02
