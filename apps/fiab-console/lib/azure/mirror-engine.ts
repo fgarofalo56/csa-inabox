@@ -252,23 +252,30 @@ async function getPrimaryKeyColumns(server: string, database: string, schema: st
 
 /**
  * Read only the rows changed since `sinceVersion` via CHANGETABLE, joined back to
- * the user table on the PK so updated/inserted rows carry full column data and
- * deleted rows carry NULLs + SYS_CHANGE_OPERATION='D'. `sinceVersion` is embedded
- * as a bigint literal (CHANGETABLE's second argument must be a scalar/constant,
- * not a bound parameter); it is always a server-sourced number, never user input.
- * Identifiers are bracket-quoted. Returns the ordered column list + changed rows.
+ * the user table on the PK so updated/inserted rows carry full column data. The
+ * delta CSV deliberately carries **only the user table's columns** (`T.*`) and NOT
+ * `CT.SYS_CHANGE_OPERATION`: the snapshot and every delta land in the same Bronze
+ * folder and are read together by one folder-scoped OPENROWSET(BULK '<folder>/',
+ * HEADER_ROW=TRUE), so all files must share an identical header — an extra
+ * change-op column would misalign columns across files and break the "one logical
+ * table" query. Deleted rows (SYS_CHANGE_OPERATION='D') are therefore filtered out
+ * here (they would otherwise be all-NULL non-PK columns); delete propagation is a
+ * disclosed follow-up. `sinceVersion` is embedded as a bigint literal (CHANGETABLE's
+ * second argument must be a scalar/constant, not a bound parameter); it is always a
+ * server-sourced number, never user input. Identifiers are bracket-quoted. Returns
+ * the ordered column list (matching the snapshot header) + changed rows.
  */
 async function readChangedRows(
   server: string, database: string, schema: string, table: string, sinceVersion: number, pkCols: string[],
 ): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
   const pkJoin = pkCols.map((c) => `T.${bracket(c)} = CT.${bracket(c)}`).join(' AND ');
   const sql =
-    `SELECT T.*, CT.SYS_CHANGE_OPERATION AS SYS_CHANGE_OPERATION ` +
+    `SELECT T.* ` +
     `FROM ${bracket(schema)}.${bracket(table)} AS T ` +
-    `RIGHT OUTER JOIN CHANGETABLE(CHANGES ${bracket(schema)}.${bracket(table)}, ${BigInt(sinceVersion).toString()}) AS CT ` +
+    `JOIN CHANGETABLE(CHANGES ${bracket(schema)}.${bracket(table)}, ${BigInt(sinceVersion).toString()}) AS CT ` +
     `ON ${pkJoin}`;
   const recordset = await executeParameterized<Record<string, unknown>>(server, database, sql);
-  const cols = recordset.length ? Object.keys(recordset[0]) : ['SYS_CHANGE_OPERATION'];
+  const cols = recordset.length ? Object.keys(recordset[0]) : [];
   return { columns: cols, rows: recordset };
 }
 
@@ -281,10 +288,21 @@ async function snapshotTableIncremental(
   src: MirrorSource, t: MirrorTableSpec, basePath: string, sinceVersion: number, pkCols: string[], lastSync: string,
 ): Promise<MirrorTableResult> {
   const { columns, rows } = await readChangedRows(src.server, src.database, t.schema, t.table, sinceVersion, pkCols);
-  const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync);
   // Capture the new watermark for the next run (last committed version).
   const after = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-  result.syncVersion = after ? after.current : sinceVersion;
+  const newVersion = after ? after.current : sinceVersion;
+  // No changes since the last watermark — don't write an empty/headerless delta
+  // CSV into the folder-scoped read (it would have no columns to align). Just
+  // advance the watermark and report a clean zero-row incremental run.
+  if (!rows.length) {
+    const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
+    const openrowset =
+      `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
+      `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
+    return { schema: t.schema, table: t.table, status: 'replicated', mode: 'incremental', rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset, syncVersion: newVersion, note: 'No changes since the last sync.' };
+  }
+  const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync);
+  result.syncVersion = newVersion;
   return result;
 }
 
@@ -361,9 +379,24 @@ async function snapshotTable(
     result.mode = 'snapshot';
     if (fallbackNote) result.note = fallbackNote;
     // Stamp the watermark so the NEXT Start can read only changes since this run.
-    // Only meaningful once CT is enabled for the table; null otherwise.
+    // Change Tracking must be ON for the table to produce a watermark; on the very
+    // first Start (no saved watermark) it isn't yet, so enable it here — otherwise
+    // CHANGE_TRACKING_CURRENT_VERSION() returns NULL forever and the engine loops
+    // on full snapshots and never reaches the incremental path.
     try {
-      const ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+      let ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+      if (!ctNow) {
+        try {
+          await enableChangeTracking(src.server, src.database, t.schema, t.table);
+          ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
+          if (ctNow && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
+        } catch (ce: any) {
+          if (!fallbackNote) result.note =
+            'Change tracking could not be enabled — the next Start will re-snapshot. ' +
+            'Grant db_owner to the console identity to unlock incremental sync. ' +
+            `(${ce?.message || String(ce)})`;
+        }
+      }
       if (ctNow) result.syncVersion = ctNow.current;
     } catch { /* CT probe is best-effort; absence simply means next run re-snapshots */ }
     return result;
