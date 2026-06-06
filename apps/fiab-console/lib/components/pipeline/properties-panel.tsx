@@ -22,7 +22,7 @@ import {
   Dropdown, Option, Accordion, AccordionItem, AccordionHeader, AccordionPanel,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular } from '@fluentui/react-icons';
-import { findByType } from './activity-catalog';
+import { findForActivity } from './activity-catalog';
 import { ActivityForm, hasActivityForm } from './activity-forms';
 import type { PipelineActivity, PipelineParameter, PipelineParameterType, PipelineVariable } from './types';
 
@@ -83,11 +83,17 @@ export interface PropertiesPanelProps {
   onDelete: () => void;
   /** 'rail' = right-side panel (legacy); 'dock' = bottom dock (ADF parity). */
   layout?: 'rail' | 'dock';
+  /** Item id of the pipeline (enables live form helpers e.g. Approval URL fetch). */
+  itemId?: string;
+  /** Workspace id of the pipeline. */
+  workspaceId?: string;
+  /** Editor host API slug (default 'data-pipeline'). */
+  apiSlug?: string;
 }
 
 type TabId = 'general' | 'source-sink' | 'settings' | 'parameters' | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail' }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, workspaceId, apiSlug }: PropertiesPanelProps) {
   const s = useStyles();
   const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
@@ -132,7 +138,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
     );
   }
 
-  const def = findByType(activity.type);
+  const def = findForActivity(activity);
   const hasSourceSink = !!(activity.typeProperties && ('source' in activity.typeProperties || 'sink' in activity.typeProperties));
 
   return (
@@ -337,6 +343,9 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                   parameters={parameters}
                   variables={variables}
                   allActivities={allActivities}
+                  itemId={itemId}
+                  workspaceId={workspaceId}
+                  apiSlug={apiSlug}
                 />
                 <Accordion collapsible>
                   <AccordionItem value="raw-json">

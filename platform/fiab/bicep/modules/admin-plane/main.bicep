@@ -151,6 +151,12 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
+@description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
+param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
+
+@description('Approval Logic App resource group. Empty defaults to LOOM_DLZ_RG (where the DLZ approval Logic App is deployed).')
+param loomApprovalLogicAppRg string = ''
+
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
@@ -657,6 +663,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Approval activity (F25) - Consumption Logic App + O365 approval
+            // email backing the pipeline editor's Approval activity. Empty name
+            // -> the approval-logicapp route returns an honest 503 naming the
+            // bicep module + env var (no Fabric / Power Automate dependency).
+            { name: 'LOOM_APPROVAL_LOGIC_APP_NAME', value: loomApprovalLogicAppName }
+            { name: 'LOOM_APPROVAL_LOGIC_APP_RG', value: !empty(loomApprovalLogicAppRg) ? loomApprovalLogicAppRg : loomDlzRg }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
             { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID

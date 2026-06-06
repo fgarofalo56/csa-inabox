@@ -790,6 +790,9 @@ export function DataPipelineEditor({ item, id }: Props) {
                         parameters={parameters}
                         variables={variables}
                         layout="dock"
+                        itemId={pipelineId}
+                        workspaceId={workspaceId}
+                        apiSlug="data-pipeline"
                         onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
                         onDelete={() => { if (selected) deleteActivity(selected.name); }}
                       />
