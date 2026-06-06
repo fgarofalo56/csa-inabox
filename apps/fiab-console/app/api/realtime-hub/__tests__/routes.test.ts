@@ -37,10 +37,11 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({
   createOwnedItem: vi.fn(),
   listAllOwnedItems: vi.fn(),
   listOwnedWorkspaces: vi.fn(),
+  loadOwnedItem: vi.fn(),
 }));
 
 import { getSession } from '@/lib/auth/session';
-import { createOwnedItem, listAllOwnedItems, listOwnedWorkspaces } from '@/app/api/items/_lib/item-crud';
+import { createOwnedItem, listAllOwnedItems, listOwnedWorkspaces, loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   listFabricWorkspaces, listEventstreams, listKqlDatabases, listEventhouses,
   connectEventstreamSource, getEventstreamDefinition, FabricError, buildEventstreamDefinition,
@@ -192,33 +193,43 @@ describe('POST /api/realtime-hub/preview', () => {
   });
 });
 
-// ---------------- endpoints ----------------
+// ---------------- endpoints (Azure-native default) ----------------
 describe('GET /api/realtime-hub/endpoints', () => {
   it('401 when unauthenticated', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await ENDPOINTS(urlReq('?fabricWorkspaceId=w&eventstreamId=e'));
+    const res = await ENDPOINTS(urlReq('?workspaceId=w&eventstreamId=e'));
     expect(res.status).toBe(401);
   });
 
-  it('400 when ids are missing', async () => {
+  it('400 when eventstreamId is missing', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    const res = await ENDPOINTS(urlReq('?fabricWorkspaceId=w'));
+    const res = await ENDPOINTS(urlReq('?workspaceId=w'));
     expect(res.status).toBe(400);
   });
 
-  it('decodes the definition and projects sources/destinations/streams into endpoints', async () => {
+  it('projects the Loom eventstream item topology into endpoints', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    const topo = {
-      sources: [{ name: 's1', type: 'AzureEventHub', properties: { eventHubName: 'eh' } }],
-      destinations: [{ name: 'd1', type: 'CustomEndpoint', properties: {} }],
-      streams: [{ name: 'st', type: 'DefaultStream', properties: {} }],
-    };
-    (getEventstreamDefinition as any).mockResolvedValue(buildEventstreamDefinition(topo));
-    const res = await ENDPOINTS(urlReq('?fabricWorkspaceId=w&eventstreamId=e'));
+    (loadOwnedItem as any).mockResolvedValue({
+      id: 'e', itemType: 'eventstream', workspaceId: 'w',
+      state: { definition: {
+        sources: [{ name: 's1', type: 'AzureEventHub', properties: { eventHubName: 'eh' } }],
+        destinations: [{ name: 'd1', type: 'CustomEndpoint', properties: {} }],
+        streams: [{ name: 'st', type: 'DefaultStream', properties: {} }],
+      } },
+    });
+    const res = await ENDPOINTS(urlReq('?workspaceId=w&eventstreamId=e'));
     const j = await res.json();
     expect(j.ok).toBe(true);
+    expect(j.backend).toBe('azure-native');
     expect(j.endpoints.find((e: any) => e.role === 'source').type).toBe('AzureEventHub');
     expect(j.endpoints.find((e: any) => e.role === 'destination').name).toBe('d1');
     expect(j.endpoints.find((e: any) => e.role === 'stream').type).toBe('DefaultStream');
+  });
+
+  it('404 when the eventstream item is not found', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await ENDPOINTS(urlReq('?workspaceId=w&eventstreamId=missing'));
+    expect(res.status).toBe(404);
   });
 });

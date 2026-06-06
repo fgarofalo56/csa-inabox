@@ -189,7 +189,7 @@ export function RealTimeHubView() {
   async function openEndpoints(row: DataStreamRow) {
     setEndpointsRow(row); setEndpoints(null); setEndpointsErr(null); setEndpointsBusy(true);
     try {
-      const res = await fetch(`/api/realtime-hub/endpoints?fabricWorkspaceId=${encodeURIComponent(row.workspaceId)}&eventstreamId=${encodeURIComponent(row.id)}`);
+      const res = await fetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(row.workspaceId)}&eventstreamId=${encodeURIComponent(row.id)}`);
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setEndpointsErr(j.error || `Failed (HTTP ${res.status}).`); return; }
       setEndpoints(j.endpoints || []);
