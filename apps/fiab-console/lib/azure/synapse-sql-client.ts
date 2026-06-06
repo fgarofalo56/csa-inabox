@@ -37,7 +37,7 @@ export function dedicatedTarget(): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
   return {
-    server: `${ws}.sql.azuresynapse.net`,
+    server: `${ws}.${synapseHostSuffix()}`,
     database: pool,
     cacheKey: `dedicated:${ws}:${pool}`,
   };
@@ -46,10 +46,18 @@ export function dedicatedTarget(): SynapseTarget {
 export function serverlessTarget(database = 'master'): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   return {
-    server: `${ws}-ondemand.sql.azuresynapse.net`,
+    server: `${ws}-ondemand.${synapseHostSuffix()}`,
     database,
     cacheKey: `serverless:${ws}:${database}`,
   };
+}
+
+// Synapse SQL TDS host suffix. Commercial = sql.azuresynapse.net; the Gov
+// clouds use sql.azuresynapse.us. Driven by env so a single image serves all
+// clouds (the token audience SQL_SCOPE stays database.windows.net/.default —
+// it is the endpoint, not the audience, that differs per cloud).
+function synapseHostSuffix(): string {
+  return process.env.LOOM_SYNAPSE_HOST_SUFFIX || 'sql.azuresynapse.net';
 }
 
 function required(key: string): string {
