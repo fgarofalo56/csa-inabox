@@ -38,6 +38,11 @@ param workspaceId string
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
+@description('DLZ storage account resource ID. When set, grants the factory system-assigned MI Storage Blob Data Contributor so linked services using MSI auth (e.g. the "Practice with sample data" copy pipeline) can read/write ADLS Gen2 without an account key.')
+param storageAccountId string = ''
+
+var storageAccountName = !empty(storageAccountId) ? last(split(storageAccountId, '/')) : ''
+
 // =====================================================================
 // Data Factory
 // =====================================================================
@@ -99,6 +104,28 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '673868aa-7521-48a0-acc6-0f60742d39f5')
+  }
+}
+
+// =====================================================================
+// RBAC — ADF factory system-assigned MI → Storage Blob Data Contributor
+// on the DLZ storage account (built-in role:
+// ba92f5b4-2d11-453d-a403-e96b0029c9fe). Required so ADF linked services
+// using MSI auth (no account key) can read landing/ and write bronze/ —
+// backs the "Practice with sample data" copy pipeline.
+// =====================================================================
+
+resource storageForAdfRbac 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(storageAccountName)) {
+  name: storageAccountName
+}
+
+resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(storageAccountId)) {
+  scope: storageForAdfRbac
+  name: guid(storageAccountId, adf.id, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  properties: {
+    principalId: adf.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
 }
 

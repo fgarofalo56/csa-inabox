@@ -751,6 +751,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+            // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
+            // card: when set, the BFF uploads a sample CSV to landing/samples and
+            // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
+            // storage account (same as LOOM_ADLS_ACCOUNT). Only emitted when an
+            // ADLS account is configured, so the card's honest gate fires
+            // otherwise. Requires the ADF factory MSI to hold Storage Blob Data
+            // Contributor (granted in landing-zone/adf.bicep).
+            { name: 'LOOM_SAMPLE_ADLS', value: loomStorageAccount }
           ] : [],
           // ----------------------------------------------------------------
           // Unified Catalog federation + admin-security env wiring.
