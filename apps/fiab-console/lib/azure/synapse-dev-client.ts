@@ -27,7 +27,7 @@ const ARM_API = '2021-06-01';
 const DEV_API = '2020-12-01';
 const LIVY_API = '2019-11-01-preview';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),

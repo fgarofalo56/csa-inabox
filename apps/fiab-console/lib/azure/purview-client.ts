@@ -74,7 +74,7 @@ const SCAN_API_VERSION = '2022-07-01-preview';
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),

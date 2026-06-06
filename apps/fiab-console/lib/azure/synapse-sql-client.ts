@@ -17,7 +17,7 @@ import sql from 'mssql';
 const SQL_SCOPE = 'https://database.windows.net/.default';
 // Prefer explicit UAMI when LOOM_UAMI_CLIENT_ID is set (Container App
 // runtime). Fall back to the default chain for local dev (az CLI).
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();

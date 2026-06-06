@@ -27,7 +27,7 @@ const SECURE_SCORE_API = '2020-01-01';
 const ASSESSMENTS_API = '2021-06-01';
 const ALERTS_API = '2022-01-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();

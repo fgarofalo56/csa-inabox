@@ -36,7 +36,7 @@ const POWERAPPS_SCOPE = 'https://service.powerapps.com/.default';
 const FLOW_SCOPE = 'https://service.flow.microsoft.com/.default';
 
 // UAMI credential — used for BAP / PowerApps / Flow control-plane calls.
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const uamiCredential: TokenCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();

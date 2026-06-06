@@ -66,7 +66,7 @@ export const SINGLE_SEND_CONTENT_TYPE = 'application/atom+xml;type=entry;charset
 /** Media type for batch sends (servicebus JSON envelope). */
 export const BATCH_SEND_CONTENT_TYPE = 'application/vnd.microsoft.servicebus.json';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),
