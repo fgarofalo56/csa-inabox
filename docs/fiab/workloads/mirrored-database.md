@@ -52,6 +52,38 @@ tables per run (disclosed in the grid as `(capped)`). Other sources (Snowflake /
 open mirroring) return an **honest gate** — their Azure-native copy runtime
 (ADF / Synapse Link) is a disclosed follow-up, not a silent stub.
 
+### Incremental change-feed delta (SQL family)
+
+The **first** Start of a SQL-family mirror is a full snapshot. On a **subsequent**
+Start, the engine reads only the rows changed since the last run and appends them
+as a `delta-<timestamp>.csv` beside `snapshot.csv` — no re-snapshot. Synapse
+Serverless' `OPENROWSET` BULK path already targets the whole folder, so the
+snapshot and every delta are queried together as one logical table.
+
+This uses **SQL Server Change Tracking** (`CHANGETABLE` /
+`CHANGE_TRACKING_CURRENT_VERSION`) — an independent mechanism from
+`sp_change_feed_enable_db` (both can be active at once). The engine enables CT at
+the database (`CHANGE_RETENTION = 7 DAYS`) and table level on first contact, then
+persists a per-table **`syncVersion`** watermark in `state.tablesStatus`. Each
+table's grid row shows a **Snapshot** or **Incremental** badge (watermark in the
+tooltip).
+
+| Run | Read path | Lands as | Watermark |
+|---|---|---|---|
+| SQL — first Start | full `SELECT` | `snapshot.csv` | captures `CHANGE_TRACKING_CURRENT_VERSION` |
+| SQL — subsequent Start (CT enabled, PK present, watermark valid) | `CHANGETABLE(CHANGES …, <syncVersion>)` joined to the table on its PK | `delta-<timestamp>.csv` | advances to the new current version |
+| PostgreSQL / Cosmos | always full snapshot | `snapshot.csv` | n/a |
+
+**Honest fallbacks** (full re-snapshot with a disclosed `note` in the grid):
+
+- **CT not enabled and could not be enabled** — e.g. the console identity lacks
+  `db_owner`; the note names the grant needed. CT is turned on so the *next* run
+  goes incremental.
+- **No primary key** — `CHANGETABLE` requires a PK join; the table re-snapshots.
+- **Watermark expired** — the saved version aged out of the 7-day retention
+  window (or the table was `TRUNCATE`d, which resets CT); a full re-snapshot
+  re-baselines the watermark.
+
 ## Editor capabilities
 
 | Capability | Loom state |
@@ -60,8 +92,10 @@ open mirroring) return an **honest gate** — their Azure-native copy runtime
 | **Edit** an existing mirror's config (source / connection / tables) | Shipped (`PATCH /api/items/mirrored-database/[id]`) |
 | **Test connection** on an existing mirror | Shipped (`POST …/verify`) |
 | **Start** — real change feed + Bronze snapshot | Shipped (`POST …/[id]/state`) |
+| **Incremental delta** (SQL family, subsequent Starts via Change Tracking) | Shipped — `delta-*.csv` + per-table `syncVersion` watermark |
 | **Stop** | Shipped (landed data + change feed remain) |
 | Per-table metrics (rows, bytes, last sync, truncation) | Shipped — from the real run |
+| Snapshot vs Incremental badge per table | Shipped — from the real run |
 | **Copy SQL** (OPENROWSET) per table | Shipped |
 | Honest gate when source/Bronze unconfigured | Shipped |
 

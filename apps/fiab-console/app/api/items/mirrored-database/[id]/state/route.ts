@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { runMirrorSnapshot, type MirrorSource, type MirrorTableSpec } from '@/lib/azure/mirror-engine';
+import { runMirrorSnapshot, type MirrorSource, type MirrorTableSpec, type MirrorTableResult } from '@/lib/azure/mirror-engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,7 +61,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // ---- start: run the real Azure-native mirror ----
     const src = sourceFromState(state);
-    const run = await runMirrorSnapshot(existing.id, workspaceId, src);
+    // Per-table watermarks from the prior run let the SQL family sync only the
+    // changes since last Start (incremental); the first run has none → snapshot.
+    const prevTableStatus = (Array.isArray(state.tablesStatus) ? state.tablesStatus : []) as MirrorTableResult[];
+    const run = await runMirrorSnapshot(existing.id, workspaceId, src, prevTableStatus);
 
     const mirroringStatus = run.status === 'Running' ? 'Running' : run.status === 'Gated' ? 'NotStarted' : 'Error';
     const next: WorkspaceItem = {

@@ -51,6 +51,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
             path: t.path,
             openrowset: t.openrowset,
             truncated: t.truncated,
+            // Incremental vs full snapshot + the per-table CT watermark / disclosure.
+            mode: t.mode,
+            syncVersion: t.syncVersion,
+            note: t.note,
             error: t.error,
           })),
         }
