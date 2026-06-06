@@ -23,8 +23,8 @@ import { ChainedTokenCredential, ManagedIdentityCredential, DefaultAzureCredenti
 import { FoundryError, NotDeployedError } from './foundry-client';
 
 const credential = new ChainedTokenCredential(
-  ...(process.env.LOOM_UAMI_CLIENT_ID
-    ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID })]
+  ...((process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID)
+    ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID })]
     : []),
   new DefaultAzureCredential(),
 );

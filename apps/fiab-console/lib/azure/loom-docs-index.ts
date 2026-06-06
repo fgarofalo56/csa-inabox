@@ -55,8 +55,8 @@ export interface DocHit extends DocChunk {
 // ---------- Credentials / config ----------
 
 const credential = new ChainedTokenCredential(
-  ...(process.env.LOOM_UAMI_CLIENT_ID
-    ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID })]
+  ...((process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID)
+    ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID })]
     : []),
   new DefaultAzureCredential(),
 );

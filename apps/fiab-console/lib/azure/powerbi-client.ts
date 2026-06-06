@@ -41,7 +41,7 @@ const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsof
 const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();

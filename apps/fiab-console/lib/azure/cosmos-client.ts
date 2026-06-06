@@ -55,7 +55,7 @@ function databaseId(): string {
 }
 
 function credential() {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID;
+  const clientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   const chain: any[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());

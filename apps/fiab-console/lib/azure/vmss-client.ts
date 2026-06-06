@@ -22,7 +22,7 @@ const ARM = 'https://management.azure.com';
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const VMSS_API = '2024-07-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),
