@@ -241,7 +241,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // (Synapse Serverless preferred, Databricks UC otherwise). S3/GCS/Dataverse
   // render the create form and honest-gate on submit. Registry is the Cosmos
   // `lakehouse-shortcuts` container. See docs/fiab/design/lakehouse-shortcuts.md.
-  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse';
+  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
   type ShortcutKind = 'files' | 'tables';
   interface ShortcutRow {
     id: string; lakehouseId: string; name: string; kind: ShortcutKind;
@@ -256,6 +256,7 @@ export function LakehouseEditor({ item, id }: Props) {
     { type: 's3', label: 'Amazon S3', ready: true },
     { type: 'gcs', label: 'Google Cloud Storage', ready: true },
     { type: 'dataverse', label: 'Dataverse', ready: true },
+    { type: 'delta_sharing', label: 'Delta Sharing (cross-tenant)', ready: false },
   ];
   // In-tenant ADLS/Blob account picker (vs typing the abfss URI) + external SAS.
   const [scAdlsMode, setScAdlsMode] = useState<'picker' | 'external'>('picker');
@@ -266,6 +267,8 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scAdlsPath, setScAdlsPath] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
   const [shortcutsBusy, setShortcutsBusy] = useState(false);
+  // Selected row drives the F11 "Retry selected broken shortcut" keybinding.
+  const [selectedShortcut, setSelectedShortcut] = useState<ShortcutRow | null>(null);
   const [shortcutsError, setShortcutsError] = useState<string | null>(null);
   const [scWizardOpen, setScWizardOpen] = useState(false);
   const [scStep, setScStep] = useState<1 | 2 | 3>(1);
@@ -335,7 +338,13 @@ export function LakehouseEditor({ item, id }: Props) {
       targetUri = `abfss://${c}@${scAcctHost}/${p}`;
     }
     const credentialRef = scKvSecret.trim()
-      ? { kind: scType === 's3' ? 'awsKeys' : scType === 'gcs' ? 'gcsServiceAccount' : 'sas', keyVaultSecret: scKvSecret.trim() }
+      ? {
+          kind: scType === 's3' ? 'awsKeys'
+              : scType === 'gcs' ? 'gcsServiceAccount'
+              : scType === 'delta_sharing' ? 'deltaSharing'
+              : 'sas',
+          keyVaultSecret: scKvSecret.trim(),
+        }
       : undefined;
     try {
       const r = await fetch('/api/lakehouse/shortcuts', {
@@ -1239,7 +1248,16 @@ export function LakehouseEditor({ item, id }: Props) {
             )}
 
             {tab === 'shortcuts' && (
-              <>
+              <div
+                onKeyDown={(e) => {
+                  // F11 retries the selected broken shortcut (re-test/restore).
+                  if (e.key === 'F11' && selectedShortcut && selectedShortcut.status === 'error' && !shortcutsBusy) {
+                    e.preventDefault();
+                    testShortcut(selectedShortcut);
+                  }
+                }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}
+              >
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
                   <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
@@ -1336,7 +1354,13 @@ export function LakehouseEditor({ item, id }: Props) {
                       </TableHeader>
                       <TableBody>
                         {shortcuts.map((sc) => (
-                          <TableRow key={sc.id}>
+                          <TableRow
+                            key={sc.id}
+                            tabIndex={0}
+                            onClick={() => setSelectedShortcut(sc)}
+                            onFocus={() => setSelectedShortcut(sc)}
+                            style={selectedShortcut?.id === sc.id ? { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: -2 } : undefined}
+                          >
                             <TableCell>
                               <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                               <strong>{sc.name}</strong>
@@ -1351,26 +1375,35 @@ export function LakehouseEditor({ item, id }: Props) {
                             <TableCell>
                               {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled />}>active</Badge>}
                               {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular />} title={sc.statusDetail}>pending</Badge>}
-                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled />} title={sc.statusDetail}>error</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled />} title={sc.statusDetail}>Broken</Badge>}
                             </TableCell>
                             <TableCell>
-                              <Menu>
-                                <MenuTrigger disableButtonEnhancement>
-                                  <Button appearance="subtle" size="small">…</Button>
-                                </MenuTrigger>
-                                <MenuPopover>
-                                  <MenuList>
-                                    {sc.kind === 'tables' && sc.engineObject && (
-                                      <MenuItem icon={<Play20Regular />} onClick={() => {
-                                        setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
-                                        setTab('sql');
-                                      }}>Query (SQL)</MenuItem>
-                                    )}
-                                    <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
-                                    <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
-                                  </MenuList>
-                                </MenuPopover>
-                              </Menu>
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                {sc.status === 'error' && (
+                                  <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
+                                    onClick={() => testShortcut(sc)} disabled={shortcutsBusy}
+                                    title={`Retry — re-test the shortcut after fixing ${sc.targetType === 'delta_sharing' ? 'the Key Vault credential file' : 'the underlying issue'} (F11 on the selected row)`}>
+                                    Retry
+                                  </Button>
+                                )}
+                                <Menu>
+                                  <MenuTrigger disableButtonEnhancement>
+                                    <Button appearance="subtle" size="small">…</Button>
+                                  </MenuTrigger>
+                                  <MenuPopover>
+                                    <MenuList>
+                                      {sc.kind === 'tables' && sc.engineObject && (
+                                        <MenuItem icon={<Play20Regular />} onClick={() => {
+                                          setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
+                                          setTab('sql');
+                                        }}>Query (SQL)</MenuItem>
+                                      )}
+                                      <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
+                                      <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
+                                    </MenuList>
+                                  </MenuPopover>
+                                </Menu>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1378,7 +1411,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     </Table>
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {tab === 'preview' && (
@@ -1655,6 +1688,33 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Field>
                           <Field label="Key Vault secret name" hint="The admin-plane Key Vault secret holding the credential.">
                             <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-s3-creds" />
+                          </Field>
+                        </>
+                      )}
+                      {scType === 'delta_sharing' && (
+                        <>
+                          <MessageBar intent="warning">
+                            <MessageBarBody>
+                              <MessageBarTitle>Delta Sharing (cross-tenant)</MessageBarTitle>
+                              Authenticates with a credential file the share owner gives you via an
+                              activation link. Store the raw JSON (<code>shareCredentialsVersion</code>,
+                              <code> endpoint</code>, <code>bearerToken</code>, <code>expirationTime</code>) as a
+                              Key Vault secret and name it below. Bearer tokens expire after at most 1 year —
+                              if the share goes <strong>Broken</strong>, update the secret with a fresh file
+                              and use <strong>Retry</strong>. A <em>Tables</em> shortcut registers a Databricks
+                              Unity Catalog table over the <code>deltaSharing</code> provider (needs
+                              LOOM_DATABRICKS_HOSTNAME); a <em>Files</em> shortcut validates the share server only.
+                            </MessageBarBody>
+                          </MessageBar>
+                          <Field label="Share / table path" required
+                            hint="delta-sharing://<share>/<schema>/<table> — from the data provider">
+                            <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
+                              placeholder="delta-sharing://agency_a_perf/analytics/metrics_monthly" />
+                          </Field>
+                          <Field label="Key Vault secret name (credential file JSON)" required
+                            hint="Holds the full credential JSON: { shareCredentialsVersion, endpoint, bearerToken, expirationTime }">
+                            <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)}
+                              placeholder="delta-sharing-agency-a-cred" />
                           </Field>
                         </>
                       )}
