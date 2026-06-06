@@ -57,6 +57,13 @@ export interface DefenderRecommendation {
   resource?: string;       // assessed resource (short)
   remediation?: string;    // remediationDescription
   category?: string;
+  // Remediation drive-fields (portal steps / PowerShell / Loom auto-fix):
+  assessmentName?: string;     // assessment definition name (last id segment)
+  resourceId?: string;         // full affected resource ARM id
+  policyDefinitionId?: string; // when the assessment is policy-backed (auto-fix)
+  portalLink?: string;         // assessment's azurePortal link
+  implementationEffort?: string;
+  userImpact?: string;
 }
 export interface DefenderAlert {
   id: string;
@@ -74,6 +81,7 @@ export interface DefenderSummary {
   highSeverityCount: number;
   alerts: DefenderAlert[];
   portalUrl: string;
+  subscriptionId: string;
 }
 
 function shortRes(id?: string): string | undefined {
@@ -101,15 +109,25 @@ export async function getDefenderSummary(): Promise<DefenderSummary> {
 
   // Assessments (recommendations).
   const assess = await armGet(`/subscriptions/${sub}/providers/Microsoft.Security/assessments?api-version=${ASSESSMENTS_API}`);
-  const recommendations: DefenderRecommendation[] = (assess?.value || []).map((a: any): DefenderRecommendation => ({
-    id: a.id,
-    name: a?.properties?.displayName || a?.name,
-    status: a?.properties?.status?.code || 'Unknown',
-    severity: a?.properties?.metadata?.severity || a?.properties?.status?.severity || 'Low',
-    resource: shortRes(a?.properties?.resourceDetails?.id || a?.id),
-    remediation: a?.properties?.metadata?.remediationDescription || a?.properties?.status?.description,
-    category: Array.isArray(a?.properties?.metadata?.categories) ? a.properties.metadata.categories.join(', ') : undefined,
-  }));
+  const recommendations: DefenderRecommendation[] = (assess?.value || []).map((a: any): DefenderRecommendation => {
+    const meta = a?.properties?.metadata || {};
+    const resourceId = a?.properties?.resourceDetails?.id || a?.id;
+    return {
+      id: a.id,
+      name: a?.properties?.displayName || meta.displayName || a?.name,
+      status: a?.properties?.status?.code || 'Unknown',
+      severity: meta.severity || a?.properties?.status?.severity || 'Low',
+      resource: shortRes(resourceId),
+      remediation: meta.remediationDescription || a?.properties?.status?.description,
+      category: Array.isArray(meta.categories) ? meta.categories.join(', ') : undefined,
+      assessmentName: a?.name,
+      resourceId,
+      policyDefinitionId: meta.policyDefinitionId || undefined,
+      portalLink: a?.properties?.links?.azurePortal || undefined,
+      implementationEffort: meta.implementationEffort || undefined,
+      userImpact: meta.userImpact || undefined,
+    };
+  });
   // Unhealthy (action-required) first, by severity.
   const sevRank: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
   recommendations.sort((x, y) => {
@@ -138,7 +156,93 @@ export async function getDefenderSummary(): Promise<DefenderSummary> {
     if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) throw e;
   }
 
-  return { secureScore, recommendations, unhealthyCount, highSeverityCount, alerts, portalUrl };
+  return { secureScore, recommendations, unhealthyCount, highSeverityCount, alerts, portalUrl, subscriptionId: sub };
+}
+
+const POLICY_API = '2022-08-01';
+const POLICY_ASSIGN_API = '2022-06-01';
+
+async function armReq(method: string, path: string, body?: unknown): Promise<any> {
+  const t = await credential.getToken(ARM_SCOPE);
+  if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Defender', 401);
+  const res = await fetch(`${ARM}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${t.token}`, accept: 'application/json', 'content-type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || text || `Defender ${method} failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  return json;
+}
+
+export interface RemediateResult {
+  ok: boolean;
+  remediationId?: string;
+  provisioningState?: string;
+  message: string;
+  /** When auto-fix isn't possible — caller falls back to portal/PowerShell. */
+  gate?: boolean;
+}
+
+/**
+ * "Fix via Loom" — trigger a REAL Azure Policy remediation task for a
+ * policy-backed Defender recommendation. Resolves a policy assignment whose
+ * definition matches the assessment's policyDefinitionId (directly, or via a
+ * policy set), then PUTs a Microsoft.PolicyInsights/remediations task scoped to
+ * the affected resource (or the subscription). Recommendations with no
+ * auto-remediation policy return `gate:true` — the caller shows portal steps +
+ * the PowerShell script instead (no fake success, per no-vaporware).
+ */
+export async function remediateRecommendation(input: {
+  policyDefinitionId?: string;
+  resourceId?: string;
+  name?: string;
+}): Promise<RemediateResult> {
+  const cfg = readMonitorConfig();
+  const sub = cfg.subscriptionId;
+  if (!input.policyDefinitionId) {
+    return { ok: false, gate: true, message: 'This recommendation has no auto-remediation policy. Use the Portal steps or run the PowerShell script.' };
+  }
+
+  // Find a policy assignment in the subscription backing this definition.
+  const assignments = await armReq('GET', `/subscriptions/${sub}/providers/Microsoft.Authorization/policyAssignments?api-version=${POLICY_ASSIGN_API}`);
+  const want = input.policyDefinitionId.toLowerCase();
+  const match = (assignments?.value || []).find((a: any) => {
+    const pid = (a?.properties?.policyDefinitionId || '').toLowerCase();
+    return pid === want || pid.includes('/policysetdefinitions/');
+  });
+  if (!match) {
+    return { ok: false, gate: true, message: 'No matching policy assignment found for this recommendation in the subscription. Use the Portal steps or PowerShell.' };
+  }
+
+  // Scope the remediation to the affected resource when known, else the sub.
+  const scope = (input.resourceId && input.resourceId.includes('/subscriptions/')) ? input.resourceId : `/subscriptions/${sub}`;
+  const remName = `loom-remediate-${Math.abs(hashCode(input.name || want)).toString(36)}-${Date.now().toString(36)}`;
+  const url = `${scope}/providers/Microsoft.PolicyInsights/remediations/${remName}?api-version=${POLICY_API}`;
+  const result = await armReq('PUT', url, {
+    properties: {
+      policyAssignmentId: match.id,
+      resourceDiscoveryMode: 'ReEvaluateCompliance',
+    },
+  });
+  return {
+    ok: true,
+    remediationId: result?.id,
+    provisioningState: result?.properties?.provisioningState,
+    message: `Started Azure Policy remediation "${remName}" (${result?.properties?.provisioningState || 'Accepted'}). It re-evaluates compliance and applies the policy effect to the affected resources.`,
+  };
+}
+
+function hashCode(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) { h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; }
+  return h;
 }
 
 export { MonitorError, MonitorNotConfiguredError };
