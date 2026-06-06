@@ -31,24 +31,26 @@ real mirror engine; per-table metrics come back from the actual run.
 
 ## How Start works (Azure-native engine)
 
-`lib/azure/mirror-engine.ts` — for the **SQL family** (Azure SQL DB / MI / SQL
-Server 2016-2025):
+`lib/azure/mirror-engine.ts` snapshots three source families to ADLS Bronze CSV:
 
-1. **Change feed** — enables the source database change feed via the real
-   `sys.sp_change_feed_enable_db` primitive (the same CDC engine Fabric mirroring
-   consumes, but it is an Azure SQL feature). DDL runs as a deliberate action.
-2. **Snapshot** — reads each selected table (or enumerates them) with a real
-   read-only `SELECT` and lands it as **CSV in ADLS Bronze** under
-   `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/snapshot.csv`.
-3. **Queryable output** — each table returns its abfss path + a ready-to-run
-   Synapse Serverless `OPENROWSET` query, so the landed data is immediately
-   usable from SQL, a notebook, or a lakehouse shortcut.
+| Source family | Read path | Change feed (ongoing CDC) |
+|---|---|---|
+| **SQL** — Azure SQL DB / MI, SQL Server 2016-2025 | TDS `SELECT` (`executeParameterized`) | `sys.sp_change_feed_enable_db` (enabled on Start) |
+| **PostgreSQL** — Azure DB for PostgreSQL | `pg` wire + Entra token (`executePostgresQuery`); tables from `information_schema` | logical replication — disclosed follow-up |
+| **Cosmos DB** — SQL API | data-plane `SELECT * FROM c` (`queryItems`); containers from `listContainers` | native change feed — disclosed follow-up |
+
+Each Start: (1) enables the change feed where supported, (2) enumerates the
+tables/containers (or uses the explicit subset), (3) lands each as **CSV in ADLS
+Bronze** under `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/snapshot.csv`,
+and (4) returns each one's abfss path + a ready-to-run Synapse Serverless
+`OPENROWSET` query so the data is immediately usable from SQL, a notebook, or a
+lakehouse shortcut. Cosmos docs are flattened to their top-level keys (nested
+objects → JSON string), mirroring how Fabric lands Cosmos.
 
 Snapshots are capped at `LOOM_MIRROR_MAX_ROWS` rows / `LOOM_MIRROR_MAX_TABLES`
-tables per run (disclosed in the grid as `(capped)`). Non-SQL sources
-(Postgres / Cosmos / Snowflake / open mirroring) return an **honest gate** —
-their Azure-native copy runtime (ADF / Synapse Link) is a disclosed follow-up,
-not a silent stub.
+tables per run (disclosed in the grid as `(capped)`). Other sources (Snowflake /
+open mirroring) return an **honest gate** — their Azure-native copy runtime
+(ADF / Synapse Link) is a disclosed follow-up, not a silent stub.
 
 ## Editor capabilities
 

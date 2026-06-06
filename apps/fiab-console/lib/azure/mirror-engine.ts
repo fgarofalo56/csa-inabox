@@ -25,9 +25,20 @@
 import { executeParameterized, enableMirroring, type MirroringConfig } from './azure-sql-client';
 import { listTables, sqlConfigGate } from './sql-objects-client';
 import { uploadFile, pathToHttpsUrl, getAccountName } from './adls-client';
+import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
+import { queryItems } from './cosmos-data-client';
+import { listContainers } from './cosmos-account-client';
 
 /** SQL-family sources the engine can snapshot directly via TDS. */
 export const MIRROR_SQL_FAMILY = new Set(['AzureSqlDatabase', 'AzureSqlMI', 'SqlServer2025', 'MSSQL']);
+/** PostgreSQL flexible server (snapshot over the pg wire protocol + Entra token). */
+export const MIRROR_PG_FAMILY = new Set(['AzurePostgreSql']);
+/** Cosmos DB SQL API (snapshot the container via the data-plane query). */
+export const MIRROR_COSMOS_FAMILY = new Set(['CosmosDb']);
+/** Any source the engine can snapshot today (vs. honest-gated). */
+function engineCanSnapshot(t: string): boolean {
+  return MIRROR_SQL_FAMILY.has(t) || MIRROR_PG_FAMILY.has(t) || MIRROR_COSMOS_FAMILY.has(t);
+}
 
 const BRONZE = 'bronze';
 /** Cap a single snapshot so a huge table can't exhaust memory; disclosed. */
@@ -108,37 +119,69 @@ function csvCell(v: unknown): string {
   return s;
 }
 
-/** Snapshot one source table → CSV in Bronze; returns real metrics. */
+/** Double-quote a PG identifier (escape embedded quotes). */
+function pgQuote(ident: string): string {
+  return `"${String(ident).replace(/"/g, '""')}"`;
+}
+
+/**
+ * Shared landing: write CSV (header + rows) to Bronze and return the metrics +
+ * the OPENROWSET/abfss accessors. `columns` is the ordered header; each row is
+ * an object keyed by column name.
+ */
+async function writeCsvSnapshot(
+  basePath: string, schema: string, table: string,
+  columns: string[], rows: Record<string, unknown>[], truncated: boolean, lastSync: string,
+): Promise<MirrorTableResult> {
+  const lines: string[] = [];
+  lines.push(columns.map(csvCell).join(','));
+  for (const r of rows) lines.push(columns.map((c) => csvCell(r[c])).join(','));
+  const buf = Buffer.from(lines.join('\n'), 'utf-8');
+
+  const folder = `${basePath}/${schema}.${table}`;
+  await uploadFile(BRONZE, `${folder}/snapshot.csv`, buf, 'text/csv');
+
+  const folderUrl = pathToHttpsUrl(BRONZE, `${folder}/`);
+  const openrowset =
+    `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
+    `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
+  return { schema, table, status: 'replicated', rows: rows.length, bytes: buf.length, truncated, lastSync, path: folderUrl, openrowset };
+}
+
+/** Snapshot one source table/container → CSV in Bronze, dispatched by source family. */
 async function snapshotTable(src: MirrorSource, t: MirrorTableSpec, basePath: string): Promise<MirrorTableResult> {
   const lastSync = new Date().toISOString();
   try {
-    // Read up to MAX_ROWS+1 to detect truncation. Identifiers are bracket-quoted
-    // (catalog-sourced); no user value is interpolated into the SQL text.
+    if (MIRROR_PG_FAMILY.has(src.sourceType)) {
+      // PostgreSQL — read via the pg wire protocol (Entra token). schema.table
+      // identifiers are double-quoted; no value is interpolated.
+      const sql = `SELECT * FROM ${pgQuote(t.schema)}.${pgQuote(t.table)} LIMIT ${MAX_ROWS + 1}`;
+      const res = await executePostgresQuery(src.server, src.database, sql);
+      const truncated = res.rows.length > MAX_ROWS;
+      const sliced = truncated ? res.rows.slice(0, MAX_ROWS) : res.rows;
+      const objs = sliced.map((row) => Object.fromEntries(res.columns.map((c, i) => [c, row[i]])));
+      return await writeCsvSnapshot(basePath, t.schema, t.table, res.columns, objs, truncated, lastSync);
+    }
+    if (MIRROR_COSMOS_FAMILY.has(src.sourceType)) {
+      // Cosmos DB — query the container (t.table = container; schema unused).
+      // Flatten the union of top-level keys; nested objects/arrays → JSON string
+      // (the same shape Fabric mirroring lands for Cosmos).
+      const q = await queryItems(src.database, t.table, 'SELECT * FROM c', { maxItems: MAX_ROWS + 1, crossPartition: true });
+      const docs = q.documents || [];
+      const truncated = docs.length > MAX_ROWS;
+      const rows = truncated ? docs.slice(0, MAX_ROWS) : docs;
+      const colSet = new Set<string>();
+      for (const d of rows) for (const k of Object.keys(d)) if (!k.startsWith('_')) colSet.add(k);
+      const columns = Array.from(colSet);
+      return await writeCsvSnapshot(basePath, 'cosmos', t.table, columns, rows, truncated, lastSync);
+    }
+    // SQL family (default) — read via TDS. Identifiers bracket-quoted.
     const sql = `SELECT TOP ${MAX_ROWS + 1} * FROM ${bracket(t.schema)}.${bracket(t.table)}`;
     const recordset = await executeParameterized<Record<string, unknown>>(src.server, src.database, sql);
     const truncated = recordset.length > MAX_ROWS;
     const rows = truncated ? recordset.slice(0, MAX_ROWS) : recordset;
     const cols = rows.length ? Object.keys(rows[0]) : [];
-
-    const lines: string[] = [];
-    lines.push(cols.map(csvCell).join(','));
-    for (const r of rows) lines.push(cols.map((c) => csvCell(r[c])).join(','));
-    const buf = Buffer.from(lines.join('\n'), 'utf-8');
-
-    const folder = `${basePath}/${t.schema}.${t.table}`;
-    const filePath = `${folder}/snapshot.csv`;
-    await uploadFile(BRONZE, filePath, buf, 'text/csv');
-
-    const folderUrl = pathToHttpsUrl(BRONZE, `${folder}/`);
-    const openrowset =
-      `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
-      `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
-
-    return {
-      schema: t.schema, table: t.table, status: 'replicated',
-      rows: rows.length, bytes: buf.length, truncated, lastSync,
-      path: folderUrl, openrowset,
-    };
+    return await writeCsvSnapshot(basePath, t.schema, t.table, cols, rows, truncated, lastSync);
   } catch (e: any) {
     return { schema: t.schema, table: t.table, status: 'error', rows: 0, bytes: 0, truncated: false, lastSync, error: e?.message || String(e) };
   }
@@ -149,20 +192,22 @@ async function snapshotTable(src: MirrorSource, t: MirrorTableSpec, basePath: st
  * tables into Bronze. Returns real per-table metrics for the editor's grid.
  */
 export async function runMirrorSnapshot(mirrorId: string, workspaceId: string, src: MirrorSource): Promise<MirrorRunResult> {
+  const isPg = MIRROR_PG_FAMILY.has(src.sourceType);
+  const isCosmos = MIRROR_COSMOS_FAMILY.has(src.sourceType);
   const note =
-    'Azure-native mirror (no Microsoft Fabric): the source change feed is enabled (CDC) and each ' +
-    'table is snapshotted to ADLS Bronze as CSV. Query it from Synapse Serverless SQL, a Loom ' +
-    'notebook, or attach it to a lakehouse via Weave.';
+    'Azure-native mirror (no Microsoft Fabric): each table/container is snapshotted to ADLS Bronze ' +
+    'as CSV' + (isPg || isCosmos ? '' : ' and the source change feed is enabled (CDC)') +
+    '. Query it from Synapse Serverless SQL, a Loom notebook, or attach it to a lakehouse via Weave.';
 
-  if (!MIRROR_SQL_FAMILY.has(src.sourceType)) {
+  if (!engineCanSnapshot(src.sourceType)) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
       gate: {
         missing: `${src.sourceType} copy runtime`,
         message:
           `${src.sourceType || 'This source'} authenticates with its own runtime — its Azure-native copy ` +
-          '(ADF / Synapse Link) is a disclosed follow-up. SQL-family sources (Azure SQL DB / MI / SQL Server) ' +
-          'replicate now via this engine.',
+          '(ADF / Synapse Link) is a disclosed follow-up. Azure SQL DB/MI, SQL Server, PostgreSQL, and ' +
+          'Cosmos DB replicate now via this engine.',
       },
       note,
     };
@@ -174,9 +219,13 @@ export async function runMirrorSnapshot(mirrorId: string, workspaceId: string, s
       note,
     };
   }
-  const sg = sqlConfigGate(src.server);
-  if (sg) {
-    return { ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [], gate: { missing: sg.missing, message: `Source SQL not reachable: ${sg.missing}` }, note };
+  // Source-reachability gate per family.
+  if (isPg) {
+    const pg = postgresQueryGate();
+    if (pg) return { ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [], gate: { missing: pg.missing, message: pg.detail }, note };
+  } else if (!isCosmos) {
+    const sg = sqlConfigGate(src.server);
+    if (sg) return { ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [], gate: { missing: sg.missing, message: `Source SQL not reachable: ${sg.missing}` }, note };
   }
   if (!bronzeConfigured()) {
     return {
@@ -186,19 +235,30 @@ export async function runMirrorSnapshot(mirrorId: string, workspaceId: string, s
     };
   }
 
-  // 1) Enable the source change feed (real DDL; best-effort, recorded).
+  // 1) Enable the source change feed — SQL family only (real DDL; best-effort).
+  //    PG (logical replication) + Cosmos (native change feed) ongoing-CDC is a
+  //    disclosed follow-up; the snapshot below is the shipped path for them.
   let changeFeed: MirroringConfig | undefined;
-  try { changeFeed = await enableMirroring(src.server, src.database); }
-  catch (e: any) { changeFeed = { enabled: false, backend: 'azure-native-cdc', state: 'Error', lastError: e?.message || String(e) }; }
+  if (!isPg && !isCosmos) {
+    try { changeFeed = await enableMirroring(src.server, src.database); }
+    catch (e: any) { changeFeed = { enabled: false, backend: 'azure-native-cdc', state: 'Error', lastError: e?.message || String(e) }; }
+  }
 
-  // 2) Resolve the table set (explicit subset, else enumerate the source).
+  // 2) Resolve the table/container set (explicit subset, else enumerate).
   let tableSpecs: MirrorTableSpec[];
   if (src.tables && src.tables.length) {
     tableSpecs = src.tables;
   } else {
     try {
-      const all = await listTables(src.server, src.database);
-      tableSpecs = all.slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
+      if (isPg) {
+        tableSpecs = (await listPostgresTables(src.server, src.database)).slice(0, MAX_TABLES);
+      } else if (isCosmos) {
+        const conts = await listContainers(src.database);
+        tableSpecs = conts.slice(0, MAX_TABLES).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+      } else {
+        const all = await listTables(src.server, src.database);
+        tableSpecs = all.slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
+      }
     } catch (e: any) {
       return { ok: false, status: 'Error', backend: 'azure-native-cdc', changeFeed, tables: [], note, error: `Could not enumerate source tables: ${e?.message || String(e)}` };
     }

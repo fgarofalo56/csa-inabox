@@ -289,6 +289,22 @@ export function postgresQueryGate(): { missing: string; detail: string } | null 
 }
 
 /**
+ * List user tables in a PostgreSQL database (schema.table), excluding the
+ * system schemas — used by the mirror engine to enumerate what to snapshot.
+ */
+export async function listPostgresTables(fqdn: string, database: string): Promise<Array<{ schema: string; table: string }>> {
+  const res = await executePostgresQuery(
+    fqdn, database,
+    "SELECT table_schema, table_name FROM information_schema.tables " +
+    "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') " +
+    'ORDER BY table_schema, table_name',
+  );
+  const iS = res.columns.indexOf('table_schema');
+  const iT = res.columns.indexOf('table_name');
+  return res.rows.map((r) => ({ schema: String(r[iS]), table: String(r[iT]) })).filter((t) => t.schema && t.table);
+}
+
+/**
  * Execute a SQL statement against a PostgreSQL flexible server over the real
  * `pg` wire protocol, authenticating with a Microsoft Entra access token (no
  * stored password). Returns columns + rows. Throws PostgresError on failure
