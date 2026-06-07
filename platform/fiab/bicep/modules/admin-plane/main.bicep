@@ -840,6 +840,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // public host; GCC-High / IL5 (Azure Government) use api.loganalytics.us.
             // Read by adf-client.ts (ADF fallback) + monitor-client.ts (Logs tab).
             { name: 'LOOM_LOG_ANALYTICS_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com' }
+            // Cloud-aware ARM management endpoint. Commercial/GCC use the public
+            // host; GCC-High / IL5 (Azure Government) use management.usgovcloudapi.net.
+            // Read by monitor-client.ts (inventory/health/metrics/activity/alerts +
+            // Activator run-history Microsoft.AlertsManagement/alerts). Mirrors the
+            // sovereign-cloud selection already used by adf-client.ts.
+            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA

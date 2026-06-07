@@ -787,6 +787,18 @@ module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (deploymen
   scope: subscription()
 }
 
+// Console UAMI → Monitoring Reader at subscription scope, so the /monitor tabs
+// (metrics / activity / health / alerts) and the Activator run-history grid
+// (Microsoft.AlertsManagement/alerts) read live control-plane observability.
+module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.bicep' = {
+  name: 'console-monitoring-reader'
+  scope: subscription()
+  params: {
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // =====================================================================
 // RTI hub cross-subscription discovery — Reader at SUBSCRIPTION scope.
 //

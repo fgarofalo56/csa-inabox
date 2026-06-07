@@ -18,10 +18,15 @@ import {
   upsertActionGroup,
   upsertScheduledQueryRule,
   queryLogs,
+  listAlertHistory,
+  type AlertHistoryEvent,
   type SmsReceiverInput,
   type WebhookReceiverInput,
   type LogicAppReceiverInput,
 } from './monitor-client';
+
+// Re-export so the BFF route imports its activator surface from one module.
+export type { AlertHistoryEvent };
 
 // ── pure helpers (mirror of provisioners/activator.ts) ──────────────────────
 export function safeRuleName(displayName: string, suffix: string): string {
@@ -214,4 +219,26 @@ export async function triggerMonitorActivatorRule(
 ): Promise<{ columns: string[]; rows: unknown[][]; count: number; fired: boolean }> {
   const r = await queryLogs(query, 'PT1H');
   return { columns: r.columns, rows: r.rows.slice(0, 50), count: r.rowCount, fired: r.rowCount > 0 };
+}
+
+/** Run history / trigger log — fetch the fired/resolved Azure Monitor alert
+ *  instances for a set of activator rules. Each rule is identified by its
+ *  azureRuleName (the scheduledQueryRule name on ARM). Results are fanned out
+ *  one call per rule, merged, and sorted newest-first. Throws
+ *  MonitorNotConfiguredError/MonitorError which the route maps to an honest
+ *  Azure infra-gate (NOT a Fabric gate). */
+export async function getActivatorHistory(
+  azureRuleNames: string[],
+  opts?: { days?: number },
+): Promise<AlertHistoryEvent[]> {
+  const names = Array.from(new Set(azureRuleNames.filter(Boolean)));
+  if (!names.length) return [];
+  const perRule = await Promise.all(
+    names.map((name) => listAlertHistory({ alertRule: name, days: opts?.days })),
+  );
+  const merged = perRule.flat();
+  merged.sort(
+    (a, b) => new Date(b.startDateTime).getTime() - new Date(a.startDateTime).getTime(),
+  );
+  return merged;
 }

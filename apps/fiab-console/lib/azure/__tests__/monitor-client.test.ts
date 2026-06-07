@@ -207,11 +207,93 @@ describe('listAlertRules', () => {
 });
 
 describe('metricsForType', () => {
+
   it('returns catalog entries case-insensitively', async () => {
     const { metricsForType } = await import('../monitor-client');
     expect(metricsForType('Microsoft.App/containerApps').length).toBeGreaterThan(0);
     expect(metricsForType('microsoft.search/searchservices')[0]).toHaveProperty('metric');
     expect(metricsForType('unknown/type')).toEqual([]);
+  });
+});
+
+describe('listAlertHistory', () => {
+  it('GETs Microsoft.AlertsManagement/alerts with alertRule + timeRange + includeContext and extracts payload', async () => {
+    const calls = captureFetch(() => ({
+      body: {
+        value: [{
+          name: 'alert-guid-1',
+          id: '/subscriptions/sub-1/providers/Microsoft.AlertsManagement/alerts/alert-guid-1',
+          properties: {
+            essentials: {
+              alertRule: 'my-rule-loom',
+              monitorCondition: 'Fired',
+              alertState: 'New',
+              severity: 'Sev3',
+              startDateTime: '2026-06-06T10:00:00Z',
+              lastModifiedDateTime: '2026-06-06T10:01:00Z',
+              targetResourceName: 'law-loom-eastus',
+              targetResourceGroup: 'rg-admin',
+            },
+            context: {
+              context: {
+                condition: {
+                  windowStartTime: '2026-06-06T09:55:00Z',
+                  windowEndTime: '2026-06-06T10:00:00Z',
+                  allOf: [{
+                    searchQuery: 'AppEvents_CL | where v > 20',
+                    metricValue: 5,
+                    operator: 'GreaterThan',
+                    threshold: '0',
+                    timeAggregation: 'Count',
+                    linkToSearchResultsUI: 'https://portal.azure.com/...',
+                  }],
+                },
+              },
+            },
+          },
+        }],
+      },
+    }));
+    const { listAlertHistory } = await import('../monitor-client');
+    const events = await listAlertHistory({ alertRule: 'my-rule-loom', days: 7 });
+    const url = calls[0].url;
+    expect(url).toContain('/providers/Microsoft.AlertsManagement/alerts?');
+    expect(url).toContain('api-version=2019-03-01');
+    expect(url).toContain('alertRule=my-rule-loom');
+    expect(url).toContain('includeContext=true');
+    expect(url).toContain('timeRange=7d');
+    expect(url).toContain('sortBy=startDateTime');
+    expect(events[0]).toMatchObject({
+      alertRule: 'my-rule-loom', monitorCondition: 'Fired', alertState: 'New', severity: 'Sev3',
+    });
+    expect(events[0].payload?.matchingRowsCount).toBe(5);
+    expect(events[0].payload?.operator).toBe('GreaterThan');
+    expect(events[0].payload?.searchQuery).toContain('AppEvents_CL');
+  });
+
+  it('caps timeRange at 30 days and tolerates single-nested context', async () => {
+    const calls = captureFetch(() => ({
+      body: {
+        value: [{
+          name: 'g2',
+          properties: {
+            essentials: { alertRule: 'r2', monitorCondition: 'Resolved', alertState: 'Closed', startDateTime: '2026-06-01T00:00:00Z' },
+            context: { condition: { allOf: [{ matchingRowsCount: 2, operator: 'GreaterThan', threshold: '0' }] } },
+          },
+        }],
+      },
+    }));
+    const { listAlertHistory } = await import('../monitor-client');
+    const events = await listAlertHistory({ alertRule: 'r2', days: 90 });
+    expect(calls[0].url).toContain('timeRange=30d');
+    expect(events[0].monitorCondition).toBe('Resolved');
+    expect(events[0].payload?.matchingRowsCount).toBe(2);
+  });
+
+  it('honest-gates when LOOM_SUBSCRIPTION_ID unset', async () => {
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    const { listAlertHistory, MonitorNotConfiguredError } = await import('../monitor-client');
+    await expect(listAlertHistory()).rejects.toBeInstanceOf(MonitorNotConfiguredError);
   });
 });
 
