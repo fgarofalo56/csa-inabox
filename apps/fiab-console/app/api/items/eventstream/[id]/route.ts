@@ -159,11 +159,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const saved = await saveItemState(item, {
       source: config.source ?? null,
       sink: config.sink ?? null,
+      sources: config.sources ?? null,
+      sinks: config.sinks ?? null,
       transforms: config.transforms ?? [],
     });
     return NextResponse.json({ ok: true, config: {
       source: saved.state?.source,
       sink: saved.state?.sink,
+      sources: saved.state?.sources,
+      sinks: saved.state?.sinks,
       transforms: saved.state?.transforms || [],
     } });
   } catch (e: any) {

@@ -29,10 +29,21 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-// Cloud-aware ARM base. Commercial → management.azure.com (default); Gov
-// (GCC-High / IL5) sets LOOM_ARM_ENDPOINT=https://management.usgovcloudapi.net
-// via bicep. Mirrors adf-client / azure-sql-client / setup routes.
-const ARM_BASE = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every Event Hubs ARM call below targets the correct ARM host instead of
+// management.azure.com. LOOM_ARM_ENDPOINT (set via bicep) takes precedence and
+// mirrors adf-client / azure-sql-client / setup routes.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
 const ARM_SCOPE = `${ARM_BASE}/.default`;
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
 // authorizationRules, networkRuleSets, disasterRecoveryConfigs.
@@ -333,6 +344,40 @@ export async function listEventHubAuthRules(eventHub: string): Promise<Authoriza
     rights: a?.properties?.rights || [],
     scope: eventHub,
   }));
+}
+
+// ============================================================
+// Namespace SAS keys (privileged). POST …/authorizationRules/{rule}/listKeys
+// returns the SAS connection string + key for the rule. Used to wire a Stream
+// Analytics input/output that authenticates to the namespace by connection
+// string. Requires the UAMI to hold Contributor (or Data Owner) on the
+// namespace — already granted via eventhubs.bicep consolePrincipalId grants.
+// ============================================================
+export interface NamespaceKeys {
+  primaryConnectionString: string;
+  secondaryConnectionString: string;
+  primaryKey: string;
+  secondaryKey: string;
+  keyName: string;
+}
+
+export async function listNamespaceKeys(
+  ruleName = 'RootManageSharedAccessKey',
+): Promise<NamespaceKeys> {
+  const cfg = readEventHubsConfig();
+  const r = await callArm(
+    `${nsUrl(cfg)}/authorizationRules/${encodeURIComponent(ruleName)}/listKeys?api-version=${EH_API}`,
+    { method: 'POST', body: '{}' },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `listNamespaceKeys failed ${r.status}`);
+  const j: any = await r.json();
+  return {
+    primaryConnectionString: j?.primaryConnectionString ?? '',
+    secondaryConnectionString: j?.secondaryConnectionString ?? '',
+    primaryKey: j?.primaryKey ?? '',
+    secondaryKey: j?.secondaryKey ?? '',
+    keyName: j?.keyName ?? ruleName,
+  };
 }
 
 // ============================================================

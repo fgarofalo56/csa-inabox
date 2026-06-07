@@ -23,7 +23,21 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every ASA call below targets the correct ARM host instead of
+// management.azure.com.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
+const ARM_SCOPE = `${ARM_BASE}/.default`;
 const API = '2020-03-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -63,7 +77,7 @@ export function readAsaConfig(): AsaConfig {
 }
 
 function rgBase(cfg: AsaConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
+  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
 }
 
 async function call(url: string, init?: RequestInit): Promise<Response> {
@@ -155,6 +169,50 @@ export async function getJob(name: string): Promise<AsaJobDetail> {
     functions,
     query: body.properties?.transformation?.properties?.query,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming job (Microsoft.StreamAnalytics/streamingjobs/{name})
+// ---------------------------------------------------------------------------
+
+export interface AsaJobCreateSpec {
+  name: string;
+  location: string;        // e.g. 'eastus', 'usgovvirginia'
+  streamingUnits?: number; // applied to the default transformation; default 3
+}
+
+/**
+ * Idempotent ARM PUT to create (or update) a streaming job resource. The job
+ * is created with a SystemAssigned identity so it can be granted Kusto / Event
+ * Hubs data-plane RBAC independently. 200 = updated, 201 = created.
+ */
+export async function createOrUpdateJob(
+  spec: AsaJobCreateSpec,
+): Promise<{ id: string; name: string }> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(spec.name)}?api-version=${API}`;
+  const body = {
+    location: spec.location,
+    identity: { type: 'SystemAssigned' },
+    properties: {
+      sku: { name: 'Standard' },
+      eventsOutOfOrderPolicy: 'Adjust',
+      outputErrorPolicy: 'Stop',
+      eventsOutOfOrderMaxDelayInSeconds: 5,
+      eventsLateArrivalMaxDelayInSeconds: 5,
+      dataLocale: 'en-US',
+      compatibilityLevel: '1.2',
+      jobType: 'Cloud',
+      contentStoragePolicy: 'SystemAccount',
+    },
+  };
+  const r = await call(url, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok && r.status !== 201) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA createOrUpdateJob failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+  const j = (await r.json().catch(() => ({}))) as any;
+  return { id: j?.id ?? '', name: j?.name ?? spec.name };
 }
 
 export async function saveTransformation(name: string, query: string): Promise<void> {
