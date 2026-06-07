@@ -617,6 +617,17 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     skuName: adxSkuName
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
+    // Console UAMI → Monitoring Contributor on the cluster (alert rules + diagnostics).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Continuous-export: grant cluster MI Storage Blob Data Contributor on the DLZ ADLS account.
+    // Empty when loomStorageAccount is unset → grant is skipped → wizard shows honest gate.
+    adlsAccountName: loomStorageAccount
+    adlsAccountRg: loomDlzRg
+    // EH data connections: grant cluster MI Azure Event Hubs Data Receiver on the DLZ EH namespace.
+    // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
+    ehNamespaceName: loomEventHubNamespace
+    ehNamespaceRg: !empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg
   }
 }
 
@@ -834,6 +845,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // RTI — continuous-export destination. Points at the same DLZ ADLS
+            // account as LOOM_ADLS_ACCOUNT. Empty → the export-to-ADLS wizard
+            // shows a Fluent MessageBar naming LOOM_RTI_EXPORT_ADLS (no-vaporware.md).
+            { name: 'LOOM_RTI_EXPORT_ADLS',    value: loomStorageAccount }
+            // RTI — queued / one-click ingestion endpoint (Get Data wizard). For a
+            // provisioned cluster this is the ARM dataIngestionUri; for a reused
+            // cluster the ingest-<name> host is reconciled post-deploy alongside
+            // LOOM_KUSTO_CLUSTER_URI by patch-navigator-env.sh. Empty when ADX off.
+            { name: 'LOOM_KUSTO_DATA_INGESTION_URI', value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
