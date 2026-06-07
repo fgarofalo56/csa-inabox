@@ -5,6 +5,19 @@
 // SKU: Dev(No SLA)_Standard_E2a_v4 — ~$140/mo. Reasonable for the
 // federal demo footprint. Upgrade to Standard_E4d_v5 (or higher) for
 // production-equivalent throughput.
+//
+// Follower database attach (database shortcut, T7): the console follower API
+// route (app/api/items/kql-database/[id]/follower) creates
+// `attachedDatabaseConfigurations` on THIS cluster at runtime via ARM — no
+// Bicep resource is needed for the follower side (it is data/runtime, not infra).
+// The console UAMI already holds rights on this cluster. To follow a database on
+// a LEADER cluster in another RG/subscription, that leader's owner must grant the
+// console UAMI 'Contributor' (or 'Azure Kusto Contributor') on the leader cluster,
+// out-of-band, e.g.:
+//   az role assignment create --role Contributor \
+//     --assignee <console-UAMI-principalId> \
+//     --scope /subscriptions/<leaderSub>/resourceGroups/<leaderRg>/providers/Microsoft.Kusto/clusters/<leaderName>
+// Leader and follower must be in the SAME Azure region (ADX follower constraint).
 
 targetScope = 'resourceGroup'
 
@@ -32,6 +45,19 @@ param skuTier string = 'Basic'
 @description('Capacity (instance count). 1 for Dev SKUs.')
 param skuCapacity int = 1
 
+@description('Enable optimized auto-scale on the cluster. Must be false for Dev(No SLA)/Basic-tier SKUs (ARM rejects optimizedAutoscale on Basic tier).')
+param enableOptimizedAutoscale bool = false
+
+@description('Optimized auto-scale minimum instance count. Ignored when enableOptimizedAutoscale is false.')
+@minValue(2)
+@maxValue(1000)
+param autoscaleMinimum int = 2
+
+@description('Optimized auto-scale maximum instance count. Ignored when enableOptimizedAutoscale is false.')
+@minValue(2)
+@maxValue(1000)
+param autoscaleMaximum int = 10
+
 @description('LAW resource id for diagnostic settings.')
 param workspaceId string
 
@@ -52,9 +78,24 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
     enableDiskEncryption: true
     enableDoubleEncryption: false
     enableStreamingIngest: true
+    // enablePurge: required for `.purge table records` (GDPR / right-to-be-
+    // forgotten erasure). The .purge command targets the Data Management
+    // endpoint (ingest-<cluster>.<region>.kusto.windows.net), not the data
+    // endpoint, and requires Database Admin on the target database. The Console
+    // UAMI holds AllDatabasesAdmin (granted via az kusto
+    // cluster-principal-assignment create; see docs/fiab/v3-tenant-bootstrap.md).
     enablePurge: true
     enableAutoStop: true
     publicNetworkAccess: 'Enabled'
+    // Optimized auto-scale — null when disabled (Dev/Basic SKUs reject it).
+    // version is always 1 per the ARM schema. Mirrors the runtime ARM PATCH
+    // surfaced in the Eventhouse editor (Manage › Auto-scale).
+    optimizedAutoscale: enableOptimizedAutoscale ? {
+      isEnabled: true
+      minimum: autoscaleMinimum
+      maximum: autoscaleMaximum
+      version: 1
+    } : null
   }
 }
 
@@ -76,4 +117,13 @@ output clusterId string = adxCluster.id
 output clusterName string = adxCluster.name
 output clusterUri string = adxCluster.properties.uri
 output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
+// clusterPrincipalId is the cluster's system-assigned MI object id. ADX
+// EventHub/IoT Hub data connections (KQL Database → Add data connection) require
+// this MI to read the SOURCE's shared-access keys. For an Event Hub that's
+// "Azure Event Hubs Data Receiver" on the namespace; for an IoT Hub that's
+// "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants
+// Microsoft.Devices/IotHubs/IotHubKeys/read) on the hub. Those grants are made
+// at the SOURCE scope, not here, and the IoT Hub is user-selected at runtime —
+// so they are operator-manual one-time actions surfaced as honest-gate
+// MessageBars in the editor (see app/api/items/kql-database/[id]/data-connections).
 output clusterPrincipalId string = adxCluster.identity.principalId
