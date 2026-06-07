@@ -73,6 +73,7 @@ jobs:
             "dbt Compile (finance)"
             "dbt Compile (inventory)"
             "dbt Compile (sales)"
+            "next build (node 20)"
           )
 
           REPO="${GITHUB_REPOSITORY}"
