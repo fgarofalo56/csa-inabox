@@ -17,9 +17,12 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5). Single
+// source of truth is lib/azure/cloud-endpoints.ts.
+const ARM = armBase();
+const ARM_SCOPE = armScope();
 const VMSS_API = '2024-07-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;

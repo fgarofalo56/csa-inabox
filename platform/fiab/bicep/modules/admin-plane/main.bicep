@@ -258,6 +258,10 @@ var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGr
 var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
 var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : resourceGroup().name
 var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGroup().name
+// Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
+// Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
+// uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
+var kustoSuffix = boundary == 'GCC-High' || boundary == 'IL5' ? 'kusto.usgovcloudapi.net' : 'kusto.windows.net'
 
 // CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
 // orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
@@ -617,6 +621,7 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     skuName: adxSkuName
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
 }
 
@@ -826,7 +831,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // name, RG, location, and default database.
             // Each prefers a reused existing<Service> (any RG/sub) over the
             // provisioned module output, and is '' when neither → honest gate.
-            { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
+            { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }

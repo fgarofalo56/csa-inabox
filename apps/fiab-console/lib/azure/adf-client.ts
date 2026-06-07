@@ -10,7 +10,7 @@
  * "Data Factory Contributor" role on adf-loom-default-eastus2 so every
  * call below succeeds.
  *
- * No mocks. Real REST against management.azure.com only.
+ * No mocks. Real ARM REST only (sovereign-cloud aware via cloud-endpoints).
  */
 
 import {
@@ -18,28 +18,17 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope, armHost } from './cloud-endpoints';
 
 const API = '2018-06-01';
 
-// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
-// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
-// so every ADF call below — including export-read and import-upsert — targets
-// the correct ARM host instead of management.azure.com.
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
+// ARM endpoint + scope + bare host come from cloud-endpoints (the single
+// sovereign-cloud source of truth — Commercial / GCC-High / IL5, honoring
+// LOOM_ARM_ENDPOINT and AZURE_CLOUD).
 const ARM_BASE = armBase();
-const ARM_SCOPE = `${ARM_BASE}/.default`;
-// Bare ARM host (no scheme) for the few call sites that build their own URL
-// string. Derived from ARM_BASE so the sovereign-cloud selection above is the
-// single source of truth (Commercial / GCC-High / IL5 all honored).
-const ARM_HOST = ARM_BASE.replace(/^https?:\/\//, '');
+const ARM_SCOPE = armScope();
+// Bare ARM host (no scheme) for the few call sites that build their own URL.
+const ARM_HOST = armHost();
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId

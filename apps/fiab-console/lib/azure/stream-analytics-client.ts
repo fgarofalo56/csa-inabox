@@ -14,7 +14,7 @@
  * 501 MessageBar that names the bicep module + env vars the operator
  * needs. No mock arrays, no "return []" lies.
  *
- * No mocks. Real REST against management.azure.com only.
+ * No mocks. Real ARM REST only (sovereign-cloud aware via cloud-endpoints).
  */
 
 import {
@@ -22,8 +22,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const API = '2020-03-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -63,7 +64,7 @@ export function readAsaConfig(): AsaConfig {
 }
 
 function rgBase(cfg: AsaConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
 }
 
 async function call(url: string, init?: RequestInit): Promise<Response> {

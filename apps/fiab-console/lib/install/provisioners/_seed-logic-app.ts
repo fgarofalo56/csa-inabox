@@ -55,7 +55,7 @@ async function listRuns(callArm: ArmFetch, workflowUrl: string): Promise<RunRow[
  * returns a structured result the provisioner folds into its ProvisionResult.
  *
  * @param callArm     bearer-authenticated ARM fetch (from logic-app.ts)
- * @param workflowUrl the management.azure.com workflow resource URL (no query)
+ * @param workflowUrl the ARM Logic App workflow resource URL (no query)
  * @param triggerName the WDL trigger to fire (first trigger in the definition)
  * @param opts.maxPolls max GET-runs polls (default 6)
  * @param opts.pollMs   delay between polls in ms (default 5000)

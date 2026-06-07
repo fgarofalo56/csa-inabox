@@ -201,7 +201,7 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
       gate: {
         reason: 'No ADX cluster configured for the dashboard data source.',
         remediation:
-          'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.windows.net) so the dashboard tiles have a queryable Kusto data source.',
+          'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.<cloud-suffix>) so the dashboard tiles have a queryable Kusto data source.',
         link: 'https://learn.microsoft.com/azure/data-explorer/',
       },
       steps,

@@ -5,7 +5,7 @@
  *
  * v2.1 KQL family (Eventhouse, KQL Database, KQL Queryset, KQL Dashboard,
  * Eventstream) are wired live against the shared Loom ADX cluster
- * `adx-csa-loom-shared.eastus2.kusto.windows.net` via the Console UAMI
+ * (default `adx-csa-loom-shared` in `eastus2`, cloud-correct suffix) via the Console UAMI
  * (Kusto raw REST: /v1/rest/query + /v1/rest/mgmt, ARM for database
  * create). Eventstream persists pipeline config to Cosmos; runtime
  * wiring lands in v3.

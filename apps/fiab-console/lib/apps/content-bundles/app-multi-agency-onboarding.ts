@@ -46,6 +46,7 @@
 
 import type { AppBundle } from './types';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 
 // ─── Warehouse: DLZ Onboarding Registry ─────────────────────────────────
 // Operational system-of-record for the onboarding workflow the Setup
@@ -407,8 +408,8 @@ const NB_CELLS: NotebookCell[] = [
       '# Confirms the DLZ resources landed and the hub<->spoke peering is\n' +
       '# Connected (post-deploy validation gate).\n' +
       '# https://learn.microsoft.com/azure/governance/resource-graph/samples/starter\n' +
-      'arg_token = os.environ["LOOM_ARM_TOKEN"]  # scope https://management.azure.com/.default\n' +
-      'ARM = os.environ.get("LOOM_ARM_BASE", "https://management.azure.com")\n' +
+      'arg_token = os.environ["LOOM_ARM_TOKEN"]  # ARM .default scope (sovereign-cloud aware)\n' +
+      'ARM = os.environ["LOOM_ARM_BASE"]  # ARM base set by the deploy per cloud (Commercial / Gov)\n' +
       'sub = interview["target_subscription_id"]\n' +
       '\n' +
       'def arg_query(kql: str):\n' +
@@ -644,7 +645,7 @@ const PIPELINE_ACTIVITIES = [
     config: {
       url: "@concat(pipeline().parameters.armBase, '/subscriptions/', pipeline().parameters.dlzSubscriptionId, '/providers/Microsoft.Resources/deployments/', pipeline().parameters.deploymentName, '?api-version=2021-04-01')",
       method: 'PUT',
-      authentication: { type: 'MSI', resource: 'https://management.azure.com' },
+      authentication: { type: 'MSI', resource: armBase() },
       body: {
         location: '@pipeline().parameters.region',
         properties: {
@@ -676,7 +677,7 @@ const PIPELINE_ACTIVITIES = [
     config: {
       url: "@concat(pipeline().parameters.armBase, '/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01')",
       method: 'POST',
-      authentication: { type: 'MSI', resource: 'https://management.azure.com' },
+      authentication: { type: 'MSI', resource: armBase() },
       body: {
         subscriptions: ['@pipeline().parameters.dlzSubscriptionId'],
         query:
@@ -853,7 +854,7 @@ const bundle: AppBundle = {
         kind: 'adf-pipeline',
         parameters: {
           graphBase: { type: 'string', defaultValue: 'https://graph.microsoft.com/v1.0' },
-          armBase: { type: 'string', defaultValue: 'https://management.azure.com' },
+          armBase: { type: 'string', defaultValue: armBase() },
           dlzSubscriptionId: { type: 'string', defaultValue: 'cccc2222-2222-2222-2222-2222222222cc' },
           domainName: { type: 'string', defaultValue: 'Field Services' },
           region: { type: 'string', defaultValue: 'usgovtexas' },

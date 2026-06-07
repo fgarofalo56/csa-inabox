@@ -14,7 +14,7 @@
  * When neither resolves, throws CsNotConfiguredError so routes can return an
  * honest infra-gate (no fake data). See .claude/rules/no-vaporware.md.
  *
- * Auth: ARM management-plane scope (https://management.azure.com/.default) via
+ * Auth: ARM management-plane scope (the sovereign-cloud ARM .default scope) via
  * the same ChainedTokenCredential strategy as foundry-client.ts. The Console
  * UAMI needs `Cognitive Services Contributor` (deployments + keys) at the
  * account scope; `Reader` is enough for the read-only tabs.
@@ -24,8 +24,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const CS_API = '2024-10-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -78,7 +79,7 @@ async function armFetch(
   const tok = await token();
   const sep = fullPath.includes('?') ? '&' : '?';
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
-  const url = `https://management.azure.com${fullPath}${sep}api-version=${init.apiVersion || CS_API}${query}`;
+  const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion || CS_API}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
   return fetch(url, {
     ...rest,

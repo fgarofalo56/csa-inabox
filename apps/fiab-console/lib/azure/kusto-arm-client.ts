@@ -28,8 +28,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -79,7 +80,7 @@ export function readKustoArmConfig(): KustoClusterArmConfig {
 }
 
 function clusterUrl(cfg: KustoClusterArmConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {

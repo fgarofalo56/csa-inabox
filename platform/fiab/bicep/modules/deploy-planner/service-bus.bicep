@@ -87,4 +87,6 @@ resource sbContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 
 output namespaceId string = ns.id
 output namespaceName string = ns.name
-output namespaceFqdn string = '${ns.name}.servicebus.windows.net'
+// Sovereign-cloud Service Bus suffix (Commercial/GCC servicebus.windows.net;
+// GCC-High/IL5 servicebus.usgovcloudapi.net), derived from the storage suffix.
+output namespaceFqdn string = '${ns.name}.servicebus.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'usgovcloudapi.net' : 'windows.net'}'

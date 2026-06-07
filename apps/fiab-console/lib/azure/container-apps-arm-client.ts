@@ -27,8 +27,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const ACA_API = '2024-03-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -73,11 +74,11 @@ export function readAcaConfig(): AcaConfig {
 }
 
 function appUrl(cfg: AcaConfig, name: string): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}`;
 }
 
 function rgUrl(cfg: AcaConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {

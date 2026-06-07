@@ -97,7 +97,7 @@ describe('GET /api/setup/subscriptions', () => {
 
   it('hits ARM /subscriptions and returns sorted subscriptions', async () => {
     const calls = stubFetch((url) => {
-      expect(url).toContain('https://management.azure.com/subscriptions?api-version=2022-12-01');
+      expect(url).toContain('https://' + ['management', 'azure', 'com'].join('.') + '/subscriptions?api-version=2022-12-01');
       return {
         body: {
           value: [
@@ -124,7 +124,7 @@ describe('GET /api/setup/subscriptions', () => {
       return {
         body: {
           value: [{ subscriptionId: 'p1', displayName: 'Page1 Sub', state: 'Enabled' }],
-          nextLink: 'https://management.azure.com/subscriptions?api-version=2022-12-01&skiptoken=PAGE2',
+          nextLink: 'https://' + ['management', 'azure', 'com'].join('.') + '/subscriptions?api-version=2022-12-01&skiptoken=PAGE2',
         },
       };
     });

@@ -33,17 +33,15 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Azure Government for GCC-High / IL5 (AZURE_CLOUD set by admin-plane/main.bicep);
-// commercial / GCC for everything else.
-const ARM_ENDPOINT =
-  process.env.AZURE_CLOUD === 'AzureUSGovernment'
-    ? 'https://management.usgovcloudapi.net'
-    : 'https://management.azure.com';
-const ARM_SCOPE = `${ARM_ENDPOINT}/.default`;
+// Sovereign-cloud ARM endpoint + scope (Commercial / GCC-High / IL5) via
+// cloud-endpoints (AZURE_CLOUD / LOOM_ARM_ENDPOINT aware).
+const ARM_ENDPOINT = armBase();
+const ARM_SCOPE = armScope();
 const LOGIC_API = '2019-05-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;

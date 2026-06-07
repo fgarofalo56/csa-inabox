@@ -202,6 +202,9 @@ resource ehDataReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 output namespaceId string = ns.id
 output namespaceName string = ns.name
-output namespaceFqdn string = '${ns.name}.servicebus.windows.net'
+// Sovereign-cloud Service Bus suffix, derived from the storage suffix the same
+// way main.bicep derives the Cosmos suffix (Commercial/GCC servicebus.windows.net;
+// GCC-High/IL5 servicebus.usgovcloudapi.net) so the FQDN is correct per cloud.
+output namespaceFqdn string = '${ns.name}.servicebus.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'usgovcloudapi.net' : 'windows.net'}'
 output telemetryHubName string = telemetryHub.name
 output telemetryConsumerGroupName string = telemetryConsumerGroup.name

@@ -20,11 +20,12 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { armBase } from './cloud-endpoints';
 
 const PG_API_VERSION = '2024-08-01';
 
 function arm(): string {
-  return process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
+  return armBase();
 }
 
 /** Commercial: postgres.database.azure.com  Gov: postgres.database.usgovcloudapi.net */

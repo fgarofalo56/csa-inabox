@@ -28,8 +28,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
 // authorizationRules, networkRuleSets, disasterRecoveryConfigs.
 const EH_API = '2024-01-01';
@@ -87,7 +88,7 @@ export function readEventHubsConfig(): EventHubsConfig {
 }
 
 function nsUrl(cfg: EventHubsConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {

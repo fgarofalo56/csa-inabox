@@ -29,8 +29,9 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
 const PE_API = '2024-03-01';
 const NIC_API = '2024-03-01';
@@ -94,7 +95,7 @@ async function armToken(): Promise<string> {
 
 async function armGet<T = any>(path: string): Promise<T> {
   const token = await armToken();
-  const res = await fetch(`https://management.azure.com${path}`, {
+  const res = await fetch(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   });
@@ -115,8 +116,7 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
   let guard = 0;
   while (next && guard < 50) {
     guard += 1;
-    const path: string = next.startsWith('https://management.azure.com')
-      ? next.slice('https://management.azure.com'.length) : next;
+    const path: string = stripArmBase(next);
     const page: { value?: T[]; nextLink?: string } =
       await armGet<{ value?: T[]; nextLink?: string }>(path);
     if (Array.isArray(page.value)) out.push(...page.value);

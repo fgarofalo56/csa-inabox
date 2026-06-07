@@ -14,7 +14,7 @@
  * other Loom ARM client. The UAMI needs "Cost Management Reader" (or Reader)
  * on each subscription; a 401/403 surfaces as an honest infra-gate.
  *
- *   POST https://management.azure.com/subscriptions/{sub}/providers/Microsoft.CostManagement/query?api-version=2023-03-01
+ *   POST {ARM}/subscriptions/{sub}/providers/Microsoft.CostManagement/query?api-version=2023-03-01
  *   https://learn.microsoft.com/rest/api/cost-management/query/usage
  *   GET  .../providers/Microsoft.Consumption/budgets?api-version=2023-05-01
  */
@@ -24,9 +24,11 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { readMonitorConfig, MonitorError, MonitorNotConfiguredError } from './monitor-client';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
+const ARM = armBase();
+const ARM_SCOPE = armScope();
 const COST_API = '2023-03-01';
 const BUDGETS_API = '2023-05-01';
 

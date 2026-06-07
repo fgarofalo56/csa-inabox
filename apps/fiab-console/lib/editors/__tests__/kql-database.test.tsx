@@ -28,7 +28,7 @@ describe('KqlDatabaseEditor', () => {
       }),
       '/api/items/kql-database/kqldb-fixture': () => ({
         ok: true,
-        cluster: 'https://adx-csa-loom-shared.eastus2.kusto.windows.net',
+        cluster: 'https://adx-csa-loom-shared.eastus2.kusto.usgovcloudapi.net',
         database: 'loomdb-default',
         details: { OriginalSize: 1_048_576, HotCachePeriod: 'P7D', SoftDeletePeriod: 'P30D' },
         tables: [{ name: 'Events' }, { name: 'Alerts' }],

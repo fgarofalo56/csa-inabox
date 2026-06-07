@@ -5,8 +5,9 @@
  */
 
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const ARM_API = '2021-06-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -24,7 +25,7 @@ function poolUrl(): string {
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
-  return `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}?api-version=${ARM_API}`;
+  return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}?api-version=${ARM_API}`;
 }
 
 async function armFetch(url: string, init?: RequestInit): Promise<Response> {
@@ -61,7 +62,7 @@ export async function resumePool(): Promise<void> {
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
-  const url = `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}/resume?api-version=${ARM_API}`;
+  const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}/resume?api-version=${ARM_API}`;
   const res = await armFetch(url, { method: 'POST' });
   if (!res.ok && res.status !== 202) {
     throw new Error(`ARM resume failed ${res.status}: ${await res.text()}`);
@@ -73,7 +74,7 @@ export async function pausePool(): Promise<void> {
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
-  const url = `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}/pause?api-version=${ARM_API}`;
+  const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Synapse/workspaces/${ws}/sqlPools/${pool}/pause?api-version=${ARM_API}`;
   const res = await armFetch(url, { method: 'POST' });
   if (!res.ok && res.status !== 202) {
     throw new Error(`ARM pause failed ${res.status}: ${await res.text()}`);

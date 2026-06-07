@@ -3,7 +3,7 @@
  *
  * The data-plane counterpart to the ARM control-plane routes under
  * /api/eventhubs/{hubs,consumergroups,…}. Talks to the real Event Hubs runtime
- * endpoint https://<namespace>.servicebus.windows.net/<hub>/messages via
+ * endpoint https://<namespace>.<serviceBusSuffix>/<hub>/messages via
  * lib/azure/eventhubs-data-client.ts, authenticated with Microsoft Entra
  * (the namespace has disableLocalAuth:true, so SAS is intentionally not used).
  *

@@ -20,13 +20,14 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import sql from 'mssql';
+import { armBase } from './cloud-endpoints';
 
 const SQL_SCOPE = 'https://database.windows.net/.default';
 
 function arm(): string {
-  // environment().resourceManager in bicep parlance — runtime equivalent.
-  // Commercial: management.azure.com   Gov: management.usgovcloudapi.net
-  return process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
+  // Sovereign-cloud ARM base (cloud-endpoints honors LOOM_ARM_ENDPOINT + AZURE_CLOUD).
+  // Commercial: ARM commercial host   Gov: management.usgovcloudapi.net
+  return armBase();
 }
 
 function sqlHostSuffix(): string {

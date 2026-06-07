@@ -6,7 +6,7 @@
  * subscriptions the calling identity can read — in ONE query — via Azure
  * Resource Graph.
  *
- *   POST https://management.azure.com/providers/Microsoft.ResourceGraph/resources
+ *   POST {ARM}/providers/Microsoft.ResourceGraph/resources
  *        ?api-version=2021-03-01
  *   body { query: "resources | where type =~ '<type>' [| where kind =~ '<kind>']
  *                  | project id,name,type,kind,location,resourceGroup,subscriptionId
@@ -20,7 +20,7 @@
  *   1. via:'user' — the signed-in user's cached ARM token (lib/azure/
  *      user-token-store). This gives the USER's RBAC: they see exactly the subs
  *      and resources they're entitled to. Requires the Loom app registration to
- *      have the delegated `https://management.azure.com/user_impersonation`
+ *      have the delegated `<ARM>/user_impersonation`
  *      scope admin-consented (captured at login).
  *   2. via:'uami'  — the Loom UAMI ChainedTokenCredential ARM token (same
  *      pattern as adf-client.ts / foundry-cs-client.ts). Sees whatever the UAMI
@@ -39,13 +39,13 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
-const ARG_URL =
-  'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01';
+const ARM_SCOPE = armScope();
+const ARG_URL = `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01`;
 
 export interface AzureResourceRow {
   id: string;
@@ -134,7 +134,7 @@ const GATE_MESSAGE =
   'No Azure resources were returned across the subscriptions visible to Loom. ' +
   'This usually means one of two one-time admin actions is still pending: ' +
   '(1) Admin-consent the Loom app registration for the Azure Service Management ' +
-  'delegated permission "user_impersonation" (https://management.azure.com/user_impersonation) ' +
+  'delegated permission "user_impersonation" (' + armBase() + '/user_impersonation) ' +
   'so the picker can query with each user\'s own RBAC; and/or ' +
   '(2) Grant the Loom user-assigned managed identity (LOOM_UAMI_CLIENT_ID) the ' +
   '"Reader" role at the tenant root management group (scope /providers/Microsoft.Management/managementGroups/<tenantRootGroupId>) ' +

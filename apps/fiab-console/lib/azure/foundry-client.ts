@@ -10,7 +10,7 @@
  * needed for things like running jobs / deploying — out of scope for this
  * editor wave.
  *
- * Auth scope:  https://management.azure.com/.default
+ * Auth scope:  the sovereign-cloud ARM .default scope
  * UAMI role:   Contributor at the workspace scope.
  *
  * 404 → null. Any other non-2xx throws FoundryError(status, body).
@@ -20,8 +20,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -42,7 +43,7 @@ function foundryBase(): string {
   const sub = required('LOOM_SUBSCRIPTION_ID');
   const rg = process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2';
-  return `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.MachineLearningServices/workspaces/${name}`;
+  return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.MachineLearningServices/workspaces/${name}`;
 }
 
 export class FoundryError extends Error {
@@ -492,7 +493,7 @@ async function armFetch(
   if (!token?.token) throw new Error('Failed to acquire ARM token');
   const sep = fullPath.includes('?') ? '&' : '?';
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
-  const url = `https://management.azure.com${fullPath}${sep}api-version=${init.apiVersion}${query}`;
+  const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
   return fetch(url, {
     ...rest,

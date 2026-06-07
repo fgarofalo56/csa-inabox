@@ -1,6 +1,7 @@
 /**
  * Azure Data Explorer (Kusto) client — raw REST against the Loom shared
- * cluster `adx-csa-loom-shared.eastus2.kusto.windows.net`.
+ * cluster (default `adx-csa-loom-shared` in region `eastus2`; the hostname
+ * suffix is sovereign-cloud-correct via cloud-endpoints.kustoClusterUri()).
  *
  * Auth: Console UAMI via ManagedIdentityCredential, chained with
  * DefaultAzureCredential for local dev. The UAMI holds AllDatabasesAdmin
@@ -20,8 +21,9 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
+import { armBase, armScope, kustoClusterUri } from './cloud-endpoints';
 
-const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || 'https://adx-csa-loom-shared.eastus2.kusto.windows.net';
+const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || kustoClusterUri('adx-csa-loom-shared', 'eastus2');
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
 const MAX_ROWS = 5_000;
 
@@ -538,12 +540,12 @@ export async function createDatabase(
   const cluster = process.env.LOOM_KUSTO_CLUSTER_NAME || 'adx-csa-loom-shared';
   const location = opts?.location || process.env.LOOM_KUSTO_LOCATION || 'eastus2';
   const armToken = await (async () => {
-    const t = await credential.getToken('https://management.azure.com/.default');
+    const t = await credential.getToken(armScope());
     if (!t?.token) throw new KustoError('Failed to acquire ARM token', 401);
     return t.token;
   })();
   const apiVersion = '2023-08-15';
-  const url = `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Kusto/clusters/${cluster}/databases/${encodeURIComponent(name)}?api-version=${apiVersion}`;
+  const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Kusto/clusters/${cluster}/databases/${encodeURIComponent(name)}?api-version=${apiVersion}`;
   const body = {
     location,
     kind: 'ReadWrite',

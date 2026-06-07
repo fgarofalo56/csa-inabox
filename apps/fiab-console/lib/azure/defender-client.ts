@@ -20,9 +20,11 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { readMonitorConfig, MonitorError, MonitorNotConfiguredError } from './monitor-client';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
+const ARM = armBase();
+const ARM_SCOPE = armScope();
 const SECURE_SCORE_API = '2020-01-01';
 const ASSESSMENTS_API = '2021-06-01';
 const ALERTS_API = '2022-01-01';

@@ -24,6 +24,7 @@ import {
   LOGIC_API,
 } from '@/lib/install/provisioners/logic-app';
 import { triggerAndPollWorkflowRun } from '@/lib/install/provisioners/_seed-logic-app';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +43,7 @@ function resolveBinding(state: any): { subscriptionId: string; resourceGroup: st
 }
 
 function workflowUrl(b: { subscriptionId: string; resourceGroup: string; workflowName: string }): string {
-  return `https://management.azure.com/subscriptions/${b.subscriptionId}/resourceGroups/${b.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(b.workflowName)}`;
+  return `${armBase()}/subscriptions/${b.subscriptionId}/resourceGroups/${b.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(b.workflowName)}`;
 }
 
 function firstTrigger(state: any): string | undefined {

@@ -16,8 +16,9 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
 const STORAGE_API = '2023-05-01';
 
@@ -51,7 +52,7 @@ export interface StorageAccountSummary {
 async function armGet<T = any>(path: string): Promise<T> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new StorageDiscoveryError('Failed to acquire ARM token', 401);
-  const res = await fetch(`https://management.azure.com${path}`, {
+  const res = await fetch(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
   });
   const text = await res.text();
@@ -69,7 +70,7 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
   let next: string | null = firstPath; let guard = 0;
   while (next && guard < 50) {
     guard += 1;
-    const p = next.startsWith('https://management.azure.com') ? next.slice('https://management.azure.com'.length) : next;
+    const p = stripArmBase(next);
     const page: { value?: T[]; nextLink?: string } = await armGet(p);
     if (Array.isArray(page.value)) out.push(...page.value);
     next = page.nextLink || null;

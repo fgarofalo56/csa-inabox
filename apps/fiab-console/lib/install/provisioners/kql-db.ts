@@ -324,7 +324,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
       gate: {
         reason: 'ADX cluster not configured.',
         remediation:
-          'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.windows.net) and LOOM_KUSTO_CLUSTER_NAME on the Console.',
+          'Set LOOM_KUSTO_CLUSTER_URI (e.g. https://adx-csa-loom-shared.eastus2.kusto.<cloud-suffix>) and LOOM_KUSTO_CLUSTER_NAME on the Console.',
         link: 'https://learn.microsoft.com/azure/data-explorer/',
       },
       steps,

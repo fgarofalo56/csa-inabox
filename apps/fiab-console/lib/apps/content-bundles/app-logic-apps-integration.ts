@@ -54,6 +54,7 @@
  */
 
 import type { AppBundle, AnyContent } from './types';
+import { LOGIC_APP_WORKFLOW_SCHEMA } from '@/lib/azure/cloud-endpoints';
 
 // ─── Local content shape for the absent AnyContent['logic-app'] kind ─────
 // Mirrors the Microsoft.Logic/workflows resource body the provisioner sends.
@@ -77,8 +78,7 @@ interface LogicAppWorkflowContent {
   primaryTrigger: string;
 }
 
-const WDL_SCHEMA =
-  'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#';
+const WDL_SCHEMA = LOGIC_APP_WORKFLOW_SCHEMA;
 
 // ════════════════════════════════════════════════════════════════════════
 //  WORKFLOW 1 — Order intake → validate → route → notify (Request-triggered)

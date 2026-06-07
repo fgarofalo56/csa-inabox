@@ -4,7 +4,7 @@
  * Auth: AAD token for resource `2ff814a6-3304-4ab8-85cb-cd0e6f879c1d`
  * (Azure Databricks). Container App MI must be a Workspace user/admin
  * (granted via SCIM bootstrap — see deployment notes). For ARM-level
- * operations (resource provider) we use management.azure.com scope.
+ * operations (resource provider) we use the sovereign-cloud ARM scope.
  *
  * Hostname comes from env LOOM_DATABRICKS_HOSTNAME, e.g.
  *   adb-7405613013893759.19.azuredatabricks.net

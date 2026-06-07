@@ -38,6 +38,9 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Console UAMI principalId — granted AllDatabasesAdmin on the cluster so the KQL navigator and kusto-client can query / run mgmt commands / ingest. Empty skips the grant (e.g. when the cluster principal-assignment is managed out-of-band).')
+param consolePrincipalId string = ''
+
 resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
   name: clusterName
   location: location
@@ -77,3 +80,18 @@ output clusterName string = adxCluster.name
 output clusterUri string = adxCluster.properties.uri
 output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
 output clusterPrincipalId string = adxCluster.identity.principalId
+
+// ADX data-plane RBAC. ADX roles (AllDatabasesAdmin/Viewer) are NOT Azure
+// RBAC roleDefinitions (no GUID) — they are assigned via the cluster's own
+// principalAssignments child resource. Grants the Console UAMI cluster-wide
+// admin so kusto-client can query / run .create-merge / ingest across every
+// per-domain database. principalType 'App' = service principal (the UAMI).
+resource adxConsoleAdmin 'Microsoft.Kusto/clusters/principalAssignments@2024-04-13' = if (!empty(consolePrincipalId)) {
+  parent: adxCluster
+  name: 'console-uami-alldatabasesadmin'
+  properties: {
+    principalId: consolePrincipalId
+    principalType: 'App'
+    role: 'AllDatabasesAdmin'
+  }
+}

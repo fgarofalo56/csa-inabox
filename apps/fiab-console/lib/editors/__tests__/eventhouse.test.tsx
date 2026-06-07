@@ -21,7 +21,7 @@ describe('EventhouseEditor', () => {
     const m = installFetchMock({
       '/api/items/eventhouse/eh-fixture': () => ({
         ok: true,
-        cluster: 'https://adx-csa-loom-shared.eastus2.kusto.windows.net',
+        cluster: 'https://adx-csa-loom-shared.eastus2.kusto.usgovcloudapi.net',
         defaultDatabase: 'loomdb-default',
         databases: [
           { name: 'loomdb-default', prettyName: 'Default' },
