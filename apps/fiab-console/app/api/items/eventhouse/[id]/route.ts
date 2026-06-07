@@ -1,11 +1,12 @@
 /**
  * GET /api/items/eventhouse/[id]
- * Returns cluster URI + list of KQL databases on the shared Loom Kusto cluster.
+ * Returns cluster URI + list of KQL databases (with size / retention /
+ * hot-cache / table count) on the shared Loom Kusto cluster.
  */
 
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { clusterUri, defaultDatabase, listDatabases, KustoError } from '@/lib/azure/kusto-client';
+import { clusterUri, defaultDatabase, listDatabasesWithDetails, KustoError } from '@/lib/azure/kusto-client';
 import { getKustoClusterArm } from '@/lib/azure/kusto-arm-client';
 
 export const runtime = 'nodejs';
@@ -16,11 +17,12 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   try {
-    // Databases (query plane) + cluster ARM (management plane) in parallel.
-    // ARM is best-effort — if the UAMI lacks read on the cluster the editor
-    // still renders databases; the auto-scale dialog then shows its gate.
+    // Databases (query plane, with details) + cluster ARM (management plane)
+    // in parallel. ARM is best-effort — if the UAMI lacks read on the cluster
+    // the editor still renders databases; the auto-scale dialog then shows its
+    // gate.
     const [dbResult, armResult] = await Promise.allSettled([
-      listDatabases(),
+      listDatabasesWithDetails(),
       getKustoClusterArm(),
     ]);
 

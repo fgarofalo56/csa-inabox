@@ -214,6 +214,83 @@ export async function listDatabases(): Promise<Array<{ name: string; prettyName?
   }));
 }
 
+/**
+ * Per-database summary for the Databases browser (tile + list views).
+ * Sourced from a single `.show databases details` bulk call.
+ */
+export interface KustoDatabaseSummary {
+  name: string;
+  prettyName?: string;
+  persistentStorage?: string;
+  /** TotalSize bytes → MB. */
+  totalSizeMb?: number;
+  /** RetentionPolicy.SoftDeletePeriod (timespan days component). */
+  retentionDays?: number;
+  /** CachingPolicy.DataHotSpan (timespan days component). */
+  hotCacheDays?: number;
+  /** NumberOfTables. */
+  tableCount?: number;
+}
+
+/**
+ * `.show databases details` — one bulk control command against NetDefaultDB
+ * that returns size, retention, caching, and table count for every database
+ * on the cluster. Used by the Databases browser so each tile/row shows real
+ * size + retention without a per-database round trip.
+ *
+ * Grounded in Microsoft Learn (`.show databases details`): returns
+ * DatabaseName, PrettyName, PersistentStorage, TotalSize (bytes),
+ * RetentionPolicy (JSON), CachingPolicy (JSON), NumberOfTables.
+ */
+export async function listDatabasesWithDetails(): Promise<KustoDatabaseSummary[]> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show databases details');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('DatabaseName');
+  const prettyIdx = idx('PrettyName');
+  const storIdx = idx('PersistentStorage');
+  const sizeIdx = idx('TotalSize');
+  const retIdx = idx('RetentionPolicy');
+  const cacheIdx = idx('CachingPolicy');
+  const tabIdx = idx('NumberOfTables');
+
+  // Timespan-days parser: SoftDeletePeriod/DataHotSpan look like "365.00:00:00"
+  // (days.hh:mm:ss). The leading integer before the first '.' is the day count.
+  // A pure-time value ("06:00:00") has ':' in its head segment, so days = 0.
+  function parseTimespanDays(raw: unknown): number | undefined {
+    if (typeof raw !== 'string' || !raw) return undefined;
+    const head = raw.split('.')[0];
+    if (head.includes(':')) return 0;
+    const days = parseInt(head, 10);
+    return Number.isFinite(days) ? days : undefined;
+  }
+
+  function policyDays(policy: unknown, key: 'SoftDeletePeriod' | 'DataHotSpan'): number | undefined {
+    if (typeof policy !== 'string' || !policy) return undefined;
+    try {
+      const p = JSON.parse(policy);
+      return parseTimespanDays(p?.[key]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return r.rows.map((row) => {
+    const sizeRaw = sizeIdx >= 0 ? row[sizeIdx] : undefined;
+    const sizeNum = typeof sizeRaw === 'number' ? sizeRaw : Number(sizeRaw);
+    const tabRaw = tabIdx >= 0 ? row[tabIdx] : undefined;
+    const tabNum = typeof tabRaw === 'number' ? tabRaw : Number(tabRaw);
+    return {
+      name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+      prettyName: prettyIdx >= 0 ? (row[prettyIdx] as string) || undefined : undefined,
+      persistentStorage: storIdx >= 0 ? (row[storIdx] as string) || undefined : undefined,
+      totalSizeMb: Number.isFinite(sizeNum) ? sizeNum / (1024 * 1024) : undefined,
+      retentionDays: retIdx >= 0 ? policyDays(row[retIdx], 'SoftDeletePeriod') : undefined,
+      hotCacheDays: cacheIdx >= 0 ? policyDays(row[cacheIdx], 'DataHotSpan') : undefined,
+      tableCount: Number.isFinite(tabNum) ? tabNum : undefined,
+    };
+  });
+}
+
 /** `.show tables` for a given database. */
 export async function listTables(db: string): Promise<Array<{ name: string; folder?: string; docString?: string }>> {
   const r = await executeMgmtCommand(db, '.show tables');

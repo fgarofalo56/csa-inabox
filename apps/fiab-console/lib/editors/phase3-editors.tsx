@@ -40,6 +40,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Table20Regular, Flowchart20Regular,
+  Apps20Regular, List20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import {
@@ -470,11 +471,21 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
 // onClick bindings (see no-vaporware.md: dead ribbons get disabled with
 // a "not yet wired" tooltip rather than rendering enabled-but-broken).
 
+interface EventhouseDb {
+  name: string;
+  prettyName?: string;
+  persistentStorage?: string;
+  totalSizeMb?: number;
+  retentionDays?: number;
+  hotCacheDays?: number;
+  tableCount?: number;
+}
+
 interface EventhouseState {
   ok: boolean;
   cluster?: string;
   defaultDatabase?: string;
-  databases?: Array<{ name: string; prettyName?: string; persistentStorage?: string }>;
+  databases?: EventhouseDb[];
   sku?: { name: string; tier: string; capacity?: number };
   optimizedAutoscale?: {
     isEnabled: boolean;
@@ -483,6 +494,16 @@ interface EventhouseState {
     version: number;
   } | null;
   error?: string;
+}
+
+/** Human-readable size from a megabyte count (KB / MB / GB / TB). */
+function fmtDbSize(mb?: number): string {
+  if (typeof mb !== 'number' || !Number.isFinite(mb)) return '—';
+  if (mb < 1) return `${(mb * 1024).toFixed(0)} KB`;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  const gb = mb / 1024;
+  if (gb < 1024) return `${gb.toFixed(1)} GB`;
+  return `${(gb / 1024).toFixed(2)} TB`;
 }
 
 type EhTimespan = 'PT1H' | 'P1D' | 'P7D' | 'P30D';
@@ -868,6 +889,11 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+  // Databases browser: tile/list view toggle + delete confirmation flow.
+  const [dbView, setDbView] = useState<'tile' | 'list'>('tile');
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
   // Cluster-level optimized auto-scale (ARM PATCH /clusters)
   const [autoscaleOpen, setAutoscaleOpen] = useState(false);
   const [autoscaleEnabled, setAutoscaleEnabled] = useState<boolean>(false);
@@ -936,6 +962,36 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     const qs = new URLSearchParams({ eventhouseId: id, database: dbName });
     router.push(`/items/kql-database/new?${qs.toString()}`);
   }, [id, router]);
+
+  // Open the focused KQL editor for a database in a NEW browser tab — mirrors
+  // Fabric's per-object "Open in new tab" affordance.
+  const openKqlEditorNewTab = useCallback((dbName: string) => {
+    if (!dbName) return;
+    const qs = new URLSearchParams({ eventhouseId: id, database: dbName });
+    window.open(`/items/kql-database/new?${qs.toString()}`, '_blank', 'noopener');
+  }, [id]);
+
+  // Delete a KQL database via ARM (Microsoft.Kusto/clusters/databases). After
+  // a successful delete, re-load the cluster so the tile/row disappears.
+  const deleteDb = useCallback(async (dbName: string) => {
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      const r = await fetch(
+        `/api/items/eventhouse/${id}/database?name=${encodeURIComponent(dbName)}`,
+        { method: 'DELETE' },
+      );
+      const j = await r.json();
+      if (!j.ok) { setDeleteErr(j.error || 'delete failed'); return; }
+      setDeleteTarget(null);
+      if (selectedDb === dbName) setSelectedDb('');
+      load();
+    } catch (e: any) {
+      setDeleteErr(e?.message || String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }, [id, selectedDb, load]);
 
   // Ingest a file (CSV / JSON / parquet) into a KQL table. Calls the
   // existing /api/items/eventhouse/{id}/ingest BFF route; honest error if
@@ -1209,6 +1265,8 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     { id: 'home', label: 'Home', groups: [
       { label: 'New', actions: [
         { label: 'New KQL database', onClick: () => setDialogOpen(true) },
+        { label: 'KQL database shortcut', disabled: true,
+          title: 'ReadOnlyFollowing (shortcut) databases require a Fabric-managed eventhouse; the standalone ADX cluster hosts ReadWrite databases only' },
         { label: 'New dashboard', disabled: true, title: 'KQL dashboard creation not yet wired — use the KQL Dashboard editor' },
       ]},
       { label: 'Query', actions: [
@@ -1275,6 +1333,10 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
               </DialogBody>
             </DialogSurface>
           </Dialog>
+          <Button appearance="outline" icon={<Add20Regular />} disabled
+            title="KQL database shortcut (ReadOnlyFollowing) requires a Fabric-managed eventhouse; the standalone ADX cluster hosts ReadWrite databases only">
+            +Database shortcut
+          </Button>
         </div>
 
         {state?.ok && (
@@ -1311,47 +1373,185 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
         {state?.ok && activeTab === 'databases' && (
           <>
-            <Subtitle2>Databases ({dbCount})</Subtitle2>
-            <div className={s.cardGrid}>
-              {(state.databases || []).map((d) => {
-                const isSelected = selectedDb === d.name;
-                return (
-                  <div
-                    key={d.name}
-                    className={s.card}
-                    onClick={() => setSelectedDb(d.name)}
-                    onDoubleClick={() => openKqlEditor(d.name)}
-                    role="button"
-                    tabIndex={0}
-                    style={{
-                      cursor: 'pointer',
-                      borderColor: isSelected ? tokens.colorBrandStroke1 : undefined,
-                      borderWidth: isSelected ? 2 : undefined,
-                      backgroundColor: isSelected ? tokens.colorNeutralBackground1Selected : undefined,
-                    }}
-                  >
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>KQL database</Caption1>
-                    <div style={{ fontSize: 18, fontWeight: 600 }}>{d.name}</div>
-                    {d.prettyName && d.prettyName !== d.name && <Caption1>{d.prettyName}</Caption1>}
-                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                      {d.name === state.defaultDatabase && <Badge appearance="filled" color="brand">default</Badge>}
-                      {isSelected && <Badge appearance="outline" color="informative">selected</Badge>}
-                    </div>
-                    <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-                      <Button size="small" appearance="primary" onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}>
-                        Query
-                      </Button>
-                      <Button size="small" appearance="outline" onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setGetDataOpen(true); }}>
-                        Get data
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-              {(!state.databases || state.databases.length === 0) && (
-                <Caption1>No databases yet. Click <strong>New KQL database</strong> to create one.</Caption1>
-              )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Subtitle2>Databases ({dbCount})</Subtitle2>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }} role="group" aria-label="Database view">
+                <Button
+                  size="small"
+                  appearance={dbView === 'tile' ? 'primary' : 'subtle'}
+                  icon={<Apps20Regular />}
+                  onClick={() => setDbView('tile')}
+                  aria-pressed={dbView === 'tile'}
+                  aria-label="Tile view"
+                  title="Tile view"
+                />
+                <Button
+                  size="small"
+                  appearance={dbView === 'list' ? 'primary' : 'subtle'}
+                  icon={<List20Regular />}
+                  onClick={() => setDbView('list')}
+                  aria-pressed={dbView === 'list'}
+                  aria-label="List view"
+                  title="List view"
+                />
+              </div>
             </div>
+
+            {dbView === 'tile' && (
+              <div className={s.cardGrid}>
+                {(state.databases || []).map((d) => {
+                  const isSelected = selectedDb === d.name;
+                  return (
+                    <div
+                      key={d.name}
+                      className={s.card}
+                      onClick={() => setSelectedDb(d.name)}
+                      onDoubleClick={() => openKqlEditor(d.name)}
+                      role="button"
+                      tabIndex={0}
+                      style={{
+                        cursor: 'pointer',
+                        borderColor: isSelected ? tokens.colorBrandStroke1 : undefined,
+                        borderWidth: isSelected ? 2 : undefined,
+                        backgroundColor: isSelected ? tokens.colorNeutralBackground1Selected : undefined,
+                      }}
+                    >
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>KQL database</Caption1>
+                      <div style={{ fontSize: 18, fontWeight: 600 }}>{d.name}</div>
+                      {d.prettyName && d.prettyName !== d.name && <Caption1>{d.prettyName}</Caption1>}
+                      <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap', color: tokens.colorNeutralForeground3 }}>
+                        {typeof d.totalSizeMb === 'number' && <Caption1>{fmtDbSize(d.totalSizeMb)}</Caption1>}
+                        {typeof d.retentionDays === 'number' && <Caption1>ret {d.retentionDays}d</Caption1>}
+                        {typeof d.tableCount === 'number' && <Caption1>{d.tableCount} {d.tableCount === 1 ? 'table' : 'tables'}</Caption1>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                        {d.name === state.defaultDatabase && <Badge appearance="filled" color="brand">default</Badge>}
+                        {isSelected && <Badge appearance="outline" color="informative">selected</Badge>}
+                      </div>
+                      <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        <Button size="small" appearance="primary" icon={<Play20Regular />}
+                          onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}
+                          title="Query data (this tab)">
+                          Query
+                        </Button>
+                        <Button size="small" appearance="outline" icon={<Open20Regular />}
+                          aria-label={`Open ${d.name} in new tab`}
+                          onClick={(e) => { e.stopPropagation(); openKqlEditorNewTab(d.name); }}
+                          title="Open in new tab" />
+                        <Button size="small" appearance="outline"
+                          onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setGetDataOpen(true); }}
+                          title="Get data">
+                          Get data
+                        </Button>
+                        <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                          aria-label={`Delete ${d.name}`}
+                          onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setDeleteTarget(d.name); setDeleteErr(null); }}
+                          title="Delete database" />
+                      </div>
+                    </div>
+                  );
+                })}
+                {(!state.databases || state.databases.length === 0) && (
+                  <Caption1>No databases yet. Click <strong>New KQL database</strong> to create one.</Caption1>
+                )}
+              </div>
+            )}
+
+            {dbView === 'list' && (
+              <div className={s.tableWrap}>
+                <Table aria-label="KQL databases" size="small">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>Tables</TableHeaderCell>
+                      <TableHeaderCell>Total size</TableHeaderCell>
+                      <TableHeaderCell>Retention</TableHeaderCell>
+                      <TableHeaderCell>Hot cache</TableHeaderCell>
+                      <TableHeaderCell aria-label="Actions" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(state.databases || []).map((d) => (
+                      <TableRow
+                        key={d.name}
+                        onClick={() => setSelectedDb(d.name)}
+                        style={{
+                          cursor: 'pointer',
+                          backgroundColor: selectedDb === d.name ? tokens.colorNeutralBackground1Selected : undefined,
+                        }}
+                      >
+                        <TableCell>
+                          <span style={{ fontWeight: 600 }}>{d.name}</span>
+                          {d.name === state.defaultDatabase &&
+                            <Badge appearance="filled" color="brand" style={{ marginLeft: 6 }}>default</Badge>}
+                        </TableCell>
+                        <TableCell>{typeof d.tableCount === 'number' ? d.tableCount : '—'}</TableCell>
+                        <TableCell>{fmtDbSize(d.totalSizeMb)}</TableCell>
+                        <TableCell>{typeof d.retentionDays === 'number' ? `${d.retentionDays} days` : '—'}</TableCell>
+                        <TableCell>{typeof d.hotCacheDays === 'number' ? `${d.hotCacheDays} days` : '—'}</TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <Button size="small" appearance="primary" icon={<Play20Regular />}
+                              aria-label={`Query ${d.name}`}
+                              onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}
+                              title="Query data" />
+                            <Button size="small" appearance="outline" icon={<Open20Regular />}
+                              aria-label={`Open ${d.name} in new tab`}
+                              onClick={(e) => { e.stopPropagation(); openKqlEditorNewTab(d.name); }}
+                              title="Open in new tab" />
+                            <Button size="small" appearance="outline"
+                              onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setGetDataOpen(true); }}
+                              title="Get data">
+                              Get data
+                            </Button>
+                            <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                              aria-label={`Delete ${d.name}`}
+                              onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setDeleteTarget(d.name); setDeleteErr(null); }}
+                              title="Delete database" />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {(!state.databases || state.databases.length === 0) && (
+                      <TableRow>
+                        <TableCell colSpan={6}>
+                          <Caption1>No databases yet. Click <strong>New KQL database</strong> to create one.</Caption1>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Delete confirmation */}
+            <Dialog open={!!deleteTarget} onOpenChange={(_, d) => { if (!d.open) { setDeleteTarget(null); setDeleteErr(null); } }}>
+              <DialogSurface style={{ maxWidth: 480 }}>
+                <DialogBody>
+                  <DialogTitle>Delete database?</DialogTitle>
+                  <DialogContent>
+                    <Caption1>
+                      This permanently deletes <strong>{deleteTarget}</strong> and all of its tables from the
+                      ADX cluster. This cannot be undone — an ARM DELETE is issued immediately.
+                    </Caption1>
+                    {deleteErr && (
+                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                        <MessageBarBody>{deleteErr}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => { setDeleteTarget(null); setDeleteErr(null); }}>Cancel</Button>
+                    <Button appearance="primary" icon={<Delete20Regular />}
+                      style={{ backgroundColor: tokens.colorPaletteRedBackground3 }}
+                      disabled={deleting || !deleteTarget}
+                      onClick={() => deleteTarget && deleteDb(deleteTarget)}>
+                      {deleting ? 'Deleting…' : 'Delete'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
 
             {/* Get data dialog — file / event hub / OneLake */}
             <Dialog open={getDataOpen} onOpenChange={(_, d) => setGetDataOpen(d.open)}>

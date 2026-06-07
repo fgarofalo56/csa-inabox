@@ -190,6 +190,30 @@ export async function updateKustoClusterSku(
 }
 
 /**
+ * ARM DELETE Microsoft.Kusto/clusters/{cluster}/databases/{name}.
+ * Database deletion is an ARM-plane operation (it deallocates persistent
+ * storage), mirroring `createDatabase` in kusto-client.ts.
+ *
+ * Returns { provisioningState: 'Succeeded' } on 200 (sync delete) or
+ * { provisioningState: 'Deleting' } on 202 (async long-running operation).
+ * The caller identity (Console UAMI) must hold Contributor on the cluster
+ * scope — the same role used to create databases.
+ *
+ * Grounded in Microsoft Learn (Databases - Delete REST operation):
+ *   DELETE .../clusters/{cluster}/databases/{name}?api-version=2023-08-15
+ */
+export async function deleteKustoDatabase(dbName: string): Promise<{ provisioningState: string }> {
+  const cfg = readKustoArmConfig();
+  const url = `${clusterUrl(cfg)}/databases/${encodeURIComponent(dbName)}?api-version=${KUSTO_API}`;
+  const r = await callArm(url, { method: 'DELETE' });
+  // 200 sync delete, 202 async delete, 204 already-gone are all success.
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `deleteKustoDatabase(${dbName}) failed ${r.status}`);
+  }
+  return { provisioningState: r.status === 202 ? 'Deleting' : 'Succeeded' };
+}
+
+/**
  * PATCH the cluster's optimizedAutoscale property via ARM.
  *   properties.optimizedAutoscale = { isEnabled, minimum, maximum, version }
  * `version` is always 1 (ARM schema requirement).
