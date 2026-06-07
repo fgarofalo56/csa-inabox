@@ -474,6 +474,351 @@ interface EventhouseState {
   error?: string;
 }
 
+type EhTimespan = 'PT1H' | 'P1D' | 'P7D' | 'P30D';
+type EhTab = 'overview' | 'databases';
+
+interface EhOverviewData {
+  ok: boolean;
+  cluster?: string;
+  timespan?: string;
+  diagnostics?: {
+    isHealthy: boolean;
+    isScaleOutRequired: boolean;
+    machinesTotal: number;
+    machinesOffline: number;
+    extentsTotal: number;
+    totalOriginalDataSizeBytes: number;
+    totalExtentSizeBytes: number;
+    ingestionsLoadFactor: number;
+    ingestionsInProgress: number;
+    ingestionsSuccessRate: number;
+  } | null;
+  capacity?: { ingestions: { total: number; consumed: number; remaining: number } } | null;
+  databases?: Array<{
+    name: string;
+    totalOriginalSizeBytes: number | null;
+    totalExtentSizeBytes: number | null;
+    hotDataSizeBytes: number | null;
+    rowCount: number | null;
+  }>;
+  topQueriedDbs?: Array<{ database: string; queryCount: number }>;
+  topUsers?: Array<{ user: string; queryCount: number }>;
+  monitor?: {
+    ingestionLatencyAvgSec: number | null;
+    queryDurationAvgMs: number | null;
+    cpuAvgPct: number | null;
+    ingestionUtilPct: number | null;
+    ingestionVolumeTotalMb: number | null;
+    throttledCommandsTotal: number | null;
+    throttledQueriesTotal: number | null;
+  } | null;
+  monitorGate?: string;
+  error?: string;
+}
+
+interface EhJournalEntry {
+  event: string;
+  eventTimestamp: string;
+  database: string;
+  entityName: string;
+  updatedEntityName: string;
+  changeCommand: string;
+  principal: string;
+}
+
+/** Bytes → human GB/MB string for the storage tiles. */
+function fmtBytes(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
+const EH_TIMESPAN_LABEL: Record<EhTimespan, string> = {
+  PT1H: '1H', P1D: '1D', P7D: '7D', P30D: '30D',
+};
+
+/** Small labelled metric tile used across the overview storage + monitor rows. */
+function EhStatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div style={{
+      padding: 14, minHeight: 92, border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: 6, background: tokens.colorNeutralBackground1, display: 'flex',
+      flexDirection: 'column', gap: 2,
+    }}>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
+      <div style={{ fontSize: 26, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.15 }}>{value}</div>
+      {hint && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{hint}</Caption1>}
+    </div>
+  );
+}
+
+/**
+ * Eventhouse system-overview dashboard — Fabric RTI Eventhouse "system overview"
+ * parity rendered over the live ADX cluster. State indicator, storage breakdown,
+ * per-db storage bar chart, time-range filter, ingestion/throttle Monitor tiles,
+ * top-queried/users grids, and the schema-change journal. All data comes from the
+ * /overview + /journal BFF routes — no mocks.
+ */
+function EventhouseOverviewPanel({
+  s, overview, journal, timespan, loading, err, onTimespan, onRefresh,
+}: {
+  s: ReturnType<typeof useStyles>;
+  overview: EhOverviewData | null;
+  journal: EhJournalEntry[] | null;
+  timespan: EhTimespan;
+  loading: boolean;
+  err: string | null;
+  onTimespan: (ts: EhTimespan) => void;
+  onRefresh: () => void;
+}) {
+  const diag = overview?.diagnostics || null;
+  const dbs = overview?.databases || [];
+  const mon = overview?.monitor || null;
+  const cap = overview?.capacity || null;
+
+  const compressionRatio =
+    diag && diag.totalExtentSizeBytes > 0
+      ? diag.totalOriginalDataSizeBytes / diag.totalExtentSizeBytes
+      : null;
+  const hotTotalBytes = dbs.reduce((a, d) => a + (d.hotDataSizeBytes ?? 0), 0);
+
+  const chartRows: unknown[][] = dbs
+    .filter((d) => (d.totalExtentSizeBytes ?? 0) > 0)
+    .sort((a, b) => (b.totalExtentSizeBytes ?? 0) - (a.totalExtentSizeBytes ?? 0))
+    .slice(0, 20)
+    .map((d) => [d.name, Math.round((d.totalExtentSizeBytes ?? 0) / 1024 / 1024)]);
+
+  return (
+    <div className={s.pad} style={{ paddingTop: 12 }}>
+      {/* time-range filter strip */}
+      <div className={s.toolbar}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Time range</Caption1>
+        {(['PT1H', 'P1D', 'P7D', 'P30D'] as EhTimespan[]).map((ts) => (
+          <Button
+            key={ts}
+            size="small"
+            appearance={timespan === ts ? 'primary' : 'outline'}
+            onClick={() => onTimespan(ts)}
+          >
+            {EH_TIMESPAN_LABEL[ts]}
+          </Button>
+        ))}
+        <Button
+          size="small"
+          appearance="outline"
+          icon={<ArrowSync20Regular />}
+          onClick={onRefresh}
+          disabled={loading}
+          style={{ marginLeft: 8 }}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </Button>
+        {diag && (
+          <Badge
+            appearance="filled"
+            color={diag.isHealthy ? 'success' : 'danger'}
+            style={{ marginLeft: 'auto' }}
+          >
+            {diag.isHealthy ? 'Healthy' : 'Unhealthy'}
+          </Badge>
+        )}
+        {diag && (
+          <Caption1>
+            Nodes: {diag.machinesTotal} ({diag.machinesOffline} offline) · Extents: {diag.extentsTotal.toLocaleString()}
+            {diag.isScaleOutRequired ? ' · scale-out recommended' : ''}
+          </Caption1>
+        )}
+      </div>
+
+      {loading && !overview && <Spinner size="small" label="Loading system overview…" />}
+      {err && (
+        <MessageBar intent="error">
+          <MessageBarBody>{err}</MessageBarBody>
+        </MessageBar>
+      )}
+      {overview && !overview.ok && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Overview unavailable</MessageBarTitle>
+            {overview.error || 'Unknown error'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {overview?.ok && (
+        <>
+          {/* storage breakdown */}
+          <Subtitle2>Storage</Subtitle2>
+          <div className={s.cardGrid}>
+            <EhStatTile
+              label="Original (uncompressed)"
+              value={fmtBytes(diag?.totalOriginalDataSizeBytes)}
+            />
+            <EhStatTile
+              label="Compressed (on disk)"
+              value={fmtBytes(diag?.totalExtentSizeBytes)}
+              hint={compressionRatio ? `${compressionRatio.toFixed(1)}× compression` : undefined}
+            />
+            <EhStatTile
+              label="Hot cache (SSD)"
+              value={fmtBytes(hotTotalBytes)}
+              hint="sum across databases"
+            />
+            <EhStatTile
+              label="Ingestion capacity"
+              value={cap ? `${cap.ingestions.consumed}/${cap.ingestions.total}` : '—'}
+              hint={cap ? `${cap.ingestions.remaining} concurrent slots free` : 'concurrent ingestions'}
+            />
+          </div>
+
+          {/* per-db storage bar chart */}
+          <Subtitle2>Storage by database (compressed MB)</Subtitle2>
+          <div className={s.card}>
+            {chartRows.length > 0 ? (
+              <ResultChart columns={['Database', 'Compressed (MB)']} rows={chartRows} kind="bar" />
+            ) : (
+              <Caption1>No per-database storage reported yet for this cluster.</Caption1>
+            )}
+          </div>
+
+          {/* ingestion + Monitor tiles */}
+          <Subtitle2>Ingestion &amp; query health ({EH_TIMESPAN_LABEL[timespan]})</Subtitle2>
+          {overview.monitorGate ? (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Azure Monitor metrics gated</MessageBarTitle>
+                {overview.monitorGate}
+              </MessageBarBody>
+            </MessageBar>
+          ) : null}
+          <div className={s.cardGrid}>
+            <EhStatTile
+              label="Ingestions in progress"
+              value={diag ? diag.ingestionsInProgress.toLocaleString() : '—'}
+              hint={diag ? `load factor ${diag.ingestionsLoadFactor}` : undefined}
+            />
+            <EhStatTile
+              label="Ingestion success rate"
+              value={diag ? `${diag.ingestionsSuccessRate}%` : '—'}
+            />
+            <EhStatTile
+              label="Ingested volume"
+              value={mon?.ingestionVolumeTotalMb != null ? `${mon.ingestionVolumeTotalMb.toLocaleString(undefined, { maximumFractionDigits: 1 })} MB` : '—'}
+              hint="Azure Monitor · total"
+            />
+            <EhStatTile
+              label="Ingest latency"
+              value={mon?.ingestionLatencyAvgSec != null ? `${mon.ingestionLatencyAvgSec.toFixed(1)} s` : '—'}
+              hint="Azure Monitor · avg"
+            />
+            <EhStatTile
+              label="Query duration"
+              value={mon?.queryDurationAvgMs != null ? `${Math.round(mon.queryDurationAvgMs).toLocaleString()} ms` : '—'}
+              hint="Azure Monitor · avg"
+            />
+            <EhStatTile
+              label="Throttled commands"
+              value={mon?.throttledCommandsTotal != null ? mon.throttledCommandsTotal.toLocaleString() : '—'}
+              hint={mon?.throttledQueriesTotal != null ? `${mon.throttledQueriesTotal.toLocaleString()} throttled queries` : 'Azure Monitor · total'}
+            />
+          </div>
+
+          {/* top queried dbs + top users */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+            <div className={s.card}>
+              <Subtitle2>Top databases by query count</Subtitle2>
+              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                <Table size="small" aria-label="Top queried databases">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Database</TableHeaderCell>
+                      <TableHeaderCell>Queries</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(overview.topQueriedDbs || []).map((r, i) => (
+                      <TableRow key={`${r.database}-${i}`}>
+                        <TableCell className={s.cell}>{r.database || '(unknown)'}</TableCell>
+                        <TableCell className={s.cell}>{r.queryCount.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(overview.topQueriedDbs || []).length === 0 && (
+                      <TableRow><TableCell className={s.cell}>No queries in this window.</TableCell><TableCell /></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+            <div className={s.card}>
+              <Subtitle2>Top users by query count</Subtitle2>
+              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                <Table size="small" aria-label="Top users">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>User</TableHeaderCell>
+                      <TableHeaderCell>Queries</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(overview.topUsers || []).map((r, i) => (
+                      <TableRow key={`${r.user}-${i}`}>
+                        <TableCell className={s.cell}>{r.user || '(unknown)'}</TableCell>
+                        <TableCell className={s.cell}>{r.queryCount.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(overview.topUsers || []).length === 0 && (
+                      <TableRow><TableCell className={s.cell}>No queries in this window.</TableCell><TableCell /></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+
+          {/* schema-change journal */}
+          <Subtitle2>Schema-change log</Subtitle2>
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Schema-change journal">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Timestamp</TableHeaderCell>
+                  <TableHeaderCell>Event</TableHeaderCell>
+                  <TableHeaderCell>Database</TableHeaderCell>
+                  <TableHeaderCell>Entity</TableHeaderCell>
+                  <TableHeaderCell>Change command</TableHeaderCell>
+                  <TableHeaderCell>Principal</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(journal || []).slice(0, 50).map((j, i) => (
+                  <TableRow key={`${j.eventTimestamp}-${i}`}>
+                    <TableCell className={s.cell}>{j.eventTimestamp}</TableCell>
+                    <TableCell className={s.cell}>{j.event}</TableCell>
+                    <TableCell className={s.cell}>{j.database}</TableCell>
+                    <TableCell className={s.cell}>{j.updatedEntityName || j.entityName}</TableCell>
+                    <TableCell className={s.cell} title={j.changeCommand}>
+                      {j.changeCommand.length > 60 ? `${j.changeCommand.slice(0, 60)}…` : j.changeCommand}
+                    </TableCell>
+                    <TableCell className={s.cell}>{j.principal}</TableCell>
+                  </TableRow>
+                ))}
+                {(!journal || journal.length === 0) && (
+                  <TableRow>
+                    <TableCell className={s.cell}>No metadata changes recorded.</TableCell>
+                    <TableCell /><TableCell /><TableCell /><TableCell /><TableCell />
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EventhouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
@@ -499,6 +844,14 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+
+  // Overview tab — live system dashboard over the ADX cluster.
+  const [activeTab, setActiveTab] = useState<EhTab>('overview');
+  const [timespan, setTimespan] = useState<EhTimespan>('P1D');
+  const [overview, setOverview] = useState<EhOverviewData | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewErr, setOverviewErr] = useState<string | null>(null);
+  const [journal, setJournal] = useState<EhJournalEntry[] | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -631,6 +984,32 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
 
+  // Load the live system-overview + schema-change journal for the current window.
+  const loadOverview = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setOverviewLoading(true);
+    setOverviewErr(null);
+    try {
+      const [ovRes, jRes] = await Promise.all([
+        fetch(`/api/items/eventhouse/${id}/overview?timespan=${timespan}`),
+        fetch(`/api/items/eventhouse/${id}/journal?limit=50`),
+      ]);
+      const ov = (await ovRes.json()) as EhOverviewData;
+      setOverview(ov);
+      const jr = await jRes.json();
+      if (jr?.ok) setJournal((jr.entries || []) as EhJournalEntry[]);
+      else setJournal([]);
+    } catch (e: any) {
+      setOverviewErr(e?.message || String(e));
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, [id, timespan]);
+
+  useEffect(() => {
+    if (activeTab === 'overview') loadOverview();
+  }, [activeTab, loadOverview]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'New', actions: [
@@ -700,6 +1079,15 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           </Dialog>
         </div>
 
+        {state?.ok && (
+          <div className={s.tabBar}>
+            <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab(d.value as EhTab)}>
+              <Tab value="overview">System overview</Tab>
+              <Tab value="databases">Databases ({dbCount})</Tab>
+            </TabList>
+          </div>
+        )}
+
         {!state && <Spinner size="small" label="Loading cluster…" />}
         {state && !state.ok && (
           <MessageBar intent="error">
@@ -709,7 +1097,21 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
-        {state?.ok && (
+
+        {state?.ok && activeTab === 'overview' && (
+          <EventhouseOverviewPanel
+            s={s}
+            overview={overview}
+            journal={journal}
+            timespan={timespan}
+            loading={overviewLoading}
+            err={overviewErr}
+            onTimespan={setTimespan}
+            onRefresh={loadOverview}
+          />
+        )}
+
+        {state?.ok && activeTab === 'databases' && (
           <>
             <Subtitle2>Databases ({dbCount})</Subtitle2>
             <div className={s.cardGrid}>
