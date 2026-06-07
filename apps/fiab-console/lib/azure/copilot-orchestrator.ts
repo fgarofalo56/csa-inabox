@@ -23,6 +23,7 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
+import { cogScope } from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -194,7 +195,7 @@ export async function resolveAoaiTarget(
 }
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }
@@ -745,7 +746,14 @@ export function getRegistry(): LoomToolRegistry {
   return _registry;
 }
 
-async function persistStep(sessionId: string, userOid: string, step: OrchestratorStep, prompt?: string) {
+/**
+ * Append a single orchestrator/chat step to this user's Cosmos session doc
+ * (`copilot-sessions`, PK /sessionId). Read-modify-write; failures never throw
+ * so a Cosmos outage can't break the live SSE stream. Exported so other chat
+ * surfaces (e.g. the notebook Copilot pane) persist into the SAME session
+ * store the cross-item Copilot uses, and show up in GET /api/copilot/sessions.
+ */
+export async function persistStep(sessionId: string, userOid: string, step: OrchestratorStep, prompt?: string) {
   try {
     const c = await copilotSessionsContainer();
     // Read-modify-write a single session doc

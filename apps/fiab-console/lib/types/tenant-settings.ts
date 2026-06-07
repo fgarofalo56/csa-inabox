@@ -67,6 +67,7 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
       { id: 'ai.dataAgent', label: 'Data Agent (assistants-on-data)', help: 'Allow per-tenant Data Agent. Requires AI Foundry deployment.', default: true },
       { id: 'ai.allowedDataSources', label: 'Data Agent allowed-sources', help: 'Restrict Data Agent to specific data sources. Configure under "Tools".', default: false },
       { id: 'ai.crossItemCopilot', label: 'Cross-item Copilot orchestrator', help: 'Lets Copilot call Loom tools across all surfaces with admin-defined guardrails.', default: true },
+      { id: 'ai.inlineCodeComplete', label: 'Inline code completion (ghost text)', help: 'AOAI-powered gray ghost-text suggestions in Monaco notebook code cells (Tab to accept). Unlike Fabric this needs no F2+/P capacity. Users can also toggle per-session via the cell toolbar sparkle button.', default: true },
     ],
   },
   {
