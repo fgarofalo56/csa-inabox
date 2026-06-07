@@ -25,6 +25,60 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.25.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.24.0...csa-inabox-v0.25.0) (2026-06-07)
+
+
+### Features
+
+* **csa-loom:** Activator action editor — action group CRUD + Logic App actions ([#845](https://github.com/fgarofalo56/csa-inabox/issues/845)) ([bdf1634](https://github.com/fgarofalo56/csa-inabox/commit/bdf1634d8aa08e9e636542c6fee87a612f92286d))
+* **csa-loom:** Activator rule wizard backed by Azure Monitor scheduled-query alerts ([#847](https://github.com/fgarofalo56/csa-inabox/issues/847)) ([2fbc9e4](https://github.com/fgarofalo56/csa-inabox/commit/2fbc9e47181918d100c9b94cb54945ec560b4493))
+* **csa-loom:** Activator run history + trigger log (Azure Monitor alert instances) ([#854](https://github.com/fgarofalo56/csa-inabox/issues/854)) ([32144f4](https://github.com/fgarofalo56/csa-inabox/commit/32144f40c6a3c7e04a62d9349c71911bdb052541))
+* **csa-loom:** ADX follower database attach (database shortcut) ([#818](https://github.com/fgarofalo56/csa-inabox/issues/818)) ([6ebbb55](https://github.com/fgarofalo56/csa-inabox/commit/6ebbb550470f561986e155e9712edad02ec31f53))
+* **csa-loom:** ASA lifecycle + live metric tiles on the Stream Analytics editor ([#833](https://github.com/fgarofalo56/csa-inabox/issues/833)) ([5b61e72](https://github.com/fgarofalo56/csa-inabox/commit/5b61e72ee111b7225bc0a0f7ce537458e0b8dbb6))
+* **csa-loom:** bicep + env sync for RTI — ADX cluster MI grants + RTI env vars ([#848](https://github.com/fgarofalo56/csa-inabox/issues/848)) ([0043821](https://github.com/fgarofalo56/csa-inabox/commit/004382146db1a9b4f7632721a2260534c7d264d8))
+* **csa-loom:** cross-service query source binder (ADX + Log Analytics / App Insights) ([#832](https://github.com/fgarofalo56/csa-inabox/issues/832)) ([73f9e5e](https://github.com/fgarofalo56/csa-inabox/commit/73f9e5ecacaa4d1e2aace93c6342907813458e0f))
+* **csa-loom:** enrich one-click ingestion pickers in the Get Data wizard ([#820](https://github.com/fgarofalo56/csa-inabox/issues/820)) ([1b21829](https://github.com/fgarofalo56/csa-inabox/commit/1b21829466b70d06a66e9fd31e1c8f9faa845935))
+* **csa-loom:** Event Hubs streaming data connection wizard for KQL database ([#830](https://github.com/fgarofalo56/csa-inabox/issues/830)) ([56c3122](https://github.com/fgarofalo56/csa-inabox/commit/56c31226870eb8a53e67264336f2a29550475c83))
+* **csa-loom:** Eventhouse capacity / throttle panel (ADX-native) ([#842](https://github.com/fgarofalo56/csa-inabox/issues/842)) ([b820499](https://github.com/fgarofalo56/csa-inabox/commit/b820499db51b71a4913452001ef241c4c8bf86ba))
+* **csa-loom:** Eventhouse lakehouse/warehouse Delta endpoint (ADX external table + query acceleration) ([#843](https://github.com/fgarofalo56/csa-inabox/issues/843)) ([14d1584](https://github.com/fgarofalo56/csa-inabox/commit/14d15840ee8b3e7b4ffe0932ee9d5df8c79e5502))
+* **csa-loom:** eventhouse OneLake availability via ADX continuous-export to ADLS Delta ([#834](https://github.com/fgarofalo56/csa-inabox/issues/834)) ([c7a766c](https://github.com/fgarofalo56/csa-inabox/commit/c7a766ce543fb2d2701af684b78d7ee98bb9b7c6))
+* **csa-loom:** Eventhouse optimized auto-scale controls (ADX ARM, no Fabric) ([#821](https://github.com/fgarofalo56/csa-inabox/issues/821)) ([5333093](https://github.com/fgarofalo56/csa-inabox/commit/5333093eb2d84137f722ccfef2648e7c1a2bb9f6))
+* **csa-loom:** eventhouse purge table records (GDPR erasure) ([#828](https://github.com/fgarofalo56/csa-inabox/issues/828)) ([f586e01](https://github.com/fgarofalo56/csa-inabox/commit/f586e0154598c64ebe7d7f6a1733d402ff38eda9))
+* **csa-loom:** Eventhouse system overview panel (live ADX + Monitor) ([#819](https://github.com/fgarofalo56/csa-inabox/issues/819)) ([d28951d](https://github.com/fgarofalo56/csa-inabox/commit/d28951de0bc2d755d17319754e9f5a905f566ac0))
+* **csa-loom:** eventstream canvas → real Event Hubs + Stream Analytics backend ([#844](https://github.com/fgarofalo56/csa-inabox/issues/844)) ([fa72f7d](https://github.com/fgarofalo56/csa-inabox/commit/fa72f7df048708b2aa3fc38063eee479de76ac50))
+* **csa-loom:** eventstream destination wizards → real ASA outputs ([#849](https://github.com/fgarofalo56/csa-inabox/issues/849)) ([cb4cce3](https://github.com/fgarofalo56/csa-inabox/commit/cb4cce3a324f47864920f728312b686de7bbe338))
+* **csa-loom:** eventstream source-node provisioning wizards (EH/IoT/Kafka/CDC/custom) ([#851](https://github.com/fgarofalo56/csa-inabox/issues/851)) ([36e2c2d](https://github.com/fgarofalo56/csa-inabox/commit/36e2c2db358043a44c3ddd67e8b4e75d07f0ef37))
+* **csa-loom:** full Databases browser for Eventhouse (tile/list, delete, new-tab) ([#825](https://github.com/fgarofalo56/csa-inabox/issues/825)) ([eb5c9d0](https://github.com/fgarofalo56/csa-inabox/commit/eb5c9d0baac571138c81491b4ac8c64d22ab438f))
+* **csa-loom:** guided ASA transform-node builder in Eventstream (compile + test query) ([#853](https://github.com/fgarofalo56/csa-inabox/issues/853)) ([cef8d17](https://github.com/fgarofalo56/csa-inabox/commit/cef8d17daa257d5669168bd980fa8440242c1f46))
+* **csa-loom:** injection-safe dashboard parameter engine (declare query_parameters) ([#838](https://github.com/fgarofalo56/csa-inabox/issues/838)) ([64c590b](https://github.com/fgarofalo56/csa-inabox/commit/64c590b4f9f1bd1cccc311f9ef08b4f856d40a14))
+* **csa-loom:** IoT Hub data connection wizard for KQL Database (ADX, Azure-native) ([#837](https://github.com/fgarofalo56/csa-inabox/issues/837)) ([f221b9b](https://github.com/fgarofalo56/csa-inabox/commit/f221b9ba14474c40f5a3c02ace80a07bd6cb63e5))
+* **csa-loom:** KQL dashboard auto-refresh interval picker + tile drill-through ([#836](https://github.com/fgarofalo56/csa-inabox/issues/836)) ([1ebc174](https://github.com/fgarofalo56/csa-inabox/commit/1ebc174e5b0961581128c7278767607d396121c4))
+* **csa-loom:** KQL Database entity diagram (React Flow) over live ADX schema ([#822](https://github.com/fgarofalo56/csa-inabox/issues/822)) ([f5a4646](https://github.com/fgarofalo56/csa-inabox/commit/f5a46462b455873314f0b0a94859d0f0c1c244c9))
+* **csa-loom:** KQL DB ingestion mapping wizard + auto-detect ([#835](https://github.com/fgarofalo56/csa-inabox/issues/835)) ([fde8d85](https://github.com/fgarofalo56/csa-inabox/commit/fde8d8585da72905f7d40a792fabb56683241cfa))
+* **csa-loom:** KQL Queryset parity — column resize + Share ([#829](https://github.com/fgarofalo56/csa-inabox/issues/829)) ([b32c409](https://github.com/fgarofalo56/csa-inabox/commit/b32c409e93d2abf692fe5b32b558fdd0baf2b4e7))
+* **csa-loom:** kql-dashboard tile edit flyout + base queries (RTD parity) ([#839](https://github.com/fgarofalo56/csa-inabox/issues/839)) ([80ea25c](https://github.com/fgarofalo56/csa-inabox/commit/80ea25c7ecdffb978cafa28230ff6f34688e463b))
+* **csa-loom:** materialized-views editor — source-table picker, monaco-kusto body, backfill toggle ([#824](https://github.com/fgarofalo56/csa-inabox/issues/824)) ([fde1237](https://github.com/fgarofalo56/csa-inabox/commit/fde1237a464f2cf941445365e855a245457db2c3))
+* **csa-loom:** NL2KQL Copilot edge for the KQL Queryset editor ([#826](https://github.com/fgarofalo56/csa-inabox/issues/826)) ([da730b6](https://github.com/fgarofalo56/csa-inabox/commit/da730b6c6174b81f52fcb1ce21bc3e63dbec4635))
+* **csa-loom:** per-tile conditional formatting for Real-Time Dashboard ([#840](https://github.com/fgarofalo56/csa-inabox/issues/840)) ([ac3ca61](https://github.com/fgarofalo56/csa-inabox/commit/ac3ca61719436fb8b1fb294f71a5b1744dcb1e93))
+* **csa-loom:** Real-Time Intelligence hub — unified cross-subscription stream catalog ([#852](https://github.com/fgarofalo56/csa-inabox/issues/852)) ([fd4fa11](https://github.com/fgarofalo56/csa-inabox/commit/fd4fa11751aefc83b030afa283ca3a66760aac3c))
+* **csa-loom:** structured stored-function editor for the KQL DB editor ([#841](https://github.com/fgarofalo56/csa-inabox/issues/841)) ([39bee2b](https://github.com/fgarofalo56/csa-inabox/commit/39bee2ba1c3c74f936d1be341094eb0804cd2d81))
+* **csa-loom:** update policy wizard in the KQL DB editor (ADX transform-on-ingest) ([#823](https://github.com/fgarofalo56/csa-inabox/issues/823)) ([2997b48](https://github.com/fgarofalo56/csa-inabox/commit/2997b4800b9290273619185d7502fdde67931e9f))
+* **csa-loom:** visual table schema designer for KQL DB (create/alter/drop) ([#827](https://github.com/fgarofalo56/csa-inabox/issues/827)) ([fc7a695](https://github.com/fgarofalo56/csa-inabox/commit/fc7a69538c3383ac4956ec20f96643d71132b8c0))
+* **csa-loom:** wire all six AdxDatabaseTree table hover actions to real ops ([#831](https://github.com/fgarofalo56/csa-inabox/issues/831)) ([d9cebb9](https://github.com/fgarofalo56/csa-inabox/commit/d9cebb98f86423105165cf3b0262bc05953f430a))
+* **csa-loom:** wire eventhouse streaming-ingestion toggle to real ARM PATCH ([#817](https://github.com/fgarofalo56/csa-inabox/issues/817)) ([ede51cf](https://github.com/fgarofalo56/csa-inabox/commit/ede51cfa38f5717838761f5c09f64fab36c890ad))
+* **csa-loom:** workspace-monitoring eventhouse provisioner (Azure Monitor -&gt; read-only ADX + dashboard) ([#850](https://github.com/fgarofalo56/csa-inabox/issues/850)) ([0dec04c](https://github.com/fgarofalo56/csa-inabox/commit/0dec04c91ce4dadfe8dce0e6a509b2b3614226db))
+
+
+### Bug Fixes
+
+* **ci:** release-please auto-pass must cover "next build (node 20)" ([#815](https://github.com/fgarofalo56/csa-inabox/issues/815)) ([ecb9683](https://github.com/fgarofalo56/csa-inabox/commit/ecb9683418c16d338c666e121f2e1cad289df6f9))
+* **csa-loom:** cloud-endpoint + RBAC sweep — central cloud-endpoints, sovereign-cloud-correct everywhere ([#855](https://github.com/fgarofalo56/csa-inabox/issues/855)) ([970c006](https://github.com/fgarofalo56/csa-inabox/commit/970c006a85f337fa05ab04922dbb0e5346d0bf1f))
+
+
+### Documentation
+
+* **csa-loom:** per-surface RTI parity docs for all seven Real-Time Intelligence experiences ([#846](https://github.com/fgarofalo56/csa-inabox/issues/846)) ([a913ac9](https://github.com/fgarofalo56/csa-inabox/commit/a913ac9e61340ca2923fd314e4da3a8c289f9d1d))
+
 ## [0.24.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.23.0...csa-inabox-v0.24.0) (2026-06-07)
 
 
