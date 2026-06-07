@@ -56,4 +56,31 @@ describe('KqlDashboardEditor', () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="new" />);
     expect(calls.filter((c) => c.url.includes('/api/items/kql-dashboard/new')).length).toBe(0);
   });
+
+  it('Edit on a tile opens the tile flyout with its editable fields', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // Each tile card exposes an "Edit tile" action; click the first.
+    const editBtns = screen.getAllByRole('button', { name: /Edit tile/i });
+    fireEvent.click(editBtns[0]);
+    await waitFor(() => {
+      // Flyout dialog mounts with the tile-editing controls.
+      expect(screen.getByText('Edit tile')).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /Tile title/i })).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: /Tile visual type/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Run tile/i })).toBeInTheDocument();
+    });
+  });
+
+  it('Base queries dialog adds a shared KQL snippet', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    const openBtns = screen.getAllByRole('button', { name: /Base queries/i });
+    fireEvent.click(openBtns[0]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add base query/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Add base query/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /Base query name/i })).toBeInTheDocument();
+    });
+  });
 });

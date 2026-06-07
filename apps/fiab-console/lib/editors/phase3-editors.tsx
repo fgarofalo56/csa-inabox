@@ -1719,6 +1719,9 @@ interface DashTile {
 
 interface DashDataSource { id: string; name: string; database: string; clusterUri?: string; }
 
+/** A shared KQL snippet referenced by tiles via `$baseQuery('name')`. */
+interface DashBaseQuery { id: string; name: string; kql: string; }
+
 type DashParamType = 'freetext' | 'fixed' | 'multi' | 'query' | 'datasource' | 'duration';
 type DashParamDataType = 'string' | 'long' | 'int' | 'real' | 'datetime' | 'bool';
 
@@ -1740,6 +1743,7 @@ interface DashboardState {
   tiles?: DashTile[];
   dataSources?: DashDataSource[];
   parameters?: DashParam[];
+  baseQueries?: DashBaseQuery[];
   timeRange?: string;
   autoRefreshMs?: number;
   error?: string;
@@ -1763,12 +1767,16 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [tiles, setTiles] = useState<DashTile[]>([]);
   const [dataSources, setDataSources] = useState<DashDataSource[]>([]);
   const [params, setParams] = useState<DashParam[]>([]);
+  const [baseQueries, setBaseQueries] = useState<DashBaseQuery[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  // Index of the tile whose edit flyout (Dialog) is open, or null. Mirrors the
+  // Fabric Real-Time Dashboard "tile editing window" — a single side panel that
+  // edits one tile at a time, rather than expanding the card inline.
+  const [tileFlyoutIdx, setTileFlyoutIdx] = useState<number | null>(null);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonErr, setJsonErr] = useState<string | null>(null);
@@ -1776,6 +1784,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('last-24h');
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [paramsOpen, setParamsOpen] = useState(false);
+  const [baseQueriesOpen, setBaseQueriesOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
@@ -1791,9 +1800,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     tiles: tiles.map(({ result, error, ...t }) => t),
     dataSources,
     parameters: params,
+    baseQueries,
     timeRange,
     autoRefreshMs,
-  }), [tiles, dataSources, params, timeRange, autoRefreshMs]);
+  }), [tiles, dataSources, params, baseQueries, timeRange, autoRefreshMs]);
 
   // Load the saved model (GET). When runTiles, GET ?run=1 executes every tile.
   const load = useCallback(async (runTiles = false) => {
@@ -1817,6 +1827,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         setTiles(j.tiles || []);
         setDataSources(j.dataSources || []);
         setParams(j.parameters || []);
+        setBaseQueries(j.baseQueries || []);
         if (typeof j.autoRefreshMs === 'number') setAutoRefreshMs(j.autoRefreshMs);
         if (j.timeRange && TIME_ORDER.includes(j.timeRange as TimeRangeKey)) setTimeRange(j.timeRange as TimeRangeKey);
         setDirty(false);
@@ -1881,7 +1892,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         kql: `// KQL for this tile. Use parameters (_startTime, _endTime, or your own _vars).\nprint value = 1`,
         viz: 'table', w: 4, h: 2,
       }];
-      setExpandedIdx(next.length - 1);
+      setTileFlyoutIdx(next.length - 1);
       return next;
     });
     setDirty(true);
@@ -1891,7 +1902,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     if (typeof window !== 'undefined' && !window.confirm('Delete this tile? This cannot be undone until you reload without saving.')) return;
     setTiles((prev) => prev.filter((_, i) => i !== idx));
     setDirty(true);
-    setExpandedIdx((cur) => (cur === idx ? null : cur));
+    setTileFlyoutIdx((cur) => (cur === idx ? null : cur !== null && cur > idx ? cur - 1 : cur));
   }, []);
 
   const updateTile = useCallback((idx: number, patch: Partial<DashTile>) => {
@@ -1994,6 +2005,20 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setDirty(true);
   }, []);
 
+  // --- Base queries (shared KQL snippets referenced via $baseQuery('name')) ---
+  const addBaseQuery = useCallback(() => {
+    setBaseQueries((prev) => [...prev, { id: genId(), name: `Query${prev.length + 1}`, kql: '// Shared KQL — referenced from a tile as $baseQuery(\'Query1\')\nStormEvents | where StartTime > _startTime' }]);
+    setDirty(true);
+  }, []);
+  const updateBaseQuery = useCallback((idx: number, patch: Partial<DashBaseQuery>) => {
+    setBaseQueries((prev) => prev.map((q, i) => i === idx ? { ...q, ...patch } : q));
+    setDirty(true);
+  }, []);
+  const removeBaseQuery = useCallback((idx: number) => {
+    setBaseQueries((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  }, []);
+
   // Resolve a query-based parameter's dropdown values from the real cluster.
   const loadParamValues = useCallback(async (p: DashParam) => {
     if (p.type !== 'query' || !p.query?.trim()) return;
@@ -2022,6 +2047,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       if (Array.isArray(model.tiles)) setTiles(model.tiles);
       if (Array.isArray(model.dataSources)) setDataSources(model.dataSources);
       if (Array.isArray(model.parameters)) setParams(model.parameters);
+      if (Array.isArray(model.baseQueries)) setBaseQueries(model.baseQueries);
       if (typeof model.timeRange === 'string' && TIME_ORDER.includes(model.timeRange)) setTimeRange(model.timeRange);
       setDirty(true); setJsonOpen(false); setJsonErr(null);
     } catch (e: any) {
@@ -2042,6 +2068,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         { label: 'Add tile', onClick: addTile },
         { label: 'Data sources', onClick: () => setSourcesOpen(true) },
         { label: 'Parameters', onClick: () => setParamsOpen(true) },
+        { label: 'Base queries', onClick: () => setBaseQueriesOpen(true) },
         { label: 'Edit JSON', onClick: openJson },
       ]},
       { label: 'View', actions: [
@@ -2069,6 +2096,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
         <Button size="small" appearance="outline" icon={<Database20Regular />} onClick={() => setSourcesOpen(true)}>Data sources</Button>
         <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setParamsOpen(true)}>Parameters</Button>
+        <Button size="small" appearance="outline" onClick={() => setBaseQueriesOpen(true)}>Base queries</Button>
         <Button size="small" appearance="outline" onClick={openJson}>Edit JSON</Button>
         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={runAll} disabled={running}>{running ? 'Refreshing…' : 'Refresh all'}</Button>
         <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
@@ -2137,8 +2165,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
                 <div style={{ display: 'flex', gap: 2 }}>
                   <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
-                  <Button size="small" appearance="subtle" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)} aria-label={expandedIdx === i ? 'Collapse tile editor' : 'Edit tile'}>
-                    {expandedIdx === i ? 'Done' : 'Edit'}
+                  <Button size="small" appearance="subtle" onClick={() => setTileFlyoutIdx(i)} aria-label="Edit tile">
+                    Edit
                   </Button>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => deleteTile(i)} aria-label="Delete tile" />
                 </div>
@@ -2151,52 +2179,127 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
               )}
               {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
-
-              {expandedIdx === i && (
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8 }}>
-                  <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" aria-label="Tile title" />
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <div style={{ flex: 1, minWidth: 120 }}>
-                      <Caption1>Visual</Caption1>
-                      <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as TileViz })} aria-label="Tile visual type">
-                        {TILE_VIZ_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                      </Select>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 120 }}>
-                      <Caption1>Data source</Caption1>
-                      <Select value={t.dataSourceId || ''} onChange={(_: unknown, d: any) => updateTile(i, { dataSourceId: d.value || undefined })} aria-label="Tile data source">
-                        <option value="">{`(dashboard default: ${defaultDb})`}</option>
-                        {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name} → {ds.database}</option>)}
-                      </Select>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <div style={{ flex: 1 }}>
-                      <Caption1>Width (1–12)</Caption1>
-                      <Input type="number" value={String(t.w || 4)} onChange={(_: unknown, d: any) => updateTile(i, { w: Math.max(1, Math.min(12, parseInt(d.value, 10) || 4)) })} aria-label="Tile width" />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <Caption1>Height (1–8)</Caption1>
-                      <Input type="number" value={String(t.h || 2)} onChange={(_: unknown, d: any) => updateTile(i, { h: Math.max(1, Math.min(8, parseInt(d.value, 10) || 2)) })} aria-label="Tile height" />
-                    </div>
-                  </div>
-                  <Caption1>KQL query</Caption1>
-                  <MonacoTextarea
-                    value={t.kql}
-                    onChange={(v) => updateTile(i, { kql: v })}
-                    language="kql"
-                    height={160}
-                    minHeight={120}
-                    ariaLabel={`Tile ${i + 1} KQL`}
-                  />
-                  <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
-                </div>
-              )}
             </div>
           );
         })}
         {tiles.length === 0 && <Caption1 style={{ gridColumn: 'span 12' }}>No tiles yet. Click <strong>Add tile</strong> to start building.</Caption1>}
       </div>
+
+      {/* Tile edit flyout — Fabric "tile editing window": one Dialog edits the
+          tile at tileFlyoutIdx (title, visual, data source, geometry, KQL),
+          runs it live, and renders the real result inline before Apply. */}
+      <Dialog open={tileFlyoutIdx !== null} onOpenChange={(_: unknown, d: any) => { if (!d.open) setTileFlyoutIdx(null); }}>
+        <DialogSurface style={{ maxWidth: 760 }}>
+          <DialogBody>
+            <DialogTitle>Edit tile</DialogTitle>
+            <DialogContent>
+              {tileFlyoutIdx !== null && tiles[tileFlyoutIdx] && (() => {
+                const i = tileFlyoutIdx;
+                const t = tiles[i];
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div>
+                      <Caption1>Title</Caption1>
+                      <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" aria-label="Tile title" />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 140 }}>
+                        <Caption1>Visual</Caption1>
+                        <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as TileViz })} aria-label="Tile visual type">
+                          {TILE_VIZ_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </Select>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 140 }}>
+                        <Caption1>Data source</Caption1>
+                        <Select value={t.dataSourceId || ''} onChange={(_: unknown, d: any) => updateTile(i, { dataSourceId: d.value || undefined })} aria-label="Tile data source">
+                          <option value="">{`(dashboard default: ${defaultDb})`}</option>
+                          {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name} → {ds.database}</option>)}
+                        </Select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Width (1–12)</Caption1>
+                        <Input type="number" value={String(t.w || 4)} onChange={(_: unknown, d: any) => updateTile(i, { w: Math.max(1, Math.min(12, parseInt(d.value, 10) || 4)) })} aria-label="Tile width" />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Height (1–8)</Caption1>
+                        <Input type="number" value={String(t.h || 2)} onChange={(_: unknown, d: any) => updateTile(i, { h: Math.max(1, Math.min(8, parseInt(d.value, 10) || 2)) })} aria-label="Tile height" />
+                      </div>
+                    </div>
+                    <Caption1>KQL query{baseQueries.length > 0 ? ' — reference a base query as $baseQuery(\'name\')' : ''}</Caption1>
+                    <MonacoTextarea
+                      value={t.kql}
+                      onChange={(v) => updateTile(i, { kql: v })}
+                      language="kql"
+                      height={220}
+                      minHeight={180}
+                      ariaLabel={`Tile ${i + 1} KQL`}
+                    />
+                    <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
+                    {t.error && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{t.error}</MessageBarBody></MessageBar>}
+                    {t.result && t.result.ok && (
+                      <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8 }}>
+                        <TileVisual viz={t.viz} result={t.result} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </DialogContent>
+            <DialogActions>
+              {tileFlyoutIdx !== null && (
+                <Button appearance="secondary" icon={<Delete20Regular />} onClick={() => deleteTile(tileFlyoutIdx)}>Delete tile</Button>
+              )}
+              <Button appearance="primary" onClick={() => setTileFlyoutIdx(null)}>Apply</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Base queries dialog — shared KQL snippets referenced via $baseQuery('name') */}
+      <Dialog open={baseQueriesOpen} onOpenChange={(_: unknown, d: any) => setBaseQueriesOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 640 }}>
+          <DialogBody>
+            <DialogTitle>Base queries</DialogTitle>
+            <DialogContent>
+              <Caption1>
+                Define shared KQL snippets once and reference them from any tile with
+                <code> $baseQuery('name')</code>. At run time the snippet is inlined as a
+                parenthesised sub-query, so a common filter or projection backs many tiles
+                without copy-paste (Fabric Real-Time Dashboard base-query parity).
+              </Caption1>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+                {baseQueries.map((q, idx) => (
+                  <div key={q.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Name (referenced as $baseQuery('…'))</Caption1>
+                        <Input value={q.name} onChange={(_: unknown, d: any) => updateBaseQuery(idx, { name: d.value })} placeholder="Filtered" aria-label="Base query name" />
+                      </div>
+                      <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeBaseQuery(idx)} aria-label="Remove base query" />
+                    </div>
+                    <Caption1>KQL</Caption1>
+                    <MonacoTextarea
+                      value={q.kql}
+                      onChange={(v) => updateBaseQuery(idx, { kql: v })}
+                      language="kql"
+                      height={120}
+                      minHeight={90}
+                      ariaLabel={`Base query ${idx + 1} KQL`}
+                    />
+                  </div>
+                ))}
+                {baseQueries.length === 0 && <Caption1>No base queries yet. Add one to share a KQL snippet across tiles.</Caption1>}
+                <Button appearance="outline" icon={<Add20Regular />} onClick={addBaseQuery}>Add base query</Button>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setBaseQueriesOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* Data sources dialog */}
       <Dialog open={sourcesOpen} onOpenChange={(_: unknown, d: any) => setSourcesOpen(d.open)}>
