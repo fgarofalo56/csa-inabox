@@ -274,6 +274,27 @@ param loomDatabricksHostname string = ''
 @description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
 param loomDatabricksSqlWarehouseId string = ''
 
+// ---------------------------------------------------------------------------
+// Standalone Azure Machine Learning workspace — backs aml-client.ts
+// (resolveAmlTarget). These coordinate the AML control-plane navigator
+// (computes / datastores / jobs / models / schedules / environments). When
+// loomAmlWorkspace is empty the client falls back to the AI Foundry hub env
+// (LOOM_FOUNDRY_*) and the shared landing-zone subscription, so existing
+// deployments need no new config. Cloud routing (Commercial vs
+// management.usgovcloudapi.net) is handled by cloud-endpoints.ts at runtime.
+// ---------------------------------------------------------------------------
+@description('AML workspace name for the standalone AML client (LOOM_AML_WORKSPACE). Empty falls back to the AI Foundry hub name.')
+param loomAmlWorkspace string = ''
+
+@description('Resource group of the AML workspace (LOOM_AML_RESOURCE_GROUP). Empty falls back to LOOM_FOUNDRY_RG, then rg-csa-loom-admin-<region>.')
+param loomAmlResourceGroup string = ''
+
+@description('Subscription id of the AML workspace (LOOM_AML_SUBSCRIPTION). Empty falls back to the deployment subscription (LOOM_SUBSCRIPTION_ID).')
+param loomAmlSubscription string = ''
+
+@description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to LOOM_FOUNDRY_REGION, then eastus2.')
+param loomAmlRegion string = ''
+
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
 //
@@ -1158,6 +1179,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
+            // Standalone Azure ML workspace coordinates — back aml-client.ts
+            // (resolveAmlTarget): the AML control-plane navigator (computes /
+            // datastores / jobs / models / schedules / environments). Empty
+            // values fall back to LOOM_FOUNDRY_* / LOOM_SUBSCRIPTION_ID in the
+            // resolver, so an AI Foundry hub doubles as the AML workspace
+            // without extra config. Cloud routing is handled at runtime.
+            { name: 'LOOM_AML_WORKSPACE', value: loomAmlWorkspace }
+            { name: 'LOOM_AML_RESOURCE_GROUP', value: loomAmlResourceGroup }
+            { name: 'LOOM_AML_SUBSCRIPTION', value: loomAmlSubscription }
+            { name: 'LOOM_AML_REGION', value: empty(loomAmlRegion) ? location : loomAmlRegion }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. The dedicated Agent Service account
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
