@@ -51,6 +51,26 @@ ARG LOOM_BUILD_TIMESTAMP=unknown
 ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
 ENV LOOM_BUILD_TIMESTAMP=${LOOM_BUILD_TIMESTAMP}
 
+# Optional: bundle the Pylance-grade Python language server (pylsp + pyright)
+# into the image for the Data Science notebook variant. Off by default so the
+# base Console image stays lean; CI builds the notebook image with
+# `--build-arg LOOM_INCLUDE_PYLSP=true`. At runtime the bridge only spawns pylsp
+# when LOOM_PYLSP_ENABLED is set (see instrumentation.ts), so an image built
+# without this layer simply reports lspAvailable:false and falls back to
+# Monaco's built-in completions. pandas/numpy give real member completions for
+# `import pandas as pd; pd.read_` via pandas-stubs that pyright reads.
+ARG LOOM_INCLUDE_PYLSP=false
+RUN if [ "$LOOM_INCLUDE_PYLSP" = "true" ]; then \
+      apk add --no-cache python3 py3-pip && \
+      pip3 install --no-cache-dir --break-system-packages \
+        "python-lsp-server[all]>=1.11.0" \
+        "pyright>=1.1.350" \
+        "pandas-stubs>=2.2.0" \
+        pandas numpy && \
+      ln -sf "$(command -v python3)" /usr/local/bin/python3 ; \
+    fi
+ENV LOOM_PYLSP_PYTHON=python3
+
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 

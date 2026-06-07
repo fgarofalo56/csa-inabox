@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular,
+  History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +31,14 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { DatastoreExplorer } from '@/lib/components/notebook/datastore-explorer';
+import { EnvironmentPanel, type AmlEnvironmentLite } from '@/lib/components/notebook/environment-panel';
+import {
+  SessionConfigDialog, toConfigureOptions, sessionConfigEquals, normalizeSessionConfig,
+  DEFAULT_SESSION_CONFIG, type SessionConfig,
+} from '@/lib/components/notebook/session-config-dialog';
+import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
+import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 // Ribbon is now built dynamically inside the component so each action can
@@ -38,7 +46,7 @@ import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState
 // below the component declarations.
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
+  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, position: 'relative' },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     width: '100%', minHeight: 280,
@@ -50,6 +58,9 @@ const useStyles = makeStyles({
   treePad: { padding: 8 },
   tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  // Bottom-left session status badge — overlays the editor surface like the
+  // Synapse Studio session indicator (Idle / Running / Error).
+  statusBadge: { position: 'absolute', bottom: 12, left: 12, zIndex: 5 },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -101,6 +112,13 @@ function cellRoutesToSpark(source: string): boolean {
   return SPARK_MAGICS.includes(line.trim().toLowerCase().split(/\s+/)[0]);
 }
 
+// AML-path Python starter — runs on a Compute Instance, not a Spark pool, so it
+// uses plain Python (no implicit `spark` session). Drag a datastore path from
+// the Datastores sidebar to read data. `deltalake` ships delta-rs schema reads.
+const STARTER_AML_PY = `# Azure ML notebook (Python 3.10 on a Compute Instance)\n# Drag a datastore path from the Datastores sidebar to insert an abfss:// URI.\n# Delta schema via delta-rs:\n#   from deltalake import DeltaTable\n#   print(DeltaTable("abfss://<fs>@<acct>.dfs.core.windows.net/<path>").schema().json())\nprint("Hello from your AML Compute Instance")\n`;
+
+const STARTER_AML_R = `# Azure ML notebook (R on a Compute Instance)\n# Run with the R kernel. Drag a datastore path from the Datastores sidebar.\nprint("Hello from R on your AML Compute Instance")\n`;
+
 function starterCells(): NotebookCell[] {
   return [
     { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
@@ -108,11 +126,6 @@ function starterCells(): NotebookCell[] {
   ];
 }
 
-function encodePy(src: string): string {
-  // browser btoa needs latin-1 — encode utf-8 first.
-  return typeof window === 'undefined' ? Buffer.from(src, 'utf-8').toString('base64')
-    : btoa(unescape(encodeURIComponent(src)));
-}
 function decodePy(b64: string): string {
   try {
     return typeof window === 'undefined' ? Buffer.from(b64, 'base64').toString('utf-8')
@@ -125,9 +138,12 @@ interface Props { item: FabricItemType; id: string; }
 interface ComputeTarget {
   id: string;
   name: string;
-  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
+  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql' | 'aml-ci';
   state?: string;
 }
+
+/** Notebook compute backend: Loom-native Spark/Databricks vs the Azure ML path. */
+type WorkspaceType = 'loom' | 'aml';
 
 function useComputes() {
   const [computes, setComputes] = useState<ComputeTarget[]>([]);
@@ -150,14 +166,44 @@ function isComputeRunning(state?: string): boolean {
   return COMPUTE_RUNNING.includes(state || '');
 }
 
+/** AML Compute Instance states that mean "stopped — needs (auto-)start". */
+const CI_STOPPED = ['Stopped', 'stopped', 'Deallocated'];
+function isCiStopped(state?: string): boolean {
+  return CI_STOPPED.includes(state || '');
+}
+
+/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set). */
+function useAmlConfigured() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await (await fetch('/api/aml/compute-instances')).json();
+        if (!cancelled) setConfigured(j.ok === true || j.configured === true);
+      } catch { if (!cancelled) setConfigured(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return configured;
+}
+
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const cp = useComputes();
+  const amlConfigured = useAmlConfigured();
+  // Notebook compute backend toggle. Defaults to Loom-native Spark/Databricks;
+  // the user flips to Azure ML when they want a Compute Instance + datastores.
+  const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('loom');
   const [workspaceId, setWorkspaceId] = useState('');
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
+  // Pylance/pylsp WS bridge path + VS Code for Web deep-link, resolved from
+  // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
+  const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
+  const [vscodeWeb, setVscodeWeb] = useState<{ enabled: boolean; url: string | null; reason?: string }>({ enabled: false, url: null });
   const [cells, setCells] = useState<NotebookCell[]>(starterCells());
   const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -171,6 +217,8 @@ export function NotebookEditor({ item, id }: Props) {
   const [jobs, setJobs] = useState<JobLite[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
+  // New-notebook kernel — Python 3.10 (pyspark/python cells) or R (sparkr).
+  const [createKernel, setCreateKernel] = useState<'python' | 'r'>('python');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
@@ -181,17 +229,66 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Copilot chat pane (docked right drawer, ~25% width)
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  // Variable explorer (Synapse/Fabric "Variables" View-pane parity)
+  const [variablesOpen, setVariablesOpen] = useState(false);
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
 
-  // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
+  // Which compute kinds are runnable for the active workspace type.
+  const computeMatchesType = useCallback((c: ComputeTarget): boolean => {
+    return workspaceType === 'aml'
+      ? c.kind === 'aml-ci'
+      : (c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+  }, [workspaceType]);
+
+  // Library & Environment management: attached AML Environment + custom .jar/.whl
+  // libraries (Azure-native 1:1 for the Fabric notebook Environment).
+  const [attachedAmlEnv, setAttachedAmlEnv] = useState<{ name: string; version: string } | null>(null);
+  const [customLibraries, setCustomLibraries] = useState<string[]>([]);
+  const [amlEnvs, setAmlEnvs] = useState<AmlEnvironmentLite[]>([]);
+  const [envPanelOpen, setEnvPanelOpen] = useState(false);
+
+  // Session configuration ("Configure session" dialog) — sizes the real Livy
+  // Spark session (executors / memory / idle timeout). Persisted per-notebook
+  // in Cosmos; applied to the session-create body before the first statement
+  // runs (the %%configure equivalent). `cfgDraft` is the in-dialog edit copy so
+  // Cancel discards. `sessionStatus` drives the bottom-left status badge.
+  const [sessionCfg, setSessionCfg] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDraft, setCfgDraft] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDialogOpen, setCfgDialogOpen] = useState(false);
+  const [cfgSaving, setCfgSaving] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
+  const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
+
+  // Schema hint for inline code completion (ghost text): the attached
+  // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
+  // real items this notebook is bound to (no Fabric dependency).
+  const inlineSchemaContext = useMemo(() => {
+    if (!attachedSources.length) return undefined;
+    const lines = attachedSources.map(
+      (a) => `${a.kind} "${a.displayName}"${a.isDefault ? ' (default)' : ''}`,
+    );
+    return `Attached data sources:\n${lines.join('\n')}`;
+  }, [attachedSources]);
+
+  // Auto-pick the first runnable compute for the active workspace type. Also
+  // clears a selection that no longer matches after the user flips the toggle
+  // (e.g. a Spark pool selected, then switched to Azure ML). Serverless SQL is
+  // never auto-picked — it's not for notebooks.
   useEffect(() => {
+    const selected = cp.computes.find(c => c.id === computeId);
+    if (computeId && selected && !computeMatchesType(selected)) {
+      setComputeId('');
+      return;
+    }
     if (!computeId && cp.computes.length) {
-      const first = cp.computes.find(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+      const first = cp.computes.find(computeMatchesType);
       if (first) setComputeId(first.id);
     }
-  }, [cp.computes, computeId]);
+  }, [cp.computes, computeId, computeMatchesType]);
 
   // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
   // immediately POST to /run with no code to initialize the Livy session in the background.
@@ -225,13 +322,19 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) return;
     setStartingCompute(true); setRunMsg('Starting compute…');
     try {
-      const r = await fetch(`/api/loom/compute-targets/${encodeURIComponent(computeId)}/start`, { method: 'POST' });
+      // AML Compute Instances start via the AML route; Spark/Databricks via the
+      // generic compute-targets verb route. computeId is `aml-ci:<name>`.
+      const isAmlCi = computeId.startsWith('aml-ci:');
+      const startUrl = isAmlCi
+        ? `/api/aml/compute-instances/${encodeURIComponent(computeId.slice('aml-ci:'.length))}/start`
+        : `/api/loom/compute-targets/${encodeURIComponent(computeId)}/start`;
+      const r = await fetch(startUrl, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
-        setRunMsg(`Could not start compute: ${j?.error || `HTTP ${r.status}`}`);
+        setRunMsg(`Could not start compute: ${j?.error || j?.hint || `HTTP ${r.status}`}`);
         return;
       }
-      // Poll state until it reports running (cluster start is ~60-90s).
+      // Poll state until it reports running (cluster/CI start is ~60-90s+).
       const startedAt = Date.now();
       while (Date.now() - startedAt < 8 * 60 * 1000) {
         await new Promise(res => setTimeout(res, 5000));
@@ -244,6 +347,21 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg(`Could not start compute: ${e?.message || String(e)}`);
     } finally { setStartingCompute(false); }
   }, [computeId, cp]);
+
+  // Auto-start a stopped AML Compute Instance when it's selected in AML mode.
+  // Debounced 1.5s so flipping through the picker doesn't fire a start per
+  // option. Tracks the last CI we kicked so we don't re-POST every refresh.
+  const autoStartedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (workspaceType !== 'aml' || !computeId.startsWith('aml-ci:')) return;
+    if (!selectedCompute || !isCiStopped(selectedCompute.state)) return;
+    if (autoStartedRef.current === computeId) return;
+    const t = setTimeout(() => {
+      autoStartedRef.current = computeId;
+      void startCompute();
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [workspaceType, computeId, selectedCompute, startCompute]);
 
   // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
   // the owning workspace from the Cosmos record and auto-select it so the
@@ -317,6 +435,13 @@ export function NotebookEditor({ item, id }: Props) {
       }
       // Phase 2: attached data sources.
       setAttachedSources(Array.isArray(j.definition?.attachedSources) ? j.definition.attachedSources : []);
+      // Library & Environment: attached AML env + custom libraries.
+      setAttachedAmlEnv(j.definition?.attachedAmlEnv || null);
+      setCustomLibraries(Array.isArray(j.definition?.customLibraries) ? j.definition.customLibraries : []);
+      // Session sizing config (Configure session dialog). Defaults when unset.
+      setSessionCfg(j.definition?.sessionConfig
+        ? normalizeSessionConfig(j.definition.sessionConfig)
+        : DEFAULT_SESSION_CONFIG);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -334,6 +459,38 @@ export function NotebookEditor({ item, id }: Props) {
     if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
   }, [workspaceId, notebookId, loadDetail, loadJobs]);
 
+  // Probe the Pylance/pylsp bridge + VS Code for Web availability for this
+  // notebook. Server route reads the gated env (boundary, LOOM_PYLSP_ENABLED,
+  // AML instance/workspace) — the client never sees those directly.
+  useEffect(() => {
+    if (!notebookId) { setLspWsUrl(null); setVscodeWeb({ enabled: false, url: null }); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/lsp`);
+        const j = await r.json().catch(() => null);
+        if (cancelled || !j?.ok) return;
+        setLspWsUrl(j.lspAvailable && j.wsUrl ? j.wsUrl : null);
+        setVscodeWeb(j.vscodeWeb || { enabled: false, url: null });
+      } catch {
+        if (!cancelled) { setLspWsUrl(null); setVscodeWeb({ enabled: false, url: null }); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [notebookId]);
+
+  // Load the AML environment catalog once so the ribbon selector can list real
+  // environments. Honest gate: a 503 (no AML workspace) leaves the list empty —
+  // the selector shows "No environment attached" and the Manage panel explains.
+  const loadAmlEnvs = useCallback(async () => {
+    try {
+      const r = await fetch('/api/aml/environments');
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.environments)) setAmlEnvs(j.environments);
+    } catch { /* selector stays empty; Manage panel surfaces the error */ }
+  }, []);
+  useEffect(() => { void loadAmlEnvs(); }, [loadAmlEnvs]);
+
   const save = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
@@ -349,7 +506,7 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources } }),
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries } }),
       });
       const j = await r.json();
       if (!j.ok) {
@@ -363,7 +520,7 @@ export function NotebookEditor({ item, id }: Props) {
       setDetailErr(e?.message || String(e));
       setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries]);
 
   // Ctrl+S / Cmd+S to save when there are unsaved changes.
   useEffect(() => {
@@ -445,6 +602,41 @@ export function NotebookEditor({ item, id }: Props) {
     void persistSources(next);
   }, [attachedSources, persistSources]);
 
+  // Open the Configure-session dialog seeded with the current sizing.
+  const openConfigDialog = useCallback(() => {
+    setCfgDraft(sessionCfg);
+    setCfgDialogOpen(true);
+  }, [sessionCfg]);
+
+  // Apply + persist the session sizing. Saves only the sessionConfig slice
+  // (the PUT route handles it independently of cells, so this never clobbers
+  // in-progress edits). The next run re-sizes the Livy session because the
+  // run route recreates the session when the requested sizing changes.
+  const applySessionConfig = useCallback(async () => {
+    const next = normalizeSessionConfig(cfgDraft);
+    setSessionCfg(next);
+    setCfgDialogOpen(false);
+    if (!workspaceId || !notebookId) return; // unsaved 'new' notebook — keep in memory
+    if (sessionConfigEquals(next, sessionCfg)) return;
+    setCfgSaving(true);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: { sessionConfig: next } }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        if (j.definition?.sessionConfig) setSessionCfg(normalizeSessionConfig(j.definition.sessionConfig));
+        setRunMsg(`Session configured: ${next.numExecutors} executors · ${next.executorMemoryGb} GB · ${next.timeoutMinutes} min timeout. Re-sizes on next run.`);
+      } else {
+        setRunMsg(`Could not save session config: ${j.error || 'unknown'}`);
+      }
+    } catch (e: any) {
+      setRunMsg(`Could not save session config: ${e?.message || e}`);
+    } finally { setCfgSaving(false); }
+  }, [cfgDraft, sessionCfg, workspaceId, notebookId]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     if (!computeId) {
@@ -452,24 +644,27 @@ export function NotebookEditor({ item, id }: Props) {
       return;
     }
     setRunning(true);
+    setSessionStatus('Running');
     setRunMsg('Submitting run…');
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId }),
+        body: JSON.stringify({ compute: computeId, sessionConfig: toConfigureOptions(sessionCfg) }),
       });
       const j = await r.json();
       if (!j.ok) {
         setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
         setRunning(false);
+        setSessionStatus('Error');
         return;
       }
+      if (j.session) setSessionReceipt(j.session);
 
       // Poll the run endpoint every 4s for status — Synapse cold-start can
       // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
       let runId: string = j.runId;
-      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
+      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId || j.compute?.ciName || ''} — ${j.status} (runId ${runId})${j.autoStarted ? ' · auto-started CI' : ''}`);
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       // Adaptive polling tuned to feel native: fast while a statement is actually
@@ -494,30 +689,38 @@ export function NotebookEditor({ item, id }: Props) {
           if (p.output.status === 'ok') {
             const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
             setRunMsg(`✓ Completed:\n${txt}`);
+            setSessionStatus('Idle');
           } else if (p.output.status === 'error') {
             setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+            setSessionStatus('Error');
           } else {
             setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+            setSessionStatus('Idle');
           }
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
           setRunMsg(`Run ended: ${p.status}${p.resultState ? ` (${p.resultState})` : ''}`);
+          setSessionStatus('Error');
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } finally { setRunning(false); }
-  }, [workspaceId, notebookId, computeId, loadJobs]);
+  }, [workspaceId, notebookId, computeId, sessionCfg, loadJobs]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
     try {
-      const definition = {
-        format: 'fabricGitSource',
-        parts: [{ path: 'notebook-content.py', payload: encodePy(STARTER_PY), payloadType: 'InlineBase64' }],
-      };
+      // Kernel-aware starter. On the AML path the cells run on a Compute
+      // Instance (plain Python 3.10 / R), not a Spark pool. `lang` drives the
+      // editor's default cell language after loadDetail re-parses the record.
+      const aml = workspaceType === 'aml';
+      const isR = createKernel === 'r';
+      const code = isR ? STARTER_AML_R : (aml ? STARTER_AML_PY : STARTER_PY);
+      const lang: NotebookCellLang = isR ? 'sparkr' : (aml ? 'python' : 'pyspark');
+      const definition = { code, lang };
       const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -529,7 +732,7 @@ export function NotebookEditor({ item, id }: Props) {
       await loadList(workspaceId);
       if (j.notebook?.id) setNotebookId(j.notebook.id);
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, loadList]);
+  }, [workspaceId, createName, createKernel, workspaceType, loadList]);
 
   // Import a desktop notebook file (.ipynb / .py / .sql / .scala / .r) into
   // the current workspace as a Loom notebook with every cell populated.
@@ -600,6 +803,31 @@ export function NotebookEditor({ item, id }: Props) {
     setCells(prev => prev.map(c => c.id === id ? next : c));
     setDirty(true);
   }, []);
+
+  /**
+   * Insert a datastore path (abfss:// / wasbs://) into a code cell. Called by
+   * the Datastores sidebar on click AND on drag-drop. Appends to the active
+   * code cell when there is one; otherwise to the first/last code cell; if the
+   * notebook has no code cell yet, a fresh one is created with the path.
+   */
+  const insertDatastorePath = useCallback((path: string) => {
+    setCells(prev => {
+      const snippet = `"${path}"`;
+      const activeIdx = prev.findIndex(c => c.id === activeCellId && c.type === 'code');
+      const idx = activeIdx >= 0 ? activeIdx : prev.map(c => c.type).lastIndexOf('code');
+      if (idx >= 0) {
+        const cell = prev[idx];
+        const sep = cell.source && !cell.source.endsWith('\n') ? '\n' : '';
+        const nextCells = [...prev];
+        nextCells[idx] = { ...cell, source: cell.source + sep + snippet };
+        return nextCells;
+      }
+      // No code cell — append a new one carrying the path.
+      const fresh = { ...emptyCell('code', defaultLang), source: snippet };
+      return [...prev, fresh];
+    });
+    setDirty(true);
+  }, [activeCellId, defaultLang]);
 
   /**
    * Patch only specific fields on a cell — used by the Run flow so output
@@ -816,6 +1044,36 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, patchCell]);
 
+  /**
+   * Apply Copilot's returned code block(s) back into the notebook. The pane
+   * parses fenced code blocks from the streamed AOAI answer (in document
+   * order) and calls this. A single block replaces the active code cell; a
+   * multi-block answer is mapped onto the trailing run of cells ENDING at the
+   * active cell (last block → active cell). Marks the notebook dirty so Ctrl+S
+   * persists — no auto-save, the user reviews the diff first.
+   */
+  const applyCells = useCallback((updated: { source: string }[]) => {
+    if (updated.length === 0) return;
+    setCells((prev) => {
+      if (prev.length === 0) return prev;
+      let activeIdx = activeCellId ? prev.findIndex((c) => c.id === activeCellId) : -1;
+      if (activeIdx < 0) {
+        // No explicit active cell — target the last CODE cell.
+        for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].type === 'code') { activeIdx = i; break; } }
+        if (activeIdx < 0) activeIdx = prev.length - 1;
+      }
+      const startIdx = Math.max(0, activeIdx - (updated.length - 1));
+      const next = [...prev];
+      updated.forEach((u, i) => {
+        const tgt = startIdx + i;
+        if (tgt <= activeIdx && next[tgt]) next[tgt] = { ...next[tgt], source: u.source, output: undefined };
+      });
+      return next;
+    });
+    setDirty(true);
+    setRunMsg('Applied Copilot suggestion — review and Save (Ctrl+S) to persist.');
+  }, [activeCellId]);
+
   // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
   // CRITICAL: use patchCell (not updateCell) for output mutations so source
   // edits the user makes WHILE the cell is running don't get overwritten
@@ -831,20 +1089,23 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     cancelRef.current.delete(cell.id);
     patchCell(cell.id, { output: { status: 'pending' } });
+    setSessionStatus('Running');
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang }),
+        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang, sessionConfig: toConfigureOptions(sessionCfg) }),
       });
       const j = await r.json();
       if (!j.ok) {
         patchCell(cell.id, { output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
         setRunMsg(`Cell run failed: ${j.error}`);
+        setSessionStatus('Error');
         return;
       }
+      if (j.session) setSessionReceipt(j.session);
       let runId: string = j.runId;
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
@@ -856,6 +1117,7 @@ export function NotebookEditor({ item, id }: Props) {
         const p = await pollRes.json();
         if (!p.ok) {
           patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          setSessionStatus('Error');
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
@@ -873,6 +1135,7 @@ export function NotebookEditor({ item, id }: Props) {
               status: p.output.status === 'ok' ? 'ok' : 'error',
               textPlain: p.output.textPlain,
               data: p.output.data,
+              richDisplay: p.output.richDisplay,
               ename: p.output.ename,
               evalue: p.output.evalue,
               traceback: p.output.traceback,
@@ -880,18 +1143,161 @@ export function NotebookEditor({ item, id }: Props) {
             },
           });
           setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
+          setSessionStatus(p.output.status === 'ok' ? 'Idle' : 'Error');
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
           patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          setSessionStatus('Error');
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+      setSessionStatus('Error');
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs, runSparkCell]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionCfg, patchCell, loadJobs, runSparkCell]);
+
+  /**
+   * Variable explorer — submit a Python introspection snippet to the ACTIVE
+   * Livy session and return parsed VarRow[]. Reuses the same warm session as
+   * runCell (the run route reuses `state.sparkSession`), so it sees variables
+   * that earlier cells defined. Goes through the Task-3 execute path:
+   * POST /run (with a sentinel cellId) + poll /runs/[runId].
+   *
+   * We use `globals()` rather than the IPython `%whos` magic because Synapse
+   * Spark runs plain PySpark via Livy (no IPython kernel) — `%whos` would be a
+   * SyntaxError there. The snippet prints one JSON line behind a marker so the
+   * row data survives any Spark log noise in stdout, then deletes its temps so
+   * they don't show up in the next inspection.
+   *
+   * Honest gate: if no workspace/notebook/compute is selected we throw a
+   * human-readable error which the pane surfaces in a MessageBar — no silent
+   * failure, per no-vaporware.
+   */
+  const inspectVariables = useCallback(async (): Promise<VarRow[]> => {
+    if (!workspaceId || !notebookId) {
+      throw new Error('Open or create a notebook first.');
+    }
+    if (!computeId) {
+      throw new Error('Pick a Spark compute target on the toolbar before inspecting variables.');
+    }
+    if (!computeId.startsWith('spark:')) {
+      throw new Error('The variable explorer runs on a Synapse Spark (Livy) session. Select a Synapse Spark compute target.');
+    }
+    const INSPECT_SOURCE = [
+      'import json as __loom_j__',
+      '__loom_v__ = []',
+      "__loom_skip__ = ('In','Out','exit','quit','get_ipython','spark','sc','sqlContext','spark_session')",
+      'for __loom_k__ in list(globals().keys()):',
+      "    if __loom_k__.startswith('_') or __loom_k__ in __loom_skip__:",
+      '        continue',
+      '    __loom_val__ = globals()[__loom_k__]',
+      "    if type(__loom_val__).__name__ in ('module','function','type','builtin_function_or_method'):",
+      '        continue',
+      '    try:',
+      "        __loom_l__ = len(__loom_val__) if hasattr(__loom_val__, '__len__') else None",
+      '    except Exception:',
+      '        __loom_l__ = None',
+      '    try:',
+      '        __loom_r__ = repr(__loom_val__)[:300]',
+      '    except Exception:',
+      "        __loom_r__ = '<unrepresentable>'",
+      "    __loom_v__.append({'n': __loom_k__, 't': type(__loom_val__).__name__, 'l': __loom_l__, 'r': __loom_r__})",
+      "print('__LOOM_VARS__:' + __loom_j__.dumps(__loom_v__))",
+      'del __loom_j__, __loom_v__, __loom_skip__',
+    ].join('\n');
+
+    const r = await fetch(
+      `/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: computeId, cellId: '__loom_inspect__', source: INSPECT_SOURCE, lang: 'pyspark' }),
+      },
+    );
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'variable inspection dispatch failed');
+    let runId: string = j.runId;
+    const start = Date.now();
+    const MAX_MS = 12 * 60 * 1000;
+    let pollInterval = 600;
+    while (Date.now() - start < MAX_MS) {
+      await new Promise(res => setTimeout(res, pollInterval));
+      const pollRes = await fetch(
+        `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+      );
+      const p = await pollRes.json();
+      if (!p.ok) throw new Error(p.error || `poll failed (${pollRes.status})`);
+      if (p.runId && p.runId !== runId) runId = p.runId;
+      const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
+      pollInterval = cold ? 2000 : 600;
+      if (p.output) {
+        if (p.output.status === 'error') {
+          throw new Error(`${p.output.ename || 'Error'}: ${p.output.evalue || 'kernel raised an error'}`);
+        }
+        const text: string = p.output.textPlain || '';
+        const markerIdx = text.lastIndexOf('__LOOM_VARS__:');
+        if (markerIdx < 0) return [];
+        const jsonStr = text.slice(markerIdx + '__LOOM_VARS__:'.length).split('\n')[0].trim();
+        let raw: Array<{ n: string; t: string; l: number | null; r: string }>;
+        try {
+          raw = JSON.parse(jsonStr);
+        } catch {
+          throw new Error('Could not parse the kernel variable snapshot.');
+        }
+        return raw.map(x => ({ name: x.n, type: x.t, len: x.l, repr: x.r }));
+      }
+      if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+        throw new Error(`Spark session ended with status ${p.status}`);
+      }
+    }
+    throw new Error('Variable inspection timed out.');
+  }, [workspaceId, notebookId, computeId]);
+
+  // Library & Environment: install a package inline. Append a new code cell with
+  // `%pip install <pkg>` and run it on the live session via the same run path
+  // (Task 3 execute). The magic installs into the running Livy/Databricks
+  // session; the next `import <pkg>` cell then works. Real backend, no stub.
+  const installPipPackage = useCallback((pkg: string) => {
+    if (!workspaceId || !notebookId) { setRunMsg('Open a notebook before installing packages.'); return; }
+    if (!computeId) { setRunMsg('Pick a compute target before installing packages.'); return; }
+    const cell: NotebookCell = { ...emptyCell('code', 'pyspark'), source: `%pip install ${pkg}` };
+    setCells(prev => [...prev, cell]);
+    setActiveCellId(cell.id);
+    setEnvPanelOpen(false);
+    // Defer so the cell is committed to state before runCell's patchCell runs.
+    setTimeout(() => { void runCell(cell); }, 0);
+  }, [workspaceId, notebookId, computeId, runCell]);
+
+  // Attach/detach an AML environment from the compact ribbon selector. Persists
+  // to Cosmos via the attach route (instant) and mirrors local state.
+  const selectAmlEnv = useCallback(async (envName: string) => {
+    if (!workspaceId || !notebookId) return;
+    if (!envName) {
+      try {
+        await fetch('/api/aml/environments?action=detach', {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ notebookId, workspaceId }),
+        });
+      } catch { /* non-fatal */ }
+      setAttachedAmlEnv(null);
+      return;
+    }
+    const env = amlEnvs.find(e => e.name === envName);
+    setRunMsg(`Attaching environment ${envName}…`);
+    try {
+      const r = await fetch('/api/aml/environments?action=attach', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ notebookId, workspaceId, envName, envVersion: env?.latestVersion }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRunMsg(`Attach failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`); return; }
+      setAttachedAmlEnv(j.attachedAmlEnv);
+      setRunMsg(`Attached ${j.attachedAmlEnv.name}:${j.attachedAmlEnv.version}.`);
+    } catch (e: any) { setRunMsg(`Attach failed: ${e?.message || e}`); }
+  }, [workspaceId, notebookId, amlEnvs]);
 
   // Build the Fabric-parity ribbon with real handlers. Previously these were
   // decorative labels with no onClick — the Ribbon component auto-disables
@@ -919,6 +1325,9 @@ export function NotebookEditor({ item, id }: Props) {
         { label: 'Workspace', actions: [
           { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
         ]},
+        { label: 'Environment', actions: [
+          { label: 'Manage environment', onClick: notebookId ? () => setEnvPanelOpen(true) : undefined, disabled: !notebookId },
+        ]},
       ]},
       { id: 'insert', label: 'Insert', groups: [
         { label: 'Cells', actions: [
@@ -932,6 +1341,8 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'view', label: 'View', groups: [
         { label: 'Panes', actions: [
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+          { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
+          { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
       { id: 'edit', label: 'Edit', groups: [
@@ -948,16 +1359,24 @@ export function NotebookEditor({ item, id }: Props) {
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
         ]},
+        { label: 'Session', actions: [
+          { label: 'Configure session', onClick: () => openConfigDialog() },
+        ]},
       ]},
       { id: 'help', label: 'Help', groups: [
         { label: 'Resources', actions: [
-          { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
+          { label: 'Notebook docs', onClick: () => window.open(
+            workspaceType === 'aml'
+              ? 'https://learn.microsoft.com/azure/machine-learning/how-to-run-jupyter-notebooks'
+              : 'https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook',
+            '_blank') },
         ]},
       ]},
     ];
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
-    run, save, del, loadList, insertCell, openAttach,
+    workspaceType, copilotOpen,
+    run, save, del, loadList, insertCell, openAttach, openConfigDialog,
     splitCell, mergeCellDown, convertCell,
   ]);
 
@@ -1012,12 +1431,41 @@ export function NotebookEditor({ item, id }: Props) {
               </Button>
             </>
           )}
+
+          {/* AML path: Datastores sidebar — Azure ML studio "Data > Datastores"
+              parity. Click or drag a datastore's abfss:// / wasbs:// path into a
+              code cell. Honest gate inside when AML isn't configured. */}
+          {workspaceType === 'aml' && (
+            <DatastoreExplorer onInsertPath={insertDatastorePath} />
+          )}
         </div>
       }
       main={
-        <div className={s.pad}>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            {/* Compute backend toggle — Loom-native Spark/Databricks vs the
+                Azure ML Compute Instance path. Default Loom; flip to Azure ML
+                for a CI + datastores. No Fabric dependency on either path. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <Caption1>Compute backend</Caption1>
+              <div style={{ display: 'flex', gap: 0 }}>
+                <Button
+                  size="small"
+                  appearance={workspaceType === 'loom' ? 'primary' : 'outline'}
+                  onClick={() => setWorkspaceType('loom')}
+                  style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+                >Loom (Spark)</Button>
+                <Button
+                  size="small"
+                  appearance={workspaceType === 'aml' ? 'primary' : 'outline'}
+                  onClick={() => setWorkspaceType('aml')}
+                  style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+                  title={amlConfigured === false ? 'Azure ML workspace not configured — the picker will explain what to set' : 'Run on an Azure ML Compute Instance'}
+                >Azure ML</Button>
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
@@ -1028,13 +1476,13 @@ export function NotebookEditor({ item, id }: Props) {
               </Select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
-              <Caption1>Compute target</Caption1>
+              <Caption1>{workspaceType === 'aml' ? 'Compute Instance' : 'Compute target'}</Caption1>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
                   <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
-                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : (workspaceType === 'aml' ? 'Select a Compute Instance' : 'Select compute')}</option>}
                     {cp.computes
-                      .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                      .filter(computeMatchesType)
                       .map(c => (
                         <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
                       ))}
@@ -1049,9 +1497,9 @@ export function NotebookEditor({ item, id }: Props) {
                     {selectedCompute?.state || 'unknown'}
                   </Badge>
                 )}
-                {/* Start a terminated cluster / paused pool right here. */}
+                {/* Start a terminated cluster / paused pool / stopped AML CI here. */}
                 {computeId && selectedCompute && !isComputeRunning(selectedCompute.state) &&
-                  (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql') && (
+                  (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql' || selectedCompute.kind === 'aml-ci') && (
                   <Button
                     appearance="primary"
                     size="small"
@@ -1065,6 +1513,31 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {/* Library & Environment: compact AML environment selector (Fabric ribbon parity). */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+              <Caption1>Environment (libraries)</Caption1>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Select
+                  aria-label="AML environment"
+                  style={{ flex: 1 }}
+                  value={attachedAmlEnv?.name || ''}
+                  onChange={(_, d) => selectAmlEnv(d.value)}
+                  disabled={!notebookId}
+                >
+                  <option value="">No environment attached</option>
+                  {amlEnvs.map((e) => (
+                    <option key={e.name} value={e.name}>{e.name}{e.latestVersion ? `:${e.latestVersion}` : ''}</option>
+                  ))}
+                </Select>
+                <Button
+                  appearance="outline"
+                  icon={<Library20Regular />}
+                  disabled={!notebookId}
+                  title="Manage environment — libraries, packages, custom .jar"
+                  onClick={() => setEnvPanelOpen(true)}
+                >Manage</Button>
+              </div>
+            </div>
             {/* Import a desktop notebook file directly into this workspace. */}
             <input
               ref={fileInputRef}
@@ -1086,10 +1559,22 @@ export function NotebookEditor({ item, id }: Props) {
               </DialogTrigger>
               <DialogSurface>
                 <DialogBody>
-                  <DialogTitle>Create Fabric notebook</DialogTitle>
+                  <DialogTitle>{workspaceType === 'aml' ? 'New notebook (Azure ML)' : 'Create notebook'}</DialogTitle>
                   <DialogContent>
-                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Caption1>Name</Caption1>
+                        <Input placeholder="My notebook" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Caption1>Kernel</Caption1>
+                        <Select aria-label="Kernel" value={createKernel} onChange={(_, d) => setCreateKernel(d.value as 'python' | 'r')}>
+                          <option value="python">Python 3.10</option>
+                          <option value="r">R</option>
+                        </Select>
+                      </div>
+                      {createErr && <MessageBar intent="error"><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    </div>
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -1113,7 +1598,30 @@ export function NotebookEditor({ item, id }: Props) {
                 : undefined}
               onClick={run}
             >{running ? 'Queuing…' : 'Run'}</Button>
+            <Button
+              appearance="outline"
+              icon={<Settings20Regular />}
+              disabled={cfgSaving}
+              title="Set Spark session executors, memory, and idle timeout"
+              onClick={openConfigDialog}
+            >Configure session</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
+            {/* VS Code for the Web — Commercial-only deep-link to the AML
+                compute-instance editor. Hidden in Gov boundaries (GCC / GCC-High
+                / DoD) where VS Code for the Web is unavailable, and only shown
+                when a real AML instance + workspace are configured (no dead button). */}
+            {notebookId && vscodeWeb.enabled && vscodeWeb.url && (
+              <Button
+                as="a"
+                href={vscodeWeb.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                appearance="outline"
+                icon={<Open20Regular />}
+              >Open in VS Code for Web</Button>
+            )}
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
+            <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
 
@@ -1125,6 +1633,38 @@ export function NotebookEditor({ item, id }: Props) {
             workspaceId={workspaceId}
             computeId={computeId}
             onRerun={run}
+          />
+
+          {/* Library & Environment management dialog */}
+          <Dialog open={envPanelOpen} onOpenChange={(_, d) => setEnvPanelOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 640 }}>
+              <DialogBody>
+                <DialogContent>
+                  <EnvironmentPanel
+                    notebookId={notebookId}
+                    workspaceId={workspaceId}
+                    attached={attachedAmlEnv}
+                    customLibraries={customLibraries}
+                    onAttached={(env) => { setAttachedAmlEnv(env); void loadAmlEnvs(); }}
+                    onJarsChanged={setCustomLibraries}
+                    onPipInstall={installPipPackage}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setEnvPanelOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Variable explorer — right-side OverlayDrawer; inspects the live
+              Livy session via the Task-3 execute path. Python-only, like
+              Synapse Studio / Fabric. */}
+          <VariablesPane
+            open={variablesOpen}
+            onOpenChange={setVariablesOpen}
+            onInspect={inspectVariables}
+            defaultLang={defaultLang}
           />
 
           {/* Phase 2: Attach Lakehouse modal */}
@@ -1185,18 +1725,49 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {!cp.loading && !cp.error && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
+          {!cp.loading && !cp.error && workspaceType === 'loom' && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>No notebook compute is available</MessageBarTitle>
                 Notebooks run on a Synapse Spark pool or a Databricks cluster. Provision one and
                 set <code>LOOM_SYNAPSE_WORKSPACE</code> (Synapse Spark) or
                 {' '}<code>LOOM_DATABRICKS_HOSTNAME</code> (Databricks) so it appears in the compute
-                picker above. You can still edit and save cells without compute.
+                picker above. You can still edit and save cells without compute. Or switch the
+                compute backend to <strong>Azure ML</strong> to run on a Compute Instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No Azure ML Compute Instance is available</MessageBarTitle>
+                The Azure ML path runs cells on a Compute Instance. Set{' '}
+                <code>LOOM_AML_WORKSPACE</code> + <code>LOOM_AML_REGION</code> to a deployed Azure
+                Machine Learning workspace (the deploy-planner <code>mlWorkspace</code> module
+                provisions one), grant the Console UAMI <strong>AzureML Data Scientist</strong>,
+                then create a Compute Instance in that workspace. You can still edit and save cells
+                without compute, or switch the backend to <strong>Loom (Spark)</strong>.
               </MessageBarBody>
             </MessageBar>
           )}
           {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+
+          {/* Honest receipt: the real Livy session-create body that provisioned
+              the running Spark session. numExecutors here is what the session
+              actually runs with — confirms the Configure-session sizing. */}
+          {sessionReceipt && typeof sessionReceipt.numExecutors === 'number' && (
+            <MessageBar intent="success">
+              <MessageBarBody>
+                <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
+                Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
+                {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
+                {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
+                {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
+                <br />
+                <code style={{ fontSize: 11 }}>{JSON.stringify(sessionReceipt)}</code>
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {notebookId && (
             <>
@@ -1244,6 +1815,23 @@ export function NotebookEditor({ item, id }: Props) {
                           draggable: true,
                           onDragStart: () => { dragIndexRef.current = idx; },
                           onDragEnd: () => { dragIndexRef.current = null; setDragOverId(null); },
+                        }}
+                        notebookId={notebookId}
+                        workspaceId={workspaceId}
+                        computeId={computeId}
+                        lspWsUrl={lspWsUrl}
+                        priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
+                        schemaContext={inlineSchemaContext}
+                        onInsertBelow={(newCell) => {
+                          setCells(prev => {
+                            const spliceIdx = prev.findIndex(cell => cell.id === c.id);
+                            if (spliceIdx < 0) return [...prev, newCell];
+                            const next = [...prev];
+                            next.splice(spliceIdx + 1, 0, newCell);
+                            return next;
+                          });
+                          setActiveCellId(newCell.id);
+                          setDirty(true);
                         }}
                       />
                     ) : (
@@ -1304,6 +1892,41 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </>
           )}
+
+          {/* Configure session dialog — sliders + numeric field, no JSON. */}
+          <SessionConfigDialog
+            open={cfgDialogOpen}
+            config={cfgDraft}
+            onConfigChange={setCfgDraft}
+            onApply={applySessionConfig}
+            onClose={() => setCfgDialogOpen(false)}
+          />
+
+          {/* Bottom-left session status badge (Idle / Running / Error). */}
+          <Badge
+            className={s.statusBadge}
+            appearance="filled"
+            color={sessionStatus === 'Running' ? 'warning' : sessionStatus === 'Error' ? 'danger' : 'success'}
+            title={
+              sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
+                ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
+                : `Session ${sessionStatus.toLowerCase()}`
+            }
+          >
+            {sessionStatus}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
+          </Badge>
+        </div>
+        <CopilotChatPane
+          open={copilotOpen}
+          onOpenChange={setCopilotOpen}
+          notebookId={notebookId}
+          workspaceId={workspaceId}
+          cells={cells}
+          activeCellId={activeCellId}
+          attachedSources={attachedSources}
+          defaultLang={defaultLang}
+          onApplyCells={applyCells}
+        />
         </div>
       }
     />

@@ -10,6 +10,7 @@ import {
   ArrowSwap16Regular, ReOrderDotsVertical16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   shell: {
@@ -212,14 +213,15 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
       {editing ? (
-        <textarea
-          className={mergeClasses(s.editor, locked && s.editorLocked, maximized && s.editorMaximized)}
+        <MonacoTextarea
           value={cell.source}
-          spellCheck
+          onChange={(next) => onChange({ ...cell, source: next })}
+          language="markdown"
           readOnly={locked}
-          onChange={(e) => onChange({ ...cell, source: e.target.value })}
-          onBlur={() => { if (!locked && cell.source.trim()) setEditing(false); }}
-          aria-label={`Markdown cell ${cell.id}`}
+          height={maximized ? 'calc(100% - 56px)' : 160}
+          minHeight={80}
+          ariaLabel={`Markdown cell ${cell.id}`}
+          className={mergeClasses(locked && s.editorLocked)}
         />
       ) : (
         <div

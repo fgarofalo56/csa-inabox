@@ -46,12 +46,20 @@ param atlasOnAksEnabled bool
 @description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
 param databricksUnityCatalogEnabled bool = false
 
-@description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy; set to "databricks" to opt the notebook editor into the Databricks Execution Context API instead. Must NOT be "databricks" at IL5.')
-@allowed(['', 'synapse', 'databricks'])
+@description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy. Set to "databricks" to opt into the Databricks Execution Context API, or "aml-ci" to execute against an Azure ML Compute-Instance Jupyter kernel (listNotebookAccessToken → Jupyter contents + kernel WebSocket; reuses LOOM_AML_*/LOOM_FOUNDRY_* + LOOM_SUBSCRIPTION_ID, no new vars). Must NOT be "databricks" at IL5.')
+@allowed(['', 'synapse', 'databricks', 'aml-ci'])
 param loomNotebookBackend string = ''
 
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
+
+@description('Enable rich display() visualization for notebook cells (F-DS). When true, the BFF injects the ai-display.py helper as Livy session statement 0 so display(df) renders the Loom interactive grid + chart recommendations. Azure-native (Synapse Spark) — no Fabric dependency. When false/unset, display(df) falls back to the kernel built-in table.')
+param loomRichDisplay bool = true
+
+@description('Maximum rows sampled for the display() rich visualization grid + client-side chart aggregation (full-dataset aggregation still fires a real Spark job). Default 5000.')
+@minValue(100)
+@maxValue(20000)
+param loomDisplaySampleRows int = 5000
 
 @description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
 #disable-next-line no-unused-params
@@ -189,6 +197,9 @@ param loomSynapseHostSuffix string = ''
 @description('Synapse SQL endpoint suffix for the live Tables catalog row-count path. Commercial = azuresynapse.net (default); Azure Government (GCC / GCC-High / IL5) = azuresynapse.us. Leave empty for Commercial.')
 param loomSynapseSqlSuffix string = ''
 
+@description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab, mlflow-client.ts). Empty → falls back to LOOM_FOUNDRY_RG. Set explicitly when pointing at a dedicated AML workspace; requires the Console UAMI AzureML Data Scientist on that workspace.')
+param loomAmlRg string = ''
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -280,6 +291,27 @@ param loomDatabricksHostname string = ''
 @description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
 param loomDatabricksSqlWarehouseId string = ''
 
+// ---------------------------------------------------------------------------
+// Standalone Azure Machine Learning workspace — backs aml-client.ts
+// (resolveAmlTarget). These coordinate the AML control-plane navigator
+// (computes / datastores / jobs / models / schedules / environments). When
+// loomAmlWorkspace is empty the client falls back to the AI Foundry hub env
+// (LOOM_FOUNDRY_*) and the shared landing-zone subscription, so existing
+// deployments need no new config. Cloud routing (Commercial vs
+// management.usgovcloudapi.net) is handled by cloud-endpoints.ts at runtime.
+// ---------------------------------------------------------------------------
+@description('AML workspace name for the standalone AML client (LOOM_AML_WORKSPACE). Empty falls back to the AI Foundry hub name.')
+param loomAmlWorkspace string = ''
+
+@description('Resource group of the AML workspace (LOOM_AML_RESOURCE_GROUP). Empty falls back to LOOM_FOUNDRY_RG, then rg-csa-loom-admin-<region>.')
+param loomAmlResourceGroup string = ''
+
+@description('Subscription id of the AML workspace (LOOM_AML_SUBSCRIPTION). Empty falls back to the deployment subscription (LOOM_SUBSCRIPTION_ID).')
+param loomAmlSubscription string = ''
+
+@description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to LOOM_FOUNDRY_REGION, then eastus2.')
+param loomAmlRegion string = ''
+
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
 //
@@ -308,6 +340,11 @@ param existingAdxClusterRg string = ''
 param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
 param existingFoundryRg string = ''
+
+@description('Azure ML workspace name backing the notebook AML path (deploy-planner mlWorkspace module). Empty → the AML notebook toggle honest-gates (LOOM_AML_WORKSPACE unset).')
+param amlWorkspaceName string = ''
+@description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
+param amlWorkspaceRg string = ''
 
 // Effective "reuse-or-new" identities used for Console env wiring below.
 var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGroup().name
@@ -431,6 +468,9 @@ param copyJobControlEnabled bool = false
 @description('Dataflow Gen2 (Power Query) backend selector. Default: adf (Azure-native WranglingDataFlow on ADF Spark — no Fabric). fabric is opt-in and additionally requires LOOM_DEFAULT_FABRIC_WORKSPACE.')
 @allowed(['adf', 'fabric'])
 param loomDataflowBackend string = 'adf'
+
+@description('Explicit Azure ML MLflow tracking URI for the ML Experiment editor. REQUIRED in IL5 / GCC-High (the commercial *.api.azureml.ms host is wrong there and no public alternate hostname is documented). Get it via `az ml workspace show --query mlflow_tracking_uri -o tsv`. Empty in Commercial / GCC, where the editor auto-constructs the URI from LOOM_AML_WORKSPACE/LOOM_FOUNDRY_NAME + region + subscription.')
+param loomMlflowTrackingUri string = ''
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -871,6 +911,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AML_SPARK', value: boundary == 'GCC-High' || boundary == 'IL5' ? '' : loomAmlSparkWorkspace }
             // Synapse Spark pool dedicated to notebook %%pyspark cells (Livy).
             { name: 'LOOM_SYNAPSE_SPARK_POOL', value: loomNotebookSparkPool }
+            // Rich display() — interactive grid + chart recommendations for
+            // display(df). Injects ai-display.py as Livy session statement 0.
+            { name: 'LOOM_RICH_DISPLAY', value: loomRichDisplay ? '1' : '0' }
+            { name: 'LOOM_DISPLAY_SAMPLE_ROWS', value: string(loomDisplaySampleRows) }
             // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
             // Commercial / GCC use database.windows.net; GCC-High / IL5 use the US-Gov audience.
             { name: 'LOOM_SYNAPSE_SQL_TOKEN_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'database.usgovcloudapi.net' : 'database.windows.net' }
@@ -1158,6 +1202,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // data-agent test chat. Empty when AI Foundry isn't deployed.
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
+            // Azure ML workspace for notebook Library & Environment management
+            // (aml-environments-client.ts) AND MLflow experiment tracking
+            // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). The Foundry
+            // hub IS an AML workspace (kind=Hub), so we point at it by default;
+            // loomAmlWorkspace / loomAmlRg override to a dedicated AML workspace.
+            // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
+            { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '')) }
+            { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : (!empty(loomAmlRg) ? loomAmlRg : byoFoundryRg) }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
@@ -1165,6 +1217,32 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
+            // ML Experiment editor — Azure ML MLflow tracking. LOOM_AML_WORKSPACE
+            // / LOOM_AML_RG are already set above (shared with aml-environments-
+            // client AND the notebook "Azure ML" compute path in aml-client.ts →
+            // list/start Compute Instances, list datastores, submit Command jobs);
+            // mlflow-client.ts also reads LOOM_AML_REGION +
+            // LOOM_SUBSCRIPTION_ID to construct the Commercial / GCC / sovereign
+            // tracking URI automatically (amlDataPlaneHost picks the right host).
+            // IL5 / GCC-High may instead pin an explicit tracking URI below.
+            //
+            // Standalone Azure ML workspace coordinates also back aml-client.ts
+            // (resolveAmlTarget): the AML control-plane navigator (computes /
+            // datastores / jobs / models / schedules / environments) and the
+            // notebook AML toggle. Empty values fall back to LOOM_FOUNDRY_* /
+            // LOOM_SUBSCRIPTION_ID in the resolver, so an AI Foundry hub doubles
+            // as the AML workspace without extra config. The deploy-planner
+            // mlWorkspace module provisions a dedicated workspace + grants the
+            // Console UAMI AzureML Data Scientist. No Fabric dependency. Cloud
+            // routing is handled at runtime.
+            { name: 'LOOM_AML_REGION', value: empty(loomAmlRegion) ? location : loomAmlRegion }
+            { name: 'LOOM_AML_RESOURCE_GROUP', value: loomAmlResourceGroup }
+            { name: 'LOOM_AML_SUBSCRIPTION', value: loomAmlSubscription }
+            // IL5 / GCC-High may set an explicit tracking URI when auto-
+            // construction can't express the boundary-specific / private-link
+            // shape. Empty in Commercial / GCC, where auto-construction applies.
+            // When set, mlflow-client.ts uses it verbatim (highest priority).
+            { name: 'LOOM_MLFLOW_TRACKING_URI', value: loomMlflowTrackingUri }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. The dedicated Agent Service account
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;

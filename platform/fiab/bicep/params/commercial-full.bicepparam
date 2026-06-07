@@ -101,11 +101,23 @@ param dlzDomainNames = []
 // Re-enable in next iteration when capacity refreshes OR switch region.
 param deployAppsEnabled = true
 param aiFoundryEnabled = true
+// Agent Foundry — provisions the dedicated AIServices account (aifndry-loom-eastus2)
+// with the loom-agents project + chat (gpt-4.1-mini) + text-embedding-ada-002
+// deployments and wires LOOM_AOAI_* / LOOM_FOUNDRY_PROJECT_*. This is what makes
+// AI Functions (POST /api/ai-functions), Copilot, and the data-agent test-chat
+// return real completions on a clean deploy instead of the 501 not_configured gate.
+param agentFoundryEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
+// Azure ML workspace — backs the notebook "Azure ML" compute path (Compute
+// Instances + datastores + Command-job cell runs). The deploy-planner
+// ml-workspace.bicep module provisions an AML workspace + its KV/Storage/
+// AppInsights deps and grants the Console UAMI AzureML Data Scientist, which
+// surfaces LOOM_AML_WORKSPACE/RG/REGION to the console. No Fabric dependency.
+param mlWorkspaceEnabled = true
 
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource

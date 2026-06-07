@@ -20,6 +20,7 @@ const REQUIRED_ROUTES: Array<{ sub: string; file: string }> = [
   { sub: '[id]/bind', file: 'route.ts' },
   { sub: '[id]/endpoint', file: 'route.ts' },
   { sub: '[id]/register', file: 'route.ts' },
+  { sub: '[id]/stage', file: 'route.ts' },
 ];
 
 function readRoute(sub: string, file: string): string | null {
@@ -64,5 +65,20 @@ describe('ml-model BFF routes — exist + real backend', () => {
     expect(ep).toMatch(/resolveModelBinding/);
     expect(ep).toMatch(/createOnlineEndpoint/);
     expect(ep).toMatch(/createOnlineDeployment/);
+  });
+
+  it('stage route transitions MLflow stages via the real MLflow REST client', () => {
+    const src = readRoute('[id]/stage', 'route.ts')!;
+    expect(src).toMatch(/resolveModelBinding/);
+    // Real MLflow transition-stage backend, not a stub.
+    expect(src).toMatch(/transitionModelVersionStage/);
+    expect(src).toMatch(/from '@\/lib\/azure\/mlflow-client'/);
+    expect(/return NextResponse\.json\(\{\}\)/.test(src)).toBe(false);
+  });
+
+  it('register route has a register-from-run (MLflow lineage) branch', () => {
+    const src = readRoute('[id]/register', 'route.ts')!;
+    expect(src).toMatch(/createMlflowModelVersion/);
+    expect(src).toMatch(/runId/);
   });
 });
