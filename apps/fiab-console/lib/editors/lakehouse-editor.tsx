@@ -37,6 +37,7 @@ import {
   BookOpen20Regular, TableSimple20Regular,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
+  FolderArrowUp20Regular, ShieldTask20Regular,
   Wrench20Regular,
   History20Regular,
 } from '@fluentui/react-icons';
@@ -143,6 +144,44 @@ function leafName(path: string): string {
   const i = trimmed.lastIndexOf('/');
   return i >= 0 ? trimmed.substring(i + 1) : trimmed;
 }
+
+/** A file collected from a folder drag-drop, with its tree-relative path. */
+interface UploadItem { relativePath: string; file: File }
+
+/**
+ * Recursively walk a drag-dropped FileSystemEntry, preserving the directory
+ * tree as a relative path (`folder/sub/file.txt`). Uses the webkit Entries API
+ * (the only browser API that exposes a dropped folder's contents). readEntries
+ * yields at most 100 entries per call, so we loop until the reader is drained.
+ */
+async function collectEntries(entry: FileSystemEntry, prefix = ''): Promise<UploadItem[]> {
+  if (entry.isFile) {
+    const fileEntry = entry as FileSystemFileEntry;
+    const file = await new Promise<File>((res, rej) => fileEntry.file(res, rej));
+    return [{ relativePath: prefix + file.name, file }];
+  }
+  if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const all: FileSystemEntry[] = [];
+    // Drain the reader (100 entries at a time) until it returns empty.
+    await new Promise<void>((resolve, reject) => {
+      const readNext = () => {
+        reader.readEntries((batch) => {
+          if (!batch.length) { resolve(); return; }
+          all.push(...batch);
+          readNext();
+        }, reject);
+      };
+      readNext();
+    });
+    const nested = await Promise.all(all.map((e) => collectEntries(e, `${prefix}${entry.name}/`)));
+    return nested.flat();
+  }
+  return [];
+}
+
+/** A tenant sensitivity label, as returned by /api/admin/security/mip/labels. */
+interface MipLabelOption { id: string; name?: string; displayName?: string; isAppliable?: boolean }
 
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
@@ -263,13 +302,33 @@ export function LakehouseEditor({ item, id }: Props) {
   const runningUploads = activeContainer
     ? jobs.filter((j) => j.kind === 'upload' && j.status === 'running' && j.container === activeContainer)
     : [];
-  const uploading = runningUploads.length > 0;
   const [actionError, setActionError] = useState<string | null>(null);
   // Phase 4.5 — positive feedback for upload / mkdir / delete so the user
   // can tell the operation actually hit ADLS. Mirrors the "Saved at HH:MM:SS"
   // pattern used by the document editors (notebook, pipeline, dataflow, etc.).
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // Folder drag-and-drop + batch upload progress (F5).
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadQueue, setUploadQueue] = useState<{ done: number; total: number } | null>(null);
+  // `uploading` is DERIVED — true while the jobs-store has a running upload for
+  // the active container (F10 background single-file upload) OR while the inline
+  // batch uploader (F5 folder drag-and-drop) is draining its queue.
+  const uploading = runningUploads.length > 0 || uploadQueue !== null;
+
+  // MIP sensitivity-label-on-download (F5). `mipStatus` is the x-loom-mip-status
+  // header echoed by /api/lakehouse/download; the UI maps it to a MessageBar.
+  const [mipStatus, setMipStatus] = useState<string | null>(null);
+  const [mipLabelName, setMipLabelName] = useState<string | null>(null);
+  // "Download with sensitivity label" picker dialog.
+  const [labelDlgOpen, setLabelDlgOpen] = useState(false);
+  const [labelDlgEntry, setLabelDlgEntry] = useState<PathEntry | null>(null);
+  const [mipLabels, setMipLabels] = useState<MipLabelOption[] | null>(null);
+  const [mipLabelsLoading, setMipLabelsLoading] = useState(false);
+  const [mipLabelsError, setMipLabelsError] = useState<string | null>(null);
+  const [chosenLabelId, setChosenLabelId] = useState<string>('');
 
   // ---- Reference lakehouses (F8) --------------------------------------
   // Other in-workspace lakehouses added to the explorer for side-by-side,
@@ -1505,6 +1564,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ---- file actions ---------------------------------------------------
   const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
+  const onFolderUploadClick = useCallback(() => folderInputRef.current?.click(), []);
 
   /** Open the selected file in a new notebook, prefilled with Spark Delta load + display. */
   const onOpenInNotebook = useCallback((entry: PathEntry) => {
@@ -1550,32 +1610,142 @@ export function LakehouseEditor({ item, id }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [activeContainer, activePath, lttOpen]);
 
-  const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = '';
-    if (!file || !activeContainer) return;
-    const prefix = activePath?.isDirectory ? activePath.name : '';
-    const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
-    setActionError(null);
+  /**
+   * Upload one file to ADLS. Returns null on success or an error string.
+   * ADLS HNS auto-creates parent directories on the DFS PUT path, so a
+   * multi-segment `targetPath` (folder/sub/file.txt) preserves the tree.
+   */
+  const uploadOne = useCallback(async (targetPath: string, file: File): Promise<string | null> => {
+    if (!activeContainer) return 'No active container';
+    try {
+      const fd = new FormData();
+      fd.set('container', activeContainer);
+      fd.set('path', targetPath);
+      fd.set('file', file);
+      const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
+      const ct = r.headers.get('content-type') || '';
+      let j: any = null;
+      let bodyText: string | null = null;
+      if (ct.includes('application/json')) {
+        try { j = await r.json(); } catch { /* fall through to text */ }
+      }
+      if (!j) { try { bodyText = (await r.text()).slice(0, 240); } catch { /* ignore */ } }
+      if (!r.ok || j?.ok === false) {
+        return j?.error
+          || (r.status === 413 ? `${leafName(targetPath)}: file too large (${file.size.toLocaleString()} bytes). Max 4 GB.`
+          : r.status === 502 ? `${leafName(targetPath)}: upstream storage error (502). Check ADLS network/role assignments.`
+          : r.status === 401 ? `Sign in expired. Reload and re-authenticate.`
+          : `${leafName(targetPath)}: upload failed (HTTP ${r.status}).${bodyText ? ` Server said: ${bodyText}` : ''}`);
+      }
+      return null;
+    } catch (e: any) {
+      return `${leafName(targetPath)}: ${e?.message || String(e)}`;
+    }
+  }, [activeContainer]);
 
-    // F10 — hand the upload to the module-scope jobs-store. The fetch is owned
-    // there (not in this component), so switching item tabs mid-upload does NOT
-    // cancel it; the global toaster raises a lakehouse-named confirmation on
-    // completion regardless of which tab is active when it finishes.
-    startUpload({
-      lakehouseName,
-      container: activeContainer,
-      path: targetPath,
-      file,
-      onDone: ({ ok, error }) => {
-        if (ok) refreshActive();
-        else if (error) setActionError(error);
-      },
-    });
-    // Refresh the listing optimistically once the ADLS append+flush has likely
-    // propagated (P99 ~200ms) so the new file appears without a manual refresh.
-    setTimeout(refreshActive, 500);
-  }, [activeContainer, activePath, startUpload, lakehouseName, refreshActive]);
+  /**
+   * Batch upload — preserves each item's tree-relative path under the current
+   * folder. Drives the inline progress bar and reports the first failure.
+   */
+  const uploadItems = useCallback(async (items: UploadItem[]) => {
+    if (!activeContainer || !items.length) return;
+    const basePrefix = activePath?.isDirectory ? `${activePath.name.replace(/\/+$/, '')}/` : '';
+    setActionError(null);
+    setActionStatus(null);
+    setUploadQueue({ done: 0, total: items.length });
+    let firstError: string | null = null;
+    let okCount = 0;
+    for (let i = 0; i < items.length; i++) {
+      const { relativePath, file } = items[i];
+      const targetPath = `${basePrefix}${relativePath.replace(/^\/+/, '')}`;
+      const err = await uploadOne(targetPath, file);
+      if (err) { if (!firstError) firstError = err; } else { okCount++; }
+      setUploadQueue({ done: i + 1, total: items.length });
+    }
+    setUploadQueue(null);
+    if (firstError) {
+      setActionError(
+        items.length > 1
+          ? `${okCount}/${items.length} uploaded. First failure — ${firstError}`
+          : firstError,
+      );
+    } else {
+      setActionStatus(`Uploaded ${okCount} file${okCount === 1 ? '' : 's'} at ${new Date().toLocaleTimeString()}`);
+    }
+    refreshActive();
+  }, [activeContainer, activePath, uploadOne, refreshActive]);
+
+  // File picker → a single file uses the F10 background jobs-store upload (the
+  // fetch is owned in the module-scope store, so switching item tabs mid-upload
+  // does NOT cancel it and the global toaster confirms on completion). A
+  // multi-select picks the inline batch uploader with its own progress bar.
+  const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(ev.target.files || []);
+    ev.target.value = '';
+    if (!files.length || !activeContainer) return;
+    if (files.length === 1) {
+      const file = files[0];
+      const prefix = activePath?.isDirectory ? activePath.name : '';
+      const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
+      setActionError(null);
+      startUpload({
+        lakehouseName,
+        container: activeContainer,
+        path: targetPath,
+        file,
+        onDone: ({ ok, error }) => {
+          if (ok) refreshActive();
+          else if (error) setActionError(error);
+        },
+      });
+      // Refresh the listing optimistically once the ADLS append+flush has likely
+      // propagated (P99 ~200ms) so the new file appears without a manual refresh.
+      setTimeout(refreshActive, 500);
+      return;
+    }
+    await uploadItems(files.map((f) => ({ relativePath: f.name, file: f })));
+  }, [activeContainer, activePath, startUpload, lakehouseName, uploadItems, refreshActive]);
+
+  // Folder picker (webkitdirectory) → preserves the folder tree via
+  // webkitRelativePath (e.g. "myfolder/sub/file.txt").
+  const onFolderInputChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(ev.target.files || []);
+    ev.target.value = '';
+    if (!files.length || !activeContainer) return;
+    await uploadItems(
+      files.map((f) => ({ relativePath: (f as any).webkitRelativePath || f.name, file: f })),
+    );
+  }, [activeContainer, uploadItems]);
+
+  // Drag-and-drop onto the Files tab — folders preserve their tree via the
+  // webkit Entries API; loose files upload flat.
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (!activeContainer) return;
+    e.preventDefault();
+    setIsDragOver(true);
+  }, [activeContainer]);
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  }, []);
+  const onDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (!activeContainer) return;
+    const dtItems = Array.from(e.dataTransfer.items || []);
+    const entries = dtItems
+      .filter((it) => it.kind === 'file')
+      .map((it) => (typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null))
+      .filter((en): en is FileSystemEntry => !!en);
+    let items: UploadItem[] = [];
+    if (entries.length) {
+      items = (await Promise.all(entries.map((en) => collectEntries(en)))).flat();
+    } else {
+      // Browsers without the Entries API — fall back to flat files.
+      items = Array.from(e.dataTransfer.files || []).map((f) => ({ relativePath: f.name, file: f }));
+    }
+    if (items.length) await uploadItems(items);
+  }, [activeContainer, uploadItems]);
 
   const onNewFolder = useCallback(async () => {
     if (!activeContainer) return;
@@ -1626,16 +1796,87 @@ export function LakehouseEditor({ item, id }: Props) {
     }
   }, [activeContainer, activePath, refreshActive]);
 
-  /** Download a file's bytes via the ADLS passthrough route. */
-  const onDownload = useCallback((entry: PathEntry) => {
+  /**
+   * Download a file's bytes via the ADLS passthrough route. Uses fetch + a blob
+   * (not window.open) so we can read the `x-loom-mip-status` response header and
+   * report whether the MIP sensitivity label was stamped. An optional
+   * `labelId`/`labelName` stamps the bytes with the CHOSEN label; otherwise the
+   * proxy applies the file's Purview-catalog label when one exists.
+   */
+  const onDownload = useCallback(async (
+    entry: PathEntry,
+    label?: { id: string; name: string; method?: 'Standard' | 'Privileged' },
+  ) => {
     if (!activeContainer || entry.isDirectory) return;
-    const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
-    // Navigate to the download endpoint; Content-Disposition: attachment makes
-    // the browser save the file instead of rendering it.
-    if (typeof window !== 'undefined') {
-      window.open(`/api/lakehouse/download?${qs.toString()}`, '_blank');
+    setMipStatus(null);
+    setMipLabelName(null);
+    const params: Record<string, string> = { container: activeContainer, path: entry.name };
+    if (label?.id) {
+      params.labelId = label.id;
+      params.labelName = label.name;
+      if (label.method) params.labelMethod = label.method;
+    }
+    const qs = new URLSearchParams(params);
+    try {
+      const r = await fetch(`/api/lakehouse/download?${qs.toString()}`);
+      if (!r.ok) {
+        const j = await r.json().catch(() => null);
+        setActionError(j?.error || `Download failed (HTTP ${r.status}).`);
+        return;
+      }
+      setMipStatus(r.headers.get('x-loom-mip-status'));
+      const lbl = r.headers.get('x-loom-mip-label');
+      if (lbl) { try { setMipLabelName(decodeURIComponent(lbl)); } catch { setMipLabelName(lbl); } }
+      const blob = await r.blob();
+      if (typeof window !== 'undefined') {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = leafName(entry.name);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (e: any) {
+      setActionError(e?.message || String(e));
     }
   }, [activeContainer]);
+
+  // ---- "Download with sensitivity label" picker -------------------------
+  const openLabelDialog = useCallback(async (entry: PathEntry) => {
+    setLabelDlgEntry(entry);
+    setLabelDlgOpen(true);
+    setChosenLabelId('');
+    setMipLabelsError(null);
+    if (mipLabels) return; // labels already loaded
+    setMipLabelsLoading(true);
+    try {
+      const r = await fetch('/api/admin/security/mip/labels');
+      const j = await parseJsonOrError<{ ok?: boolean; error?: string; labels?: MipLabelOption[]; hint?: any }>(r, 'List sensitivity labels');
+      if (!r.ok || j.ok === false) {
+        // 503 → MIP not configured. Surface the hint's followUp when present.
+        const hint = (j as any)?.hint?.followUp || (j as any)?.hint?.bicepStatus;
+        setMipLabelsError(j.error || hint || `Sensitivity labels unavailable (HTTP ${r.status}).`);
+      } else {
+        const labels = (j.labels || []).filter((l) => l.isAppliable !== false);
+        setMipLabels(labels);
+        if (!labels.length) setMipLabelsError('No appliable sensitivity labels are published to this tenant.');
+      }
+    } catch (e: any) {
+      setMipLabelsError(e?.message || String(e));
+    } finally {
+      setMipLabelsLoading(false);
+    }
+  }, [mipLabels]);
+
+  const confirmLabelDownload = useCallback(async () => {
+    if (!labelDlgEntry || !chosenLabelId) return;
+    const chosen = (mipLabels || []).find((l) => l.id === chosenLabelId);
+    const name = chosen?.displayName || chosen?.name || chosenLabelId;
+    setLabelDlgOpen(false);
+    await onDownload(labelDlgEntry, { id: chosenLabelId, name, method: 'Standard' });
+  }, [labelDlgEntry, chosenLabelId, mipLabels, onDownload]);
 
   // Properties dialog state — shows the real ADLS metadata already in hand.
   const [propsEntry, setPropsEntry] = useState<PathEntry | null>(null);
@@ -1816,6 +2057,18 @@ export function LakehouseEditor({ item, id }: Props) {
               disabled: writeBlocked, title: writeTitle,
             },
             {
+              // F5 — folder upload preserves the dropped/selected tree via the
+              // webkitdirectory picker and the inline batch uploader.
+              label: 'Upload folder', icon: <FolderArrowUp20Regular />,
+              onClick: writeBlocked ? undefined : onFolderUploadClick,
+              disabled: writeBlocked, title: writeTitle,
+            },
+            {
+              label: 'New folder', icon: <FolderAdd20Regular />,
+              onClick: writeBlocked ? undefined : onNewFolder,
+              disabled: writeBlocked, title: writeTitle,
+            },
+            {
               label: 'New shortcut', icon: <LinkMultiple20Regular />,
               onClick: writeBlocked ? undefined : () => { setTab('shortcuts'); openShortcutWizard(); },
               disabled: writeBlocked, title: writeTitle,
@@ -1872,6 +2125,9 @@ export function LakehouseEditor({ item, id }: Props) {
       { label: 'Tables', actions: [
         { label: 'Load to table', onClick: hasFile ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' },
       ]},
+      { label: 'Protect', actions: [
+        { label: 'Download with label', onClick: hasFile ? () => { if (activePath) openLabelDialog(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Stamp a MIP sensitivity label on download' : 'Select a file first' },
+      ]},
       { label: 'Manage', actions: [
         {
           label: 'Settings', icon: <Info20Regular />,
@@ -1898,8 +2154,8 @@ export function LakehouseEditor({ item, id }: Props) {
     ]},
   ], [
     writeBlocked, writeTitle, canFileAction, uploading, runningUploads.length,
-    onUploadClick, onNewFolder, refreshActive, openShortcutWizard, router,
-    notebookHref, hasFile, activePath, selectFile, onLoadToTables,
+    onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, openShortcutWizard, router,
+    notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, openPerms, openSettings, tab, maintainTable,
   ]);
 
@@ -2224,8 +2480,24 @@ export function LakehouseEditor({ item, id }: Props) {
                     ref={fileInputRef}
                     type="file"
                     hidden
+                    multiple
                     onChange={onUploadChange}
                     aria-label={`Upload file to ${lakehouseName} lakehouse`}
+                  />
+                  <Button appearance="outline" icon={<FolderArrowUp20Regular />} disabled={!activeContainer || uploading} onClick={onFolderUploadClick}>
+                    Upload folder
+                  </Button>
+                  {/* webkitdirectory makes the picker select a folder; the
+                      browser fills webkitRelativePath so the tree is preserved. */}
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    hidden
+                    multiple
+                    // @ts-expect-error -- non-standard directory-picker attributes
+                    webkitdirectory=""
+                    directory=""
+                    onChange={onFolderInputChange}
                   />
                   <Button appearance="outline" icon={<FolderAdd20Regular />} disabled={!activeContainer} onClick={onNewFolder}>
                     New folder
@@ -2244,6 +2516,61 @@ export function LakehouseEditor({ item, id }: Props) {
                     <MessageBarBody>{actionStatus}</MessageBarBody>
                   </MessageBar>
                 )}
+                {uploading && uploadQueue && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <Spinner size="tiny" />{' '}Uploading {uploadQueue.done} / {uploadQueue.total} file{uploadQueue.total === 1 ? '' : 's'}…
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {/* MIP sensitivity-label-on-download outcome (F5). The proxy
+                    echoes x-loom-mip-status; map it to an honest MessageBar.
+                    The download itself always succeeds regardless of status. */}
+                {mipStatus === 'stamped' && (
+                  <MessageBar intent="success" icon={<ShieldTask20Regular />}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Sensitivity label applied</MessageBarTitle>
+                      {mipLabelName ? <>“{mipLabelName}” was </> : 'The label was '}
+                      embedded in the downloaded file (MSIP metadata). Reopen the file in Office/Acrobat to verify the label bar.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {mipStatus === 'no-label' && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>No sensitivity label</MessageBarTitle>
+                      This file has no sensitivity label in the Microsoft Purview catalog (it may not have been scanned yet). Use <b>Download with label</b> to choose one explicitly. The file was downloaded as-is.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {mipStatus === 'not-configured' && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>MIP label lookup unavailable</MessageBarTitle>
+                      Microsoft Purview is not wired in this deployment, so no catalog label could be looked up. Set <code>LOOM_PURVIEW_ACCOUNT</code> (see <code>platform/fiab/bicep/modules/admin-plane/catalog.bicep</code>) and grant the Console UAMI a Purview <em>Data Reader</em> role (<code>scripts/csa-loom/grant-purview-datamap-role.sh ROLE=data-reader</code>), or use <b>Download with label</b> to stamp a chosen label. The file downloaded without a stamp.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {(mipStatus === 'no-xmp-stream' || mipStatus === 'pdf-insufficient-xmp-padding' || mipStatus === 'ooxml-zip64-unsupported' || mipStatus === 'ooxml-parse-failed') && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Label could not be embedded in this file</MessageBarTitle>
+                      {mipStatus === 'no-xmp-stream' && 'This PDF has no XMP metadata packet to stamp into. '}
+                      {mipStatus === 'pdf-insufficient-xmp-padding' && 'This PDF\'s XMP packet has no spare padding to stamp into without re-flowing the file. '}
+                      {mipStatus === 'ooxml-zip64-unsupported' && 'This Office file uses the ZIP64 container, which the in-proxy stamper does not modify. '}
+                      {mipStatus === 'ooxml-parse-failed' && 'This Office file could not be parsed as a standard OPC package. '}
+                      The file downloaded unchanged — no partial or fake stamp was written.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {mipStatus === 'error' && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Label lookup failed</MessageBarTitle>
+                      Purview is configured but the label lookup failed (the file still downloaded). Confirm the Console UAMI holds a Purview <em>Data Reader</em> role on the root collection (<code>scripts/csa-loom/grant-purview-datamap-role.sh ROLE=data-reader</code>).
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 {currentListing === 'loading' && <Spinner size="small" label="Listing paths…" labelPosition="after" />}
                 {currentListing && !Array.isArray(currentListing) && currentListing !== 'loading' && (
                   <MessageBar intent="error">
@@ -2254,7 +2581,22 @@ export function LakehouseEditor({ item, id }: Props) {
                   </MessageBar>
                 )}
                 {Array.isArray(currentListing) && (
-                  <div className={s.tableWrap}>
+                  <div
+                    className={s.tableWrap}
+                    onDragOver={onDragOver}
+                    onDragLeave={onDragLeave}
+                    onDrop={onDrop}
+                    style={isDragOver ? {
+                      outline: `2px dashed ${tokens.colorBrandStroke1}`,
+                      outlineOffset: -2,
+                      backgroundColor: tokens.colorNeutralBackground2,
+                    } : undefined}
+                  >
+                    {isDragOver && (
+                      <div style={{ padding: 8, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: 600 }}>
+                        Drop files or a folder to upload into /{currentPrefix || ''} (folder tree preserved)
+                      </div>
+                    )}
                     <Table aria-label="Lakehouse paths" size="small">
                       <TableHeader>
                         <TableRow>
@@ -2317,6 +2659,16 @@ export function LakehouseEditor({ item, id }: Props) {
                                     {!entry.isDirectory && (
                                       <MenuItem icon={<TableSimple20Regular />} onClick={() => onLoadToTables(entry)}>
                                         Load to Tables (Delta)
+                                      </MenuItem>
+                                    )}
+                                    {!entry.isDirectory && (
+                                      <MenuItem icon={<ArrowDownload20Regular />} onClick={() => onDownload(entry)}>
+                                        Download
+                                      </MenuItem>
+                                    )}
+                                    {!entry.isDirectory && (
+                                      <MenuItem icon={<ShieldTask20Regular />} onClick={() => openLabelDialog(entry)}>
+                                        Download with label…
                                       </MenuItem>
                                     )}
                                     <MenuItem icon={<Delete20Regular />} onClick={() => onDelete(entry)}>
@@ -3121,6 +3473,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     <MenuItem icon={<BookOpen20Regular />} onClick={() => { if (ctxEntry) onOpenInNotebook(ctxEntry); setCtxOpen(false); }}>Open in notebook</MenuItem>
                     <MenuItem icon={<TableSimple20Regular />} onClick={() => { if (ctxEntry) onLoadToTables(ctxEntry); setCtxOpen(false); }}>Load to Tables (Delta)</MenuItem>
                     <MenuItem icon={<ArrowDownload20Regular />} onClick={() => { if (ctxEntry) onDownload(ctxEntry); setCtxOpen(false); }}>Download</MenuItem>
+                    <MenuItem icon={<ShieldTask20Regular />} onClick={() => { if (ctxEntry) openLabelDialog(ctxEntry); setCtxOpen(false); }}>Download with label…</MenuItem>
                   </>
                 )}
                 {ctxEntry && ctxEntry.isDirectory && (
@@ -3360,6 +3713,61 @@ export function LakehouseEditor({ item, id }: Props) {
                       {scSubmitting ? 'Creating…' : 'Create'}
                     </Button>
                   )}
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* "Download with sensitivity label" — pick a tenant MIP label, then
+              the download proxy stamps the bytes (PDF XMP / OOXML custom props). */}
+          <Dialog open={labelDlgOpen} onOpenChange={(_, d) => { if (!d.open) setLabelDlgOpen(false); }}>
+            <DialogSurface style={{ maxWidth: 520 }}>
+              <DialogBody>
+                <DialogTitle>Download with sensitivity label</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Stamp a Microsoft Information Protection sensitivity label onto{' '}
+                      <strong>{labelDlgEntry ? leafName(labelDlgEntry.name) : ''}</strong> as it downloads.
+                      Supported for Office (.docx/.xlsx/.pptx) and PDF — other types download unstamped.
+                    </Caption1>
+                    {mipLabelsLoading && <Spinner size="small" label="Loading sensitivity labels…" labelPosition="after" />}
+                    {mipLabelsError && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Sensitivity labels unavailable</MessageBarTitle>
+                          {mipLabelsError}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {!mipLabelsLoading && !mipLabelsError && mipLabels && mipLabels.length > 0 && (
+                      <Field label="Sensitivity label">
+                        <Dropdown
+                          placeholder="Select a label"
+                          selectedOptions={chosenLabelId ? [chosenLabelId] : []}
+                          value={(mipLabels.find((l) => l.id === chosenLabelId)?.displayName) || (mipLabels.find((l) => l.id === chosenLabelId)?.name) || ''}
+                          onOptionSelect={(_, d) => setChosenLabelId(d.optionValue || '')}
+                        >
+                          {mipLabels.map((l) => (
+                            <Option key={l.id} value={l.id} text={l.displayName || l.name || l.id}>
+                              {l.displayName || l.name || l.id}
+                            </Option>
+                          ))}
+                        </Dropdown>
+                      </Field>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setLabelDlgOpen(false)}>Cancel</Button>
+                  <Button
+                    appearance="primary"
+                    icon={<ShieldTask20Regular />}
+                    disabled={!chosenLabelId}
+                    onClick={confirmLabelDownload}
+                  >
+                    Download with label
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

@@ -54,6 +54,15 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+  // Folder drag-and-drop sends a multi-segment relative path. Reject traversal
+  // (`..`) and absolute paths so a crafted folder name can't escape the
+  // container root.
+  if (path.includes('..') || path.startsWith('/') || path.startsWith('\\')) {
+    return NextResponse.json(
+      { ok: false, error: 'invalid path: must be a relative path without ".." segments' },
+      { status: 400 },
+    );
+  }
   if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
     return NextResponse.json(
       { ok: false, error: `unknown container: ${container}` },

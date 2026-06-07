@@ -532,6 +532,31 @@ export async function getAssetDetail(guid: string): Promise<any | null> {
   return readJson<any>(res);
 }
 
+/**
+ * Look up an Atlas entity by its (typeName, qualifiedName) unique attribute.
+ *   GET /datamap/api/atlas/v2/entity/uniqueAttribute/type/{typeName}
+ *       ?attr:qualifiedName=<qualifiedName>
+ *
+ * Used by purview-mip-client to find the sensitivity label scanned onto a
+ * concrete ADLS Gen2 path. Returns the AtlasEntityWithExtInfo (with `.entity`)
+ * or null when the asset isn't in the catalog (404 — e.g. not scanned yet).
+ *
+ * https://learn.microsoft.com/rest/api/purview/datamapdataplane/entity/get-by-unique-attributes
+ */
+export async function getEntityByQualifiedName(
+  typeName: string,
+  qualifiedName: string,
+): Promise<any | null> {
+  purviewAccount();
+  if (!typeName) throw new PurviewError(400, null, 'typeName is required');
+  if (!qualifiedName) throw new PurviewError(400, null, 'qualifiedName is required');
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/entity/uniqueAttribute/type/${encodeURIComponent(typeName)}`,
+    { query: { 'attr:qualifiedName': qualifiedName } },
+  );
+  return readJson<any>(res);
+}
+
 // ------------------------------------------------------------
 // Cross-source registration — Atlas entity upsert
 // ------------------------------------------------------------

@@ -58,9 +58,11 @@ jobs:
           # deploy SP created the Purview account, so it is the root Collection
           # Admin and can grant the Console UAMI the roles it needs for the
           # catalog/scan/glossary/lineage surfaces (fixes the /governance scan +
-          # sources "Not authorized to access account" 403). Idempotent.
+          # sources "Not authorized to access account" 403). data-reader is
+          # included for the F5 lakehouse MIP-label-on-download lookup (reading
+          # the sensitivity label scanned onto an ADLS path). Idempotent.
           chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
-          for ROLE in data-curator data-source-administrator collection-administrator; do
+          for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
             echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection =="
             PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
               bash scripts/csa-loom/grant-purview-datamap-role.sh \
