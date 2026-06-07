@@ -20,6 +20,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeMgmtCommand, KustoError } from '@/lib/azure/kusto-client';
+import {
+  updateKustoClusterAutoscale,
+  KustoArmError,
+  KustoNotConfiguredError,
+} from '@/lib/azure/kusto-arm-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,4 +102,72 @@ export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
     errors: errors.length ? errors : undefined,
     oneLakeNote,
   });
+}
+
+/**
+ * PATCH /api/items/eventhouse/[id]/policies
+ *
+ * Body: { optimizedAutoscale: { isEnabled: boolean, minimum: number, maximum: number } }
+ *
+ * Cluster-level (not per-database) operation: calls ARM
+ * `PATCH /clusters` with properties.optimizedAutoscale to enable/disable ADX
+ * optimized auto-scale and set the min/max instance bounds. `version` is
+ * pinned to 1 by the client per the ARM schema.
+ *
+ * ARM rejects optimizedAutoscale on Dev(No SLA)/Basic-tier SKUs with HTTP 400;
+ * that is surfaced as an honest 422 SKU gate per .claude/rules/no-vaporware.md.
+ * Azure-native path — no Fabric workspace required.
+ */
+export async function PATCH(req: NextRequest, _ctx: { params: { id: string } }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const body = await req.json().catch(() => ({}));
+  const as = body?.optimizedAutoscale;
+  if (
+    !as ||
+    typeof as.isEnabled !== 'boolean' ||
+    typeof as.minimum !== 'number' ||
+    typeof as.maximum !== 'number'
+  ) {
+    return NextResponse.json(
+      { ok: false, error: 'optimizedAutoscale.{isEnabled,minimum,maximum} are required' },
+      { status: 400 },
+    );
+  }
+  const isEnabled: boolean = as.isEnabled;
+  const minimum = Math.floor(as.minimum);
+  const maximum = Math.floor(as.maximum);
+  if (!Number.isInteger(minimum) || minimum < 2) {
+    return NextResponse.json({ ok: false, error: 'minimum must be an integer >= 2' }, { status: 400 });
+  }
+  if (!Number.isInteger(maximum) || maximum > 1000 || maximum < minimum) {
+    return NextResponse.json(
+      { ok: false, error: `maximum must be an integer in [${minimum}, 1000]` },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const cluster = await updateKustoClusterAutoscale(isEnabled, minimum, maximum);
+    return NextResponse.json({
+      ok: true,
+      optimizedAutoscale: cluster.optimizedAutoscale,
+      provisioningState: cluster.provisioningState,
+    });
+  } catch (e: any) {
+    if (e instanceof KustoNotConfiguredError) {
+      return NextResponse.json({ ok: false, error: e.message, missing: e.missing }, { status: 503 });
+    }
+    if (e instanceof KustoArmError) {
+      const skuGate = e.status === 400
+        ? 'Optimized auto-scale requires a Standard-tier ADX SKU. This cluster is on a Dev(No SLA)/Basic SKU. Upgrade the cluster SKU via Manage › Scale up first, then re-apply.'
+        : undefined;
+      return NextResponse.json(
+        { ok: false, error: skuGate || e.message, armStatus: e.status },
+        { status: e.status === 400 || e.status === 409 ? 422 : 502 },
+      );
+    }
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
 }

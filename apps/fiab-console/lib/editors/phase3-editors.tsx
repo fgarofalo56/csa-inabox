@@ -33,7 +33,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, Switch,
+  Label, Select, Textarea, Switch, SpinButton,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -471,6 +471,13 @@ interface EventhouseState {
   cluster?: string;
   defaultDatabase?: string;
   databases?: Array<{ name: string; prettyName?: string; persistentStorage?: string }>;
+  sku?: { name: string; tier: string; capacity?: number };
+  optimizedAutoscale?: {
+    isEnabled: boolean;
+    minimum: number;
+    maximum: number;
+    version: number;
+  } | null;
   error?: string;
 }
 
@@ -498,6 +505,13 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+  // Cluster-level optimized auto-scale (ARM PATCH /clusters)
+  const [autoscaleOpen, setAutoscaleOpen] = useState(false);
+  const [autoscaleEnabled, setAutoscaleEnabled] = useState<boolean>(false);
+  const [autoscaleMin, setAutoscaleMin] = useState<number>(2);
+  const [autoscaleMax, setAutoscaleMax] = useState<number>(10);
+  const [autoscaleBusy, setAutoscaleBusy] = useState(false);
+  const [autoscaleResult, setAutoscaleResult] = useState<{ ok: boolean; msg: string; provisioningState?: string } | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -507,6 +521,12 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
       const r = await fetch(`/api/items/eventhouse/${id}`);
       const j = (await r.json()) as EventhouseState;
       setState(j);
+      // Seed the auto-scale dialog from live ARM cluster state.
+      if (j.optimizedAutoscale) {
+        setAutoscaleEnabled(j.optimizedAutoscale.isEnabled);
+        setAutoscaleMin(j.optimizedAutoscale.minimum);
+        setAutoscaleMax(j.optimizedAutoscale.maximum);
+      }
       if (j.ok && (j.databases?.length ?? 0) > 0 && !selectedDb) {
         setSelectedDb(j.defaultDatabase || j.databases![0].name);
       }
@@ -626,8 +646,47 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
 
+  // Cluster-level optimized auto-scale via ARM PATCH /clusters. Azure-native;
+  // no Fabric workspace involved. Honest 422 gate on Dev/Basic SKUs.
+  const applyAutoscale = useCallback(async () => {
+    setAutoscaleBusy(true);
+    setAutoscaleResult(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/policies`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          optimizedAutoscale: {
+            isEnabled: autoscaleEnabled,
+            minimum: autoscaleMin,
+            maximum: autoscaleMax,
+          },
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) {
+        setAutoscaleResult({ ok: false, msg: j.error || 'Auto-scale update failed' });
+      } else {
+        setAutoscaleResult({
+          ok: true,
+          msg: 'Optimized auto-scale settings applied.',
+          provisioningState: j.provisioningState,
+        });
+        load();
+      }
+    } catch (e: any) {
+      setAutoscaleResult({ ok: false, msg: e?.message || String(e) });
+    } finally {
+      setAutoscaleBusy(false);
+    }
+  }, [id, autoscaleEnabled, autoscaleMin, autoscaleMax, load]);
+
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
+  // Dev(No SLA)/Basic-tier SKUs reject optimizedAutoscale — drives the honest gate.
+  const isDevSku = (state?.sku?.tier || '').toLowerCase() === 'basic'
+    || (state?.sku?.name || '').toLowerCase().startsWith('dev(no sla)');
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -649,12 +708,15 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+        { label: 'Auto-scale', onClick: state?.ok ? () => { setAutoscaleResult(null); setAutoscaleOpen(true); } : undefined,
+          disabled: !state?.ok,
+          title: !state?.ok ? 'cluster must be reachable' : 'configure optimized auto-scale (min/max instances)' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
       ]},
     ]},
-  ], [hasDbs, selectedDb, openKqlEditor, load]);
+  ], [hasDbs, selectedDb, openKqlEditor, load, state?.ok]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -861,6 +923,93 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     <Button appearance="secondary" onClick={() => setPoliciesOpen(false)}>Cancel</Button>
                     <Button appearance="primary" onClick={applyPolicies} disabled={policiesBusy}>
                       {policiesBusy ? 'Applying…' : 'Apply'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Optimized auto-scale dialog — cluster-level ARM PATCH /clusters */}
+            <Dialog open={autoscaleOpen} onOpenChange={(_, d) => setAutoscaleOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: 480 }}>
+                <DialogBody>
+                  <DialogTitle>Optimized auto-scale</DialogTitle>
+                  <DialogContent>
+                    {state?.sku && (
+                      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                        Cluster SKU: <strong>{state.sku.name}</strong> ({state.sku.tier} tier
+                        {typeof state.sku.capacity === 'number' ? `, ${state.sku.capacity} instance${state.sku.capacity === 1 ? '' : 's'}` : ''})
+                      </Caption1>
+                    )}
+                    {isDevSku && (
+                      <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Dev/Basic SKU — auto-scale not supported</MessageBarTitle>
+                          Optimized auto-scale requires a Standard-tier ADX SKU
+                          (e.g. <code>Standard_E2ads_v5</code>). This cluster is on{' '}
+                          <strong>{state?.sku?.name}</strong> (Basic tier). Upgrade the
+                          cluster SKU via Manage › Scale up, then return here.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, opacity: isDevSku ? 0.5 : 1 }}>
+                      <div>
+                        <Switch
+                          checked={autoscaleEnabled}
+                          onChange={(_, d) => setAutoscaleEnabled(!!d.checked)}
+                          label={autoscaleEnabled ? 'Optimized auto-scale enabled' : 'Optimized auto-scale disabled'}
+                          disabled={isDevSku}
+                        />
+                        <Caption1>
+                          ADX automatically scales instance count between the minimum and
+                          maximum based on CPU, cache utilisation, and ingestion load.
+                          Predictive + reactive — no custom rules needed.
+                        </Caption1>
+                      </div>
+                      <div>
+                        <Label>Minimum instances</Label>
+                        <SpinButton
+                          min={2}
+                          max={autoscaleMax}
+                          value={autoscaleMin}
+                          onChange={(_, d) => {
+                            const v = d.value ?? Number(d.displayValue);
+                            if (Number.isFinite(v)) setAutoscaleMin(Math.max(2, Math.min(autoscaleMax, Number(v))));
+                          }}
+                          disabled={isDevSku || !autoscaleEnabled}
+                        />
+                        <Caption1>Cluster will never scale below this count (minimum 2).</Caption1>
+                      </div>
+                      <div>
+                        <Label>Maximum instances</Label>
+                        <SpinButton
+                          min={autoscaleMin}
+                          max={1000}
+                          value={autoscaleMax}
+                          onChange={(_, d) => {
+                            const v = d.value ?? Number(d.displayValue);
+                            if (Number.isFinite(v)) setAutoscaleMax(Math.max(autoscaleMin, Math.min(1000, Number(v))));
+                          }}
+                          disabled={isDevSku || !autoscaleEnabled}
+                        />
+                        <Caption1>Cluster will never scale above this count (maximum 1000).</Caption1>
+                      </div>
+                    </div>
+                    {autoscaleResult && (
+                      <MessageBar intent={autoscaleResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
+                        <MessageBarBody>
+                          {autoscaleResult.msg}
+                          {autoscaleResult.provisioningState && (
+                            <> — cluster state: <strong>{autoscaleResult.provisioningState}</strong></>
+                          )}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setAutoscaleOpen(false)}>Close</Button>
+                    <Button appearance="primary" onClick={applyAutoscale} disabled={autoscaleBusy || isDevSku}>
+                      {autoscaleBusy ? 'Applying…' : 'Apply'}
                     </Button>
                   </DialogActions>
                 </DialogBody>

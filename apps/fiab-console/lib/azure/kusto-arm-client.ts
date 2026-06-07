@@ -29,7 +29,22 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC / GCC-High / IL5 deployments set AZURE_CLOUD (or
+// LOOM_ARM_ENDPOINT) so every ARM call below — GET cluster, PATCH SKU, and
+// PATCH optimizedAutoscale — targets the correct ARM host and the token
+// audience matches. Mirrors the pattern in adf-client.ts.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
+const ARM_SCOPE = `${ARM_BASE}/.default`;
 const KUSTO_API = '2023-08-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -79,7 +94,7 @@ export function readKustoArmConfig(): KustoClusterArmConfig {
 }
 
 function clusterUrl(cfg: KustoClusterArmConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
+  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
@@ -95,6 +110,13 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+export interface OptimizedAutoscale {
+  isEnabled: boolean;
+  minimum: number;
+  maximum: number;
+  version: number; // always 1 per the ARM schema
+}
+
 export interface KustoClusterArm {
   id: string;
   name: string;
@@ -102,6 +124,7 @@ export interface KustoClusterArm {
   sku: { name: string; tier: string; capacity?: number };
   state?: string;
   provisioningState?: string;
+  optimizedAutoscale?: OptimizedAutoscale;
 }
 
 function shape(raw: any): KustoClusterArm {
@@ -116,6 +139,14 @@ function shape(raw: any): KustoClusterArm {
     },
     state: raw?.properties?.state,
     provisioningState: raw?.properties?.provisioningState,
+    optimizedAutoscale: raw?.properties?.optimizedAutoscale
+      ? {
+          isEnabled: !!raw.properties.optimizedAutoscale.isEnabled,
+          minimum: Number(raw.properties.optimizedAutoscale.minimum),
+          maximum: Number(raw.properties.optimizedAutoscale.maximum),
+          version: Number(raw.properties.optimizedAutoscale.version ?? 1),
+        }
+      : undefined,
   };
 }
 
@@ -150,6 +181,49 @@ export async function updateKustoClusterSku(
   // ARM returns the full resource on PATCH (or 202 + Location for async).
   if (r.status === 202) {
     return shape({ id: cfg.clusterName, name: cfg.clusterName, sku: body.sku, properties: { provisioningState: 'Updating' } });
+  }
+  return shape(await r.json());
+}
+
+/**
+ * PATCH the cluster's optimizedAutoscale property via ARM.
+ *   properties.optimizedAutoscale = { isEnabled, minimum, maximum, version }
+ * `version` is always 1 (ARM schema requirement).
+ *
+ * ARM rejects this field with HTTP 400 on Dev(No SLA)/Basic-tier SKUs — the
+ * caller surfaces that as an honest SKU gate. Standard-tier clusters apply it
+ * (often as a 202 long-running op).
+ */
+export async function updateKustoClusterAutoscale(
+  isEnabled: boolean,
+  minimum: number,
+  maximum: number,
+): Promise<KustoClusterArm> {
+  const cfg = readKustoArmConfig();
+  const body = {
+    properties: {
+      optimizedAutoscale: { isEnabled, minimum, maximum, version: 1 },
+    },
+  };
+  const r = await callArm(
+    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `updateKustoClusterAutoscale failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    // Long-running ARM op — return a provisional shape so the caller can
+    // surface provisioningState:'Updating' in the receipt MessageBar.
+    return shape({
+      id: cfg.clusterName,
+      name: cfg.clusterName,
+      sku: {},
+      properties: {
+        provisioningState: 'Updating',
+        optimizedAutoscale: { isEnabled, minimum, maximum, version: 1 },
+      },
+    });
   }
   return shape(await r.json());
 }

@@ -114,6 +114,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
+param adxEnableOptimizedAutoscale bool = false
+
+@description('ADX optimized auto-scale minimum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMinimum int = 2
+
+@description('ADX optimized auto-scale maximum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMaximum int = 10
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -615,6 +628,9 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   params: {
     location: location
     skuName: adxSkuName
+    enableOptimizedAutoscale: adxEnableOptimizedAutoscale
+    autoscaleMinimum: adxAutoscaleMinimum
+    autoscaleMaximum: adxAutoscaleMaximum
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }
