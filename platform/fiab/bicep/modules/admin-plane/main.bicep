@@ -1227,6 +1227,13 @@ output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId
 output uamiActivatorId string = identity.outputs.uamiActivatorId
 output uamiActivatorPrincipalId string = identity.outputs.uamiActivatorPrincipalId
+
+// ADX cluster system-assigned MI principal ID — threaded to the DLZ
+// landing-zone module so eventhubs.bicep can grant it Azure Event Hubs Data
+// Receiver (required for KQL-database Event Hub data connections). Empty when
+// ADX is disabled or a BYO existing cluster is used (then bootstrap the grant
+// manually — see docs/fiab/v3-tenant-bootstrap.md).
+output adxClusterPrincipalId string = (adxEnabled && empty(existingAdxClusterName)) ? adxCluster!.outputs.clusterPrincipalId : ''
 output uamiMirroringId string = identity.outputs.uamiMirroringId
 output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 
