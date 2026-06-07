@@ -71,7 +71,19 @@ export interface WarehouseContent {
 export interface LakehouseContent {
   kind: 'lakehouse';
   folders: { path: string; description?: string }[];
-  deltaTables?: { name: string; ddl: string; sampleRows?: any[][] }[];
+  /**
+   * When true the lakehouse uses multi-schema namespaces
+   * (workspace.lakehouse.schema.table) — Azure-native parity with Fabric's
+   * schema-enabled lakehouse. `dbo` is always the immutable default schema.
+   * Tables then live under `Tables/<schema>/<table>/` in ADLS and register as
+   * `<schema>.<view>` in the Synapse serverless user DB. When false/omitted the
+   * lakehouse is the classic flat (`Tables/<table>/`) layout.
+   */
+  schemasEnabled?: boolean;
+  /** Declared non-default schemas. `dbo` is implicit and never listed here. */
+  schemas?: { name: string; description?: string }[];
+  /** `schema` names the schema each Delta table belongs to when schemasEnabled (defaults to 'dbo'). */
+  deltaTables?: { name: string; ddl: string; schema?: string; sampleRows?: any[][] }[];
   shortcuts?: { name: string; target: string; description?: string }[];
 }
 

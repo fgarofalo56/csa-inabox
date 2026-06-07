@@ -206,10 +206,10 @@ export const useJobsStore = create<JobsState>((set, get) => ({
 
   recordLoadToTable: ({ lakehouseName, container, tableName }) => {
     const id = nextId();
-    // The real side effects (notebook prefill in localStorage + navigation) are
-    // owned by the editor. This records the LH-named metadata so the toast can
-    // identify the originating lakehouse; marking success reflects the real
-    // state (notebook opened — the user runs it to write the Delta table).
+    // The real backend work (the no-code Load-to-Table wizard submitting a Spark
+    // job that materializes the Delta table) is owned by the editor/wizard. This
+    // records the LH-named metadata in the registry so the global toaster can
+    // identify the originating lakehouse and the job survives navigation.
     const job: LoomJob = {
       id,
       kind: 'load-to-table',

@@ -57,9 +57,10 @@ export function GlobalJobToaster() {
       } else if (job.kind === 'load-to-table') {
         dispatchToast(
           <Toast>
-            <ToastTitle>Loading {job.fileName} into {job.lakehouseName}</ToastTitle>
+            <ToastTitle>Loading into {job.lakehouseName}</ToastTitle>
             <ToastBody>
-              A notebook has been opened. Run it to write the Delta table.
+              Table “{job.tableName || job.fileName}” is materializing as a Delta
+              table — track progress in Monitor.
             </ToastBody>
           </Toast>,
           { intent: 'info', timeout: 8000 },
