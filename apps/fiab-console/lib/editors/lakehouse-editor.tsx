@@ -1993,7 +1993,14 @@ export function LakehouseEditor({ item, id }: Props) {
                           statsLoading={statsLoading}
                           statsError={statsError}
                           mode={previewMode}
-                          onModeChange={setPreviewMode}
+                          onModeChange={(m) => {
+                            // Fabric's File/Table preview toggle switches the
+                            // lakehouse explorer between its Files and Tables
+                            // sections — navigate there so the control is live,
+                            // not a cosmetic highlight.
+                            setPreviewMode(m);
+                            setTab(m === 'table' ? 'tables' : 'files');
+                          }}
                         />
                       )
                     )}
