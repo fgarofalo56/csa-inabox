@@ -60,6 +60,11 @@ function armBase(): string {
 }
 
 export function devBase(): string {
+  // Sovereign-cloud aware. Prefer the explicit LOOM_SYNAPSE_DEV_SUFFIX
+  // (e.g. `azuresynapse.us` for GCC-High / DoD), otherwise use the
+  // AZURE_SYNAPSE_DEV_HOST_SUFFIX host (default `dev.azuresynapse.net`).
+  const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX;
+  if (suffix) return `https://${ws()}.dev.${suffix}`;
   return `https://${ws()}.${DEV_HOST_SUFFIX}`;
 }
 
@@ -687,6 +692,53 @@ export async function submitLivyStatement(poolName: string, sessionId: number, b
     { method: 'POST', body: JSON.stringify({ code: body.code, kind: body.kind || 'pyspark' }) },
   );
   return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);
+}
+
+/**
+ * Run a single Spark SQL statement against a Synapse Spark pool via Livy and
+ * wait for it to complete. Used for lakehouse schema DDL (CREATE SCHEMA,
+ * ALTER TABLE … RENAME TO, DROP SCHEMA) where the BFF must confirm the DDL
+ * actually committed before patching the registry.
+ *
+ * Creates an interactive `sql`-kind session, polls it to 'idle' (Spark cold
+ * start can take 60-90s), submits the statement, then polls the statement to a
+ * terminal state. Throws the real Spark error verbatim on failure so the BFF
+ * can surface it in a MessageBar. Returns the statement output text on success.
+ */
+export async function runSparkSqlAndWait(poolName: string, sql: string): Promise<{ output: string }> {
+  // 1) Create + poll session to idle.
+  const sess = await createLivySessionAsync(poolName, 'sql', `loom-schema-ddl-${Date.now()}`);
+  let sessState = sess.state;
+  for (let i = 0; i < 60 && sessState !== 'idle'; i++) {
+    if (sessState === 'error' || sessState === 'dead' || sessState === 'killed') {
+      throw new Error(`Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready`);
+    }
+    await new Promise((res) => setTimeout(res, 3000));
+    sessState = (await getLivySession(poolName, sess.id)).state;
+  }
+  if (sessState !== 'idle') {
+    throw new Error(`Spark session ${sess.id} not ready after 3 min — current state '${sessState}'. Pool may be undersized or auto-paused.`);
+  }
+
+  // 2) Submit the SQL statement.
+  const stmt = await submitLivyStatement(poolName, sess.id, { code: sql, kind: 'sql' });
+
+  // 3) Poll the statement to a terminal state.
+  let st: { id: number; state: string; output?: any } = { id: stmt.id, state: stmt.state };
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    if (st.state === 'available' || st.state === 'error' || st.state === 'cancelled') break;
+    await new Promise((res) => setTimeout(res, 2000));
+    st = await getLivyStatement(poolName, sess.id, stmt.id);
+  }
+  const out = st.output || {};
+  // Livy statement output: { status: 'ok' | 'error', evalue?, traceback?, data? }
+  if (st.state !== 'available' || out.status === 'error') {
+    const detail = out.evalue || (Array.isArray(out.traceback) ? out.traceback.join('') : '') || `statement state '${st.state}'`;
+    throw new Error(`Spark SQL failed: ${detail}`);
+  }
+  const text = out?.data?.['text/plain'] || '';
+  return { output: typeof text === 'string' ? text : JSON.stringify(text) };
 }
 
 /**

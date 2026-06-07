@@ -35,6 +35,7 @@ import { AppLauncher } from './app-launcher';
 import { TabStrip } from './tab-strip';
 import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
+import { GlobalJobToaster } from './global-job-toaster';
 
 interface MeResponse {
   authenticated: boolean;
@@ -233,6 +234,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <HelpCopilotWidget />
       <FeedbackWidget />
       <GlobalErrorListeners />
+      <GlobalJobToaster />
     </div>
   );
 }
