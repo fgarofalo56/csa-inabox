@@ -499,3 +499,61 @@ object id.
 limitation). Until a `LOOM_STORAGE_ENDPOINT_SUFFIX` is introduced, only
 **same-account** references are supported in sovereign clouds; cross-account
 references there are blocked until the DFS host is parameterized.
+
+## Notebook Pylance / pylsp IntelliSense bridge
+
+The notebook cell editor (Monaco) gets Pylance-grade Python IntelliSense
+(completions, hover docstrings, signature help, diagnostics) from
+**python-lsp-server + pyright** running **in the Console container** — no
+Fabric, no external call, all clouds. It is **opt-in** so the default image is
+untouched.
+
+To enable it:
+
+1. **Build the Console image with the pylsp layer.** CI passes the build-arg for
+   the Data Science notebook variant:
+
+   ```bash
+   docker build apps/fiab-console --build-arg LOOM_INCLUDE_PYLSP=true -t <acr>/loom-console:<tag>
+   ```
+
+   Without this layer the bridge simply stays off (probe reports
+   `lspAvailable:false`) and cells keep Monaco's built-in completions.
+
+2. **Turn the bridge on** by setting the Console app env var (Bicep param
+   `pylspEnabled` on `admin-plane/app-deployments.bicep`, surfaced as
+   `LOOM_PYLSP_ENABLED`):
+
+   ```bicep
+   // params/<cloud>-full.bicepparam
+   param pylspEnabled = true
+   ```
+
+   `instrumentation.ts` then attaches the WebSocket bridge to the Next HTTP
+   server on `/api/notebook/*/lsp` (same port, same Container Apps ingress;
+   WebSockets work on the default `http` transport). The upgrade is authenticated
+   with the encrypted `loom_session` cookie.
+
+3. **(Optional) Curated AML Environment.** `deploy-planner/ml-workspace.bicep`
+   ships `loom-pylsp-env` (jupyter-lsp + python-lsp-server + pyright over
+   pandas/numpy/scikit-learn) so AML compute instances + JupyterLab get the same
+   IntelliSense and the VS Code for the Web path uses a known-good kernel.
+
+### "Open in VS Code for the Web" deep-link (Commercial only)
+
+The notebook header shows an **Open in VS Code for the Web** button that
+deep-links to the AML compute-instance VS Code surface. Microsoft does not offer
+VS Code for the Web in GCC / GCC-High / DoD, so the button is gated on
+`CSA_LOOM_BOUNDARY === 'Commercial'` **and** only renders when both AML values
+are configured (no dead button):
+
+```bicep
+param amlInstance     = '<aml-compute-instance-name>'   // LOOM_AML_INSTANCE
+param amlWorkspaceId  = '<aml-workspace-arm-id-or-wsId>' // LOOM_AML_WORKSPACE_ID
+// param amlPortalBase = 'https://ml.azure.com'          // default
+```
+
+These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`,
+`LOOM_AML_WORKSPACE_ID`, `LOOM_AML_PORTAL_BASE`. The gate is evaluated
+server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
+directly.

@@ -11,8 +11,9 @@ const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
   // mssql + tedious use dynamic requires that break Next.js bundling.
   // Externalize so they load from node_modules at runtime in the
-  // standalone server output.
-  serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake'],
+  // standalone server output. `ws` powers the Pylance/pylsp WebSocket bridge
+  // (lib/lsp/pylsp-bridge.mjs) and must load natively, not be webpack-bundled.
+  serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake', 'ws'],
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
     // Next.js 15: instrumentation.ts is enabled by default; instrumentationHook
