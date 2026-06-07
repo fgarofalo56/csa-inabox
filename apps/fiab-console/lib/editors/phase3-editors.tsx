@@ -837,6 +837,19 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [getDataHubName, setGetDataHubName] = useState('');
   const [getDataConsumer, setGetDataConsumer] = useState('$Default');
   const [getDataOneLakePath, setGetDataOneLakePath] = useState('');
+  const [getDataFormat, setGetDataFormat] = useState<'auto' | 'csv' | 'json' | 'multijson' | 'parquet'>('auto');
+  // ARM-populated Event Hub pickers (from /api/eventhubs/{hubs,consumergroups}).
+  const [ehHubs, setEhHubs] = useState<string[]>([]);
+  const [ehHubsErr, setEhHubsErr] = useState<string | null>(null);
+  const [ehHubsLoading, setEhHubsLoading] = useState(false);
+  const [ehConsumerGroups, setEhConsumerGroups] = useState<string[]>(['$Default']);
+  const [ehCgLoading, setEhCgLoading] = useState(false);
+  // Loom medallion container quick-pick (from /api/loom/storage-paths).
+  const [loomContainers, setLoomContainers] = useState<Array<{ label: string; url: string }>>([]);
+  // Schema preview before commit.
+  const [schemaPreview, setSchemaPreview] = useState<{ columns: string[]; sampleRows: string[][]; detectedFormat?: string; sampleRowCount?: number } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [policiesOpen, setPoliciesOpen] = useState(false);
   const [hotCacheDays, setHotCacheDays] = useState<number>(7);
   const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
@@ -938,7 +951,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             kind: 'onelake', database: selectedDb, table: getDataTable.trim(),
-            oneLakePath: getDataOneLakePath.trim(),
+            oneLakePath: getDataOneLakePath.trim(), format: getDataFormat,
           }),
         });
         const ct = r.headers.get('content-type') || '';
@@ -950,7 +963,126 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setGetDataBusy(false);
     }
-  }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath]);
+  }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath, getDataFormat]);
+
+  // ---- Get-Data wizard: ARM-populated pickers + schema preview ----
+
+  // Load the deployment's Event Hubs from real ARM (/api/eventhubs/hubs) when
+  // the dialog opens in eventhub mode. Honest 503 gate is surfaced verbatim.
+  useEffect(() => {
+    if (!getDataOpen || getDataMode !== 'eventhub') return;
+    let cancelled = false;
+    setEhHubsLoading(true);
+    setEhHubsErr(null);
+    fetch('/api/eventhubs/hubs')
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (cancelled) return;
+        if (j?.ok) setEhHubs((j.hubs as Array<{ name: string }>).map((h) => h.name).filter(Boolean));
+        else if (j?.code === 'not_configured') setEhHubsErr(`Event Hubs namespace not configured — set ${j.missing}.`);
+        else setEhHubsErr(j?.error || 'Failed to list event hubs');
+      })
+      .catch((e: any) => { if (!cancelled) setEhHubsErr(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setEhHubsLoading(false); });
+    return () => { cancelled = true; };
+  }, [getDataOpen, getDataMode]);
+
+  // Load consumer groups for the chosen hub (real ARM list).
+  useEffect(() => {
+    if (!getDataHubName) { setEhConsumerGroups(['$Default']); return; }
+    let cancelled = false;
+    setEhCgLoading(true);
+    fetch(`/api/eventhubs/consumergroups?eventHub=${encodeURIComponent(getDataHubName)}`)
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (cancelled) return;
+        if (j?.ok) {
+          const names = (j.consumerGroups as Array<{ name: string }>).map((c) => c.name).filter(Boolean);
+          setEhConsumerGroups(names.length ? names : ['$Default']);
+        }
+      })
+      .catch(() => { /* keep the $Default fallback */ })
+      .finally(() => { if (!cancelled) setEhCgLoading(false); });
+    return () => { cancelled = true; };
+  }, [getDataHubName]);
+
+  // Load Loom medallion container roots for the ADLS quick-pick (env-sourced).
+  useEffect(() => {
+    if (!getDataOpen) return;
+    let cancelled = false;
+    fetch('/api/loom/storage-paths')
+      .then((r) => r.json())
+      .then((j: any) => { if (!cancelled && j?.ok) setLoomContainers(j.containers || []); })
+      .catch(() => { /* quick-pick row simply stays hidden */ });
+    return () => { cancelled = true; };
+  }, [getDataOpen]);
+
+  // Reset the picker/preview state whenever the source mode changes so a stale
+  // schema from a previous source never lingers.
+  useEffect(() => {
+    setSchemaPreview(null);
+    setPreviewErr(null);
+    setGetDataResult(null);
+  }, [getDataMode, getDataOpen]);
+
+  // File mode: detect schema client-side from the first 16 KB (no round-trip).
+  useEffect(() => {
+    if (getDataMode !== 'file' || !getDataFile) { return; }
+    const slice = getDataFile.slice(0, 16 * 1024);
+    slice.text().then((text) => {
+      try {
+        const lower = (getDataFile.name || '').toLowerCase();
+        const isJson = /\.(json|jsonl|ndjson)$/.test(lower) || text.trim().startsWith('[') || text.trim().startsWith('{');
+        if (isJson) {
+          const trimmed = text.trim();
+          let rows: any[] = [];
+          if (trimmed.startsWith('[')) {
+            // tolerate truncation: parse leading complete objects
+            try { rows = JSON.parse(trimmed); } catch { rows = []; }
+          } else {
+            rows = trimmed.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          }
+          if (Array.isArray(rows) && rows.length) {
+            const keys = Array.from(new Set(rows.flatMap((r) => Object.keys(r ?? {}))));
+            const sampleRows = rows.slice(0, 5).map((r) => keys.map((k) => { const v = r?.[k]; return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); }));
+            setSchemaPreview({ columns: keys, sampleRows, detectedFormat: 'json', sampleRowCount: rows.length });
+            return;
+          }
+        }
+        // CSV fallback
+        const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+        if (lines.length && !/\n$/.test(text) && lines.length > 1) lines.pop();
+        if (!lines.length) { setSchemaPreview(null); return; }
+        const header = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+        const sampleRows = lines.slice(1, 6).map((l) => l.split(',').map((c) => c.replace(/^"|"$/g, '')));
+        setSchemaPreview({ columns: header, sampleRows, detectedFormat: 'csv', sampleRowCount: Math.max(0, lines.length - 1) });
+      } catch {
+        setSchemaPreview(null);
+      }
+    }).catch(() => setSchemaPreview(null));
+  }, [getDataMode, getDataFile]);
+
+  // URL mode: peek the blob/ADLS object on the server (MI or SAS) and preview.
+  const onPreview = useCallback(async () => {
+    if (!getDataOneLakePath.trim()) return;
+    setPreviewBusy(true);
+    setPreviewErr(null);
+    setSchemaPreview(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/ingest/preview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: getDataOneLakePath.trim(), format: getDataFormat }),
+      });
+      const j = await r.json();
+      if (j?.ok) setSchemaPreview({ columns: j.columns, sampleRows: j.sampleRows, detectedFormat: j.detectedFormat, sampleRowCount: j.sampleRowCount });
+      else setPreviewErr(j?.error || 'preview failed');
+    } catch (e: any) {
+      setPreviewErr(e?.message || String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [id, getDataOneLakePath, getDataFormat]);
 
   // Apply per-database caching + retention policies via the .alter database
   // policy KQL management commands. Also flips the OneLake availability
@@ -1186,23 +1318,122 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       )}
                       {getDataMode === 'eventhub' && (
                         <>
+                          {ehHubsErr && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>{ehHubsErr}</MessageBarBody>
+                            </MessageBar>
+                          )}
                           <div>
-                            <Label>Event Hub name</Label>
-                            <Input value={getDataHubName} onChange={(_, d) => setGetDataHubName(d.value)} placeholder="orders-hub" />
+                            <Label>Event Hub</Label>
+                            {ehHubsLoading ? (
+                              <Spinner size="tiny" label="Loading event hubs…" />
+                            ) : (
+                              <Select
+                                value={getDataHubName}
+                                onChange={(_, d) => { setGetDataHubName(d.value); setGetDataConsumer('$Default'); }}
+                                disabled={!!ehHubsErr || ehHubs.length === 0}
+                              >
+                                <option value="">— select an event hub —</option>
+                                {ehHubs.map((h) => <option key={h} value={h}>{h}</option>)}
+                              </Select>
+                            )}
                           </div>
                           <div>
                             <Label>Consumer group</Label>
-                            <Input value={getDataConsumer} onChange={(_, d) => setGetDataConsumer(d.value)} placeholder="$Default" />
+                            {ehCgLoading ? (
+                              <Spinner size="tiny" label="Loading consumer groups…" />
+                            ) : (
+                              <Select
+                                value={getDataConsumer}
+                                onChange={(_, d) => setGetDataConsumer(d.value)}
+                                disabled={!getDataHubName}
+                              >
+                                {ehConsumerGroups.map((cg) => <option key={cg} value={cg}>{cg}</option>)}
+                              </Select>
+                            )}
                           </div>
+                          {getDataHubName && (
+                            <MessageBar intent="info">
+                              <MessageBarBody>
+                                Streaming connection <strong>{getDataHubName}</strong> / <strong>{getDataConsumer || '$Default'}</strong>.
+                                Schema is inferred from the first arriving JSON events; rows land as the data connection warms up (typically &lt;60s).
+                              </MessageBarBody>
+                            </MessageBar>
+                          )}
                         </>
                       )}
                       {getDataMode === 'onelake' && (
-                        <div>
-                          <Label>OneLake path</Label>
-                          <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/" />
-                        </div>
+                        <>
+                          <div>
+                            <Label>Storage path (ADLS Gen2 abfss:// or Blob https:// with SAS)</Label>
+                            <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/data.csv" />
+                          </div>
+                          {loomContainers.length > 0 && (
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <Caption1>Quick-pick:</Caption1>
+                              {loomContainers.map((c) => (
+                                <Button
+                                  key={c.label}
+                                  size="small"
+                                  appearance="outline"
+                                  onClick={() => setGetDataOneLakePath(c.url.endsWith('/') ? c.url : `${c.url}/`)}
+                                >
+                                  {c.label}
+                                </Button>
+                              ))}
+                            </div>
+                          )}
+                          <div>
+                            <Label>Format</Label>
+                            <Select value={getDataFormat} onChange={(_, d) => setGetDataFormat(d.value as any)}>
+                              <option value="auto">Auto-detect (from extension)</option>
+                              <option value="csv">CSV</option>
+                              <option value="json">JSON (one object per line)</option>
+                              <option value="multijson">MultiJSON (array)</option>
+                              <option value="parquet">Parquet</option>
+                            </Select>
+                          </div>
+                          <div>
+                            <Button
+                              appearance="outline"
+                              onClick={onPreview}
+                              disabled={previewBusy || !getDataOneLakePath.trim()}
+                            >
+                              {previewBusy ? 'Previewing…' : 'Preview schema'}
+                            </Button>
+                          </div>
+                          {previewErr && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>{previewErr}</MessageBarBody>
+                            </MessageBar>
+                          )}
+                        </>
                       )}
                     </div>
+                    {schemaPreview && schemaPreview.columns.length > 0 && (
+                      <div style={{ marginTop: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8 }}>
+                        <Caption1><strong>Detected schema</strong>{schemaPreview.detectedFormat ? ` (${schemaPreview.detectedFormat})` : ''}</Caption1>
+                        <div style={{ overflowX: 'auto', marginTop: 4 }}>
+                          <Table size="small" aria-label="Detected schema preview">
+                            <TableHeader>
+                              <TableRow>
+                                {schemaPreview.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {schemaPreview.sampleRows.slice(0, 3).map((row, i) => (
+                                <TableRow key={i}>
+                                  {schemaPreview.columns.map((_, j) => (
+                                    <TableCell key={j} className={s.cell}>{String(row?.[j] ?? '')}</TableCell>
+                                  ))}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                        <Caption1>{schemaPreview.columns.length} columns detected · {schemaPreview.sampleRows.length} sample rows shown.</Caption1>
+                      </div>
+                    )}
                     {getDataResult && (
                       <MessageBar intent={getDataResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
                         <MessageBarBody>
