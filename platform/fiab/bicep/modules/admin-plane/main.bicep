@@ -46,8 +46,8 @@ param atlasOnAksEnabled bool
 @description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
 param databricksUnityCatalogEnabled bool = false
 
-@description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy; set to "databricks" to opt the notebook editor into the Databricks Execution Context API instead. Must NOT be "databricks" at IL5.')
-@allowed(['', 'synapse', 'databricks'])
+@description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy. Set to "databricks" to opt into the Databricks Execution Context API, or "aml-ci" to execute against an Azure ML Compute-Instance Jupyter kernel (listNotebookAccessToken → Jupyter contents + kernel WebSocket; reuses LOOM_AML_*/LOOM_FOUNDRY_* + LOOM_SUBSCRIPTION_ID, no new vars). Must NOT be "databricks" at IL5.')
+@allowed(['', 'synapse', 'databricks', 'aml-ci'])
 param loomNotebookBackend string = ''
 
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')

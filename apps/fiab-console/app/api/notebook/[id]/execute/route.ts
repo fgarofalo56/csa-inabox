@@ -116,6 +116,53 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ---- AML Compute-Instance Jupyter kernel opt-in branch ----
+  if (resolveNotebookBackend() === 'aml-ci') {
+    const {
+      isJupyterCiConfigured, getNotebookToken, sessionsCreate, executeViaKernelWs,
+    } = await import('@/lib/clients/jupyter-server-client');
+    if (!isJupyterCiConfigured()) {
+      return NextResponse.json(
+        {
+          ok: false, code: 'not_configured',
+          error: 'AML Compute-Instance Jupyter backend selected but LOOM_AML_WORKSPACE / LOOM_SUBSCRIPTION_ID are unset.',
+          missing: ['LOOM_AML_WORKSPACE', 'LOOM_SUBSCRIPTION_ID'],
+        },
+        { status: 503 },
+      );
+    }
+    const notebookPath: string = typeof body?.notebookPath === 'string' ? body.notebookPath.trim() : '';
+    const kernelName: string = typeof body?.kernelName === 'string' && body.kernelName.trim() ? body.kernelName.trim() : 'python3';
+    let kernelId: string = typeof body?.kernelId === 'string' ? body.kernelId.trim() : '';
+    let amlSessionId: string = typeof body?.sessionId === 'string' ? body.sessionId.trim() : '';
+    try {
+      const token = await getNotebookToken();
+      // Allocate a session (and a kernel on a running CI) when one wasn't reused.
+      if (!kernelId) {
+        if (!notebookPath) {
+          return NextResponse.json({ ok: false, error: 'notebookPath is required to start a kernel session' }, { status: 400 });
+        }
+        const sess = await sessionsCreate(token, notebookPath, kernelName);
+        kernelId = sess.kernelId;
+        amlSessionId = sess.sessionId;
+      }
+      // The kernel WebSocket execute is synchronous — it returns the normalized
+      // output once execute_reply arrives, so there is no separate poll step.
+      const output = await executeViaKernelWs(token, kernelId, amlSessionId, runCode);
+      return NextResponse.json({
+        ok: output.status !== 'error',
+        backend: 'aml-ci',
+        sessionId: amlSessionId,
+        kernelId,
+        state: output.status === 'error' ? 'error' : 'available',
+        output,
+      });
+    } catch (e: any) {
+      const status = typeof e?.status === 'number' && e.status >= 400 && e.status < 600 ? e.status : 502;
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+    }
+  }
+
   // ---- Synapse Livy default ----
   const g = synapseGate(); if (g) return g;
   const pool: string = typeof body?.pool === 'string' ? body.pool.trim() : '';
@@ -178,6 +225,29 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, backend: 'databricks', state: livyState, output: done ? normalizeDbxResults(st.status || '', st.results) : null });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  }
+
+  // AML CI: execute is synchronous over the kernel WebSocket (the POST already
+  // returned the output), so GET only reports session/kernel state — used by the
+  // editor to poll while a cold compute instance is still warming.
+  if (resolveNotebookBackend() === 'aml-ci') {
+    const { isJupyterCiConfigured, getNotebookToken, sessionsGet } = await import('@/lib/clients/jupyter-server-client');
+    if (!isJupyterCiConfigured()) {
+      return NextResponse.json(
+        { ok: false, code: 'not_configured', error: 'AML Compute-Instance Jupyter backend not configured.', missing: ['LOOM_AML_WORKSPACE', 'LOOM_SUBSCRIPTION_ID'] },
+        { status: 503 },
+      );
+    }
+    const sid = req.nextUrl.searchParams.get('sessionId')?.trim() || '';
+    if (!sid) return NextResponse.json({ ok: false, error: 'sessionId query param required' }, { status: 400 });
+    try {
+      const token = await getNotebookToken();
+      const s = await sessionsGet(token, sid);
+      return NextResponse.json({ ok: true, backend: 'aml-ci', sessionId: s.sessionId, kernelId: s.kernelId, state: s.state || 'unknown', output: null });
+    } catch (e: any) {
+      const status = typeof e?.status === 'number' && e.status >= 400 && e.status < 600 ? e.status : 502;
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
     }
   }
 
