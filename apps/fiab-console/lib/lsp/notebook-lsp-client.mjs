@@ -18,8 +18,8 @@
  * pandas-stubs, etc.) running in the Console container — no canned lists.
  *
  * Plain .mjs (excluded from the TS program: tsconfig has allowJs:false and
- * includes only **/*.ts(x)). Dynamically imported from code-cell.tsx so SSR
- * never touches it.
+ * includes only .ts / .tsx sources). Dynamically imported from code-cell.tsx so
+ * SSR never touches it.
  *
  * Returns a disposer; call it on cell unmount / model dispose.
  */
