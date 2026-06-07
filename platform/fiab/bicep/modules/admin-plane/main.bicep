@@ -799,6 +799,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // Full ARM resource id of the Event Hubs namespace — consumed by the
+            // eventhouse ingest route to wire an ADX → Event Hub data connection
+            // (Get-Data wizard, streaming source). Derived from the same
+            // namespace/RG/sub the navigator uses (RG/sub fall back to the DLZ).
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}' }
+            // Cloud-aware ARM base. Commercial → management.azure.com (default);
+            // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
+            // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
+            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these
