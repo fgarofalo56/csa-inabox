@@ -30,8 +30,10 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// Sovereign-cloud aware ARM endpoint. Defaults to the public cloud; operators
+// in GCC-High / IL5 set LOOM_ARM_ENDPOINT='https://management.usgovcloudapi.net'.
+const ARM = process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
+const ARM_SCOPE = `${ARM}/.default`;
 const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
 const LA_SCOPE = `${LA_ENDPOINT}/.default`;
 
@@ -517,6 +519,10 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
   'microsoft.kusto/clusters': [
     { metric: 'CPU', aggregation: 'Average', label: 'CPU %' },
     { metric: 'IngestionUtilization', aggregation: 'Average', label: 'Ingestion util %' },
+    { metric: 'CacheUtilizationFactor', aggregation: 'Average', label: 'Cache util %' },
+    { metric: 'TotalNumberOfConcurrentQueries', aggregation: 'Average', label: 'Concurrent queries' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
     { metric: 'KeepAlive', aggregation: 'Average', label: 'Keep-alive' },
   ],
   'microsoft.synapse/workspaces': [

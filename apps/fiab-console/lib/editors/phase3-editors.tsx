@@ -33,7 +33,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, Switch,
+  Label, Select, Textarea, Switch, ProgressBar,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -474,10 +474,348 @@ interface EventhouseState {
   error?: string;
 }
 
+// ----- Eventhouse Capacity / throttle panel -----
+// Azure-native default: the shared Azure Data Explorer cluster IS the
+// eventhouse capacity backend (no Fabric / OneLake). Reads the live capacity
+// policy + slot utilization from `.show cluster policy capacity` / `.show
+// capacity`, layers Azure Monitor throttle metrics on top, and writes the
+// ingestion capacity policy back via `.alter-merge cluster policy capacity`.
+// See app/api/items/eventhouse/[id]/capacity/route.ts.
+
+interface CapacitySlot {
+  resource: string;
+  total: number;
+  consumed: number;
+  remaining: number;
+  origin: string;
+}
+interface CapacityMetricPoint { timeStamp: string; value: number | null }
+interface CapacityMetric { name: string; unit: string; aggregation: string; points: CapacityMetricPoint[] }
+interface CapacityResponse {
+  ok: boolean;
+  error?: string;
+  configGate?: string;
+  kustoClusterArmId?: string;
+  capacityPolicy?: Record<string, any>;
+  liveCapacity?: CapacitySlot[];
+  metrics?: CapacityMetric[];
+  metricsGate?: string;
+}
+
+/** Sum every point in a metric series (for Total-aggregated throttle counts). */
+function metricSum(metrics: CapacityMetric[] | undefined, name: string): number | null {
+  const m = metrics?.find((x) => x.name === name);
+  if (!m) return null;
+  let any = false;
+  let total = 0;
+  for (const p of m.points) {
+    if (typeof p.value === 'number') { total += p.value; any = true; }
+  }
+  return any ? total : null;
+}
+
+/** Latest non-null point in a metric series (for util/CPU gauges). */
+function metricLatest(metrics: CapacityMetric[] | undefined, name: string): number | null {
+  const m = metrics?.find((x) => x.name === name);
+  if (!m) return null;
+  for (let i = m.points.length - 1; i >= 0; i--) {
+    if (typeof m.points[i].value === 'number') return m.points[i].value as number;
+  }
+  return null;
+}
+
+function utilColor(pct: number): string {
+  if (pct >= 90) return tokens.colorPaletteRedForeground1;
+  if (pct >= 70) return tokens.colorPaletteDarkOrangeForeground1;
+  return tokens.colorPaletteGreenForeground1;
+}
+
+export function EventhouseCapacityPanel({ id }: { id: string }) {
+  const s = useStyles();
+  const [data, setData] = useState<CapacityResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Editable ingestion capacity policy fields.
+  const [editMaxOps, setEditMaxOps] = useState<number>(512);
+  const [editCoreCoeff, setEditCoreCoeff] = useState<number>(0.75);
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState<{ ok: boolean; applied?: string; effectivePolicy?: string; error?: string } | null>(null);
+
+  const loadCapacity = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/capacity`);
+      const j = (await r.json()) as CapacityResponse;
+      setData(j);
+      const ing = j.capacityPolicy?.IngestionCapacity;
+      if (ing) {
+        if (typeof ing.ClusterMaximumConcurrentOperations === 'number') setEditMaxOps(ing.ClusterMaximumConcurrentOperations);
+        if (typeof ing.CoreUtilizationCoefficient === 'number') setEditCoreCoeff(ing.CoreUtilizationCoefficient);
+      }
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => { loadCapacity(); }, [loadCapacity]);
+
+  const applyCapacityPolicy = useCallback(async () => {
+    setApplying(true);
+    setApplyResult(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/capacity`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          patch: {
+            IngestionCapacity: {
+              ClusterMaximumConcurrentOperations: Math.floor(editMaxOps),
+              CoreUtilizationCoefficient: editCoreCoeff,
+            },
+          },
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      setApplyResult(j);
+      if (j.ok) loadCapacity();
+    } catch (e: any) {
+      setApplyResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setApplying(false);
+    }
+  }, [id, editMaxOps, editCoreCoeff, loadCapacity]);
+
+  if (loading && !data) return <Spinner size="small" label="Loading capacity policy…" />;
+  if (err) {
+    return (
+      <MessageBar intent="error">
+        <MessageBarBody><MessageBarTitle>Capacity unavailable</MessageBarTitle>{err}</MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (data && !data.ok) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>Azure Data Explorer not configured</MessageBarTitle>
+          {data.error || 'ADX cluster unreachable.'}
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (!data) return null;
+
+  const policy = data.capacityPolicy || {};
+  const ingestion = (policy.IngestionCapacity || {}) as Record<string, any>;
+  const exportCap = (policy.ExportCapacity || {}) as Record<string, any>;
+  const slots = data.liveCapacity || [];
+  const ingestionSlot = slots.find((x) => x.resource === 'ingestions');
+  const throttledQueries = metricSum(data.metrics, 'TotalNumberOfThrottledQueries');
+  const throttledCommands = metricSum(data.metrics, 'TotalNumberOfThrottledCommands');
+  const ingestUtil = metricLatest(data.metrics, 'IngestionUtilization');
+  const cacheUtil = metricLatest(data.metrics, 'CacheUtilizationFactor');
+  const cpu = metricLatest(data.metrics, 'CPU');
+  const concurrentQueries = metricLatest(data.metrics, 'TotalNumberOfConcurrentQueries');
+
+  const throttleActive =
+    (ingestionSlot?.remaining === 0) ||
+    (typeof throttledQueries === 'number' && throttledQueries > 0) ||
+    (typeof throttledCommands === 'number' && throttledCommands > 0);
+
+  const gaugeCards: { label: string; value: number | null; pct?: boolean }[] = [
+    { label: 'Ingestion utilization', value: ingestUtil, pct: true },
+    { label: 'Cache utilization', value: cacheUtil, pct: true },
+    { label: 'CPU', value: cpu, pct: true },
+    { label: 'Concurrent queries', value: concurrentQueries },
+    { label: 'Throttled queries (15m)', value: throttledQueries },
+    { label: 'Throttled commands (15m)', value: throttledCommands },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Section 1 — Throttle state */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <Subtitle2>Throttle state</Subtitle2>
+        <Badge appearance="filled" color={throttleActive ? 'danger' : 'success'}>
+          {throttleActive ? 'Throttled' : 'Healthy'}
+        </Badge>
+        <Button appearance="outline" size="small" icon={<ArrowSync20Regular />} onClick={loadCapacity}>Refresh</Button>
+        {ingestionSlot && (
+          <Caption1>
+            Ingestion slots — consumed {ingestionSlot.consumed} / {ingestionSlot.total} ({ingestionSlot.remaining} remaining), origin {ingestionSlot.origin || 'n/a'}
+          </Caption1>
+        )}
+      </div>
+
+      {data.metricsGate && (
+        <MessageBar intent="warning">
+          <MessageBarBody><MessageBarTitle>Live metrics gated</MessageBarTitle>{data.metricsGate}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Live throttle / utilization gauges (Azure Monitor) */}
+      <div className={s.cardGrid}>
+        {gaugeCards.map((g) => {
+          const has = typeof g.value === 'number';
+          const display = !has ? '—' : g.pct ? `${Math.round(g.value as number)}%` : String(Math.round(g.value as number));
+          const pct = g.pct && has ? Math.max(0, Math.min(100, g.value as number)) : undefined;
+          return (
+            <div key={g.label} className={s.card}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{g.label}</Caption1>
+              <div style={{ fontSize: 22, fontWeight: 600, color: pct !== undefined ? utilColor(pct) : undefined }}>{display}</div>
+              {pct !== undefined && (
+                <ProgressBar value={pct / 100} thickness="large" color={pct >= 90 ? 'error' : pct >= 70 ? 'warning' : 'success'} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Section 2 — Capacity slots (.show capacity) */}
+      <div>
+        <Subtitle2>Capacity slots</Subtitle2>
+        <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+          Live cluster slot utilization across every data-management operation type (from <code>.show capacity</code>).
+        </Caption1>
+        {slots.length === 0 && <Caption1>No capacity rows returned.</Caption1>}
+        {slots.length > 0 && (
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Cluster capacity slots">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Resource</TableHeaderCell>
+                  <TableHeaderCell>Total</TableHeaderCell>
+                  <TableHeaderCell>Consumed</TableHeaderCell>
+                  <TableHeaderCell>Remaining</TableHeaderCell>
+                  <TableHeaderCell>Utilization</TableHeaderCell>
+                  <TableHeaderCell>Origin</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {slots.map((slot) => {
+                  const util = slot.total > 0 ? Math.round((slot.consumed / slot.total) * 100) : 0;
+                  return (
+                    <TableRow key={slot.resource}>
+                      <TableCell>{slot.resource}</TableCell>
+                      <TableCell>{slot.total}</TableCell>
+                      <TableCell>{slot.consumed}</TableCell>
+                      <TableCell>{slot.remaining}</TableCell>
+                      <TableCell>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 120 }}>
+                          <ProgressBar value={util / 100} color={util >= 90 ? 'error' : util >= 70 ? 'warning' : 'success'} style={{ flex: 1 }} />
+                          <span style={{ color: utilColor(util) }}>{util}%</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{slot.origin || '—'}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      {/* Section 3 — Ingestion capacity policy (editable) */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Subtitle2>Ingestion capacity policy</Subtitle2>
+        <Caption1>
+          Caps total concurrent ingestion operations. Effective slots ={' '}
+          <code>Minimum(ClusterMaximumConcurrentOperations, nodes × max(1, cores × CoreUtilizationCoefficient))</code>.
+          Applied via <code>.alter-merge cluster policy capacity</code> — changes can take up to an hour to take effect.
+          Microsoft recommends consulting support before changing capacity.
+        </Caption1>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <Field label="ClusterMaximumConcurrentOperations" hint="Hard cap on concurrent ingestions (long).">
+            <Input
+              type="number"
+              value={String(editMaxOps)}
+              onChange={(_: unknown, d: any) => setEditMaxOps(Math.max(1, parseInt(d.value, 10) || 1))}
+            />
+          </Field>
+          <Field label="CoreUtilizationCoefficient" hint="Fraction of cores used in the formula (0–1, real).">
+            <Input
+              type="number"
+              step={0.05}
+              min={0}
+              max={1}
+              value={String(editCoreCoeff)}
+              onChange={(_: unknown, d: any) => {
+                const n = parseFloat(d.value);
+                setEditCoreCoeff(Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0);
+              }}
+            />
+          </Field>
+        </div>
+        <div>
+          <Button appearance="primary" icon={<Save20Regular />} onClick={applyCapacityPolicy} disabled={applying}>
+            {applying ? 'Applying…' : 'Apply ingestion policy'}
+          </Button>
+        </div>
+        {applyResult && (
+          <MessageBar intent={applyResult.ok ? 'success' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>{applyResult.ok ? 'Capacity policy applied' : 'Apply failed'}</MessageBarTitle>
+              {applyResult.ok
+                ? <span style={{ fontFamily: 'Consolas, monospace', fontSize: 12, wordBreak: 'break-all' }}>
+                    {applyResult.applied}
+                    {applyResult.effectivePolicy ? ` → ${applyResult.effectivePolicy.slice(0, 300)}` : ''}
+                  </span>
+                : applyResult.error}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+      </div>
+
+      {/* Section 4 — Export capacity (read-only) */}
+      <div className={s.card}>
+        <Subtitle2>Export capacity</Subtitle2>
+        <Caption1 style={{ display: 'block' }}>
+          ClusterMaximumConcurrentOperations: <strong>{exportCap.ClusterMaximumConcurrentOperations ?? '—'}</strong>
+          {'  ·  '}CoreUtilizationCoefficient: <strong>{exportCap.CoreUtilizationCoefficient ?? '—'}</strong>
+        </Caption1>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Read-only here. Use <code>.alter-merge cluster policy capacity</code> with an <code>ExportCapacity</code> patch to tune export concurrency.
+        </Caption1>
+      </div>
+
+      {/* Section 5 — Per-DB CU% honest-gate */}
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Per-database CU% usage</MessageBarTitle>
+          Per-database CU% is a Microsoft Fabric capacity-billing concept (F/P SKU) that does not exist on the
+          Azure-native ADX backend — on the shared cluster, capacity is pooled at the cluster level. The Capacity
+          slots table above shows cluster-wide slot utilization across all databases. Set
+          <code> LOOM_KUSTO_FABRIC_MANAGED=true</code> only if you have opted into a Fabric-managed eventhouse.
+        </MessageBarBody>
+      </MessageBar>
+
+      {/* Section 6 — Mission-critical exempt honest-gate */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <Subtitle2>Mission-critical exempt</Subtitle2>
+        <Switch checked={false} disabled label="Exempt from capacity throttling (not applicable to ADX)" />
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Mission-critical exempt is a workspace-level Microsoft Fabric capacity setting (requires a Fabric F or P
+            SKU). It has no equivalent in the Azure Data Explorer cluster capacity policy — the shared cluster has no
+            exempt toggle. No action is required.
+          </MessageBarBody>
+        </MessageBar>
+      </div>
+    </div>
+  );
+}
+
 export function EventhouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
   const [state, setState] = useState<EventhouseState | null>(null);
+  const [activeTab, setActiveTab] = useState<'databases' | 'capacity'>('databases');
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [createErr, setCreateErr] = useState<string | null>(null);
@@ -649,6 +987,8 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+        { label: 'Capacity & throttling', onClick: () => setActiveTab('capacity'),
+          title: 'View capacity policy + live throttle metrics' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
@@ -695,6 +1035,14 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           </Dialog>
         </div>
 
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab(d.value as 'databases' | 'capacity')}>
+          <Tab value="databases">Databases</Tab>
+          <Tab value="capacity">Capacity</Tab>
+        </TabList>
+
+        {activeTab === 'capacity' && <EventhouseCapacityPanel id={id} />}
+
+        {activeTab === 'databases' && <>
         {!state && <Spinner size="small" label="Loading cluster…" />}
         {state && !state.ok && (
           <MessageBar intent="error">
@@ -868,6 +1216,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
             </Dialog>
           </>
         )}
+        </>}
       </div>
     } />
   );
