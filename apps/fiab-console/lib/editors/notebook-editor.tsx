@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
+  History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -155,6 +155,10 @@ export function NotebookEditor({ item, id }: Props) {
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
+  // Pylance/pylsp WS bridge path + VS Code for Web deep-link, resolved from
+  // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
+  const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
+  const [vscodeWeb, setVscodeWeb] = useState<{ enabled: boolean; url: string | null; reason?: string }>({ enabled: false, url: null });
   const [cells, setCells] = useState<NotebookCell[]>(starterCells());
   const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -371,6 +375,26 @@ export function NotebookEditor({ item, id }: Props) {
   useEffect(() => {
     if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
   }, [workspaceId, notebookId, loadDetail, loadJobs]);
+
+  // Probe the Pylance/pylsp bridge + VS Code for Web availability for this
+  // notebook. Server route reads the gated env (boundary, LOOM_PYLSP_ENABLED,
+  // AML instance/workspace) — the client never sees those directly.
+  useEffect(() => {
+    if (!notebookId) { setLspWsUrl(null); setVscodeWeb({ enabled: false, url: null }); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/lsp`);
+        const j = await r.json().catch(() => null);
+        if (cancelled || !j?.ok) return;
+        setLspWsUrl(j.lspAvailable && j.wsUrl ? j.wsUrl : null);
+        setVscodeWeb(j.vscodeWeb || { enabled: false, url: null });
+      } catch {
+        if (!cancelled) { setLspWsUrl(null); setVscodeWeb({ enabled: false, url: null }); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [notebookId]);
 
   // Load the AML environment catalog once so the ribbon selector can list real
   // environments. Honest gate: a 503 (no AML workspace) leaves the list empty —
@@ -1249,6 +1273,20 @@ export function NotebookEditor({ item, id }: Props) {
               onClick={openConfigDialog}
             >Configure session</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
+            {/* VS Code for the Web — Commercial-only deep-link to the AML
+                compute-instance editor. Hidden in Gov boundaries (GCC / GCC-High
+                / DoD) where VS Code for the Web is unavailable, and only shown
+                when a real AML instance + workspace are configured (no dead button). */}
+            {notebookId && vscodeWeb.enabled && vscodeWeb.url && (
+              <Button
+                as="a"
+                href={vscodeWeb.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                appearance="outline"
+                icon={<Open20Regular />}
+              >Open in VS Code for Web</Button>
+            )}
             <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
@@ -1419,6 +1457,7 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        lspWsUrl={lspWsUrl}
                         priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
                         schemaContext={inlineSchemaContext}
                         notebookId={notebookId}

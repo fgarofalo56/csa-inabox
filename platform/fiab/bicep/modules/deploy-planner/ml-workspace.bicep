@@ -136,3 +136,50 @@ resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
+
+// --- Curated AML Environment: Pylance-grade Python IntelliSense ---
+// Backs the CSA Loom notebook "Open in VS Code for Web" path (AML compute
+// instance) and the curated kernel image. python-lsp-server + pyright give the
+// same completions/hover the Console's in-cell Monaco bridge serves, and
+// jupyter-lsp wires LSP into the JupyterLab UI on the compute instance.
+// Grounded in Learn: Microsoft.MachineLearningServices/workspaces/environments
+// + .../environments/versions (condaFile + image).
+resource loomPylspEnv 'Microsoft.MachineLearningServices/workspaces/environments@2023-04-01' = {
+  parent: workspace
+  name: 'loom-pylsp-env'
+  properties: {
+    description: 'CSA Loom curated environment — jupyter-lsp + python-lsp-server + pyright (Pylance-grade IntelliSense) over pandas/numpy/scikit-learn.'
+    tags: { 'csa-loom': 'notebook-lsp' }
+  }
+}
+
+resource loomPylspEnvVersion 'Microsoft.MachineLearningServices/workspaces/environments/versions@2023-04-01' = {
+  parent: loomPylspEnv
+  name: '1'
+  properties: {
+    description: 'v1 — Pylance-grade Python LSP stack on the AML openmpi CPU base image.'
+    image: 'mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest'
+    condaFile: '''
+name: loom-pylsp
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - jupyter-lsp>=2.2.0
+    - jupyterlab>=4.0.0
+    - python-lsp-server[all]>=1.11.0
+    - pyright>=1.1.350
+    - pandas-stubs>=2.2.0
+    - pandas
+    - numpy
+    - scikit-learn
+'''
+    tags: { 'csa-loom': 'notebook-lsp' }
+  }
+}
+
+output pylspEnvironmentName string = loomPylspEnv.name
+output pylspEnvironmentVersion string = loomPylspEnvVersion.name
