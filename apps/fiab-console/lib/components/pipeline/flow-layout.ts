@@ -25,6 +25,34 @@ const LAYOUT_OPTIONS: Record<string, string> = {
 };
 
 /**
+ * Tighter, faster ELK options for large pipelines — trades ideal spacing for a
+ * compact layout that pans smoothly with React Flow virtualization on. Used at
+ * or above VIRTUALIZE_THRESHOLD nodes.
+ */
+const LARGE_GRAPH_LAYOUT_OPTIONS: Record<string, string> = {
+  'elk.algorithm': 'layered',
+  'elk.direction': 'RIGHT',
+  'elk.layered.spacing.nodeNodeBetweenLayers': '60',
+  'elk.spacing.nodeNode': '32',
+  'elk.layered.spacing.edgeNodeBetweenLayers': '30',
+  'elk.edgeRouting': 'POLYLINE',
+  'elk.padding': '[top=16,left=16,bottom=16,right=16]',
+  'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+};
+
+/**
+ * Node count at or above which the canvas enables React Flow's
+ * `onlyRenderVisibleElements` (off-screen nodes are not mounted) and ELK uses
+ * the compact large-graph options — keeps a 200-node pipeline panning smoothly.
+ */
+export const VIRTUALIZE_THRESHOLD = 80;
+
+/** True when the graph is large enough to benefit from React Flow virtualization. */
+export function shouldVirtualize(nodeCount: number): boolean {
+  return nodeCount >= VIRTUALIZE_THRESHOLD;
+}
+
+/**
  * Run ELK over the activity DAG. Returns absolute top-left positions keyed by
  * activity name. `nodeW`/`nodeH` are the rendered node box size.
  */
@@ -39,7 +67,7 @@ export async function elkLayout(
   const names = new Set(activities.map((a) => a.name));
   const graph = {
     id: 'root',
-    layoutOptions: LAYOUT_OPTIONS,
+    layoutOptions: shouldVirtualize(activities.length) ? LARGE_GRAPH_LAYOUT_OPTIONS : LAYOUT_OPTIONS,
     children: activities.map((a) => ({ id: a.name, width: nodeW, height: nodeH })),
     edges: activities.flatMap((a) =>
       (a.dependsOn || [])

@@ -74,6 +74,7 @@ export interface OutputPaneProps {
 export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
   const s = useStyles();
   const [runs, setRuns] = useState<RunRow[] | null>(null);
+  const [laFallback, setLaFallback] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -87,8 +88,8 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
-      if (!j.ok) { setErr(j.error || 'failed'); setRuns([]); }
-      else setRuns(j.runs || []);
+      if (!j.ok) { setErr(j.error || 'failed'); setRuns([]); setLaFallback(false); }
+      else { setRuns(j.runs || []); setLaFallback(!!j.laFallback); }
     } catch (e: any) {
       setErr(e?.message || String(e));
       setRuns([]);
@@ -126,6 +127,15 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
       </div>
       {err && (
         <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>
+      )}
+      {laFallback && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            No runs found in ADF&apos;s 45-day native monitoring window. Showing historical
+            runs from Log Analytics (up to the workspace retention, 90 days by default).
+            Invoked-by and some run metadata are not recorded in the diagnostic tables.
+          </MessageBarBody>
+        </MessageBar>
       )}
       {!err && runs && runs.length === 0 && (
         <Caption1>No runs yet for this pipeline. Click <strong>Run</strong> or <strong>Debug</strong> in the ribbon to dispatch one.</Caption1>
