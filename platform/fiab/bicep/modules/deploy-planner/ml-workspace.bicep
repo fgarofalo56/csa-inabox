@@ -103,6 +103,12 @@ resource workspace 'Microsoft.MachineLearningServices/workspaces@2023-04-01' = {
 
 // AzureML Data Scientist — drive the workspace data plane
 // (role f6c7c914-8db3-469d-8ca1-694a8f32e121).
+//
+// This same role also covers notebook scheduling (Task: Notebook scheduling):
+//   - Microsoft.MachineLearningServices/workspaces/schedules/write  (create/enable/disable)
+//   - Microsoft.MachineLearningServices/workspaces/schedules/read   (schedule list)
+//   - Microsoft.MachineLearningServices/workspaces/jobs/write       (the Command job the schedule runs)
+// No additional role assignment is required for the schedule wizard / list.
 resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: workspace
   name: guid(workspace.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
