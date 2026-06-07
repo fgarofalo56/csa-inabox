@@ -30,10 +30,22 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 
-// ARM endpoint + token scope are env-overridable so the same client works in
-// Azure Government (GCC-High / IL5: https://management.usgovcloudapi.net) and
-// other sovereign clouds. Commercial is the default when unset.
-const ARM = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+// Sovereign-cloud aware ARM host. Commercial + GCC use management.azure.com;
+// GCC-High / IL5 (Azure Government / DoD) set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every ARM call below — including scheduledQueryRules / actionGroups create
+// for the Activator — targets the correct ARM host instead of the Commercial
+// one. Mirrors lib/azure/adf-client.ts so all Loom ARM clients agree.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM = armBase();
+// Token scope is env-overridable for sovereign clouds; defaults to the ARM host.
 const ARM_SCOPE = process.env.LOOM_ARM_SCOPE || `${ARM}/.default`;
 const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
 const LA_SCOPE = `${LA_ENDPOINT}/.default`;
@@ -609,7 +621,9 @@ export function metricsForType(type: string): { metric: string; aggregation: str
 // ----------------------------------------------------------------------------
 
 const ACTION_GROUPS_API = '2023-01-01';
-const SCHEDULED_QUERY_RULES_API = '2023-03-15-preview';
+// Stable GA (2023-12-01) — available Commercial + Azure Government + DoD. Same
+// property set as the prior 2023-03-15-preview; required for production.
+const SCHEDULED_QUERY_RULES_API = '2023-12-01';
 
 /** Resolve the RG alert resources are written into (alert RG → admin RG). */
 function alertResourceGroup(): string {

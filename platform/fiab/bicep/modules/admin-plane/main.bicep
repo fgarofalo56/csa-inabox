@@ -839,7 +839,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
-            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
+            // Azure-native Activator (lib/azure/activator-monitor.ts) creates
+            // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
+            // to THIS admin RG — the same RG where monitoring.bicep grants the
+            // Console UAMI "Monitoring Contributor" (749f88ad…). Override to land
+            // alerts elsewhere AND grant the role on that RG.
+            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : resourceGroup().name }
+            // Region stamped into the scheduledQueryRule + actionGroup ARM bodies.
+            // Defaults to the deployment location so Gov (usgov*) deployments do
+            // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
+            { name: 'LOOM_ALERT_LOCATION', value: location }
             // ARM endpoint / scope overrides for sovereign clouds (GCC-High / IL5).
             // Empty on Commercial → monitor-client.ts falls back to
             // https://management.azure.com. Set both for Azure Government.

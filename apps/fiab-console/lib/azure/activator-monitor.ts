@@ -114,6 +114,10 @@ export interface MonitorRuleInput {
   query?: string;
   sourceTable?: string;
   severity?: number;
+  /** ISO-8601 schedule, e.g. PT5M. How often the alert query is evaluated. */
+  evaluationFrequency?: string;
+  /** ISO-8601 lookback window the query spans, e.g. PT15M. Must be ≥ frequency. */
+  windowSize?: string;
   /** ARM id of an EXISTING action group to attach instead of creating one from
    *  the rule's action config (the editor's pick-existing flow). */
   existingActionGroupId?: string;
@@ -130,6 +134,8 @@ export interface MonitorRuleRecord {
   /** Summary of the receivers attached to this rule's action group (for the UI). */
   actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
   severity: number;
+  evaluationFrequency: string;
+  windowSize: string;
   state: 'Active';
   backend: 'azure-monitor';
   createdAt: string;
@@ -171,11 +177,15 @@ export async function createMonitorActivatorRule(
   const ruleSuffix = (input.name || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
   const severity = typeof input.severity === 'number' ? input.severity : 3;
+  const evaluationFrequency = input.evaluationFrequency || 'PT5M';
+  const windowSize = input.windowSize || 'PT5M';
   await upsertScheduledQueryRule({
     name: azureRuleName,
     description: `Loom Activator rule '${input.name || 'rule'}'`,
     query,
     severity,
+    evaluationFrequency,
+    windowSize,
     actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
   });
   return {
@@ -188,6 +198,8 @@ export async function createMonitorActivatorRule(
     actionGroupId,
     ...(receivers ? { actionGroupReceivers: receivers } : {}),
     severity,
+    evaluationFrequency,
+    windowSize,
     state: 'Active',
     backend: 'azure-monitor',
     createdAt: new Date().toISOString(),
