@@ -35,7 +35,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'spark-job-definition': reg(() => import('./phase2-misc-editors'),      'SparkJobDefinitionEditor'),
   'environment':          reg(() => import('./phase2-misc-editors'),      'EnvironmentEditor'),
   'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
-  'copy-job':             reg(() => import('./phase2-misc-editors'),      'CopyJobEditor'),
+  'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
 
   // Phase 3

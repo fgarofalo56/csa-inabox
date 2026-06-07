@@ -74,3 +74,27 @@ Synapse Serverless SQL Pool is the on-demand T-SQL engine that ships built-in wi
 - Items 7, 9, 10 (ADLS-file → create-external-table wizard + scoped-credential editor): **1 session** — needs ADLS Gen2 list-paths API integration + schema inference call
 
 **Total to A+**: ~2.5 sessions, of which ~1 session is shared with the Dedicated spec (Monaco editor). Today's grade is honest A — the primary action (Run T-SQL on `{ws}-ondemand` against real ADLS) works end-to-end with real lake URIs and real OPENROWSET samples; remaining work is convenience and cost-governance polish.
+
+## Lakehouse 1:1 pairing (Foundation, 2026-06-06)
+
+Every `lakehouse` item now auto-creates a paired `synapse-serverless-sql-pool`
+item so F3 (lakehouse) and F14 (this editor) share **one** Synapse Serverless
+built-in endpoint over the same lake root — no Microsoft Fabric required.
+
+- **Pairing rule**: `apps/fiab-console/lib/items/registry.ts` (`ITEM_PAIRING_RULES.lakehouse`).
+  The install engine (`provisioning-engine.ts` → `runPairingPass`) applies it after
+  a lakehouse provisions, creating the sibling Cosmos item + running its provisioner.
+- **Paired provisioner**: `apps/fiab-console/lib/install/provisioners/synapse-serverless-sql-pool.ts`.
+  On the Azure-native default path it ensures the `[loom_lakehouse]` serverless user
+  DB, a `WorkspaceIdentity` `DATABASE SCOPED CREDENTIAL` (`IDENTITY = 'Managed Identity'`
+  — workspace MSI passthrough), and an `EXTERNAL DATA SOURCE` whose `LOCATION` is the
+  lakehouse abfss root (`content.adlsRoot`, published by the lakehouse provisioner via
+  `adls-client.resolveAbfssRoot`). It then runs `SELECT 1` as a live receipt proof.
+- **Sovereign clouds**: the endpoint suffix is resolved by
+  `synapse-sql-client.getSynapseSqlSuffix()` from `AZURE_CLOUD` (set per-boundary by
+  `admin-plane/main.bicep`) — `sql.azuresynapse.net` (Commercial/GCC) vs
+  `sql.azuresynapse.usgovcloudapi.net` (GCC-High/IL5). Cloud-matrix coverage:
+  `lib/azure/__tests__/synapse-sql-suffix.test.ts`.
+- **Honest gates** (no Fabric dependency): missing `LOOM_SYNAPSE_WORKSPACE`, or a
+  lakehouse on the opt-in Fabric/OneLake backend (no abfss root), surface a structured
+  remediation rather than a stub.
