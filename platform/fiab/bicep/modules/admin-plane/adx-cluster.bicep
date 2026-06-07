@@ -5,6 +5,19 @@
 // SKU: Dev(No SLA)_Standard_E2a_v4 — ~$140/mo. Reasonable for the
 // federal demo footprint. Upgrade to Standard_E4d_v5 (or higher) for
 // production-equivalent throughput.
+//
+// Follower database attach (database shortcut, T7): the console follower API
+// route (app/api/items/kql-database/[id]/follower) creates
+// `attachedDatabaseConfigurations` on THIS cluster at runtime via ARM — no
+// Bicep resource is needed for the follower side (it is data/runtime, not infra).
+// The console UAMI already holds rights on this cluster. To follow a database on
+// a LEADER cluster in another RG/subscription, that leader's owner must grant the
+// console UAMI 'Contributor' (or 'Azure Kusto Contributor') on the leader cluster,
+// out-of-band, e.g.:
+//   az role assignment create --role Contributor \
+//     --assignee <console-UAMI-principalId> \
+//     --scope /subscriptions/<leaderSub>/resourceGroups/<leaderRg>/providers/Microsoft.Kusto/clusters/<leaderName>
+// Leader and follower must be in the SAME Azure region (ADX follower constraint).
 
 targetScope = 'resourceGroup'
 
