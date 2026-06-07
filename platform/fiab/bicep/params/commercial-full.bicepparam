@@ -101,6 +101,12 @@ param dlzDomainNames = []
 // Re-enable in next iteration when capacity refreshes OR switch region.
 param deployAppsEnabled = true
 param aiFoundryEnabled = true
+// Agent Foundry — provisions the dedicated AIServices account (aifndry-loom-eastus2)
+// with the loom-agents project + chat (gpt-4.1-mini) + text-embedding-ada-002
+// deployments and wires LOOM_AOAI_* / LOOM_FOUNDRY_PROJECT_*. This is what makes
+// AI Functions (POST /api/ai-functions), Copilot, and the data-agent test-chat
+// return real completions on a clean deploy instead of the 501 not_configured gate.
+param agentFoundryEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true

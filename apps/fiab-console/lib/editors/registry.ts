@@ -57,7 +57,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 
   // Phase 4
   'ml-model':             reg(() => import('./phase4-editors'),           'MlModelEditor'),
-  'ml-experiment':        reg(() => import('./phase4-editors'),           'MlExperimentEditor'),
+  'ml-experiment':        reg(() => import('./ml-experiment-editor'),     'MlExperimentEditor'),
   'graphql-api':          reg(() => import('./phase4-editors'),           'GraphqlApiEditor'),
   'user-data-function':   reg(() => import('./phase4-editors'),           'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4-editors'),           'VariableLibraryEditor'),
@@ -67,6 +67,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'map':                  reg(() => import('./phase4-editors'),           'MapEditor'),
   'operations-agent':     reg(() => import('./phase4-editors'),           'OperationsAgentEditor'),
   'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
+
+  // v3.5 — Data Science experience home (workload landing page)
+  'data-science-home':    reg(() => import('./data-science-home-editor'), 'DataScienceHomeEditor'),
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)

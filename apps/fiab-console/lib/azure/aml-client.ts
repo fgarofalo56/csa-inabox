@@ -1,49 +1,62 @@
 /**
- * Azure Machine Learning — control-plane (ARM) client for the notebook AML path.
+ * aml-client — typed Azure Machine Learning CONTROL-PLANE REST client.
  *
- * This is a *separate* AML workspace client from foundry-client.ts (which
- * targets the AI Foundry hub). It drives the dedicated AML workspace that the
- * deploy-planner `ml-workspace.bicep` module provisions, so the notebook editor
- * can:
- *   - list Compute Instances (CI)               → listCIs()
- *   - start a stopped CI (auto-start)           → startCI()
- *   - read the workspace datastores             → listAmlDatastores()
- *   - submit a Command job onto a CI            → submitCiJob() (run-route)
- *   - poll that job's status                    → getCiJob()
+ * This single module serves two integrated surfaces, both pure ARM (every
+ * object is a child of `Microsoft.MachineLearningServices/workspaces/<ws>`):
  *
- * ALL calls go through the ARM control plane (armBase() from cloud-endpoints),
- * which is sovereign-cloud-aware (Commercial / GCC / GCC-High / IL5). The AML
- * data-plane endpoint (*.api.azureml.ms) is NOT used here.
+ *   1. The Data Science experiences: computes, datastores, experiments / runs
+ *      (ARM "jobs"), models, schedules, environments — list surfaces.
+ *   2. The notebook "Azure ML" path: list Compute Instances (CI), auto-start a
+ *      stopped CI, read datastores (with abfss:// / wasbs:// path building for
+ *      the Datastore Explorer), submit a Command job onto a CI, and poll it.
  *
- * Config resolution mirrors mlflow-client.ts so an already-configured Loom
- * keeps working: LOOM_AML_WORKSPACE / LOOM_AML_REGION / LOOM_AML_RG fall back
- * to the Foundry hub env when the dedicated AML vars aren't set.
+ * Everything routes through one sovereign-cloud-aware fetch helper. Workspace
+ * coordinates come from `resolve-aml-target.ts` (LOOM_AML_* → LOOM_FOUNDRY_*
+ * fallback), so an already-deployed Loom keeps working without new config.
  *
- * Honest infra-gate: when the workspace can't be resolved from env,
- * `amlConfig()` throws `AmlNotConfiguredError` carrying the exact env vars to
- * set. Routes surface that as a Fluent MessageBar; the editor still renders.
+ * Grounding (Microsoft Learn — Azure Machine Learning REST, api-version
+ * 2024-10-01 GA):
+ *   GET  <ws>/computes      https://learn.microsoft.com/rest/api/azureml/compute/list
+ *   POST <ws>/computes/{n}/start                                   (202, no body)
+ *   GET  <ws>/datastores    https://learn.microsoft.com/rest/api/azureml/datastores/list
+ *   PUT  <ws>/jobs/{name}                                          (Command job)
+ *   GET  <ws>/jobs          https://learn.microsoft.com/rest/api/azureml/jobs/list
+ *   GET  <ws>/models        https://learn.microsoft.com/rest/api/azureml/model-containers/list
+ *   GET  <ws>/schedules     https://learn.microsoft.com/rest/api/azureml/schedules/list
+ *   GET  <ws>/environments  https://learn.microsoft.com/rest/api/azureml/environment-containers/list
  *
- * No Fabric dependency: this is the Azure-native default backend for the AML
- * notebook path. When LOOM_AML_WORKSPACE is unset, `amlIsConfigured()` returns
- * false cleanly and the AML toggle simply shows the gate — the Fabric path is
- * unaffected.
+ * Cloud routing: the ARM host + AAD scope come from `cloud-endpoints.ts`
+ * (`armBase()` / `armScope()`), resolved at REQUEST time so AZURE_CLOUD /
+ * LOOM_ARM_ENDPOINT pick the `management.usgovcloudapi.net` host in Government.
  *
- * Real ARM (verified against Microsoft Learn — Machine Learning
- *   workspaces/computes + workspaces/datastores + workspaces/jobs, 2024-10-01):
- *   GET  {base}/computes?api-version=2024-10-01
- *   POST {base}/computes/{name}/start?api-version=2024-10-01      (202, no body)
- *   GET  {base}/datastores?api-version=2024-10-01                 (paged)
- *   PUT  {base}/jobs/{name}?api-version=2024-10-01                (Command job)
- *   GET  {base}/jobs/{name}?api-version=2024-10-01
+ * Auth: ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID),
+ * DefaultAzureCredential) against the ARM `.default` scope — identical to
+ * adf-client.ts / foundry-client.ts / mlflow-client.ts. The Console UAMI must
+ * hold the "AzureML Data Scientist" role (role ID
+ * f6c7c914-8db3-469d-8ca1-694a8f32e121) on the workspace; ml-workspace.bicep
+ * already grants it.
+ *
+ * NO mocks, NO `return []` placeholders. Real ARM REST only. When env is unset
+ * the BFF gates via `amlConfigGate()` / `amlIsConfigured()` with the exact
+ * missing variable. NO Fabric dependency — works with
+ * LOOM_DEFAULT_FABRIC_WORKSPACE unset (Azure-native by default, per
+ * no-fabric-dependency.md).
  */
+
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
+import {
+  resolveAmlTarget,
+  amlWorkspaceArmPath,
+  AmlNotConfiguredError,
+  type AmlTarget,
+} from './resolve-aml-target';
 
-const ARM_SCOPE = armScope();
+/** Stable GA api-version for Microsoft.MachineLearningServices control plane. */
 const ML_API = '2024-10-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -54,111 +67,108 @@ const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
     )
   : new DefaultAzureCredential();
 
-/** Raised when the AML workspace needed for the notebook AML path isn't configured. */
-export class AmlNotConfiguredError extends Error {
-  hint: string;
-  missing: string[];
-  constructor(missing: string[]) {
-    super('Azure Machine Learning workspace is not configured in this deployment');
-    this.name = 'AmlNotConfiguredError';
-    this.missing = missing;
-    this.hint =
-      `Set ${missing.join(' + ')} to a deployed Azure Machine Learning workspace ` +
-      `(the deploy-planner mlWorkspace module provisions one), then grant the ` +
-      `Console UAMI the AzureML Data Scientist role on it. ` +
-      `LOOM_AML_WORKSPACE / LOOM_AML_REGION fall back to LOOM_FOUNDRY_NAME / ` +
-      `LOOM_FOUNDRY_REGION when those are set.`;
-  }
-}
-
-/** Non-404 AML ARM failure. */
+/** Non-404 AML control-plane REST failure. */
 export class AmlError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, body: unknown, message?: string) {
-    super(message || `Azure ML call failed (${status})`);
+    super(message || `Azure ML control-plane call failed (${status})`);
     this.name = 'AmlError';
     this.status = status;
     this.body = body;
   }
 }
 
+// Re-export the resolver surface so route handlers import everything AML from
+// one module.
+export {
+  resolveAmlTarget,
+  amlWorkspaceArmPath,
+  isAmlConfigured,
+  amlDataPlaneHostSuffix,
+  AmlNotConfiguredError,
+  type AmlTarget,
+} from './resolve-aml-target';
+
+// ============================================================
+// Config / gate helpers
+// ============================================================
+
+/** Resolved AML workspace coordinates + the full ARM base (host + path). */
 export interface AmlConfig {
   subscriptionId: string;
   resourceGroup: string;
   workspace: string;
   region: string;
-  /** Full ARM resource path under the workspace (no api-version). */
+  /** Full ARM resource base for the workspace (host + path, no api-version). */
   base: string;
 }
 
 /**
- * Resolve the AML workspace ARM base from env. Workspace + region honor the
- * task's dedicated vars first, then fall back to the Foundry hub env.
+ * Resolve the AML workspace config (coordinates + full ARM base) from env.
+ * Delegates to `resolveAmlTarget()`; throws `AmlNotConfiguredError` (carrying
+ * the exact missing vars) when the workspace can't be addressed.
  */
 export function amlConfig(): AmlConfig {
-  const missing: string[] = [];
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
-  if (!subscriptionId) missing.push('LOOM_SUBSCRIPTION_ID');
-
-  const workspace = process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME;
-  if (!workspace) missing.push('LOOM_AML_WORKSPACE');
-
-  const region = process.env.LOOM_AML_REGION || process.env.LOOM_FOUNDRY_REGION;
-  if (!region) missing.push('LOOM_AML_REGION');
-
-  if (missing.length) throw new AmlNotConfiguredError(missing);
-
-  const resourceGroup =
-    process.env.LOOM_AML_RG ||
-    process.env.LOOM_FOUNDRY_RG ||
-    'rg-csa-loom-admin-eastus2';
-
-  const base =
-    `${armBase()}/subscriptions/${subscriptionId}` +
-    `/resourceGroups/${resourceGroup}` +
-    `/providers/Microsoft.MachineLearningServices/workspaces/${workspace}`;
-
-  return { subscriptionId: subscriptionId!, resourceGroup, workspace: workspace!, region: region!, base };
+  const t = resolveAmlTarget();
+  return { ...t, base: `${armBase()}${amlWorkspaceArmPath(t)}` };
 }
 
 /** True when the AML workspace can be addressed (env is set). Lets callers branch without try/catch. */
 export function amlIsConfigured(): boolean {
   try {
-    amlConfig();
+    resolveAmlTarget();
     return true;
   } catch {
     return false;
   }
 }
 
-async function authHeader(): Promise<string> {
-  const token = await credential.getToken(ARM_SCOPE);
-  if (!token?.token) throw new Error('Failed to acquire ARM token for Azure ML');
-  return `Bearer ${token.token}`;
+/**
+ * Honest config gate. Returns the exact missing env var so the BFF can 503 with
+ * a precise Fluent MessageBar instead of a generic 500. Returns null when the
+ * workspace coordinates resolve.
+ */
+export function amlConfigGate(): { missing: string } | null {
+  try {
+    resolveAmlTarget();
+    return null;
+  } catch (e) {
+    if (e instanceof AmlNotConfiguredError) return { missing: e.missing.join(' + ') };
+    throw e;
+  }
 }
 
+// ============================================================
+// Fetch foundation
+// ============================================================
+
+/**
+ * ARM fetch against `<armBase><workspaceArmPath><path>?api-version=ML_API`.
+ * `armBase()` / `armScope()` are evaluated here (request time) so the
+ * sovereign-cloud host is correct even when AZURE_CLOUD changes after import.
+ */
 async function amlFetch(
-  pathUnderWorkspace: string,
-  init: RequestInit & { query?: Record<string, string>; apiVersion?: string } = {},
+  path: string,
+  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget } = {},
 ): Promise<Response> {
-  const cfg = amlConfig();
-  const apiVer = init.apiVersion || ML_API;
-  const sep = pathUnderWorkspace.includes('?') ? '&' : '?';
-  const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
-  const url = `${cfg.base}${pathUnderWorkspace}${sep}api-version=${apiVer}${query}`;
-  const { query: _q, apiVersion: _av, ...rest } = init;
+  const token = await credential.getToken(armScope());
+  if (!token?.token) throw new AmlError(401, undefined, 'Failed to acquire ARM token for Azure ML');
+  const { query, target, ...rest } = init;
+  const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
+  const extra = query ? '&' + new URLSearchParams(query).toString() : '';
+  const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
   return fetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
-      authorization: await authHeader(),
+      authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
     },
   });
 }
 
-async function readJson<T>(res: Response): Promise<T | null> {
+async function readAmlJson<T>(res: Response, label: string): Promise<T | null> {
   if (res.status === 404) return null;
   const text = await res.text();
   let parsed: unknown = undefined;
@@ -169,46 +179,66 @@ async function readJson<T>(res: Response): Promise<T | null> {
     const msg =
       (parsed as any)?.error?.message ||
       (typeof parsed === 'string' ? parsed : `Azure ML ${res.status}`);
-    throw new AmlError(res.status, parsed, `Azure ML ${res.status}: ${String(msg).slice(0, 280)}`);
+    throw new AmlError(res.status, parsed, `${label} failed ${res.status}: ${String(msg).slice(0, 280)}`);
   }
   return (parsed as T) ?? ({} as T);
 }
 
-/** Paged ARM list — follows nextLink, raw bearer on each continuation. */
-async function pagedList(pathUnderWorkspace: string): Promise<any[]> {
+/**
+ * Paged ARM value collector — ARM returns `{ value: [], nextLink?: string }`.
+ * Follows `nextLink` with the same bearer until exhausted.
+ */
+async function pagedList(path: string, label: string): Promise<any[]> {
   const out: any[] = [];
-  let res = await amlFetch(pathUnderWorkspace);
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+  let res = await amlFetch(path);
+  let j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
   while (j) {
     if (Array.isArray(j.value)) out.push(...j.value);
     if (!j.nextLink) break;
-    res = await fetch(j.nextLink, { headers: { authorization: await authHeader() } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+    const token = await credential.getToken(armScope());
+    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
   }
   return out;
 }
 
-// ---------------- Compute Instances ----------------
+// ============================================================
+// 1. Computes
+// ============================================================
 
-export interface AmlComputeInstance {
+export interface AmlCompute {
+  id: string;
   name: string;
-  vmSize?: string;
-  /** ComputeInstance lifecycle state: Creating | Running | Stopped | Stopping | Starting | … */
-  state?: string;
-  provisioningState?: string;
+  location?: string;
   computeType?: string;
+  provisioningState?: string;
+  state?: string;
+  vmSize?: string;
+  createdOn?: string;
 }
 
-function shapeCompute(raw: any): AmlComputeInstance {
+/** A Compute Instance view (subset of AmlCompute) used by the notebook path. */
+export type AmlComputeInstance = AmlCompute;
+
+function shapeCompute(raw: any): AmlCompute {
   const p = raw?.properties || {};
   const inner = p.properties || {};
   return {
+    id: raw?.id,
     name: raw?.name,
-    vmSize: inner.vmSize,
-    state: inner.state || p.provisioningState,
-    provisioningState: p.provisioningState,
+    location: raw?.location,
     computeType: p.computeType,
+    provisioningState: p.provisioningState,
+    state: inner.state || p.provisioningState,
+    vmSize: inner.vmSize,
+    createdOn: p.createdOn,
   };
+}
+
+/** GET <ws>/computes — the acceptance-test surface (live compute list). */
+export async function listComputes(): Promise<AmlCompute[]> {
+  const rows = await pagedList('/computes', 'listComputes');
+  return rows.map(shapeCompute);
 }
 
 /**
@@ -217,7 +247,7 @@ function shapeCompute(raw: any): AmlComputeInstance {
  * dropped — a notebook runs on a CI).
  */
 export async function listCIs(): Promise<AmlComputeInstance[]> {
-  const rows = await pagedList('/computes');
+  const rows = await pagedList('/computes', 'listCIs');
   return rows
     .filter((r) => (r?.properties?.computeType || '') === 'ComputeInstance')
     .map(shapeCompute);
@@ -252,21 +282,25 @@ export async function startCI(name: string): Promise<void> {
 /** Read a single CI (state probe after start). */
 export async function getCI(name: string): Promise<AmlComputeInstance | null> {
   const res = await amlFetch(`/computes/${encodeURIComponent(name)}`);
-  const j = await readJson<any>(res);
+  const j = await readAmlJson<any>(res, 'getCI');
   return j ? shapeCompute(j) : null;
 }
 
-// ---------------- Datastores ----------------
+// ============================================================
+// 2. Datastores
+// ============================================================
 
 export interface AmlDatastore {
+  id?: string;
   name: string;
-  datastoreType: string;       // AzureBlob | AzureDataLakeGen2 | AzureFile | AzureDataLakeGen1 | OneLake | …
+  datastoreType?: string;       // AzureBlob | AzureDataLakeGen2 | AzureFile | AzureDataLakeGen1 | OneLake | …
   isDefault?: boolean;
-  accountName?: string;
-  containerName?: string;      // AzureBlob
-  filesystem?: string;         // AzureDataLakeGen2
-  endpoint?: string;           // cloud storage suffix, e.g. "core.windows.net"
   description?: string;
+  accountName?: string;
+  containerName?: string;       // AzureBlob
+  filesystem?: string;          // AzureDataLakeGen2
+  endpoint?: string;            // cloud storage suffix, e.g. "core.windows.net"
+  tags?: Record<string, string>;
   /** abfss:// for ADLS Gen2 datastores (null otherwise). */
   abfssPath?: string | null;
   /** wasbs:// for Blob datastores (null otherwise). */
@@ -304,57 +338,105 @@ export function toWasbsPath(ds: { datastoreType?: string; accountName?: string; 
 function shapeDatastore(raw: any): AmlDatastore {
   const p = raw?.properties || {};
   const ds: AmlDatastore = {
+    id: raw?.id,
     name: raw?.name,
     datastoreType: p.datastoreType,
     isDefault: p.isDefault,
+    description: p.description,
     accountName: p.accountName,
     containerName: p.containerName,
     filesystem: p.filesystem,
     endpoint: p.endpoint,
-    description: p.description,
+    tags: p.tags,
   };
   ds.abfssPath = toAbfssPath(ds);
   ds.wasbsPath = toWasbsPath(ds);
   return ds;
 }
 
-export async function listAmlDatastores(): Promise<AmlDatastore[]> {
-  const rows = await pagedList('/datastores');
+export async function listDatastores(): Promise<AmlDatastore[]> {
+  const rows = await pagedList('/datastores', 'listDatastores');
   return rows.map(shapeDatastore);
 }
 
-// ---------------- Command jobs (run a notebook cell on a CI) ----------------
+/** Notebook Datastore Explorer surface — same data as listDatastores, named for the editor. */
+export async function listAmlDatastores(): Promise<AmlDatastore[]> {
+  const rows = await pagedList('/datastores', 'listAmlDatastores');
+  return rows.map(shapeDatastore);
+}
+
+// ============================================================
+// 3. Experiments / Runs (ARM "jobs")
+// ============================================================
 
 export interface AmlJob {
+  id?: string;
   name: string;
   displayName?: string;
-  status?: string;            // NotStarted | Starting | Running | Finalizing | Completed | Failed | Canceled | …
   jobType?: string;
+  experimentName?: string;
+  status?: string;
+  startTimeUtc?: string;
+  endTimeUtc?: string;
   computeId?: string;
   command?: string;
+  description?: string;
+  tags?: Record<string, string>;
 }
 
 function shapeJob(raw: any): AmlJob {
   const p = raw?.properties || {};
   return {
+    id: raw?.id,
     name: raw?.name,
     displayName: p.displayName,
-    status: p.status,
     jobType: p.jobType,
+    experimentName: p.experimentName,
+    status: p.status,
+    startTimeUtc: p.startTimeUtc,
+    endTimeUtc: p.endTimeUtc,
     computeId: p.computeId,
     command: p.command,
+    description: p.description,
+    tags: p.tags,
   };
+}
+
+/**
+ * GET <ws>/jobs — the workspace's runs. Optionally filter to one experiment
+ * (ARM supports the `$filter` and `listViewType` query params) and cap results.
+ */
+export async function listJobs(opts: { experimentName?: string; maxResults?: number } = {}): Promise<AmlJob[]> {
+  const query: Record<string, string> = {};
+  if (opts.experimentName) query.$filter = `properties.experimentName eq '${opts.experimentName}'`;
+  const cap = opts.maxResults ?? 200;
+  const out: AmlJob[] = [];
+  let res = await amlFetch('/jobs', { query });
+  let j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
+  while (j) {
+    if (Array.isArray(j.value)) for (const r of j.value) out.push(shapeJob(r));
+    if (!j.nextLink || out.length >= cap) break;
+    const token = await credential.getToken(armScope());
+    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
+  }
+  return out.slice(0, cap);
 }
 
 /** Default curated AML environment that ships Python 3.10 (used when no env override is given). */
 export const DEFAULT_AML_ENVIRONMENT =
   'azureml://registries/azureml/environments/sklearn-1.5/labels/latest';
 
+/** Single-quote a string for a POSIX shell `-c` argument (the CI runs Linux). */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 /**
  * Submit a Command job that runs `code` on the given Compute Instance.
  *   PUT {base}/jobs/{name}?api-version=2024-10-01
  * The command runs `python -c "<code>"` (or `Rscript -e` for R) on the CI's
- * default compute. Returns the job name so the caller can poll getCiJob().
+ * default compute. Returns the job so the caller can poll getCiJob().
  */
 export async function submitCiJob(opts: {
   ciName: string;
@@ -362,11 +444,11 @@ export async function submitCiJob(opts: {
   lang?: 'python' | 'r';
   displayName?: string;
 }): Promise<AmlJob> {
-  const cfg = amlConfig();
+  const t = resolveAmlTarget();
   const name = `loom-nb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const computeId =
-    `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}` +
-    `/providers/Microsoft.MachineLearningServices/workspaces/${cfg.workspace}/computes/${opts.ciName}`;
+    `/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}` +
+    `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}/computes/${opts.ciName}`;
   const command = opts.lang === 'r'
     ? `Rscript -e ${shellQuote(opts.code)}`
     : `python -c ${shellQuote(opts.code)}`;
@@ -384,14 +466,14 @@ export async function submitCiJob(opts: {
     method: 'PUT',
     body: JSON.stringify(armBody),
   });
-  const j = await readJson<any>(res);
+  const j = await readAmlJson<any>(res, 'submitCiJob');
   return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
 }
 
 /** Poll a Command job's status. Null on 404. */
 export async function getCiJob(name: string): Promise<AmlJob | null> {
   const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`);
-  const j = await readJson<any>(res);
+  const j = await readAmlJson<any>(res, 'getCiJob');
   return j ? shapeJob(j) : null;
 }
 
@@ -401,7 +483,92 @@ export function amlJobIsTerminal(status?: string): boolean {
   return AML_TERMINAL.includes(status || '');
 }
 
-/** Single-quote a string for a POSIX shell `-c` argument (the CI runs Linux). */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
+// ============================================================
+// 4. Models (model containers)
+// ============================================================
+
+export interface AmlModel {
+  id: string;
+  name: string;
+  latestVersion?: string;
+  description?: string;
+  tags?: Record<string, string>;
+}
+
+function shapeModel(raw: any): AmlModel {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    latestVersion: p.latestVersion,
+    description: p.description,
+    tags: p.tags,
+  };
+}
+
+export async function listModels(): Promise<AmlModel[]> {
+  const rows = await pagedList('/models', 'listModels');
+  return rows.map(shapeModel);
+}
+
+// ============================================================
+// 5. Schedules
+// ============================================================
+
+export interface AmlSchedule {
+  id: string;
+  name: string;
+  displayName?: string;
+  isEnabled?: boolean;
+  provisioningState?: string;
+  triggerType?: string;
+  description?: string;
+}
+
+function shapeSchedule(raw: any): AmlSchedule {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    displayName: p.displayName,
+    isEnabled: p.isEnabled,
+    provisioningState: p.provisioningState,
+    triggerType: p.trigger?.triggerType,
+    description: p.description,
+  };
+}
+
+export async function listSchedules(): Promise<AmlSchedule[]> {
+  const rows = await pagedList('/schedules', 'listSchedules');
+  return rows.map(shapeSchedule);
+}
+
+// ============================================================
+// 6. Environments (environment containers)
+// ============================================================
+
+export interface AmlEnvironment {
+  id: string;
+  name: string;
+  latestVersion?: string;
+  description?: string;
+  isAnonymous?: boolean;
+  tags?: Record<string, string>;
+}
+
+function shapeEnvironment(raw: any): AmlEnvironment {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    latestVersion: p.latestVersion,
+    description: p.description,
+    isAnonymous: p.isAnonymous,
+    tags: p.tags,
+  };
+}
+
+export async function listEnvironments(): Promise<AmlEnvironment[]> {
+  const rows = await pagedList('/environments', 'listEnvironments');
+  return rows.map(shapeEnvironment);
 }

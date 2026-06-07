@@ -118,6 +118,27 @@ export function kvUrlFromName(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Cognitive Services / Azure OpenAI (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * AAD `.default` scope for Azure Cognitive Services / Azure OpenAI tokens.
+ *
+ * The cognitiveservices audience differs by sovereign boundary: Commercial /
+ * GCC use `cognitiveservices.azure.com`; GCC-High / IL5 (both
+ * `AzureUSGovernment`) use `cognitiveservices.azure.us`. Hard-coding the
+ * Commercial scope silently fails AOAI auth in Gov — every AOAI token request
+ * must go through this helper. The AOAI REST data-plane URL itself comes from
+ * `LOOM_AOAI_ENDPOINT` (`*.openai.azure.com` vs `*.openai.azure.us`), which
+ * Bicep wires per boundary.
+ */
+export function cogScope(): string {
+  return isGovCloud()
+    ? 'https://cognitiveservices.azure.us/.default'
+    : 'https://cognitiveservices.azure.com/.default';
+}
+
+// ---------------------------------------------------------------------------
 // Service Bus / Event Hubs (data plane)
 // ---------------------------------------------------------------------------
 
@@ -157,6 +178,41 @@ export function kustoSuffix(): string {
 /** Build a cluster URI from `name` + `region` (e.g. `adx-loom`, `eastus2`). */
 export function kustoClusterUri(clusterName: string, region: string): string {
   return `https://${clusterName}.${region}.${kustoSuffix()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Azure Machine Learning data plane (api.azureml.ms / api.ml.azure.us)
+// ---------------------------------------------------------------------------
+
+/**
+ * AML regional data-plane host (no scheme) for a given workspace region. This
+ * is the host the MLflow tracking / registry REST and the foundry data-plane
+ * calls hang off — `<region>.api.azureml.ms` in Commercial/GCC, but
+ * `<region>.api.ml.azure.us` in the US Government clouds (verified against
+ * Microsoft Learn "reference-machine-learning-cloud-parity", e.g.
+ * `usgovvirginia.api.ml.azure.us`). Hard-coding `api.azureml.ms` silently
+ * fails in GCC-High / IL5 — every AML data-plane URL builds this host instead.
+ *
+ * `LOOM_AML_DATAPLANE_HOST` overrides the suffix outright for private-link
+ * workspaces or clouds we don't enumerate (it may be a bare suffix like
+ * `api.ml.azure.us` — the region is prefixed — or a full host already
+ * containing the region, which is passed through).
+ */
+export function amlDataPlaneHost(region: string): string {
+  const override = process.env.LOOM_AML_DATAPLANE_HOST;
+  if (override) {
+    const o = override.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    // Full host already carrying the region (contains it) is passed through;
+    // otherwise treat the override as a suffix and prefix the region.
+    return o.startsWith(`${region}.`) ? o : `${region}.${o}`;
+  }
+  switch (detectCloud()) {
+    case 'AzureUSGovernment':
+    case 'AzureDOD':
+      return `${region}.api.ml.azure.us`;
+    default:
+      return `${region}.api.azureml.ms`;
+  }
 }
 
 // ---------------------------------------------------------------------------

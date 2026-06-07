@@ -26,6 +26,21 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants — set true when re-provisioning to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('''Rich display() AML startup — base64-encoded shell command run at compute-instance start.
+It must drop apps/fiab-console/lib/notebook/ai-display.py into the IPython startup dir
+(~/.ipython/profile_default/startup/99_loom_display.py) so display(df) emits the Loom
+rich-display MIME in AML Jupyter, matching the Synapse-Spark path. Empty = skip the
+opt-in compute instance below (the Synapse Livy path still injects the helper at runtime,
+so display() rich rendering works without this). Build it from ai-display.py — see
+docs/fiab/parity/notebook-display.md.''')
+param richDisplayStartupScriptBase64 string = ''
+
+@description('Name of the opt-in AML compute instance that carries the rich-display startup script. Empty = none. Only created when richDisplayStartupScriptBase64 is also set.')
+param richDisplayComputeInstanceName string = ''
+
+@description('VM size for the rich-display compute instance.')
+param richDisplayComputeVmSize string = 'Standard_DS3_v2'
+
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
@@ -103,6 +118,12 @@ resource workspace 'Microsoft.MachineLearningServices/workspaces@2023-04-01' = {
 
 // AzureML Data Scientist — drive the workspace data plane
 // (role f6c7c914-8db3-469d-8ca1-694a8f32e121).
+//
+// This same role also covers notebook scheduling (Task: Notebook scheduling):
+//   - Microsoft.MachineLearningServices/workspaces/schedules/write  (create/enable/disable)
+//   - Microsoft.MachineLearningServices/workspaces/schedules/read   (schedule list)
+//   - Microsoft.MachineLearningServices/workspaces/jobs/write       (the Command job the schedule runs)
+// No additional role assignment is required for the schedule wizard / list.
 resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: workspace
   name: guid(workspace.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
@@ -113,5 +134,96 @@ resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// Rich display() — opt-in AML compute instance whose startup script installs the
+// ai-display.py helper into the IPython startup dir, so display(df) renders the
+// Loom interactive grid + chart recommendations in AML Jupyter (parity with the
+// Synapse Spark path). startupScript runs at every machine start (inline source,
+// base64 command) — the supported AML setup-script mechanism. Gated on both the
+// name and the script being supplied, so default deploys are unaffected and the
+// Synapse Livy path (which injects the same helper at session start) is unchanged.
+resource displayComputeInstance 'Microsoft.MachineLearningServices/workspaces/computes@2023-04-01' = if (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) {
+  parent: workspace
+  name: richDisplayComputeInstanceName
+  location: location
+  tags: complianceTags
+  properties: {
+    computeType: 'ComputeInstance'
+    properties: {
+      vmSize: richDisplayComputeVmSize
+      setupScripts: {
+        scripts: {
+          startupScript: {
+            scriptSource: 'inline'
+            scriptData: richDisplayStartupScriptBase64
+          }
+        }
+      }
+    }
+  }
+}
+
+// AzureML Compute Operator — list / start / stop / restart Compute Instances
+// on this workspace (role e503ece1-11d0-4e8e-8e2c-7a6c3bf38815). Mirrors the
+// grant on the Foundry hub (ai-foundry.bicep) so the CI lifecycle routes
+// (/api/foundry/computes[/{id}/start|status]) work against any AML workspace
+// the Console drives. Data Scientist above lacks computes/*.
+resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: workspace
+  name: guid(workspace.id, consolePrincipalId, 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
+output richDisplayComputeInstanceName string = (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) ? richDisplayComputeInstanceName : ''
+
+// --- Curated AML Environment: Pylance-grade Python IntelliSense ---
+// Backs the CSA Loom notebook "Open in VS Code for Web" path (AML compute
+// instance) and the curated kernel image. python-lsp-server + pyright give the
+// same completions/hover the Console's in-cell Monaco bridge serves, and
+// jupyter-lsp wires LSP into the JupyterLab UI on the compute instance.
+// Grounded in Learn: Microsoft.MachineLearningServices/workspaces/environments
+// + .../environments/versions (condaFile + image).
+resource loomPylspEnv 'Microsoft.MachineLearningServices/workspaces/environments@2023-04-01' = {
+  parent: workspace
+  name: 'loom-pylsp-env'
+  properties: {
+    description: 'CSA Loom curated environment — jupyter-lsp + python-lsp-server + pyright (Pylance-grade IntelliSense) over pandas/numpy/scikit-learn.'
+    tags: { 'csa-loom': 'notebook-lsp' }
+  }
+}
+
+resource loomPylspEnvVersion 'Microsoft.MachineLearningServices/workspaces/environments/versions@2023-04-01' = {
+  parent: loomPylspEnv
+  name: '1'
+  properties: {
+    description: 'v1 — Pylance-grade Python LSP stack on the AML openmpi CPU base image.'
+    image: 'mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest'
+    condaFile: '''
+name: loom-pylsp
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - jupyter-lsp>=2.2.0
+    - jupyterlab>=4.0.0
+    - python-lsp-server[all]>=1.11.0
+    - pyright>=1.1.350
+    - pandas-stubs>=2.2.0
+    - pandas
+    - numpy
+    - scikit-learn
+'''
+    tags: { 'csa-loom': 'notebook-lsp' }
+  }
+}
+
+output pylspEnvironmentName string = loomPylspEnv.name
+output pylspEnvironmentVersion string = loomPylspEnvVersion.name

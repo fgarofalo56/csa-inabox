@@ -303,15 +303,16 @@ export function parseConfigureMagic(source: string): Partial<LivySessionOptions>
 // ============================================================
 
 /**
- * Azure-native default: Synapse Spark Livy. Databricks is strictly opt-in via
- * LOOM_NOTEBOOK_BACKEND=databricks (per no-fabric-dependency.md the default
- * path must never require an opt-in backend). Any other value falls back to
- * Synapse silently.
+ * Azure-native default: Synapse Spark Livy. Databricks and the AML Compute-
+ * Instance Jupyter kernel (`aml-ci`) are strictly opt-in via
+ * LOOM_NOTEBOOK_BACKEND (per no-fabric-dependency.md the default path must never
+ * require an opt-in backend). Any other value falls back to Synapse silently.
  */
-export function resolveNotebookBackend(): 'synapse' | 'databricks' {
-  return (process.env.LOOM_NOTEBOOK_BACKEND || '').trim().toLowerCase() === 'databricks'
-    ? 'databricks'
-    : 'synapse';
+export function resolveNotebookBackend(): 'synapse' | 'databricks' | 'aml-ci' {
+  const v = (process.env.LOOM_NOTEBOOK_BACKEND || '').trim().toLowerCase();
+  if (v === 'databricks') return 'databricks';
+  if (v === 'aml-ci' || v === 'aml' || v === 'jupyter') return 'aml-ci';
+  return 'synapse';
 }
 
 // ============================================================

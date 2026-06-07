@@ -1,142 +1,319 @@
 /**
- * Contract tests for aml-client — the ARM calls the notebook AML path drives.
- * Stubs `fetch` + the credential and asserts the exact ARM URL, method, body,
- * filtering, and the abfss:// / wasbs:// path-building (the strings the
- * Datastore Explorer drags into a cell).
+ * Contract tests for the AML control-plane client (resolve-aml-target +
+ * aml-client). Per .claude/rules/no-vaporware.md these assert the EXACT ARM
+ * REST the client shapes — sovereign-cloud-aware URLs, the AAD bearer header,
+ * api-version 2024-10-01, list surfaces (computes / schedules / environments),
+ * the resolver's env fallback chain, and the notebook AML path (Compute
+ * Instance list/start, datastore abfss:// / wasbs:// path building, and the
+ * Command job submit). Nothing is faked beyond stubbing fetch + the credential.
  *
- * Grounded in Microsoft Learn (Machine Learning workspaces/computes +
- * workspaces/datastores + workspaces/jobs, api-version 2024-10-01).
+ * Grounding: https://learn.microsoft.com/rest/api/azureml/compute/list (2024-10-01)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@azure/identity', () => {
-  class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
-  return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
+  class Cred { async getToken() { return { token: 'AAD.ARM.TOKEN', expiresOnTimestamp: Date.now() + 3600_000 }; } }
+  return {
+    DefaultAzureCredential: Cred,
+    ManagedIdentityCredential: Cred,
+    ChainedTokenCredential: Cred,
+  };
 });
 
-beforeEach(() => {
-  process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
-  process.env.LOOM_AML_RG = 'rg-aml';
-  process.env.LOOM_AML_WORKSPACE = 'aml-loom-abc';
-  process.env.LOOM_AML_REGION = 'eastus2';
-  delete process.env.AZURE_CLOUD;
-});
+import {
+  listComputes,
+  listSchedules,
+  listEnvironments,
+  amlConfigGate,
+} from '../aml-client';
+import {
+  resolveAmlTarget,
+  amlWorkspaceArmPath,
+  AmlNotConfiguredError,
+} from '../resolve-aml-target';
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); });
+const AML_ENV = [
+  'LOOM_AML_SUBSCRIPTION',
+  'LOOM_SUBSCRIPTION_ID',
+  'LOOM_AML_WORKSPACE',
+  'LOOM_FOUNDRY_NAME',
+  'LOOM_AML_RESOURCE_GROUP',
+  'LOOM_AML_RG',
+  'LOOM_FOUNDRY_RG',
+  'LOOM_AML_REGION',
+  'LOOM_FOUNDRY_REGION',
+  'AZURE_CLOUD',
+  'LOOM_ARM_ENDPOINT',
+];
 
-function captureFetch(impl: (url: string, init?: RequestInit) => { status?: number; body?: unknown } = () => ({ body: {} })) {
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    const r = impl(String(url), init);
-    return new Response(JSON.stringify(r.body ?? {}), {
-      status: r.status ?? 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return calls;
+function clearAmlEnv() {
+  for (const k of AML_ENV) delete process.env[k];
 }
 
-describe('aml-client config', () => {
-  it('amlIsConfigured true when env set, false when workspace unset', async () => {
-    const mod = await import('../aml-client');
-    expect(mod.amlIsConfigured()).toBe(true);
-    delete process.env.LOOM_AML_WORKSPACE;
-    delete process.env.LOOM_FOUNDRY_NAME;
-    vi.resetModules();
-    const mod2 = await import('../aml-client');
-    expect(mod2.amlIsConfigured()).toBe(false);
-    expect(() => mod2.amlConfig()).toThrow(/not configured/i);
+// ============================================================
+// Notebook AML path suite (listCIs / startCI / datastores / submitCiJob)
+// ============================================================
+describe('notebook AML path', () => {
+  beforeEach(() => {
+    clearAmlEnv();
+    process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
+    process.env.LOOM_AML_RG = 'rg-aml';
+    process.env.LOOM_AML_WORKSPACE = 'aml-loom-abc';
+    process.env.LOOM_AML_REGION = 'eastus2';
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); clearAmlEnv(); });
+
+  function captureFetch(impl: (url: string, init?: RequestInit) => { status?: number; body?: unknown } = () => ({ body: {} })) {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      const r = impl(String(url), init);
+      return new Response(JSON.stringify(r.body ?? {}), {
+        status: r.status ?? 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return calls;
+  }
+
+  describe('aml-client config', () => {
+    it('amlIsConfigured true when env set, false when workspace unset', async () => {
+      const mod = await import('../aml-client');
+      expect(mod.amlIsConfigured()).toBe(true);
+      delete process.env.LOOM_AML_WORKSPACE;
+      delete process.env.LOOM_FOUNDRY_NAME;
+      vi.resetModules();
+      const mod2 = await import('../aml-client');
+      expect(mod2.amlIsConfigured()).toBe(false);
+      expect(() => mod2.amlConfig()).toThrow(/not configured/i);
+    });
+
+    it('falls back to Foundry env for workspace/region', async () => {
+      delete process.env.LOOM_AML_WORKSPACE;
+      delete process.env.LOOM_AML_REGION;
+      delete process.env.LOOM_AML_RG;
+      process.env.LOOM_FOUNDRY_NAME = 'hub-loom';
+      process.env.LOOM_FOUNDRY_REGION = 'westus2';
+      process.env.LOOM_FOUNDRY_RG = 'rg-foundry';
+      vi.resetModules();
+      const mod = await import('../aml-client');
+      const cfg = mod.amlConfig();
+      expect(cfg.workspace).toBe('hub-loom');
+      expect(cfg.region).toBe('westus2');
+      expect(cfg.resourceGroup).toBe('rg-foundry');
+    });
   });
 
-  it('falls back to Foundry env for workspace/region', async () => {
-    delete process.env.LOOM_AML_WORKSPACE;
-    delete process.env.LOOM_AML_REGION;
-    delete process.env.LOOM_AML_RG;
-    process.env.LOOM_FOUNDRY_NAME = 'hub-loom';
-    process.env.LOOM_FOUNDRY_REGION = 'westus2';
-    process.env.LOOM_FOUNDRY_RG = 'rg-foundry';
-    vi.resetModules();
-    const mod = await import('../aml-client');
-    const cfg = mod.amlConfig();
-    expect(cfg.workspace).toBe('hub-loom');
-    expect(cfg.region).toBe('westus2');
-    expect(cfg.resourceGroup).toBe('rg-foundry');
+  describe('listCIs', () => {
+    it('hits the computes ARM path and keeps only ComputeInstance', async () => {
+      const calls = captureFetch(() => ({ body: { value: [
+        { name: 'ci1', properties: { computeType: 'ComputeInstance', properties: { state: 'Running', vmSize: 'Standard_DS3_v2' } } },
+        { name: 'cluster1', properties: { computeType: 'AmlCompute', properties: { state: 'Succeeded' } } },
+      ] } }));
+      const mod = await import('../aml-client');
+      const cis = await mod.listCIs();
+      expect(cis).toHaveLength(1);
+      expect(cis[0]).toMatchObject({ name: 'ci1', state: 'Running', vmSize: 'Standard_DS3_v2' });
+      expect(calls[0].url).toContain('https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-aml/providers/Microsoft.MachineLearningServices/workspaces/aml-loom-abc/computes');
+      expect(calls[0].url).toContain('api-version=2024-10-01');
+    });
+  });
+
+  describe('startCI', () => {
+    it('POSTs computes/{name}/start and tolerates 409', async () => {
+      const calls = captureFetch((url) => url.includes('/start') ? { status: 202 } : { body: {} });
+      const mod = await import('../aml-client');
+      await mod.startCI('ci1');
+      expect(calls[0].init?.method).toBe('POST');
+      expect(calls[0].url).toContain('/computes/ci1/start');
+      // 409 → swallowed (idempotent auto-start)
+      vi.resetModules();
+      captureFetch(() => ({ status: 409, body: { error: { message: 'already running' } } }));
+      const mod2 = await import('../aml-client');
+      await expect(mod2.startCI('ci1')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('listAmlDatastores path building', () => {
+    it('builds abfss for ADLS Gen2 and wasbs for Blob', async () => {
+      captureFetch(() => ({ body: { value: [
+        { name: 'adls', properties: { datastoreType: 'AzureDataLakeGen2', isDefault: false, accountName: 'myadls', filesystem: 'data', endpoint: 'core.windows.net' } },
+        { name: 'blobstore', properties: { datastoreType: 'AzureBlob', isDefault: true, accountName: 'myblob', containerName: 'azureml-blobstore', endpoint: 'core.windows.net' } },
+        { name: 'fileshare', properties: { datastoreType: 'AzureFile', accountName: 'myfile' } },
+      ] } }));
+      const mod = await import('../aml-client');
+      const stores = await mod.listAmlDatastores();
+      const adls = stores.find(d => d.name === 'adls')!;
+      const blob = stores.find(d => d.name === 'blobstore')!;
+      const file = stores.find(d => d.name === 'fileshare')!;
+      expect(adls.abfssPath).toBe('abfss://data@myadls.dfs.core.windows.net/');
+      expect(adls.wasbsPath).toBeNull();
+      expect(blob.wasbsPath).toBe('wasbs://azureml-blobstore@myblob.blob.core.windows.net/');
+      expect(blob.isDefault).toBe(true);
+      expect(file.abfssPath).toBeNull();
+      expect(file.wasbsPath).toBeNull();
+    });
+
+    it('uses the gov DFS suffix when endpoint absent in a gov cloud', async () => {
+      const mod = await import('../aml-client');
+      // pure helper — no fetch needed
+      expect(mod.toAbfssPath({ datastoreType: 'AzureDataLakeGen2', accountName: 'a', filesystem: 'fs', endpoint: 'core.usgovcloudapi.net' }))
+        .toBe('abfss://fs@a.dfs.core.usgovcloudapi.net/');
+    });
+  });
+
+  describe('submitCiJob', () => {
+    it('PUTs a Command job targeting the CI computeId', async () => {
+      const calls = captureFetch(() => ({ body: { name: 'loom-nb-x', properties: { jobType: 'Command', status: 'NotStarted' } } }));
+      const mod = await import('../aml-client');
+      const job = await mod.submitCiJob({ ciName: 'ci1', code: "print('hi')", lang: 'python' });
+      expect(job.name).toBe('loom-nb-x');
+      const call = calls[0];
+      expect(call.init?.method).toBe('PUT');
+      expect(call.url).toContain('/jobs/');
+      expect(call.url).toContain('api-version=2024-10-01');
+      const body = JSON.parse(String(call.init?.body));
+      expect(body.properties.jobType).toBe('Command');
+      expect(body.properties.computeId).toContain('/workspaces/aml-loom-abc/computes/ci1');
+      expect(body.properties.command).toContain('python -c');
+    });
   });
 });
 
-describe('listCIs', () => {
-  it('hits the computes ARM path and keeps only ComputeInstance', async () => {
-    const calls = captureFetch(() => ({ body: { value: [
-      { name: 'ci1', properties: { computeType: 'ComputeInstance', properties: { state: 'Running', vmSize: 'Standard_DS3_v2' } } },
-      { name: 'cluster1', properties: { computeType: 'AmlCompute', properties: { state: 'Succeeded' } } },
-    ] } }));
-    const mod = await import('../aml-client');
-    const cis = await mod.listCIs();
-    expect(cis).toHaveLength(1);
-    expect(cis[0]).toMatchObject({ name: 'ci1', state: 'Running', vmSize: 'Standard_DS3_v2' });
-    expect(calls[0].url).toContain('https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-aml/providers/Microsoft.MachineLearningServices/workspaces/aml-loom-abc/computes');
-    expect(calls[0].url).toContain('api-version=2024-10-01');
-  });
-});
+// ============================================================
+// AML control-plane suite (resolver + list surfaces)
+// ============================================================
+describe('AML control-plane', () => {
+  const realFetch = global.fetch;
+  interface Call { url: string; init?: any }
 
-describe('startCI', () => {
-  it('POSTs computes/{name}/start and tolerates 409', async () => {
-    const calls = captureFetch((url) => url.includes('/start') ? { status: 202 } : { body: {} });
-    const mod = await import('../aml-client');
-    await mod.startCI('ci1');
-    expect(calls[0].init?.method).toBe('POST');
-    expect(calls[0].url).toContain('/computes/ci1/start');
-    // 409 → swallowed (idempotent auto-start)
-    vi.resetModules();
-    captureFetch(() => ({ status: 409, body: { error: { message: 'already running' } } }));
-    const mod2 = await import('../aml-client');
-    await expect(mod2.startCI('ci1')).resolves.toBeUndefined();
-  });
-});
+  function mockFetch(handler: (url: string) => any, calls?: Call[]) {
+    global.fetch = vi.fn(async (url: any, init?: any) => {
+      calls?.push({ url: String(url), init });
+      const out = handler(String(url));
+      if (out instanceof Response) return out;
+      const status = out?._status ?? 200;
+      return new Response(JSON.stringify(out?._body ?? out), { status });
+    }) as any;
+  }
 
-describe('listAmlDatastores path building', () => {
-  it('builds abfss for ADLS Gen2 and wasbs for Blob', async () => {
-    captureFetch(() => ({ body: { value: [
-      { name: 'adls', properties: { datastoreType: 'AzureDataLakeGen2', isDefault: false, accountName: 'myadls', filesystem: 'data', endpoint: 'core.windows.net' } },
-      { name: 'blobstore', properties: { datastoreType: 'AzureBlob', isDefault: true, accountName: 'myblob', containerName: 'azureml-blobstore', endpoint: 'core.windows.net' } },
-      { name: 'fileshare', properties: { datastoreType: 'AzureFile', accountName: 'myfile' } },
-    ] } }));
-    const mod = await import('../aml-client');
-    const stores = await mod.listAmlDatastores();
-    const adls = stores.find(d => d.name === 'adls')!;
-    const blob = stores.find(d => d.name === 'blobstore')!;
-    const file = stores.find(d => d.name === 'fileshare')!;
-    expect(adls.abfssPath).toBe('abfss://data@myadls.dfs.core.windows.net/');
-    expect(adls.wasbsPath).toBeNull();
-    expect(blob.wasbsPath).toBe('wasbs://azureml-blobstore@myblob.blob.core.windows.net/');
-    expect(blob.isDefault).toBe(true);
-    expect(file.abfssPath).toBeNull();
-    expect(file.wasbsPath).toBeNull();
+  beforeEach(() => {
+    clearAmlEnv();
+    process.env.LOOM_SUBSCRIPTION_ID = 'sub-1';
+    process.env.LOOM_AML_WORKSPACE = 'ws-test';
+    process.env.LOOM_AML_RESOURCE_GROUP = 'rg-aml';
+    process.env.LOOM_AML_REGION = 'eastus2';
+  });
+  afterEach(() => {
+    global.fetch = realFetch;
+    clearAmlEnv();
+    vi.restoreAllMocks();
   });
 
-  it('uses the gov DFS suffix when endpoint absent in a gov cloud', async () => {
-    const mod = await import('../aml-client');
-    // pure helper — no fetch needed
-    expect(mod.toAbfssPath({ datastoreType: 'AzureDataLakeGen2', accountName: 'a', filesystem: 'fs', endpoint: 'core.usgovcloudapi.net' }))
-      .toBe('abfss://fs@a.dfs.core.usgovcloudapi.net/');
+  describe('amlConfigGate', () => {
+    it('returns null when LOOM_AML_WORKSPACE + a subscription resolve', () => {
+      expect(amlConfigGate()).toBeNull();
+    });
+    it('names the missing workspace var', () => {
+      delete process.env.LOOM_AML_WORKSPACE;
+      expect(amlConfigGate()).toEqual({ missing: 'LOOM_AML_WORKSPACE (or LOOM_FOUNDRY_NAME)' });
+    });
+    it('names the missing subscription var', () => {
+      delete process.env.LOOM_SUBSCRIPTION_ID;
+      expect(amlConfigGate()).toEqual({ missing: 'LOOM_AML_SUBSCRIPTION (or LOOM_SUBSCRIPTION_ID)' });
+    });
   });
-});
 
-describe('submitCiJob', () => {
-  it('PUTs a Command job targeting the CI computeId', async () => {
-    const calls = captureFetch(() => ({ body: { name: 'loom-nb-x', properties: { jobType: 'Command', status: 'NotStarted' } } }));
-    const mod = await import('../aml-client');
-    const job = await mod.submitCiJob({ ciName: 'ci1', code: "print('hi')", lang: 'python' });
-    expect(job.name).toBe('loom-nb-x');
-    const call = calls[0];
-    expect(call.init?.method).toBe('PUT');
-    expect(call.url).toContain('/jobs/');
-    expect(call.url).toContain('api-version=2024-10-01');
-    const body = JSON.parse(String(call.init?.body));
-    expect(body.properties.jobType).toBe('Command');
-    expect(body.properties.computeId).toContain('/workspaces/aml-loom-abc/computes/ci1');
-    expect(body.properties.command).toContain('python -c');
+  describe('resolveAmlTarget fallback chain', () => {
+    it('LOOM_AML_WORKSPACE overrides LOOM_FOUNDRY_NAME', () => {
+      process.env.LOOM_FOUNDRY_NAME = 'foundry-hub';
+      expect(resolveAmlTarget().workspace).toBe('ws-test');
+      delete process.env.LOOM_AML_WORKSPACE;
+      expect(resolveAmlTarget().workspace).toBe('foundry-hub');
+    });
+    it('LOOM_AML_SUBSCRIPTION overrides LOOM_SUBSCRIPTION_ID', () => {
+      process.env.LOOM_AML_SUBSCRIPTION = 'sub-aml';
+      expect(resolveAmlTarget().subscriptionId).toBe('sub-aml');
+    });
+    it('LOOM_AML_RESOURCE_GROUP overrides LOOM_AML_RG and LOOM_FOUNDRY_RG', () => {
+      process.env.LOOM_AML_RG = 'rg-legacy';
+      process.env.LOOM_FOUNDRY_RG = 'rg-foundry';
+      expect(resolveAmlTarget().resourceGroup).toBe('rg-aml');
+      delete process.env.LOOM_AML_RESOURCE_GROUP;
+      expect(resolveAmlTarget().resourceGroup).toBe('rg-legacy');
+    });
+    it('falls back to rg-csa-loom-admin-<region> when no RG var is set', () => {
+      delete process.env.LOOM_AML_RESOURCE_GROUP;
+      expect(resolveAmlTarget().resourceGroup).toBe('rg-csa-loom-admin-eastus2');
+    });
+    it('throws AmlNotConfiguredError listing missing vars when unconfigured', () => {
+      delete process.env.LOOM_AML_WORKSPACE;
+      delete process.env.LOOM_SUBSCRIPTION_ID;
+      let caught: unknown;
+      try { resolveAmlTarget(); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(AmlNotConfiguredError);
+      expect((caught as AmlNotConfiguredError).missing).toEqual([
+        'LOOM_AML_SUBSCRIPTION (or LOOM_SUBSCRIPTION_ID)',
+        'LOOM_AML_WORKSPACE (or LOOM_FOUNDRY_NAME)',
+      ]);
+    });
+    it('builds the canonical workspace ARM path', () => {
+      expect(amlWorkspaceArmPath()).toBe(
+        '/subscriptions/sub-1/resourceGroups/rg-aml/providers/Microsoft.MachineLearningServices/workspaces/ws-test',
+      );
+    });
+  });
+
+  describe('listComputes — Commercial endpoint', () => {
+    it('GETs the computes child resource with an AAD bearer and api-version 2024-10-01', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({
+        value: [
+          { id: '/sub/.../computes/ci-1', name: 'ci-1', location: 'eastus2', properties: { computeType: 'ComputeInstance', provisioningState: 'Succeeded', properties: { state: 'Running', vmSize: 'STANDARD_DS3_V2' } } },
+        ],
+      }), calls);
+
+      const rows = await listComputes();
+
+      expect(calls).toHaveLength(1);
+      const { url, init } = calls[0];
+      expect(url).toBe(
+        'https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-aml/providers/Microsoft.MachineLearningServices/workspaces/ws-test/computes?api-version=2024-10-01',
+      );
+      expect(init.headers['authorization']).toBe('Bearer AAD.ARM.TOKEN');
+      expect(rows[0]).toMatchObject({ name: 'ci-1', computeType: 'ComputeInstance', state: 'Running', vmSize: 'STANDARD_DS3_V2' });
+    });
+  });
+
+  describe('listComputes — Government endpoint selection', () => {
+    it('targets the Government ARM host when AZURE_CLOUD is AzureUSGovernment', async () => {
+      process.env.AZURE_CLOUD = 'AzureUSGovernment';
+      const calls: Call[] = [];
+      mockFetch(() => ({ value: [] }), calls);
+
+      await listComputes();
+
+      expect(calls[0].url).toContain('https://management.usgovcloudapi.net/');
+      expect(calls[0].url).not.toContain('management.azure.com');
+    });
+  });
+
+  describe('sibling list surfaces', () => {
+    it('listSchedules GETs the schedules child resource', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({ value: [{ id: 's1', name: 'nightly', properties: { isEnabled: true, provisioningState: 'Succeeded', trigger: { triggerType: 'Recurrence' } } }] }), calls);
+      const rows = await listSchedules();
+      expect(calls[0].url).toContain('/workspaces/ws-test/schedules?api-version=2024-10-01');
+      expect(rows[0]).toMatchObject({ name: 'nightly', isEnabled: true, triggerType: 'Recurrence' });
+    });
+
+    it('listEnvironments GETs the environments child resource', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({ value: [{ id: 'e1', name: 'sklearn-env', properties: { latestVersion: '3' } }] }), calls);
+      const rows = await listEnvironments();
+      expect(calls[0].url).toContain('/workspaces/ws-test/environments?api-version=2024-10-01');
+      expect(rows[0]).toMatchObject({ name: 'sklearn-env', latestVersion: '3' });
+    });
   });
 });
