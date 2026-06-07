@@ -37,6 +37,7 @@ import {
   BookOpen20Regular, TableSimple20Regular,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
+  History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
@@ -110,6 +111,21 @@ interface PreviewResponse {
   message?: string;
   error?: string;
   code?: string;
+}
+
+interface HistoryRow {
+  version: number;
+  timestamp: string;
+  operation: string;
+  userName?: string;
+  metrics: {
+    numOutputRows?: number;
+    numFiles?: number;
+    numRemovedFiles?: number;
+    numDeletedRows?: number;
+    numOutputBytes?: number;
+  };
+  operationParameters?: Record<string, unknown>;
 }
 
 function formatBytes(n: number): string {
@@ -224,6 +240,16 @@ export function LakehouseEditor({ item, id }: Props) {
   );
   const [sqlResult, setSqlResult] = useState<PreviewResponse | null>(null);
   const [sqlLoading, setSqlLoading] = useState(false);
+  // ---- History tab (Delta time travel) --------------------------------
+  const [historyTable, setHistoryTable] = useState<string | null>(null);
+  const [historyRows, setHistoryRows] = useState<HistoryRow[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRestoring, setHistoryRestoring] = useState<number | null>(null);
+  const [historyRestoreMsg, setHistoryRestoreMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [historyPreviewVersion, setHistoryPreviewVersion] = useState<number | null>(null);
+  const [historyPreviewResult, setHistoryPreviewResult] = useState<PreviewResponse | null>(null);
+  const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false);
   // F10 — upload jobs live in the module-scope jobs-store so they survive item
   // tab switches (component unmount). `uploading` is DERIVED from the store's
   // running jobs for the active container, not local state — subscribing to
@@ -529,6 +555,90 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch (e: any) { setShortcutsError(e?.message || String(e)); setShortcuts([]); }
     finally { setShortcutsBusy(false); }
   }, [shortcutLakehouseId]);
+
+  // ---- History (Delta time travel) callbacks --------------------------
+  const loadHistory = useCallback(async (tablePath: string) => {
+    if (!activeContainer) return;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    setHistoryRows(null);
+    setHistoryRestoreMsg(null);
+    setHistoryPreviewResult(null);
+    try {
+      const qs = new URLSearchParams({ container: activeContainer, tablePath });
+      const r = await fetch(`/api/lakehouse/history?${qs.toString()}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; versions?: HistoryRow[] }>(r, 'Load history');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setHistoryRows(j.versions || []);
+    } catch (e: any) {
+      setHistoryError(e?.message || String(e));
+      setHistoryRows([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [activeContainer]);
+
+  const restoreToVersion = useCallback(async (tablePath: string, version: number) => {
+    if (!activeContainer) return;
+    // eslint-disable-next-line no-alert
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm(`Restore table "${leafName(tablePath)}" to version ${version}? This overwrites the current table state with version ${version}. Ensure the data files for that version have not been removed by VACUUM.`)
+      : false;
+    if (!confirmed) return;
+    setHistoryRestoring(version);
+    setHistoryRestoreMsg(null);
+    try {
+      const r = await fetch('/api/lakehouse/history', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'restore' }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; gated?: boolean; hint?: string }>(r, 'Restore');
+      if (!j.ok) {
+        setHistoryRestoreMsg({ ok: false, text: j.gated ? `Not available: ${j.hint}` : (j.error || 'Restore failed') });
+      } else {
+        setHistoryRestoreMsg({ ok: true, text: `Table restored to version ${version} at ${new Date().toLocaleTimeString()}` });
+        await loadHistory(tablePath);
+      }
+    } catch (e: any) {
+      setHistoryRestoreMsg({ ok: false, text: e?.message || String(e) });
+    } finally {
+      setHistoryRestoring(null);
+    }
+  }, [activeContainer, loadHistory]);
+
+  const previewAsOf = useCallback(async (tablePath: string, version: number) => {
+    if (!activeContainer) return;
+    setHistoryPreviewLoading(true);
+    setHistoryPreviewVersion(version);
+    setHistoryPreviewResult(null);
+    try {
+      const r = await fetch('/api/lakehouse/history', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'preview' }),
+      });
+      const j = await parseJsonOrError<PreviewResponse & { gated?: boolean; hint?: string }>(r, 'Preview as of');
+      if (!j.ok && (j as any).gated) {
+        setHistoryPreviewResult({ ok: false, error: `Not available: ${(j as any).hint}` });
+      } else {
+        setHistoryPreviewResult(j);
+      }
+    } catch (e: any) {
+      setHistoryPreviewResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setHistoryPreviewLoading(false);
+    }
+  }, [activeContainer]);
+
+  const openTableHistory = useCallback((tablePath: string) => {
+    setHistoryTable(tablePath);
+    setHistoryRows(null);
+    setHistoryRestoreMsg(null);
+    setHistoryPreviewResult(null);
+    loadHistory(tablePath);
+    setTab('history');
+  }, [loadHistory]);
 
   const resetWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
     setScStep(1); setScType('internal'); setScTargetUri('');
@@ -2064,6 +2174,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
               <Tab value="tables">Tables</Tab>
+              <Tab value="history">History</Tab>
               <Tab value="schemas">Schemas</Tab>
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
@@ -2277,13 +2388,27 @@ export function LakehouseEditor({ item, id }: Props) {
                                       <TableCell><code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
                                       <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
                                       <TableCell>
-                                        <Button size="small" appearance="primary"
-                                          onClick={() => {
-                                            setSqlText(`-- Read Delta table (once materialized under Tables/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/Tables/${t.name}', FORMAT='DELTA') AS r;`);
-                                            setTab('sql');
-                                          }}>
-                                          Query template
-                                        </Button>
+                                        <Menu>
+                                          <MenuTrigger disableButtonEnhancement>
+                                            <Button appearance="subtle" size="small">…</Button>
+                                          </MenuTrigger>
+                                          <MenuPopover>
+                                            <MenuList>
+                                              <MenuItem icon={<Play20Regular />}
+                                                onClick={() => {
+                                                  setSqlText(`-- Read Delta table (once materialized under Tables/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/Tables/${t.name}', FORMAT='DELTA') AS r;`);
+                                                  setTab('sql');
+                                                }}>
+                                                Query template
+                                              </MenuItem>
+                                              <MenuItem icon={<History20Regular />}
+                                                disabled={!activeContainer}
+                                                onClick={() => openTableHistory(`Tables/${t.name}`)}>
+                                                History (time travel)
+                                              </MenuItem>
+                                            </MenuList>
+                                          </MenuPopover>
+                                        </Menu>
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -2357,6 +2482,10 @@ export function LakehouseEditor({ item, id }: Props) {
                                                   <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
                                                     onClick={() => openMoveTable(tableName, schemaName)}>
                                                     Move to schema…
+                                                  </Button>
+                                                  <Button size="small" appearance="outline" icon={<History20Regular />}
+                                                    onClick={() => openTableHistory(t.name)}>
+                                                    History
                                                   </Button>
                                                 </span>
                                               </TableCell>
@@ -2441,6 +2570,140 @@ export function LakehouseEditor({ item, id }: Props) {
                     </div>
                   );
                 })()}
+              </>
+            )}
+
+            {tab === 'history' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
+                  {historyTable ? (
+                    <>
+                      <Caption1>Delta version history — <strong>{leafName(historyTable)}</strong> <code style={{ fontSize: 11 }}>/{historyTable}</code></Caption1>
+                      <Button appearance="outline" icon={<ArrowSync20Regular />}
+                        disabled={historyLoading || !activeContainer}
+                        onClick={() => historyTable && loadHistory(historyTable)}>
+                        Refresh
+                      </Button>
+                    </>
+                  ) : (
+                    <Caption1>Open the <strong>Tables</strong> tab and choose <strong>… → History (time travel)</strong> on a Delta table to view its version log, preview any version, or restore.</Caption1>
+                  )}
+                </div>
+
+                {historyLoading && <Spinner size="small" label="Reading _delta_log…" labelPosition="after" />}
+
+                {historyError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>History error</MessageBarTitle>
+                      {historyError}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {historyRestoreMsg && (
+                  <MessageBar intent={historyRestoreMsg.ok ? 'success' : 'warning'}>
+                    <MessageBarBody>{historyRestoreMsg.text}</MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {!historyLoading && historyRows !== null && historyRows.length === 0 && !historyError && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      No committed versions found under <code>{historyTable}/_delta_log/</code>. The table may not have been materialized yet, or the path is not a Delta table.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {!historyLoading && historyRows !== null && historyRows.length > 0 && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Delta version history" size="small">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Version</TableHeaderCell>
+                          <TableHeaderCell>Timestamp</TableHeaderCell>
+                          <TableHeaderCell>Operation</TableHeaderCell>
+                          <TableHeaderCell>User</TableHeaderCell>
+                          <TableHeaderCell>Metrics</TableHeaderCell>
+                          <TableHeaderCell>Actions</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {historyRows.map((row) => (
+                          <TableRow key={row.version}>
+                            <TableCell className={s.cell}>{row.version}</TableCell>
+                            <TableCell className={s.cell}>{row.timestamp ? new Date(row.timestamp).toLocaleString() : '—'}</TableCell>
+                            <TableCell><Badge appearance="outline">{row.operation}</Badge></TableCell>
+                            <TableCell className={s.cell}>{row.userName || '—'}</TableCell>
+                            <TableCell className={s.cell}>
+                              {[
+                                row.metrics.numOutputRows != null && `${row.metrics.numOutputRows.toLocaleString()} rows`,
+                                row.metrics.numFiles != null && `${row.metrics.numFiles} files`,
+                                row.metrics.numRemovedFiles != null && `${row.metrics.numRemovedFiles} removed`,
+                                row.metrics.numDeletedRows != null && `${row.metrics.numDeletedRows.toLocaleString()} deleted`,
+                                row.metrics.numOutputBytes != null && formatBytes(row.metrics.numOutputBytes),
+                              ].filter(Boolean).join(' · ') || '—'}
+                            </TableCell>
+                            <TableCell>
+                              <Button size="small" appearance="outline" icon={<Eye20Regular />}
+                                disabled={historyPreviewLoading}
+                                style={{ marginRight: 4 }}
+                                onClick={() => historyTable && previewAsOf(historyTable, row.version)}>
+                                Preview
+                              </Button>
+                              <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />}
+                                disabled={historyRestoring === row.version}
+                                onClick={() => historyTable && restoreToVersion(historyTable, row.version)}>
+                                {historyRestoring === row.version ? 'Restoring…' : 'Restore'}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {historyPreviewLoading && (
+                  <Spinner size="small" label={`Querying version ${historyPreviewVersion}…`} labelPosition="after" />
+                )}
+                {!historyPreviewLoading && historyPreviewResult && (
+                  <>
+                    <Subtitle2 style={{ marginTop: 12 }}>
+                      Preview — {leafName(historyTable || '')} @ version {historyPreviewVersion}
+                    </Subtitle2>
+                    {!historyPreviewResult.ok ? (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Preview unavailable</MessageBarTitle>
+                          {historyPreviewResult.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    ) : (historyPreviewResult.columns?.length ?? 0) === 0 ? (
+                      <Caption1>Query returned no columns.</Caption1>
+                    ) : (
+                      <div className={s.tableWrap}>
+                        <Table aria-label="Preview as of version" size="small">
+                          <TableHeader>
+                            <TableRow>
+                              {(historyPreviewResult.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(historyPreviewResult.rows || []).map((row, i) => (
+                              <TableRow key={i}>
+                                {(historyPreviewResult.columns || []).map((_, j) => (
+                                  <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
+                                ))}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
 
