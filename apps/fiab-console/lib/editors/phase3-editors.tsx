@@ -2881,7 +2881,6 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
             </Dialog>
           </>
         )}
-        </>}
       </div>
     } />
   );
