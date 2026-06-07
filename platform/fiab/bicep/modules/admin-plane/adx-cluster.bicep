@@ -117,4 +117,13 @@ output clusterId string = adxCluster.id
 output clusterName string = adxCluster.name
 output clusterUri string = adxCluster.properties.uri
 output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
+// clusterPrincipalId is the cluster's system-assigned MI object id. ADX
+// EventHub/IoT Hub data connections (KQL Database → Add data connection) require
+// this MI to read the SOURCE's shared-access keys. For an Event Hub that's
+// "Azure Event Hubs Data Receiver" on the namespace; for an IoT Hub that's
+// "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants
+// Microsoft.Devices/IotHubs/IotHubKeys/read) on the hub. Those grants are made
+// at the SOURCE scope, not here, and the IoT Hub is user-selected at runtime —
+// so they are operator-manual one-time actions surfaced as honest-gate
+// MessageBars in the editor (see app/api/items/kql-database/[id]/data-connections).
 output clusterPrincipalId string = adxCluster.identity.principalId

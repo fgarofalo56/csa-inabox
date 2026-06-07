@@ -28,25 +28,16 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './arm-endpoint';
 
-// ARM endpoint is sovereign-cloud aware — single source of truth, identical
-// pattern to adf-client.ts. Default = Commercial (unchanged behavior). GCC /
-// GCC-High / IL5 deployments set AZURE_CLOUD=AzureUSGovernment (or
-// LOOM_ARM_ENDPOINT) so every Kusto ARM call below — GET cluster, PATCH SKU,
-// PATCH optimizedAutoscale, PATCH enableStreamingIngest, follower-attach —
-// targets the correct ARM host + token scope instead of management.azure.com.
-// Required because follower-attach ships in Gov.
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
+// Sovereign-cloud aware ARM host + scope. Resolved from AZURE_CLOUD /
+// LOOM_ARM_ENDPOINT via the shared arm-endpoint helper so every Kusto ARM call
+// below — GET cluster, PATCH SKU, PATCH optimizedAutoscale, PATCH
+// enableStreamingIngest, follower-attach, data connections — targets the right
+// host + token scope (Commercial / GCC / GCC-High / IL5 / IL6) instead of a
+// hardcoded management.azure.com. Required because follower-attach ships in Gov.
 const ARM_BASE = armBase();
-const ARM_SCOPE = `${ARM_BASE}/.default`;
+const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -255,7 +246,9 @@ export interface CreateEventHubDataConnectionSpec {
 }
 
 function dataConnectionsBaseUrl(cfg: KustoClusterArmConfig, database: string): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}/databases/${encodeURIComponent(database)}/dataConnections`;
+  // Sovereign-cloud aware host via clusterUrl(ARM_BASE) — never hardcode
+  // management.azure.com (would break GCC/GCC-High/IL5/IL6).
+  return `${clusterUrl(cfg)}/databases/${encodeURIComponent(database)}/dataConnections`;
 }
 
 function shapeDataConnection(raw: any): DataConnectionArm {
@@ -318,6 +311,83 @@ export async function createOrUpdateDataConnection(
   if (r.status === 202) {
     return shapeDataConnection({
       id: name, name, location: spec.location, kind: 'EventHub',
+      properties: { ...payload.properties, provisioningState: 'Creating' },
+    });
+  }
+  return shapeDataConnection(await r.json());
+}
+
+// ---------------------------------------------------------------------------
+// IoT Hub data connection (PR #837) — Azure-native parity for a Fabric
+// Eventhouse IoT Hub "Get data" connection. ADX streams device-to-cloud
+// messages from an Azure IoT Hub into a target table. Unlike Event Hubs (which
+// uses the cluster's system-assigned MI), an IoT Hub data connection
+// authenticates with the hub's shared-access policy (key-based) — ARM reads the
+// keys on the caller's behalf, so the ADX cluster MI needs IoT Hub Contributor
+// (Microsoft.Devices/IotHubs/IotHubKeys/read) at the IoT Hub scope. No Fabric
+// tenant required; works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
+// ---------------------------------------------------------------------------
+
+export interface CreateIotHubDataConnectionSpec {
+  /** ARM resource ID: /subscriptions/{s}/resourceGroups/{rg}/providers/Microsoft.Devices/IotHubs/{name} */
+  iotHubResourceId: string;
+  /** Shared-access policy name (e.g. iothubowner, service) — ADX reads its keys via ARM. */
+  sharedAccessPolicyName: string;
+  /** Consumer group — defaults to $Default. */
+  consumerGroup?: string;
+  /** Optional target table. Omit for per-event (dynamic) routing. */
+  tableName?: string;
+  /** Optional ingestion mapping name. */
+  mappingRuleName?: string;
+  /** Optional data format. IoT Hub does NOT support RAW; defaults to MULTIJSON. */
+  dataFormat?: DataConnectionDataFormat;
+}
+
+/**
+ * Resolve the cluster's Azure region for the data-connection PUT body. Honors
+ * LOOM_KUSTO_LOCATION; otherwise reads it live from the cluster resource so the
+ * value is correct in any region/cloud (no hardcoded 'eastus2'). ARM requires
+ * `location` on the child data-connection resource.
+ */
+async function resolveClusterLocation(): Promise<string> {
+  const fromEnv = process.env.LOOM_KUSTO_LOCATION;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  const c = await getKustoClusterArm();
+  if (c.location && c.location.trim()) return c.location.trim();
+  throw new KustoArmError(400, undefined, 'Could not resolve ADX cluster location; set LOOM_KUSTO_LOCATION.');
+}
+
+export async function createIotHubDataConnection(
+  database: string,
+  name: string,
+  spec: CreateIotHubDataConnectionSpec,
+): Promise<DataConnectionArm> {
+  const cfg = readKustoArmConfig();
+  const location = await resolveClusterLocation();
+  const payload = {
+    kind: 'IotHub',
+    location,
+    properties: {
+      iotHubResourceId: spec.iotHubResourceId,
+      sharedAccessPolicyName: spec.sharedAccessPolicyName,
+      consumerGroup: spec.consumerGroup || '$Default',
+      ...(spec.tableName ? { tableName: spec.tableName } : {}),
+      ...(spec.mappingRuleName ? { mappingRuleName: spec.mappingRuleName } : {}),
+      // IoT Hub D2C messages are JSON envelopes; MULTIJSON is the ADX default.
+      dataFormat: spec.dataFormat ?? 'MULTIJSON',
+      databaseRouting: 'Single',
+    },
+  };
+  const r = await callArm(
+    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `createIotHubDataConnection failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    return shapeDataConnection({
+      id: name, name, location, kind: 'IotHub',
       properties: { ...payload.properties, provisioningState: 'Creating' },
     });
   }
