@@ -197,6 +197,9 @@ param loomAsaRg string = ''
 @description('Loom Stream Analytics subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomAsaSub string = ''
 
+@description('Azure region for Stream Analytics jobs created on demand from the Eventstream canvas (POST /api/items/eventstream/{id}/provision). Defaults to the deployment region; falls back to LOOM_LOCATION then eastus in the client.')
+param loomAsaLocation string = location
+
 @description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
 param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
@@ -794,6 +797,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // when ASA lives in a different RG / sub than the DLZ.
             { name: 'LOOM_ASA_RG', value: loomAsaRg }
             { name: 'LOOM_ASA_SUB', value: loomAsaSub }
+            // Region for ASA jobs the Eventstream canvas provisions on demand.
+            { name: 'LOOM_ASA_LOCATION', value: loomAsaLocation }
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }

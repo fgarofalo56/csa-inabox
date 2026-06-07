@@ -2434,6 +2434,12 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [publishHint, setPublishHint] = useState<string | null>(null);
   const [publishMsg, setPublishMsg] = useState<string | null>(null);
   const [publishedId, setPublishedId] = useState<string | null>(null);
+  // Provision-to-Azure (Azure-native default: Event Hubs + Stream Analytics).
+  // Maps the saved canvas topology onto real ARM resources — no Fabric needed.
+  const [provisionBusy, setProvisionBusy] = useState(false);
+  const [provisionResult, setProvisionResult] = useState<{ ehId?: string; asaJobId?: string | null; steps?: string[]; partial?: boolean; hint?: string | null } | null>(null);
+  const [provisionErr, setProvisionErr] = useState<string | null>(null);
+  const [provisionHint, setProvisionHint] = useState<string | null>(null);
 
   // Visual designer ↔ JSON sync. Best-effort: when JSON parses we mirror
   // it into the designer; when the designer changes we re-serialize JSON.
@@ -2593,6 +2599,30 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 
   const canSave = !saving && dirty;
 
+  // Provision the saved canvas topology onto the Azure-native backend: an
+  // Event Hub (transport) + a Stream Analytics job (transform) when transforms
+  // exist. Returns the ARM resource IDs of both as the receipt. No Fabric.
+  const doProvision = useCallback(async () => {
+    setProvisionBusy(true); setProvisionErr(null); setProvisionHint(null); setProvisionResult(null);
+    try {
+      // Persist the current canvas first so the route reads the latest topology.
+      await save();
+      const r = await fetch(`/api/items/eventstream/${id}/provision`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) {
+        setProvisionErr(j.error || `HTTP ${r.status}`);
+        setProvisionHint(j.hint || null);
+        return;
+      }
+      setProvisionResult({ ehId: j.ehId, asaJobId: j.asaJobId, steps: j.steps, partial: j.partial, hint: j.hint });
+      load();
+    } catch (e: any) {
+      setProvisionErr(e?.message || String(e));
+    } finally {
+      setProvisionBusy(false);
+    }
+  }, [save, id, load]);
+
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
   // shape) directly so the visual designer + Monaco JSON view stay in sync.
   const ribbonAdd = useCallback(
@@ -2638,12 +2668,14 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: provisionBusy ? 'Provisioning…' : 'Provision to Azure', onClick: provisionBusy ? undefined : doProvision, disabled: provisionBusy,
+          title: 'Create an Event Hub (transport) + Stream Analytics job (transform) from the canvas topology — Azure-native, no Fabric required' },
         { label: 'Publish to Fabric', onClick: () => setPublishOpen(true) },
         { label: pullBusy ? 'Pulling…' : 'Pull from Fabric', onClick: pullBusy ? undefined : pullFromFabric, disabled: pullBusy,
           title: 'Reload the live topology from the published Fabric Eventstream (getDefinition REST)' },
       ]},
     ]},
-  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric]);
+  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric, provisionBusy, doProvision]);
 
   // On /new there is no Cosmos record yet, so Save (PUT) would 404 — the
   // designer rendered but couldn't persist (the "wonky / not functional"
@@ -2699,7 +2731,10 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
               {pullBusy ? 'Pulling…' : 'Pull from Fabric'}
             </Button>
           )}
-          <Button appearance="outline" onClick={() => setPublishOpen(true)} style={{ marginLeft: 'auto' }}>Publish to Fabric</Button>
+          <Button appearance="outline" onClick={doProvision} disabled={provisionBusy} style={{ marginLeft: 'auto' }}>
+            {provisionBusy ? 'Provisioning…' : 'Provision to Azure'}
+          </Button>
+          <Button appearance="outline" onClick={() => setPublishOpen(true)}>Publish to Fabric</Button>
           <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty}>
             {saving ? 'Saving…' : 'Save (Ctrl+S)'}
           </Button>
@@ -2758,6 +2793,28 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
         {saveErr && !parseErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
+
+        {provisionErr && (
+          <MessageBar intent={provisionHint ? 'warning' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>Provision to Azure failed</MessageBarTitle>
+              {provisionErr}
+              {provisionHint && <><br /><Caption1>{provisionHint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {provisionResult && (
+          <MessageBar intent={provisionResult.partial ? 'warning' : 'success'}>
+            <MessageBarBody>
+              <MessageBarTitle>{provisionResult.partial ? 'Provisioned (partial)' : 'Provisioned to Azure'}</MessageBarTitle>
+              {provisionResult.ehId && <>Event Hub: <code>{provisionResult.ehId}</code><br /></>}
+              {provisionResult.asaJobId
+                ? <>Stream Analytics job: <code>{provisionResult.asaJobId}</code><br /></>
+                : <Caption1>No Stream Analytics job (no transforms, or transform not available in this cloud).<br /></Caption1>}
+              {provisionResult.hint && <Caption1>{provisionResult.hint}</Caption1>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'json') || 'designer')}>
           <Tab value="designer">Visual designer</Tab>
