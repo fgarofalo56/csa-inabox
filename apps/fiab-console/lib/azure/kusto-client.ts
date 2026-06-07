@@ -417,6 +417,59 @@ export async function showDatabasePolicies(db: string): Promise<KustoDatabasePol
   return out;
 }
 
+export interface KustoUpdatePolicyEntry {
+  IsEnabled: boolean;
+  Source: string;
+  Query: string;
+  IsTransactional: boolean;
+  PropagateIngestionProperties: boolean;
+}
+
+/**
+ * `.alter table ["<target>"] policy update @'[...]'` — set the table update
+ * policy (transform-on-ingest ETL). `policies` is the serialized array of
+ * policy objects; each fires the `Query` (a stored function call or inline KQL
+ * over the `Source` table) whenever data lands in `Source`, routing the
+ * transformed rows into `<target>`. Uses the `@'...'` verbatim-string form so
+ * the embedded JSON only needs single-quote escaping (same pattern as
+ * {@link createIngestionMapping}). Real Kusto control command — no mocks.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/alter-table-update-policy-command
+ */
+export async function setTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+  policies: KustoUpdatePolicyEntry[],
+): Promise<KustoQueryResult> {
+  const escaped = JSON.stringify(policies).replace(/'/g, "\\'");
+  return executeMgmtCommand(
+    db,
+    `.alter table ${qName(targetTable)} policy update @'${escaped}'`,
+  );
+}
+
+/**
+ * `.show table ["<target>"] policy update` — read the table's update policy.
+ * Returns the parsed policy plus the raw JSON string Kusto reports back (the
+ * "receipt" confirming the cluster accepted the config), or null when the
+ * command returns no rows. Mirrors {@link showDatabasePolicies} in shape.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/show-table-update-policy-command
+ */
+export async function showTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+): Promise<{ policy: unknown; raw: string } | null> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(targetTable)} policy update`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { policy = raw; }
+  return { policy, raw };
+}
+
 /** `.show database <db> schema as json` — flat read-only schema object. */
 export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
   const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);

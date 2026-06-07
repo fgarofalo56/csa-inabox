@@ -472,7 +472,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Update policies', '.alter table T policy update — transform-on-ingest pipelines; authored from the KQL database ribbon (New → Update policy), not from this navigator yet.'],
                 ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
                 ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
                 ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
