@@ -26,6 +26,8 @@ vi.mock('../databricks-client', () => ({
   listWarehouses: vi.fn(async () => [{ id: 'wh1', name: 'wh', state: 'RUNNING' }]),
   executeStatement: vi.fn(async () => ({ columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false })),
   databricksConfigGate: vi.fn(() => null),
+  writeUcVolumesFile: vi.fn(async () => {}),
+  deleteUcVolumesFile: vi.fn(async () => {}),
 }));
 
 import { bindExternalSource, externalSourceGate } from '../shortcut-engines';
@@ -54,6 +56,7 @@ describe('externalSourceGate', () => {
   });
   it('gates needs_credential when no credentialRef', () => {
     expect(externalSourceGate('s3', false)?.code).toBe('needs_credential');
+    expect(externalSourceGate('delta_sharing', false)?.code).toBe('needs_credential');
   });
   it('gates key_vault_not_configured when vault missing but ref present', () => {
     (keyVaultConfigGate as any).mockReturnValue({ missing: 'LOOM_KEY_VAULT_URI' });
@@ -61,6 +64,60 @@ describe('externalSourceGate', () => {
   });
   it('returns null when ref present and vault configured', () => {
     expect(externalSourceGate('s3', true)).toBeNull();
+    expect(externalSourceGate('delta_sharing', true)).toBeNull();
+  });
+});
+
+describe('bindExternalSource — Delta Sharing', () => {
+  const profile = {
+    shareCredentialsVersion: 1,
+    endpoint: 'https://sharing.example.com/api/2.0/delta-sharing/metastores/m1/',
+    bearerToken: 'tok-123',
+    expirationTime: '2026-12-08T00:00:00.000Z',
+  };
+  const goodArgs = {
+    lakehouseId: 'lh1', name: 'agency_a', targetType: 'delta_sharing' as const,
+    targetUri: 'delta-sharing://agency_a/analytics/metrics',
+    credentialRef: { kind: 'deltaSharing' as const, keyVaultSecret: 'ds-cred' },
+  };
+
+  it('validates the credential file, lists shares, and returns parsed coordinates', async () => {
+    (getKeyVaultSecret as any).mockResolvedValue(JSON.stringify(profile));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), { status: 200 }) as any,
+    );
+    const res = await bindExternalSource(goodArgs);
+    expect('gated' in res).toBe(false);
+    expect((res as any).readUri).toBe('delta-sharing://agency_a/analytics/metrics');
+    expect((res as any).deltaSharing).toMatchObject({ share: 'agency_a', schema: 'analytics', table: 'metrics' });
+    // Real HTTP test hit <endpoint>/shares with the bearer token.
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe('https://sharing.example.com/api/2.0/delta-sharing/metastores/m1/shares');
+    expect((init as any).headers.Authorization).toBe('Bearer tok-123');
+    fetchSpy.mockRestore();
+  });
+
+  it('throws delta_sharing_auth_failure on a 401 from the share server', async () => {
+    (getKeyVaultSecret as any).mockResolvedValue(JSON.stringify(profile));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('no', { status: 401 }) as any);
+    await expect(bindExternalSource(goodArgs)).rejects.toMatchObject({ code: 'delta_sharing_auth_failure' });
+    fetchSpy.mockRestore();
+  });
+
+  it('throws bad_delta_sharing_secret for non-JSON secret', async () => {
+    (getKeyVaultSecret as any).mockResolvedValue('not json');
+    await expect(bindExternalSource(goodArgs)).rejects.toMatchObject({ code: 'bad_delta_sharing_secret' });
+  });
+
+  it('throws bad_delta_sharing_secret when endpoint/bearerToken missing', async () => {
+    (getKeyVaultSecret as any).mockResolvedValue(JSON.stringify({ shareCredentialsVersion: 1 }));
+    await expect(bindExternalSource(goodArgs)).rejects.toMatchObject({ code: 'bad_delta_sharing_secret' });
+  });
+
+  it('throws bad_target when targetUri is not delta-sharing://share/schema/table', async () => {
+    (getKeyVaultSecret as any).mockResolvedValue(JSON.stringify(profile));
+    await expect(bindExternalSource({ ...goodArgs, targetUri: 'delta-sharing://onlyshare' }))
+      .rejects.toMatchObject({ code: 'bad_target' });
   });
 });
 

@@ -297,6 +297,46 @@ az role assignment create --assignee-object-id <console-uami-oid> \
 ```
 (Granted live on kv-loom-… 2026-06-06.)
 
+## Delta Sharing shortcuts (cross-tenant) {#delta-sharing-shortcuts}
+
+A **Delta Sharing** lakehouse shortcut (Lakehouse editor → Shortcuts → New
+shortcut → *Delta Sharing (cross-tenant)*) virtualizes a table a partner shares
+with you over the open Delta Sharing protocol — no Fabric / Power BI dependency.
+The share owner gives you a **credential file** (open-sharing profile JSON:
+`shareCredentialsVersion`, `endpoint`, `bearerToken`, `expirationTime`) via an
+activation link. Store the raw JSON as a **Key Vault secret** and name it in the
+wizard; Loom validates the bearer token against the share server on create
+(`GET <endpoint>/shares`) and again on **Test/Retry**. A `401`/`403` ⇒ the token
+is expired/invalid — the shortcut shows the **Broken** badge; update the KV
+secret with a fresh credential file and click **Retry** (or press **F11** on the
+selected row) to restore it.
+
+No new Azure resources or env vars are required — the Console UAMI already holds
+**Key Vault Secrets Officer** on the admin-plane vault (see above), which is all
+a **Files** Delta Sharing shortcut needs (the credential is validated and the
+profile is stored in the registry for notebook reads via
+`delta_sharing.SharingClient`).
+
+A **Tables** Delta Sharing shortcut additionally registers a Databricks Unity
+Catalog table over the `deltaSharing` Spark provider, which requires the
+Databricks engine (`LOOM_DATABRICKS_HOSTNAME`) plus a **UC Volume** to hold the
+credential file. Create the volume once as a metastore admin in the Databricks
+workspace:
+
+```sql
+CREATE CATALOG IF NOT EXISTS loom;
+CREATE SCHEMA  IF NOT EXISTS loom.loom_shortcuts;
+CREATE VOLUME  IF NOT EXISTS loom.loom_shortcuts.loom_shortcut_files;
+-- Grant the Console UAMI (workspace service principal) write to the volume:
+GRANT WRITE VOLUME, READ VOLUME ON VOLUME loom.loom_shortcuts.loom_shortcut_files TO `<console-uami-app-id>`;
+```
+
+Override the volume path with `LOOM_DELTA_SHARING_VOLUME=<catalog>.<schema>.<volume>`
+on the Console if you keep shortcut credentials in a different governed volume.
+If the volume is absent, a Tables Delta Sharing shortcut honest-gates
+(`delta_sharing_needs_uc_volume`) with the exact `CREATE VOLUME` remediation; a
+Files Delta Sharing shortcut works without Databricks entirely.
+
 ## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
 
 The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a
