@@ -25,18 +25,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Caption1, Badge, Button, Spinner,
+  Subtitle2, Caption1, Badge, Button, Spinner, Field, Input, Divider,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Input, Select,
+  Select,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular, Add20Regular, Delete20Regular } from '@fluentui/react-icons';
+import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular, Beaker20Regular, Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { AsaTransformInspector } from '@/lib/components/eventstream/visual-designer';
+import { compileToSaql, type TransformNode, type SourceNode, type SinkNode } from '@/lib/azure/asa-query-compiler';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
@@ -112,7 +114,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const s = useStyles();
   const [jobs, setJobs] = useState<AsaJob[] | null>(null);
   const [selected, setSelected] = useState<string>(id !== 'new' ? id : '');
-  const [tab, setTab] = useState<'query' | 'inputs' | 'outputs' | 'functions' | 'monitoring'>('query');
+  const [tab, setTab] = useState<'query' | 'builder' | 'test' | 'inputs' | 'outputs' | 'functions' | 'monitoring'>('query');
   const [job, setJob] = useState<AsaJob | null>(null);
   const [query, setQuery] = useState(STARTER_QUERY);
   const [origQuery, setOrigQuery] = useState(STARTER_QUERY);
@@ -120,6 +122,21 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  // ── Transform builder (guided) state ──────────────────────────────
+  const [builderSource, setBuilderSource] = useState('input');
+  const [builderSink, setBuilderSink] = useState('output');
+  const [builderTransform, setBuilderTransform] = useState<TransformNode>({
+    kind: 'filter', name: 'transform-1', expression: '',
+  });
+  // ── Test-with-sample-data state ───────────────────────────────────
+  const [sampleText, setSampleText] = useState(
+    '[\n  { "deviceId": "sensor-A", "temperature": 42, "eventTime": "2026-06-07T00:00:00Z" },\n  { "deviceId": "sensor-B", "temperature": 18, "eventTime": "2026-06-07T00:00:05Z" }\n]',
+  );
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<any | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testHint, setTestHint] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<AsaMetricSeries[] | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
@@ -244,6 +261,62 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
       void pollJobState(selected, target);
     } finally { setBusy(false); }
   }, [selected, loadDetail, pollJobState]);
+
+  // ── Guided builder: compile the configured transform to SAQL ──────
+  const builderSaql = useMemo(() => {
+    const src: SourceNode[] = [{ kind: 'eventhub', name: builderSource || 'input' }];
+    const snk: SinkNode[] = [{ kind: 'kusto', name: builderSink || 'output' }];
+    return compileToSaql(src, [builderTransform], snk);
+  }, [builderSource, builderSink, builderTransform]);
+
+  // Persist an explicit query string to ASA (used by "Apply to job"). Mirrors
+  // save() but takes the bytes to write directly.
+  const applyQuery = useCallback(async (q: string) => {
+    if (!selected) { setError('Select a job first'); return; }
+    setBusy(true); setStatus(null); setError(null);
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/query`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'Apply failed'); setHint(j.hint || null); return; }
+      setQuery(q); setOrigQuery(q);
+      setStatus(`Transform applied to ${selected} at ${new Date().toLocaleTimeString()}`);
+    } finally { setBusy(false); }
+  }, [selected]);
+
+  // ── Test the query: 'compile' (validate via ASA) or 'run' (sample output)
+  const runTest = useCallback(async (mode: 'compile' | 'run') => {
+    if (!selected) { setTestError('Select a job first'); return; }
+    setTestBusy(true); setTestError(null); setTestHint(null); setTestResult(null);
+    // The query under test is whatever's in the Query buffer (which Builder
+    // can populate via "Copy to Query"/"Apply").
+    const q = query;
+    let sampleInput: { inputAlias: string; events: any[] }[] = [];
+    if (mode === 'run') {
+      try {
+        const events = JSON.parse(sampleText);
+        if (!Array.isArray(events)) throw new Error('Sample data must be a JSON array of events.');
+        const alias = (job?.inputs && job.inputs[0]?.name) || builderSource || 'input';
+        sampleInput = [{ inputAlias: alias, events }];
+      } catch (e: any) {
+        setTestError(`Invalid sample JSON: ${e?.message || String(e)}`); setTestBusy(false); return;
+      }
+    }
+    const inputNames = (job?.inputs || []).map((i) => i.name);
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/test`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: q, mode, sampleInput, inputNames }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestError(j.error || 'Test failed'); setTestHint(j.hint || null); return; }
+      setTestResult(j);
+    } catch (e: any) {
+      setTestError(e?.message || String(e));
+    } finally { setTestBusy(false); }
+  }, [selected, query, sampleText, job, builderSource]);
 
   const dirty = query !== origQuery;
   // Keep ref in sync so async callbacks see the latest dirty state.
@@ -370,6 +443,10 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
         { label: busy ? 'Saving…' : 'Save', onClick: !busy && selected && dirty ? save : undefined, disabled: busy || !selected || !dirty, title: !dirty ? 'No unsaved changes' : (!selected ? 'Select a job first' : undefined) },
         { label: 'Test selection', onClick: () => setTab('query') },
       ]},
+      { label: 'Build', actions: [
+        { label: 'Query Builder', onClick: () => setTab('builder') },
+        { label: 'Test with sample', onClick: () => setTab('test') },
+      ]},
       { label: 'Topology', actions: [
         { label: 'Inputs', onClick: () => setTab('inputs') },
         { label: 'Outputs', onClick: () => setTab('outputs') },
@@ -492,6 +569,8 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           <div className={s.tabBar}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
               <Tab value="query">Query</Tab>
+              <Tab value="builder">Query Builder</Tab>
+              <Tab value="test">Test</Tab>
               <Tab value="inputs">Inputs ({job?.inputs?.length ?? 0})</Tab>
               <Tab value="outputs">Outputs ({job?.outputs?.length ?? 0})</Tab>
               <Tab value="functions">Functions ({job?.functions?.length ?? 0})</Tab>
@@ -504,6 +583,141 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <Caption1>SAQL — Stream Analytics Query Language. Reference inputs/outputs by their alias in square brackets, e.g. <code>FROM [input-eventhub]</code>.</Caption1>
               <MonacoTextarea value={query} onChange={setQuery} language="sql" height={280} minHeight={200} ariaLabel="ASA query" />
             </>
+          )}
+
+          {tab === 'builder' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Subtitle2>Guided transform builder</Subtitle2>
+                <Caption1>
+                  Configure a filter / aggregate / window / join through guided fields. The
+                  generated SAQL compiles to this job&apos;s transformation — no hand-written query.
+                </Caption1>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Field label="Source alias (FROM)" style={{ flex: 1 }}>
+                    <Input value={builderSource} onChange={(_, d) => setBuilderSource(d.value)} aria-label="Builder source alias" />
+                  </Field>
+                  <Field label="Destination alias (INTO)" style={{ flex: 1 }}>
+                    <Input value={builderSink} onChange={(_, d) => setBuilderSink(d.value)} aria-label="Builder sink alias" />
+                  </Field>
+                </div>
+                <Divider />
+                <Subtitle2>Generated SAQL</Subtitle2>
+                <MonacoTextarea value={builderSaql} onChange={() => {}} language="sql" height={220} readOnly ariaLabel="Builder generated SAQL" />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Button appearance="outline" icon={<Save20Regular />} onClick={() => { setQuery(builderSaql); setTab('query'); }}>
+                    Copy to Query tab
+                  </Button>
+                  <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={() => applyQuery(builderSaql)}>
+                    {busy ? 'Applying…' : 'Apply to ASA job'}
+                  </Button>
+                  <Button appearance="outline" icon={<Beaker20Regular />} disabled={!selected} onClick={() => { setQuery(builderSaql); setTab('test'); }}>
+                    Test with sample data
+                  </Button>
+                </div>
+              </div>
+              <div style={{ borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, paddingLeft: 16, maxHeight: 560, overflowY: 'auto' }}>
+                <AsaTransformInspector
+                  value={builderTransform}
+                  sources={[{ kind: 'eventhub', name: builderSource || 'input' }]}
+                  onChange={(p) => setBuilderTransform((cur) => ({ ...cur, ...p }))}
+                  onDelete={() => setBuilderTransform({ kind: 'filter', name: 'transform-1', expression: '' })}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === 'test' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <Subtitle2>Test query with sample data</Subtitle2>
+              <Caption1>
+                <strong>Compile</strong> validates the current Query against ASA (no infra needed).
+                <strong> Run test</strong> streams the sample events below through ASA and returns the
+                produced output rows.
+              </Caption1>
+              <Field label="Sample events (JSON array)">
+                <MonacoTextarea value={sampleText} onChange={setSampleText} language="json" height={160} ariaLabel="Sample events JSON" />
+              </Field>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button appearance="outline" disabled={testBusy || !selected} onClick={() => runTest('compile')}>
+                  {testBusy ? 'Working…' : 'Compile query'}
+                </Button>
+                <Button appearance="primary" icon={<Beaker20Regular />} disabled={testBusy || !selected} onClick={() => runTest('run')}>
+                  {testBusy ? 'Working…' : 'Run test'}
+                </Button>
+              </div>
+
+              {testError && (
+                <MessageBar intent={testHint ? 'warning' : 'error'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>{testHint ? 'Test not available' : 'Test error'}</MessageBarTitle>
+                    {testError}
+                    {testHint && <><br /><Caption1>{testHint}</Caption1></>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {testResult?.mode === 'compile' && (
+                <>
+                  <MessageBar intent={testResult.valid ? 'success' : 'error'}>
+                    <MessageBarBody>
+                      {testResult.valid
+                        ? `Query compiled successfully at ${new Date().toLocaleTimeString()} — ${testResult.inputs?.length || 0} input(s), ${testResult.outputs?.length || 0} output(s) resolved.`
+                        : `Query has ${testResult.errors?.length || 0} compilation error(s).`}
+                    </MessageBarBody>
+                  </MessageBar>
+                  {(testResult.errors || []).length > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table size="small">
+                        <TableHeader><TableRow><TableHeaderCell>Line</TableHeaderCell><TableHeaderCell>Message</TableHeaderCell></TableRow></TableHeader>
+                        <TableBody>
+                          {testResult.errors.map((e: any, i: number) => (
+                            <TableRow key={i}><TableCell>{e.startLine ?? '—'}</TableCell><TableCell>{e.message}</TableCell></TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  {(testResult.warnings || []).map((w: string, i: number) => (
+                    <Caption1 key={i}>⚠ {w}</Caption1>
+                  ))}
+                </>
+              )}
+
+              {testResult?.mode === 'run' && (
+                <>
+                  <MessageBar intent={/succeeded|success/i.test(testResult.status) ? 'success' : 'warning'}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Test {testResult.status}</MessageBarTitle>
+                      {`${(testResult.rows || []).length} output row(s) returned at ${new Date().toLocaleTimeString()}.`}
+                      {testResult.outputUri && <><br /><Caption1>Output written to: {String(testResult.outputUri).slice(0, 120)}</Caption1></>}
+                    </MessageBarBody>
+                  </MessageBar>
+                  {(testResult.rows || []).length > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table size="small">
+                        <TableHeader>
+                          <TableRow>
+                            {Object.keys(testResult.rows[0]).map((c) => (
+                              <TableHeaderCell key={c}>{c}</TableHeaderCell>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {testResult.rows.slice(0, 50).map((row: any, i: number) => (
+                            <TableRow key={i}>
+                              {Object.keys(testResult.rows[0]).map((c) => (
+                                <TableCell key={c}>{typeof row[c] === 'object' ? JSON.stringify(row[c]) : String(row[c] ?? '')}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           )}
 
           {tab === 'inputs' && (

@@ -84,6 +84,34 @@ describe('StreamAnalyticsJobEditor', () => {
     expect(screen.getByLabelText('ASA query')).toBeInTheDocument();
   });
 
+  it('opens the guided Query Builder and shows generated SAQL', async () => {
+    render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="job-fixture" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('job-fixture').length).toBeGreaterThan(0);
+    });
+    // The ribbon stub surfaces actions as buttons; switch to the builder tab.
+    fireEvent.click(screen.getByRole('button', { name: 'Query Builder' }));
+    await waitFor(() => {
+      expect(screen.getByText('Guided transform builder')).toBeInTheDocument();
+    });
+    // Generated-SAQL preview is wired to the compiler output.
+    expect(screen.getByLabelText('Builder generated SAQL')).toBeInTheDocument();
+    expect(screen.getByLabelText('Builder source alias')).toBeInTheDocument();
+  });
+
+  it('exposes the Test tab with a sample-data editor and run actions', async () => {
+    render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="job-fixture" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('job-fixture').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Test with sample' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Sample events JSON')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Compile query/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run test/i })).toBeInTheDocument();
+  });
+
   it('renders live metric tiles on the Monitoring tab', async () => {
     render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="new" />);
     await waitFor(() => {

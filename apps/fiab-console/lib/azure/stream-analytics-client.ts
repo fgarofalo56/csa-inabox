@@ -26,10 +26,14 @@ import {
 // ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
 // behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
 // so every ASA call below targets the correct ARM host instead of
-// management.azure.com.
+// management.azure.com. LOOM_CLOUD is also honored for the gov clouds.
 function armBase(): string {
   const explicit = process.env.LOOM_ARM_ENDPOINT;
   if (explicit) return explicit.replace(/\/+$/, '');
+  const loomCloud = (process.env.LOOM_CLOUD || '').toLowerCase();
+  if (loomCloud.startsWith('gcc') || loomCloud === 'il5' || loomCloud === 'usgov') {
+    return 'https://management.usgovcloudapi.net';
+  }
   switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
     case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
     case 'azuredod':          return 'https://management.azure.microsoft.scloud';
@@ -43,6 +47,9 @@ const ARM_SCOPE = `${ARM_BASE}/.default`;
 // matches the deploy-planner ASA bicep). It is a superset of 2020-03-01 for
 // list/get/transformations/start/stop/inputs/outputs, so we use it throughout.
 const API = '2021-10-01-preview';
+// The compile/test/sample-input query actions are only exposed on the
+// preview API surface (Microsoft.StreamAnalytics/locations/*Query/action).
+const API_PREVIEW = '2021-10-01-preview';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -64,6 +71,19 @@ export class AsaNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Thrown when the sample-data Test Query path can't run because no result
+ * storage write URI is configured. Compile-query (validation) still works
+ * without it; only the "return sample output rows" path needs a place for
+ * ASA to write the results.
+ */
+export class AsaTestNotAvailableError extends Error {
+  constructor(public hint: string) {
+    super('ASA sample-output Test Query is not available in this deployment.');
+    this.name = 'AsaTestNotAvailableError';
+  }
+}
+
 export function readAsaConfig(): AsaConfig {
   const missing: string[] = [];
   const subscriptionId =
@@ -82,6 +102,11 @@ export function readAsaConfig(): AsaConfig {
 
 function rgBase(cfg: AsaConfig): string {
   return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
+}
+
+/** Subscription/location-scoped base for the compile/test query RP actions. */
+function locationBase(cfg: AsaConfig, location: string): string {
+  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/providers/Microsoft.StreamAnalytics/locations/${encodeURIComponent(location)}`;
 }
 
 async function call(url: string, init?: RequestInit): Promise<Response> {
@@ -561,5 +586,250 @@ export async function deleteOutput(jobName: string, outputName: string): Promise
   if (!r.ok && r.status !== 204 && r.status !== 200) {
     const text = await r.text().catch(() => '');
     throw new Error(`ASA delete-output failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Compile / Test query — the ASA "test your query before you start the job"
+// surface. These are subscription/location-scoped RP actions exposed on the
+// preview API:
+//   POST .../locations/{location}/compileQuery  → validate SAQL, real errors
+//   POST .../locations/{location}/testQuery     → run SAQL over sample input,
+//                                                  write output to a SAS blob
+// Built-in role "Stream Analytics Query Tester" (or "Stream Analytics
+// Contributor") grants both. No mocks — real ARM, real diagnostics.
+// ---------------------------------------------------------------------------
+
+function defaultLocation(): string {
+  return process.env.LOOM_ASA_LOCATION || (IS_GOV ? 'usgovvirginia' : 'eastus2');
+}
+
+/** Poll an Azure async operation (LRO) until terminal; return the final JSON. */
+async function pollLro(initial: Response, label: string, timeoutMs = 60_000): Promise<any> {
+  // Synchronous success — body already holds the result.
+  if (initial.status === 200) {
+    return await initial.json().catch(() => ({}));
+  }
+  if (initial.status !== 201 && initial.status !== 202) {
+    const text = await initial.text().catch(() => '');
+    throw new Error(`${label} failed ${initial.status}: ${text.slice(0, 600)}`);
+  }
+  const opUrl =
+    initial.headers.get('azure-asyncoperation') ||
+    initial.headers.get('Azure-AsyncOperation') ||
+    initial.headers.get('location') ||
+    initial.headers.get('Location');
+  if (!opUrl) {
+    // Some RP actions return 202 with the body inline.
+    return await initial.json().catch(() => ({}));
+  }
+  const deadline = Date.now() + timeoutMs;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (Date.now() > deadline) {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s waiting on ${opUrl}`);
+    }
+    await new Promise((res) => setTimeout(res, 2000));
+    const pr = await call(opUrl);
+    const body = await pr.json().catch(() => ({}));
+    const status = (body?.status || body?.properties?.status || '').toString();
+    if (/succeeded/i.test(status)) return body;
+    if (/failed|canceled|cancelled/i.test(status)) {
+      const err = body?.error?.message || body?.properties?.error?.message || JSON.stringify(body).slice(0, 400);
+      throw new Error(`${label} ${status}: ${err}`);
+    }
+    if (pr.status === 200 && !status) {
+      // Operation-result endpoints return the final payload with 200 and no
+      // running status once complete.
+      return body;
+    }
+  }
+}
+
+export interface AsaCompileError {
+  message: string;
+  startLine?: number;
+  startColumn?: number;
+  endLine?: number;
+  endColumn?: number;
+  isGlobal?: boolean;
+}
+
+export interface AsaCompileResult {
+  ok: boolean;
+  errors: AsaCompileError[];
+  warnings: string[];
+  inputs: string[];
+  outputs: string[];
+  functions: string[];
+}
+
+/**
+ * Compile (validate) a SAQL query without starting the job. Real ARM call —
+ * returns the genuine compiler diagnostics. `inputNames` lets the compiler
+ * resolve `FROM [alias]` references against the job's declared inputs.
+ */
+export async function compileQuery(
+  query: string,
+  opts?: { location?: string; inputNames?: string[]; functionNames?: string[]; compatibilityLevel?: string },
+): Promise<AsaCompileResult> {
+  const cfg = readAsaConfig();
+  const location = opts?.location || defaultLocation();
+  const url = `${locationBase(cfg, location)}/compileQuery?api-version=${API_PREVIEW}`;
+  const body = {
+    query,
+    jobType: 'Cloud',
+    compatibilityLevel: opts?.compatibilityLevel || '1.2',
+    inputs: (opts?.inputNames || []).map((name) => ({
+      name,
+      type: 'Microsoft.StreamAnalytics/streamingjobs/inputs',
+      properties: { type: 'Stream' },
+    })),
+    functions: (opts?.functionNames || []).map((name) => ({
+      name,
+      type: 'Microsoft.StreamAnalytics/streamingjobs/functions',
+      properties: { type: 'Scalar' },
+    })),
+  };
+  const r = await call(url, { method: 'POST', body: JSON.stringify(body) });
+  const out = await pollLro(r, 'ASA compileQuery');
+  const result = out?.properties || out || {};
+  const errors: AsaCompileError[] = (result.errors || []).map((e: any) => ({
+    message: e.message || String(e),
+    startLine: e.startLine,
+    startColumn: e.startColumn,
+    endLine: e.endLine,
+    endColumn: e.endColumn,
+    isGlobal: e.isGlobal,
+  }));
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings: (result.warnings || []).map((w: any) => (typeof w === 'string' ? w : w?.message || String(w))),
+    inputs: result.inputs || [],
+    outputs: result.outputs || [],
+    functions: result.functions || [],
+  };
+}
+
+export interface AsaTestSampleInput {
+  /** Input alias the events belong to (matches a FROM [alias]). */
+  inputAlias: string;
+  events: any[];
+}
+
+export interface AsaTestResult {
+  status: string;
+  /** Storage location ASA wrote the test output to (if any). */
+  outputUri?: string;
+  /** Parsed output rows (when the result blob could be read inline). */
+  outputRows: any[];
+  errors?: string[];
+}
+
+/**
+ * Run a SAQL query over sample input events using the ASA Test Query action,
+ * and return the produced output rows.
+ *
+ * ASA's Test Query writes results to a storage location (a blob SAS), so this
+ * needs LOOM_ASA_TEST_WRITE_URI (a container SAS URL with write/read). Without
+ * it we throw AsaTestNotAvailableError — the route surfaces an honest gate
+ * naming the env var + the "Stream Analytics Query Tester" role. The compile
+ * path above needs no storage and remains the always-on validation.
+ */
+export async function testTransformation(
+  jobName: string,
+  query: string,
+  sampleInputs: AsaTestSampleInput[],
+): Promise<AsaTestResult> {
+  const cfg = readAsaConfig();
+  const writeUri = process.env.LOOM_ASA_TEST_WRITE_URI || '';
+  if (!writeUri) {
+    throw new AsaTestNotAvailableError(
+      'Set LOOM_ASA_TEST_WRITE_URI to a blob container SAS URL (write+read) so ASA can write Test Query output, ' +
+        'and grant the Loom Console UAMI the "Stream Analytics Query Tester" role (or Stream Analytics Contributor). ' +
+        'Bicep: platform/fiab/bicep/modules/landing-zone/stream-analytics.bicep.',
+    );
+  }
+
+  // Resolve the job's real location + topology so the test reflects the job.
+  const job = await getJob(jobName);
+  const location = job.location || defaultLocation();
+  const inputs = (job.inputs || []).map((i) => {
+    const sample = sampleInputs.find((s) => s.inputAlias === i.name);
+    return {
+      name: i.name,
+      type: 'Microsoft.StreamAnalytics/streamingjobs/inputs',
+      properties: {
+        type: i.type || 'Stream',
+        serialization: { type: 'Json', properties: { encoding: 'UTF8' } },
+        datasource: sample
+          ? { type: 'Raw', properties: { payload: JSON.stringify(sample.events) } }
+          : { type: 'Raw', properties: { payload: '[]' } },
+      },
+    };
+  });
+
+  const url = `${locationBase(cfg, location)}/testQuery?api-version=${API_PREVIEW}`;
+  const reqBody = {
+    diagnostics: { writeUri, path: `loom-asa-test/${jobName}/${Date.now()}` },
+    streamingJob: {
+      name: jobName,
+      location,
+      properties: {
+        sku: { name: 'Standard' },
+        compatibilityLevel: '1.2',
+        transformation: { name: 'Transformation', properties: { streamingUnits: 1, query } },
+        inputs,
+        outputs: (job.outputs || []).map((o) => ({
+          name: o.name,
+          properties: { datasource: { type: 'Raw', properties: { payload: '' } } },
+        })),
+      },
+    },
+  };
+
+  const r = await call(url, { method: 'POST', body: JSON.stringify(reqBody) });
+  const out = await pollLro(r, 'ASA testQuery');
+  const result = out?.properties || out || {};
+  const status = (result.status || out?.status || 'Unknown').toString();
+  const outputUri: string | undefined = result.outputUri || result.outputUrl;
+
+  let outputRows: any[] = [];
+  if (outputUri) {
+    try {
+      const blob = await fetch(outputUri);
+      if (blob.ok) {
+        const text = await blob.text();
+        outputRows = parseAsaOutput(text);
+      }
+    } catch {
+      // Output written but not inline-readable (e.g. SAS scope). Status +
+      // outputUri are still returned as the receipt.
+    }
+  }
+  return { status, outputUri, outputRows, errors: result.error ? [String(result.error?.message || result.error)] : undefined };
+}
+
+/** ASA test output is JSON-lines or a JSON array; parse defensively. */
+function parseAsaOutput(text: string): any[] {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return [];
+  try {
+    const j = JSON.parse(trimmed);
+    return Array.isArray(j) ? j : [j];
+  } catch {
+    // newline-delimited JSON
+    const rows: any[] = [];
+    for (const line of trimmed.split(/\r?\n/)) {
+      const l = line.trim();
+      if (!l) continue;
+      try {
+        rows.push(JSON.parse(l));
+      } catch {
+        /* skip non-JSON line */
+      }
+    }
+    return rows;
   }
 }
