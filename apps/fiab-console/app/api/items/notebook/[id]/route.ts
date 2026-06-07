@@ -60,6 +60,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         cells: migrated.cells,
         defaultLang: migrated.defaultLang,
         attachedSources: migrated.attachedSources || [],
+        attachedAmlEnv: state.attachedAmlEnv || null,
+        customLibraries: Array.isArray(state.customLibraries) ? state.customLibraries : [],
         // Session sizing chosen via the editor's "Configure session" dialog
         // (UI shape: { numExecutors, executorMemoryGb, timeoutMinutes }).
         sessionConfig: (state.sessionConfig && typeof state.sessionConfig === 'object') ? state.sessionConfig : null,
@@ -107,6 +109,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       stateNext.cells = cells;
       if (def?.defaultLang) stateNext.defaultLang = def.defaultLang as NotebookCellLang;
       if (def?.attachedSources !== undefined) stateNext.attachedSources = def.attachedSources;
+      if (def?.attachedAmlEnv !== undefined) stateNext.attachedAmlEnv = def.attachedAmlEnv;
+      if (def?.customLibraries !== undefined) stateNext.customLibraries = def.customLibraries;
       // Keep `code` mirror in sync for old consumers (concatenated cells).
       const codeMirror = cells
         .filter(c => c.type === 'code')
@@ -138,6 +142,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         cells: respState.cells || [],
         defaultLang: respState.defaultLang || 'pyspark',
         attachedSources: respState.attachedSources || [],
+        attachedAmlEnv: respState.attachedAmlEnv || null,
+        customLibraries: Array.isArray(respState.customLibraries) ? respState.customLibraries : [],
         sessionConfig: respState.sessionConfig || null,
       },
     });

@@ -1145,6 +1145,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // data-agent test chat. Empty when AI Foundry isn't deployed.
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
+            // Azure ML workspace for notebook Library & Environment management
+            // (aml-environments-client.ts). The Foundry hub IS an AML workspace
+            // (kind=Hub), so we point env management at it by default. Falls back
+            // to LOOM_FOUNDRY_NAME/_RG in code when these are empty. No Fabric dep.
+            { name: 'LOOM_AML_WORKSPACE', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
+            { name: 'LOOM_AML_RG', value: byoFoundryRg }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
