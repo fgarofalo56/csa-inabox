@@ -160,6 +160,41 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Machine Learning data plane (api.azureml.ms / api.ml.azure.us)
+// ---------------------------------------------------------------------------
+
+/**
+ * AML regional data-plane host (no scheme) for a given workspace region. This
+ * is the host the MLflow tracking / registry REST and the foundry data-plane
+ * calls hang off — `<region>.api.azureml.ms` in Commercial/GCC, but
+ * `<region>.api.ml.azure.us` in the US Government clouds (verified against
+ * Microsoft Learn "reference-machine-learning-cloud-parity", e.g.
+ * `usgovvirginia.api.ml.azure.us`). Hard-coding `api.azureml.ms` silently
+ * fails in GCC-High / IL5 — every AML data-plane URL builds this host instead.
+ *
+ * `LOOM_AML_DATAPLANE_HOST` overrides the suffix outright for private-link
+ * workspaces or clouds we don't enumerate (it may be a bare suffix like
+ * `api.ml.azure.us` — the region is prefixed — or a full host already
+ * containing the region, which is passed through).
+ */
+export function amlDataPlaneHost(region: string): string {
+  const override = process.env.LOOM_AML_DATAPLANE_HOST;
+  if (override) {
+    const o = override.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    // Full host already carrying the region (contains it) is passed through;
+    // otherwise treat the override as a suffix and prefix the region.
+    return o.startsWith(`${region}.`) ? o : `${region}.${o}`;
+  }
+  switch (detectCloud()) {
+    case 'AzureUSGovernment':
+    case 'AzureDOD':
+      return `${region}.api.ml.azure.us`;
+    default:
+      return `${region}.api.azureml.ms`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

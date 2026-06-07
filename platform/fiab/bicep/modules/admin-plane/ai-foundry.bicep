@@ -98,6 +98,26 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
+// AzureML Data Scientist for the Console UAMI on the Hub workspace.
+// The ml-model editor's stage-transition + register-from-run actions call the
+// AML-hosted MLflow registry data plane (model-versions/transition-stage,
+// model-versions/create). Those need the Console UAMI to hold AzureML Data
+// Scientist on the workspace — without it the MLflow REST calls 403. Stages are
+// an MLflow-layer concept (Learn "how-to-manage-models-mlflow"); no new Azure
+// resource is required, only this data-plane role grant.
+resource hubConsoleDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: foundryHub
+  name: guid(foundryHub.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+  properties: {
+    // AzureML Data Scientist
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Private endpoint to the Hub
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${foundryHub.name}'
