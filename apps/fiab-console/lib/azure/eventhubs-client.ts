@@ -346,6 +346,96 @@ export async function listEventHubAuthRules(eventHub: string): Promise<Authoriza
   }));
 }
 
+/**
+ * Read the namespace's top-level properties. Used to detect `disableLocalAuth`
+ * so the source-node wizard knows whether SAS connection strings can actually
+ * authenticate (they cannot when the namespace deploys with the secure-default
+ * `disableLocalAuth: true`).
+ */
+export interface NamespaceProperties {
+  disableLocalAuth: boolean;
+  kafkaEnabled: boolean;
+  publicNetworkAccess?: string;
+}
+
+export async function getNamespaceProperties(): Promise<NamespaceProperties> {
+  const cfg = readEventHubsConfig();
+  const r = await callArm(`${nsUrl(cfg)}?api-version=${EH_API}`);
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `getNamespace failed ${r.status}`);
+  const body: any = await r.json();
+  const p = body?.properties || {};
+  return {
+    disableLocalAuth: p.disableLocalAuth === true,
+    kafkaEnabled: p.kafkaEnabled !== false,
+    publicNetworkAccess: p.publicNetworkAccess,
+  };
+}
+
+/**
+ * Create (idempotent PUT) a per-event-hub SAS authorization rule. Defaults to
+ * Send-only rights — exactly what a custom-app producer needs and nothing more.
+ * On a `disableLocalAuth: true` namespace the rule is still created, but its
+ * keys cannot authenticate; callers should gate the connection string via
+ * {@link listEventHubKeys}'s `localAuthDisabled` flag.
+ */
+export async function createEventHubAuthRule(
+  eventHub: string,
+  ruleName: string,
+  rights: Array<'Send' | 'Listen' | 'Manage'> = ['Send'],
+): Promise<AuthorizationRule> {
+  const cfg = readEventHubsConfig();
+  const r = await callArm(
+    `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eventHub)}/authorizationRules/${encodeURIComponent(ruleName.trim())}?api-version=${EH_API}`,
+    { method: 'PUT', body: JSON.stringify({ properties: { rights } }) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `createEventHubAuthRule failed ${r.status}`);
+  const a: any = await r.json();
+  return { name: a?.name, rights: a?.properties?.rights || rights, scope: eventHub };
+}
+
+/** SAS access keys + connection strings returned by the listKeys ARM action. */
+export interface EventHubAccessKeys {
+  keyName?: string;
+  primaryKey?: string;
+  secondaryKey?: string;
+  primaryConnectionString?: string;
+  secondaryConnectionString?: string;
+  /**
+   * True when the namespace sets `disableLocalAuth: true`. ARM still returns
+   * key values, but they CANNOT authenticate — the connection strings are
+   * therefore suppressed (set to undefined) and Entra auth must be used instead.
+   */
+  localAuthDisabled: boolean;
+}
+
+/**
+ * List the SAS keys for a per-event-hub authorization rule (POST listKeys).
+ * When the namespace has local auth disabled the connection strings are
+ * suppressed and `localAuthDisabled: true` is set so the BFF/wizard surface the
+ * honest "use Entra / HTTPS REST" path rather than a non-working SAS string.
+ */
+export async function listEventHubKeys(eventHub: string, ruleName: string): Promise<EventHubAccessKeys> {
+  const cfg = readEventHubsConfig();
+  const r = await callArm(
+    `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eventHub)}/authorizationRules/${encodeURIComponent(ruleName)}/listKeys?api-version=${EH_API}`,
+    { method: 'POST' },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `listEventHubKeys failed ${r.status}`);
+  const k: any = await r.json();
+  // Detect the secure-default posture; on failure assume disabled (fail safe).
+  let localAuthDisabled = true;
+  try { localAuthDisabled = (await getNamespaceProperties()).disableLocalAuth; }
+  catch { localAuthDisabled = true; }
+  return {
+    keyName: k?.keyName,
+    primaryKey: localAuthDisabled ? undefined : k?.primaryKey,
+    secondaryKey: localAuthDisabled ? undefined : k?.secondaryKey,
+    primaryConnectionString: localAuthDisabled ? undefined : k?.primaryConnectionString,
+    secondaryConnectionString: localAuthDisabled ? undefined : k?.secondaryConnectionString,
+    localAuthDisabled,
+  };
+}
+
 // ============================================================
 // Namespace SAS keys (privileged). POST …/authorizationRules/{rule}/listKeys
 // returns the SAS connection string + key for the rule. Used to wire a Stream

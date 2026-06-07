@@ -64,6 +64,7 @@ function mapSourceType(kind?: string): string {
     case 'iothub': return 'AzureIoTHub';
     case 'kafka': return 'CustomEndpoint';
     case 'cdc-mirror': return 'SQLServerCDC';
+    case 'custom-app': return 'CustomEndpoint';
     case 'sample': return 'SampleData';
     default: return 'CustomEndpoint';
   }
