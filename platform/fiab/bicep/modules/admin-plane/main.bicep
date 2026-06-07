@@ -458,6 +458,9 @@ param copyJobControlEnabled bool = false
 @allowed(['adf', 'fabric'])
 param loomDataflowBackend string = 'adf'
 
+@description('Explicit Azure ML MLflow tracking URI for the ML Experiment editor. REQUIRED in IL5 / GCC-High (the commercial *.api.azureml.ms host is wrong there and no public alternate hostname is documented). Get it via `az ml workspace show --query mlflow_tracking_uri -o tsv`. Empty in Commercial / GCC, where the editor auto-constructs the URI from LOOM_AML_WORKSPACE/LOOM_FOUNDRY_NAME + region + subscription.')
+param loomMlflowTrackingUri string = ''
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -1196,16 +1199,27 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
-            // Standalone Azure ML workspace coordinates — back aml-client.ts
+            // ML Experiment editor — Azure ML MLflow tracking. LOOM_AML_WORKSPACE
+            // / LOOM_AML_RG are already set above (shared with aml-environments-
+            // client); mlflow-client.ts also reads LOOM_AML_REGION +
+            // LOOM_SUBSCRIPTION_ID to construct the Commercial / GCC / sovereign
+            // tracking URI automatically (amlDataPlaneHost picks the right host).
+            // IL5 / GCC-High may instead pin an explicit tracking URI below.
+            //
+            // Standalone Azure ML workspace coordinates also back aml-client.ts
             // (resolveAmlTarget): the AML control-plane navigator (computes /
             // datastores / jobs / models / schedules / environments). Empty
             // values fall back to LOOM_FOUNDRY_* / LOOM_SUBSCRIPTION_ID in the
             // resolver, so an AI Foundry hub doubles as the AML workspace
             // without extra config. Cloud routing is handled at runtime.
-            { name: 'LOOM_AML_WORKSPACE', value: loomAmlWorkspace }
+            { name: 'LOOM_AML_REGION', value: empty(loomAmlRegion) ? location : loomAmlRegion }
             { name: 'LOOM_AML_RESOURCE_GROUP', value: loomAmlResourceGroup }
             { name: 'LOOM_AML_SUBSCRIPTION', value: loomAmlSubscription }
-            { name: 'LOOM_AML_REGION', value: empty(loomAmlRegion) ? location : loomAmlRegion }
+            // IL5 / GCC-High may set an explicit tracking URI when auto-
+            // construction can't express the boundary-specific / private-link
+            // shape. Empty in Commercial / GCC, where auto-construction applies.
+            // When set, mlflow-client.ts uses it verbatim (highest priority).
+            { name: 'LOOM_MLFLOW_TRACKING_URI', value: loomMlflowTrackingUri }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. The dedicated Agent Service account
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
