@@ -563,6 +563,31 @@ export async function createTable(db: string, name: string, schema: string): Pro
   return executeMgmtCommand(db, `.create table ${qName(name)} (${cols})`);
 }
 
+/**
+ * `.alter-merge table T (schema)` — ADDITIVE schema change. New columns are
+ * appended; existing columns and their data are preserved. This is the safe
+ * "add column" path used by the schema designer's ALTER flow. (A full
+ * `.alter table` replaces the schema and drops omitted columns with data loss,
+ * so it is intentionally NOT exposed.) Requires Table Admin.
+ * Grounded in Microsoft Learn: `.alter-merge table` command.
+ */
+export async function alterMergeTable(db: string, name: string, schema: string): Promise<KustoQueryResult> {
+  const cols = schema.trim();
+  if (!cols) throw new KustoError('alterMergeTable: schema is required (e.g. "newcol:string")', 400);
+  return executeMgmtCommand(db, `.alter-merge table ${qName(name)} (${cols})`);
+}
+
+/**
+ * `.show table T cslschema` — returns the table's schema as a CSL string
+ * (`col:type,col:type`) for pre-populating the schema designer's ALTER grid.
+ */
+export async function getTableCslSchema(db: string, table: string): Promise<string> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} cslschema`);
+  if (!r.rows.length) return '';
+  const schemaIdx = r.columns.findIndex((c) => /schema/i.test(c));
+  return String(r.rows[0][schemaIdx >= 0 ? schemaIdx : 1] ?? '');
+}
+
 /** `.drop table T ifexists`. */
 export async function dropTable(db: string, name: string): Promise<KustoQueryResult> {
   return executeMgmtCommand(db, `.drop table ${qName(name)} ifexists`);
