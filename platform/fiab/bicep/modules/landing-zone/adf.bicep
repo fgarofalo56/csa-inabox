@@ -41,7 +41,14 @@ param complianceTags object
 @description('DLZ storage account resource ID. When set, grants the factory system-assigned MI Storage Blob Data Contributor so linked services using MSI auth (e.g. the "Practice with sample data" copy pipeline) can read/write ADLS Gen2 without an account key.')
 param storageAccountId string = ''
 
-var storageAccountName = !empty(storageAccountId) ? last(split(storageAccountId, '/')) : ''
+@description('DLZ ADLS Gen2 storage account NAME (same RG). Alternative to storageAccountId — also grants the ADF system-assigned MI Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
+param adlsAccountName string = ''
+
+// Unify both inputs: prefer the explicit account name, else derive it from the
+// resource ID. A single grant covers MSI-auth copy pipelines AND Dataflow Gen2
+// sinks (same role, same principal, same account) — avoids a duplicate
+// role-assignment collision on the storage account scope.
+var sblobAccountName = !empty(adlsAccountName) ? adlsAccountName : (!empty(storageAccountId) ? last(split(storageAccountId, '/')) : '')
 
 // =====================================================================
 // Data Factory
@@ -56,6 +63,28 @@ resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
     publicNetworkAccess: 'Disabled'
   }
 }
+
+// ---------------------------------------------------------------------
+// HDInsight pipeline activities (F17) — Hive / Spark / MapReduce / Streaming
+//
+// ADF natively executes all four HDInsight activity types at this factory's
+// api-version (2018-06-01); no extra factory config is required to *run* them.
+// They target an `AzureHDInsight` linked service that names a cluster. The
+// cluster is NOT provisioned here — HDInsight clusters are long-lived and
+// cost-significant, so they are stood up out-of-band by the operator. To wire
+// the activities up:
+//   1. Provision (or reuse) an Azure HDInsight cluster, VNet-injected into the
+//      spoke so this private-only factory can reach it.
+//   2. In the Loom console: Manage -> Linked services -> New -> Azure HDInsight,
+//      pointing at that cluster.
+//   3. Set the admin-plane param `loomHdinsightLinkedService` (env vars
+//      LOOM_HDINSIGHT_LINKED_SERVICE + NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE)
+//      to that linked-service name so new activities pre-fill the cluster.
+//   When unset, the four activities render fully but show an honest MessageBar
+//   gate naming LOOM_HDINSIGHT_LINKED_SERVICE (no Fabric dependency anywhere).
+//   For on-demand HDInsight clusters, also grant the Console UAMI the
+//   "HDInsight Cluster Operator" role on the cluster resource.
+// ---------------------------------------------------------------------
 
 // =====================================================================
 // Private endpoint
@@ -108,20 +137,23 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 }
 
 // =====================================================================
+// =====================================================================
 // RBAC — ADF factory system-assigned MI → Storage Blob Data Contributor
 // on the DLZ storage account (built-in role:
 // ba92f5b4-2d11-453d-a403-e96b0029c9fe). Required so ADF linked services
 // using MSI auth (no account key) can read landing/ and write bronze/ —
-// backs the "Practice with sample data" copy pipeline.
+// backs the "Practice with sample data" copy pipeline — AND so Dataflow
+// Gen2 (WranglingDataFlow) can write its Parquet/CSV sink to ADLS.
+// One grant covers both; scoped to the storage account in this RG.
 // =====================================================================
 
-resource storageForAdfRbac 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(storageAccountName)) {
-  name: storageAccountName
+resource storageForAdfRbac 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(sblobAccountName)) {
+  name: empty(sblobAccountName) ? 'placeholder' : sblobAccountName
 }
 
-resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(storageAccountId)) {
+resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(sblobAccountName)) {
   scope: storageForAdfRbac
-  name: guid(storageAccountId, adf.id, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  name: guid(adf.id, sblobAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   properties: {
     principalId: adf.identity.principalId
     principalType: 'ServicePrincipal'
@@ -138,6 +170,11 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'diag-loom-stdz'
   properties: {
     workspaceId: workspaceId
+    // Resource-specific (Dedicated) mode routes ADF diagnostic logs into the
+    // typed ADFPipelineRun / ADFActivityRun tables instead of the legacy
+    // AzureDiagnostics catch-all. The Output-pane Log Analytics fallback
+    // (runs older than ADF's 45-day native window) queries these typed tables.
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       { category: 'ActivityRuns',  enabled: true }
       { category: 'PipelineRuns',  enabled: true }

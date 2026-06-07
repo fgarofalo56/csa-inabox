@@ -290,8 +290,9 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     skipRoleGrants: skipRoleGrants
     // Grant the ADF factory MSI Storage Blob Data Contributor on the DLZ storage
     // account so MSI-auth linked services can read/write ADLS Gen2 (backs the
-    // "Practice with sample data" copy pipeline).
+    // "Practice with sample data" copy pipeline) and Dataflow Gen2 Parquet/CSV sinks.
     storageAccountId: storage.outputs.storageAccountId
+    adlsAccountName: storage.outputs.storageAccountName
   }
 }
 
