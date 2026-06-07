@@ -68,11 +68,19 @@ interface Props {
   onOpenChange?: (open: boolean) => void;
   /** Pre-select this connector and jump straight to its connection form. */
   initialConnector?: SourceConnector | null;
+  /**
+   * Pre-fill the connection form's property fields (e.g. an Event Hub name a
+   * Subscribe action picked from the RTI hub catalog). Applied when the dialog
+   * opens onto `initialConnector`. Keys match the connector's field keys.
+   */
+  initialProps?: Record<string, string> | null;
+  /** Pre-fill the eventstream display name (defaults to a slug of the source). */
+  initialDisplayName?: string | null;
 }
 
 export function ConnectSourceDialog({
   workspaces, defaultWorkspaceId, onConnected, trigger,
-  open: openProp, onOpenChange, initialConnector,
+  open: openProp, onOpenChange, initialConnector, initialProps, initialDisplayName,
 }: Props) {
   const styles = useStyles();
   const [openState, setOpenState] = useState(false);
@@ -83,11 +91,13 @@ export function ConnectSourceDialog({
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<SourceConnector | null>(null);
 
-  // When opened with a pre-selected connector, jump straight to its form.
+  // When opened with a pre-selected connector, jump straight to its form —
+  // honoring any pre-filled property values / display name from the caller
+  // (e.g. the RTI hub Subscribe action carrying the chosen Event Hub).
   useEffect(() => {
-    if (open && initialConnector) pick(initialConnector);
+    if (open && initialConnector) pick(initialConnector, initialProps || undefined, initialDisplayName || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialConnector]);
+  }, [open, initialConnector, initialProps, initialDisplayName]);
 
   const [displayName, setDisplayName] = useState('');
   const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || '');
@@ -108,10 +118,18 @@ export function ConnectSourceDialog({
     setError(null); setErrorHint(null); setSuccess(null); setBusy(false);
   }
 
-  function pick(c: SourceConnector) {
+  function pick(c: SourceConnector, preProps?: Record<string, string>, preName?: string) {
     setPicked(c);
-    setDisplayName(`${c.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-stream`);
-    setProps({});
+    setDisplayName(preName?.trim() || `${c.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-stream`);
+    // Keep only property values whose keys this connector actually exposes.
+    const allowed: Record<string, string> = {};
+    if (preProps) {
+      for (const f of c.fields) {
+        const v = preProps[f.key];
+        if (v != null && String(v).trim()) allowed[f.key] = String(v);
+      }
+    }
+    setProps(allowed);
     setError(null); setErrorHint(null); setSuccess(null);
   }
 

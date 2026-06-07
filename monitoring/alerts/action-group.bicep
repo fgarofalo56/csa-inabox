@@ -16,6 +16,12 @@ param emailReceivers array = []
 @description('Webhook receivers configuration (Teams, PagerDuty, etc.)')
 param webhookReceivers array = []
 
+@description('SMS receivers configuration')
+param smsReceivers array = []
+
+@description('Logic App receivers configuration (Teams adaptive-card / pipeline-trigger workflows)')
+param logicAppReceivers array = []
+
 @description('Tags to apply')
 param tags object = {}
 
@@ -28,11 +34,11 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
     groupShortName: shortName
     emailReceivers: emailReceivers
     webhookReceivers: webhookReceivers
-    smsReceivers: []
+    smsReceivers: smsReceivers
     azureAppPushReceivers: []
     automationRunbookReceivers: []
     voiceReceivers: []
-    logicAppReceivers: []
+    logicAppReceivers: logicAppReceivers
     azureFunctionReceivers: []
     armRoleReceivers: [
       {
