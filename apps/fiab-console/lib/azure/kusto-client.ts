@@ -651,6 +651,161 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
   }));
 }
 
+// ============================================================
+// External Delta tables + query acceleration — the "lakehouse /
+// warehouse endpoint" surface. Binds an ADLS Gen2 Delta Lake path to an
+// ADX external table (schema auto-inferred from the delta log) and turns
+// on the query_acceleration policy so the Delta data is queryable via KQL
+// within seconds. Grounded in Microsoft Learn:
+//   .create-or-alter external table … kind=delta
+//     https://learn.microsoft.com/kusto/management/external-tables-delta-lake
+//   .alter external table … policy query_acceleration
+//     https://learn.microsoft.com/kusto/management/alter-query-acceleration-policy-command
+//   .show external table … policy query_acceleration
+//     https://learn.microsoft.com/kusto/management/show-query-acceleration-policy-command
+//   external_table() + managed-identity storage auth
+//     https://learn.microsoft.com/azure/data-explorer/external-tables-managed-identities
+// ============================================================
+
+export interface KustoExternalTable {
+  name: string;
+  tableType?: string; // 'Delta' for delta external tables
+  folder?: string;
+  docString?: string;
+  properties?: string; // raw JSON properties blob
+}
+
+/** `.show external tables` — list every external table in a database. */
+export async function listExternalTables(db: string): Promise<KustoExternalTable[]> {
+  const r = await executeMgmtCommand(db, '.show external tables');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('TableName');
+  const typeIdx = idx('TableType');
+  const folderIdx = idx('Folder');
+  const docIdx = idx('DocString');
+  const propIdx = idx('Properties');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    tableType: typeIdx >= 0 ? (row[typeIdx] as string) || undefined : undefined,
+    folder: folderIdx >= 0 ? (row[folderIdx] as string) || undefined : undefined,
+    docString: docIdx >= 0 ? (row[docIdx] as string) || undefined : undefined,
+    properties: propIdx >= 0 ? (row[propIdx] as string) || undefined : undefined,
+  }));
+}
+
+/**
+ * `.create-or-alter external table T kind=delta (connStr) with (...)`.
+ *
+ * `abfssUri` is the Delta table ROOT (e.g.
+ * `abfss://bronze@acct.dfs.core.windows.net/path`). Storage auth uses the
+ * cluster system-assigned MI (`;managed_identity=system`) by default, or a
+ * user-assigned MI object id when `opts.miObjectId` is supplied. The schema is
+ * omitted so ADX auto-infers it from the latest delta-log version.
+ *
+ * Requires AllDatabasesAdmin on the cluster (the Console UAMI already holds
+ * this); the cluster's MI must hold Storage Blob Data Reader on the ADLS
+ * account. No Fabric / OneLake dependency — works against the stand-alone ADX
+ * cluster.
+ */
+export async function createExternalDeltaTable(
+  db: string,
+  name: string,
+  abfssUri: string,
+  opts?: { folder?: string; docString?: string; miObjectId?: string },
+): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('createExternalDeltaTable: name is required', 400);
+  const uri = abfssUri.trim();
+  if (!uri || !/^abfss:\/\//i.test(uri)) {
+    throw new KustoError('createExternalDeltaTable: abfssUri must be an abfss:// URI', 400);
+  }
+  const auth = opts?.miObjectId ? `;managed_identity=${opts.miObjectId}` : ';managed_identity=system';
+  const connStr = `h@'${uri}${auth}'`;
+  const withParts: string[] = [];
+  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
+  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
+  const command = `.create-or-alter external table ${qName(name)}\nkind=delta\n(\n  ${connStr}\n)${withClause}`;
+  return executeMgmtCommand(db, command);
+}
+
+/**
+ * `.alter external table T policy query_acceleration '{"IsEnabled":true,"Hot":"Nd"}'`.
+ *
+ * `hotDays` is the number of days of Delta data cached for sub-second KQL
+ * queries (minimum 1). The background caching job starts within seconds;
+ * full build time scales with the Delta table size. Requires Database Admin.
+ */
+export async function setQueryAccelerationPolicy(
+  db: string,
+  externalTableName: string,
+  hotDays: number,
+): Promise<KustoQueryResult> {
+  if (!externalTableName.trim()) {
+    throw new KustoError('setQueryAccelerationPolicy: externalTableName is required', 400);
+  }
+  if (!Number.isFinite(hotDays) || hotDays < 1) {
+    throw new KustoError('setQueryAccelerationPolicy: hotDays must be >= 1', 400);
+  }
+  const policy = JSON.stringify({ IsEnabled: true, Hot: `${Math.floor(hotDays)}.00:00:00` });
+  const command = `.alter external table ${qName(externalTableName)} policy query_acceleration '${policy}'`;
+  return executeMgmtCommand(db, command);
+}
+
+export interface QueryAccelerationPolicyResult {
+  policyName?: string;
+  entityName?: string;
+  policy?: unknown;
+  raw: string;
+}
+
+/**
+ * `.show external table T policy query_acceleration` — the applied policy
+ * (the receipt). Returns null when no policy is set on the table.
+ */
+export async function showQueryAccelerationPolicy(
+  db: string,
+  externalTableName: string,
+): Promise<QueryAccelerationPolicyResult | null> {
+  const r = await executeMgmtCommand(
+    db,
+    `.show external table ${qName(externalTableName)} policy query_acceleration`,
+  );
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const nameIdx = r.columns.indexOf('PolicyName');
+  const entityIdx = r.columns.indexOf('EntityName');
+  const raw = String(r.rows[0][polIdx >= 0 ? polIdx : r.columns.length - 1] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { /* keep raw string */ }
+  return {
+    policyName: nameIdx >= 0 ? (r.rows[0][nameIdx] as string) : undefined,
+    entityName: entityIdx >= 0 ? (r.rows[0][entityIdx] as string) : undefined,
+    policy,
+    raw,
+  };
+}
+
+/**
+ * `.create-or-alter function NAME() { external_table("T") }` — a stored KQL
+ * function that wraps the external Delta table so callers can query the
+ * mirrored view with a clean `NAME()` invocation instead of remembering the
+ * `external_table(...)` syntax. This is the "mirrored KQL view".
+ */
+export async function createExternalTableView(
+  db: string,
+  viewName: string,
+  externalTableName: string,
+): Promise<KustoQueryResult> {
+  if (!viewName.trim() || !externalTableName.trim()) {
+    throw new KustoError('createExternalTableView: viewName and externalTableName are required', 400);
+  }
+  const body = `external_table("${externalTableName.replace(/"/g, '\\"')}")`;
+  return executeMgmtCommand(
+    db,
+    `.create-or-alter function with (folder = "Loom Delta", docstring = "Delta view via CSA Loom") ${viewName}() { ${body} }`,
+  );
+}
+
 export interface KustoDatabasePolicy {
   /** Policy name: retention | caching | sharding | mergepolicy | streamingingestion. */
   kind: string;

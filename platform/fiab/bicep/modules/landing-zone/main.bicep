@@ -168,6 +168,7 @@ module synapse 'synapse.bicep' = {
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
+    adxClusterPrincipalId: adxClusterPrincipalId
   }
 }
 
