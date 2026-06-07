@@ -252,8 +252,44 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
 
-## Cost Management + Diagnostics (Console UAMI subscription grants)
+## ADX Event Hub data connections — cluster MI grant {#adx-eventhub-data-connection}
 
+The KQL-database **Event Hub data connection** wizard (KqlDatabaseEditor →
+**Data → Data connections**) creates a streaming `Microsoft.Kusto/.../dataConnections`
+(kind `EventHub`). ADX authenticates to Event Hubs using the **cluster's
+system-assigned managed identity**, which must hold **Azure Event Hubs Data
+Receiver** on the namespace. The Azure portal auto-grants this when you create a
+connection in the portal; the ARM REST API (what the Loom wizard calls) does
+**not**, so the grant must exist first or the `PUT .../dataConnections` returns
+`Forbidden`.
+
+**Default deploy (greenfield ADX):** fully automated. `admin-plane/main.bicep`
+outputs `adxClusterPrincipalId`; the top-level `main.bicep` threads it into the
+DLZ `landing-zone/main.bicep`, which passes it to `eventhubs.bicep`. There the
+`adxEhDataReceiverRole` role assignment grants the cluster MI Azure Event Hubs
+Data Receiver (role `a638d3c7-ab3a-418d-83e6-5f17a39d4fde`) on the namespace.
+**No manual step.**
+
+**BYO / existing ADX cluster (`existingAdxClusterName` set):** the admin-plane
+output is empty (it can't read a pre-existing cluster's MI principal id at
+deploy time), so the grant is skipped. Grant it once manually:
+
+```bash
+ADX_MI=$(az kusto cluster show \
+  -g <adx-cluster-rg> -n <adx-cluster-name> \
+  --query identity.principalId -o tsv)
+EHNS=$(az eventhubs namespace show \
+  -g <dlz-rg> -n evhns-loom-<domain>-<location> --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$ADX_MI" --assignee-principal-type ServicePrincipal \
+  --role "Azure Event Hubs Data Receiver" --scope "$EHNS"
+```
+
+**Verify:** create a connection in the wizard, send events to the hub, and run
+`.show data connections` in the KQL editor — the connection lists with
+`State = Running` and rows appear in the target table within seconds.
+
+## Cost Management + Diagnostics (Console UAMI subscription grants)
 Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
 bicep can't express them):
 

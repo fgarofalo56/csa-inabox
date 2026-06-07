@@ -49,7 +49,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const timeKey = model.timeRange || 'last-24h';
-    const tiles = await runTiles(model.tiles, model.dataSources, model.parameters, timeKey, fallbackDb);
+    const tiles = await runTiles(model.tiles, model.dataSources, model.parameters, timeKey, fallbackDb, model.baseQueries);
 
     return NextResponse.json({
       ok: true,
