@@ -263,6 +263,12 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // ASA Lakehouse/Blob output writes to the DLZ ADLS Gen2 account via MSI
+    // (Storage Blob Data Contributor granted in the module).
+    adlsAccountName: storage.outputs.storageAccountName
+    // ADX cluster backing KQL Database outputs (ingestor grant is a Kusto
+    // control-plane step surfaced via module output for the bootstrap).
+    adxClusterName: adminPlaneAdxClusterName
   }
 }
 

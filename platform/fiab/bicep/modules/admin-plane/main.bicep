@@ -197,6 +197,9 @@ param loomAsaRg string = ''
 @description('Loom Stream Analytics subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomAsaSub string = ''
 
+@description('Default ASA job name the Eventstream editor pre-fills for "Push destinations to ASA". Matches the starter job from modules/landing-zone/stream-analytics.bicep (asa-loom-<domain>-<region>). Editable in the UI.')
+param loomAsaJobName string = 'asa-loom-default-${location}'
+
 @description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
 param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
@@ -794,6 +797,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // when ASA lives in a different RG / sub than the DLZ.
             { name: 'LOOM_ASA_RG', value: loomAsaRg }
             { name: 'LOOM_ASA_SUB', value: loomAsaSub }
+            { name: 'NEXT_PUBLIC_LOOM_ASA_JOB_NAME', value: loomAsaJobName }
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }

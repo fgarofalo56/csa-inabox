@@ -24,7 +24,11 @@ import {
 } from '@azure/identity';
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
-const API = '2020-03-01';
+// 2021-10-01-preview is the management-plane API version that supports
+// `authenticationMode: 'Msi'` on Blob/ADLS Gen2 and Kusto/ADX outputs (and
+// matches the deploy-planner ASA bicep). It is a superset of 2020-03-01 for
+// list/get/transformations/start/stop/inputs/outputs, so we use it throughout.
+const API = '2021-10-01-preview';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -323,8 +327,15 @@ export interface AsaOutputCreateSpec {
     | 'Microsoft.EventHub/EventHub'
     | 'Microsoft.DBForPostgreSQL/servers/databases'
     | 'PowerBI'
-    | 'Microsoft.DataLake/Accounts'
     | 'Microsoft.Kusto/clusters/databases';
+  /**
+   * Auth mode for ARM output datasources that support it (Blob/ADLS Gen2,
+   * Kusto/ADX, Event Hub). Default 'Msi' — the ASA job is created with a
+   * system-assigned managed identity by both bicep modules, so no connection
+   * string / account key is required when RBAC is granted. 'ConnectionString'
+   * is selected automatically when a key is supplied.
+   */
+  authenticationMode?: 'ConnectionString' | 'Msi' | 'UserToken';
   // sql
   server?: string;
   database?: string;
@@ -371,15 +382,26 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
         table: spec.table,
       };
       break;
-    case 'Microsoft.Storage/Blob':
+    case 'Microsoft.Storage/Blob': {
+      // ADLS Gen2 is reached through the same Blob datasource type (accountName
+      // accepts an ADLS Gen2 account). MSI by default — the ASA job MI must hold
+      // "Storage Blob Data Contributor" on the account. ConnectionString only
+      // when an explicit account key is supplied.
+      const blobMsi = !spec.storageAccountKey && spec.authenticationMode !== 'ConnectionString';
       ds.properties = {
-        storageAccounts: [{ accountName: spec.storageAccount, accountKey: spec.storageAccountKey }],
+        storageAccounts: [
+          blobMsi
+            ? { accountName: spec.storageAccount }
+            : { accountName: spec.storageAccount, accountKey: spec.storageAccountKey },
+        ],
         container: spec.container,
         pathPattern: spec.pathPattern || '',
         dateFormat: spec.dateFormat || 'yyyy/MM/dd',
         timeFormat: spec.timeFormat || 'HH',
+        authenticationMode: spec.authenticationMode || (blobMsi ? 'Msi' : 'ConnectionString'),
       };
       break;
+    }
     case 'Microsoft.Storage/Table':
       ds.properties = {
         accountName: spec.storageAccount,
@@ -405,14 +427,24 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
         sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
       };
       break;
-    case 'Microsoft.EventHub/EventHub':
+    case 'Microsoft.EventHub/EventHub': {
+      // SAS key when supplied, otherwise MSI (the ASA job MI needs "Azure Event
+      // Hubs Data Sender" on the namespace/hub). Custom Event Hub + Activator
+      // destinations both route through this type.
+      const ehMsi = !spec.sharedAccessPolicyKey && spec.authenticationMode !== 'ConnectionString';
       ds.properties = {
         eventHubName: spec.eventHubName,
         serviceBusNamespace: spec.namespace,
-        sharedAccessPolicyName: spec.sharedAccessPolicyName,
-        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+        ...(ehMsi
+          ? { authenticationMode: 'Msi' }
+          : {
+              sharedAccessPolicyName: spec.sharedAccessPolicyName,
+              sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+              authenticationMode: 'ConnectionString',
+            }),
       };
       break;
+    }
     case 'PowerBI':
       ds.properties = {
         dataset: spec.dataset,
@@ -423,10 +455,14 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
       };
       break;
     case 'Microsoft.Kusto/clusters/databases':
+      // ADX / KQL Database output. MSI by default — the ASA job MI must be
+      // granted the AllDatabasesIngestor (or table-scoped ingestor) role on the
+      // ADX cluster (Kusto control command / az kusto cluster-principal-assignment).
       ds.properties = {
         cluster: spec.kustoClusterUrl,
         database: spec.kustoDatabase,
         table: spec.kustoTable,
+        authenticationMode: spec.authenticationMode || 'Msi',
       };
       break;
   }

@@ -2404,6 +2404,7 @@ interface EventstreamState {
   runtimeStatus?: string;
   runtimeNote?: string;
   config?: StreamCfg;
+  asaJobName?: string | null;
   error?: string;
 }
 
@@ -2434,6 +2435,17 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [publishHint, setPublishHint] = useState<string | null>(null);
   const [publishMsg, setPublishMsg] = useState<string | null>(null);
   const [publishedId, setPublishedId] = useState<string | null>(null);
+  // Push-to-ASA: materialize the saved destination nodes as real Azure Stream
+  // Analytics outputs (KQL DB → ADX, Lakehouse → ADLS Gen2 Blob, Event Hub,
+  // Activator → Event Hub). The target ASA job is named here and persisted.
+  const [asaJobName, setAsaJobName] = useState(
+    (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_LOOM_ASA_JOB_NAME) || '',
+  );
+  const [asaSyncBusy, setAsaSyncBusy] = useState(false);
+  const [asaSyncErr, setAsaSyncErr] = useState<string | null>(null);
+  const [asaSyncHint, setAsaSyncHint] = useState<string | null>(null);
+  const [asaSyncMsg, setAsaSyncMsg] = useState<string | null>(null);
+  const [asaOutputs, setAsaOutputs] = useState<Array<{ name: string; type: string; id: string }>>([]);
 
   // Visual designer ↔ JSON sync. Best-effort: when JSON parses we mirror
   // it into the designer; when the designer changes we re-serialize JSON.
@@ -2477,6 +2489,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null };
       setState(j);
       if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
+      if (j.asaJobName) setAsaJobName(j.asaJobName);
       const cfg = j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0)
         ? j.config
         : DEFAULT_ES_CFG;
@@ -2593,10 +2606,44 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 
   const canSave = !saving && dirty;
 
+  // Push the saved destination nodes to a real ASA job as outputs. Saves first
+  // if there are unsaved edits so the route reads the latest topology.
+  const pushToAsa = useCallback(async () => {
+    if (!asaJobName.trim()) { setAsaSyncErr('ASA job name is required'); return; }
+    setAsaSyncBusy(true); setAsaSyncErr(null); setAsaSyncHint(null); setAsaSyncMsg(null);
+    try {
+      if (dirty) { await save(); }
+      const r = await fetch(`/api/items/eventstream/${id}/asa-sync`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ asaJobName: asaJobName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setAsaSyncErr(j.error || `HTTP ${r.status}`);
+        setAsaSyncHint(j.hint || null);
+        setAsaOutputs([]);
+        return;
+      }
+      setAsaOutputs(j.outputs || []);
+      const n = (j.outputs || []).length;
+      const skippedNote = (j.skipped || []).length ? ` (${j.skipped.length} skipped)` : '';
+      setAsaSyncMsg(
+        n
+          ? `Created ${n} ASA output${n === 1 ? '' : 's'} on job "${j.asaJobName}"${skippedNote}. Start the job in the Stream Analytics editor to land transformed events.`
+          : `No external outputs were created${skippedNote}. Add a KQL Database, Lakehouse, or Event Hub destination.`,
+      );
+    } catch (e: any) {
+      setAsaSyncErr(e?.message || String(e));
+    } finally {
+      setAsaSyncBusy(false);
+    }
+  }, [asaJobName, dirty, save, id]);
+
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
   // shape) directly so the visual designer + Monaco JSON view stay in sync.
   const ribbonAdd = useCallback(
-    (kind: 'source' | 'sink' | 'transform', preset?: Partial<VisualTransformNode>) => {
+    (kind: 'source' | 'sink' | 'transform', preset?: Record<string, any>) => {
       let cur: VisualPipelineConfig = {};
       try { cur = JSON.parse(cfgText) as VisualPipelineConfig; } catch { cur = {}; }
       const sources = Array.isArray(cur.sources) ? cur.sources : (cur.source ? [cur.source] : []);
@@ -2605,7 +2652,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       if (kind === 'source') {
         sources.push({ kind: 'eventhub', name: `source-${sources.length + 1}`, namespace: '', consumerGroup: '$Default' });
       } else if (kind === 'sink') {
-        sinks.push({ kind: 'kusto', name: `sink-${sinks.length + 1}`, database: 'loomdb-default', table: '' });
+        const sinkKind = (preset?.kind as any) || 'kusto';
+        const base: Record<string, any> = { kind: sinkKind, name: `sink-${sinks.length + 1}` };
+        if (sinkKind === 'kusto') { base.database = 'loomdb-default'; base.table = ''; }
+        if (sinkKind === 'lakehouse') { base.container = ''; base.pathPattern = 'events/{date}/{time}'; }
+        sinks.push({ ...base, ...preset });
       } else {
         transforms.push({ kind: (preset?.kind as any) || 'filter', name: `transform-${transforms.length + 1}`, expression: preset?.expression || '' });
       }
@@ -2634,16 +2685,22 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Group by', onClick: () => ribbonAdd('transform', { kind: 'group-by' }) },
       ]},
       { label: 'Destination', actions: [
-        { label: 'Add destination', onClick: () => ribbonAdd('sink') },
+        { label: 'KQL Database', onClick: () => ribbonAdd('sink', { kind: 'kusto' }) },
+        { label: 'Lakehouse (ADLS)', onClick: () => ribbonAdd('sink', { kind: 'lakehouse' }) },
+        { label: 'Event Hub', onClick: () => ribbonAdd('sink', { kind: 'eventhub' }) },
+        { label: 'Activator', onClick: () => ribbonAdd('sink', { kind: 'reflex' }) },
       ]},
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: asaSyncBusy ? 'Pushing…' : 'Push to ASA', onClick: !asaSyncBusy && asaJobName.trim() ? pushToAsa : undefined,
+          disabled: asaSyncBusy || !asaJobName.trim(),
+          title: asaJobName.trim() ? 'Create ASA outputs for each destination (real ARM PUT)' : 'Enter an ASA job name first' },
         { label: 'Publish to Fabric', onClick: () => setPublishOpen(true) },
         { label: pullBusy ? 'Pulling…' : 'Pull from Fabric', onClick: pullBusy ? undefined : pullFromFabric, disabled: pullBusy,
           title: 'Reload the live topology from the published Fabric Eventstream (getDefinition REST)' },
       ]},
     ]},
-  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric]);
+  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric, asaSyncBusy, asaJobName, pushToAsa]);
 
   // On /new there is no Cosmos record yet, so Save (PUT) would 404 — the
   // designer rendered but couldn't persist (the "wonky / not functional"
@@ -2704,6 +2761,54 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
             {saving ? 'Saving…' : 'Save (Ctrl+S)'}
           </Button>
         </div>
+
+        {/* Destination → Azure Stream Analytics outputs. Materialize each saved
+            destination node (KQL DB → ADX, Lakehouse → ADLS Gen2, Event Hub,
+            Activator → Event Hub) as a real ASA output via ARM. */}
+        <div className={s.toolbar}>
+          <Field label="ASA job" style={{ minWidth: 240 }}>
+            <Input
+              value={asaJobName}
+              onChange={(_: unknown, d: any) => setAsaJobName(d.value)}
+              placeholder="asa-loom-default-eastus2"
+            />
+          </Field>
+          <Button
+            appearance="primary"
+            onClick={pushToAsa}
+            disabled={asaSyncBusy || !asaJobName.trim()}
+            style={{ alignSelf: 'flex-end' }}
+          >
+            {asaSyncBusy ? 'Pushing…' : 'Push destinations to ASA'}
+          </Button>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, alignSelf: 'flex-end' }}>
+            Creates one ASA output per destination, then start the job in the Stream Analytics editor.
+          </Caption1>
+        </div>
+
+        {asaSyncErr && (
+          <MessageBar intent={asaSyncHint ? 'warning' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>{asaSyncHint ? 'Stream Analytics not configured' : 'Push to ASA failed'}</MessageBarTitle>
+              {asaSyncErr}{asaSyncHint ? <><br /><Caption1>{asaSyncHint}</Caption1></> : null}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {asaSyncMsg && !asaSyncErr && (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Destinations pushed to ASA</MessageBarTitle>
+              {asaSyncMsg}
+              {asaOutputs.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {asaOutputs.map((o) => (
+                    <li key={o.name}><code>{o.name}</code> → {o.type}</li>
+                  ))}
+                </ul>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         <Dialog open={publishOpen} onOpenChange={(_: unknown, d: any) => setPublishOpen(d.open)}>
           <DialogSurface>
