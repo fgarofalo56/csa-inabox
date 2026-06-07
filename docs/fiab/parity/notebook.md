@@ -16,7 +16,8 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | New / open / delete notebook | Home ribbon |
 | 8 | Workspace notebook list | Item picker |
 | 9 | Help / docs | Help ribbon |
-| 10 | Variable explorer (Name/Type/Length/Value, sortable, Python-only) | View ribbon → Variables |
+| 10 | Copilot chat pane (context-aware, slash commands, apply-to-notebook) | Copilot sidebar |
+| 11 | Variable explorer (Name/Type/Length/Value, sortable, Python-only) | View ribbon → Variables |
 
 ## Loom coverage
 
@@ -31,12 +32,14 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | ✅ | New (`createOpen`), Delete (`del`) |
 | 8 | ✅ | `/api/items/notebook?workspaceId=` list + Refresh |
 | 9 | ✅ | `Notebook docs` opens Learn |
-| 10 | ✅ | `VariablesPane` (`variablesOpen`, toolbar + View ribbon → Variables) — right OverlayDrawer with a sortable Name/Type/Length/Value table, `repr()` tooltip on Value, and a **Python** badge. `onInspect` submits a `globals()` introspection snippet to the **live Livy session** (the same warm session as cell runs) through the real run/poll path — `POST /api/items/notebook/[id]/run` (sentinel `cellId:'__loom_inspect__'`) then `GET /runs/[runId]`, parsing the `__LOOM_VARS__:` JSON line from stdout. Honest errors surface in a MessageBar when no Spark compute is selected; an info bar gates non-Python kernels. Sort logic unit-tested (`variables-sort.test.ts`). |
+| 10 | ✅ | **Copilot chat pane** — docked `InlineDrawer` (~25% width) opened from the toolbar or View → Panes → Copilot. Streams a real Azure OpenAI answer via SSE from `POST /api/copilot/notebook-assist`. Context builder sends the current cell + prior 5 cells; the server appends the lakehouse datastore schema (Delta column names + types read from each table's `_delta_log/0.json` — Azure-native, no Fabric). Slash menu `/fix /explain /comments /optimize` (fixed allowlist). Multi-block answers render as a diff with **Apply to notebook** (writes cells back). Honest `no_aoai` MessageBar gate when no chat deployment is wired. History reuses `GET /api/copilot/sessions`. |
+| 11 | ✅ | `VariablesPane` (`variablesOpen`, toolbar + View ribbon → Variables) — right OverlayDrawer with a sortable Name/Type/Length/Value table, `repr()` tooltip on Value, and a **Python** badge. `onInspect` submits a `globals()` introspection snippet to the **live Livy session** (the same warm session as cell runs) through the real run/poll path — `POST /api/items/notebook/[id]/run` (sentinel `cellId:'__loom_inspect__'`) then `GET /runs/[runId]`, parsing the `__LOOM_VARS__:` JSON line from stdout. Honest errors surface in a MessageBar when no Spark compute is selected; an info bar gates non-Python kernels. Sort logic unit-tested (`variables-sort.test.ts`). |
 
 ## Backend per control
 - Run / status → Fabric REST notebook job APIs (`/run`, `/runs/[runId]`, `/jobs`).
 - Lakehouse attach → Fabric REST lakehouse list.
 - CRUD → Fabric REST `/v1/workspaces/{ws}/notebooks`.
+- Copilot pane → `POST /api/copilot/notebook-assist` (Azure OpenAI chat-completions `stream:true`, AAD `cogScope()` token); schema grounding → ADLS `_delta_log` via `synapse-catalog-client` + `adls-client`; sessions → `copilot-sessions` Cosmos container (shared with the cross-item Copilot).
 - Variable explorer → real Synapse **Livy** statement on the active session via
   `POST /api/items/notebook/[id]/run` + `GET /runs/[runId]` (Azure-native default;
   no Fabric/Power BI dependency). Uses `globals()` introspection, not the IPython

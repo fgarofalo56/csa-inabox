@@ -118,6 +118,27 @@ export function kvUrlFromName(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Cognitive Services / Azure OpenAI (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * AAD `.default` scope for Azure Cognitive Services / Azure OpenAI tokens.
+ *
+ * The cognitiveservices audience differs by sovereign boundary: Commercial /
+ * GCC use `cognitiveservices.azure.com`; GCC-High / IL5 (both
+ * `AzureUSGovernment`) use `cognitiveservices.azure.us`. Hard-coding the
+ * Commercial scope silently fails AOAI auth in Gov — every AOAI token request
+ * must go through this helper. The AOAI REST data-plane URL itself comes from
+ * `LOOM_AOAI_ENDPOINT` (`*.openai.azure.com` vs `*.openai.azure.us`), which
+ * Bicep wires per boundary.
+ */
+export function cogScope(): string {
+  return isGovCloud()
+    ? 'https://cognitiveservices.azure.us/.default'
+    : 'https://cognitiveservices.azure.com/.default';
+}
+
+// ---------------------------------------------------------------------------
 // Service Bus / Event Hubs (data plane)
 // ---------------------------------------------------------------------------
 

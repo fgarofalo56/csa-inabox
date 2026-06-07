@@ -38,6 +38,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
+import { cogScope } from '@/lib/azure/cloud-endpoints';
 
 type AssistMode = 'generate' | 'explain' | 'fix';
 
@@ -51,10 +52,11 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  // Gov clouds (GCC-High / DoD) issue AOAI tokens for the .us audience; commercial
-  // uses .com. LOOM_AOAI_AUDIENCE is set per-cloud by admin-plane/main.bicep.
-  const audience = process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com';
-  const scope = `${audience.replace(/\/+$/, '')}/.default`;
+  // Boundary-aware AOAI audience: cogScope() returns .us for Gov (GCC-High /
+  // DoD), .com for Commercial / GCC. LOOM_AOAI_AUDIENCE (set per-cloud by
+  // admin-plane/main.bicep) overrides when present.
+  const audience = process.env.LOOM_AOAI_AUDIENCE;
+  const scope = audience ? `${audience.replace(/\/+$/, '')}/.default` : cogScope();
   const t = await credential.getToken(scope);
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;

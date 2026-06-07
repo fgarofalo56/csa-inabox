@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular, BracesVariable20Regular,
+  History20Regular, ArrowUpload20Regular, Sparkle20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +31,7 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
@@ -169,6 +170,8 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Copilot chat pane (docked right drawer, ~25% width)
+  const [copilotOpen, setCopilotOpen] = useState(false);
   // Variable explorer (Synapse/Fabric "Variables" View-pane parity)
   const [variablesOpen, setVariablesOpen] = useState(false);
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
@@ -658,7 +661,37 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
-  // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  /**
+   * Apply Copilot's returned code block(s) back into the notebook. The pane
+   * parses fenced code blocks from the streamed AOAI answer (in document
+   * order) and calls this. A single block replaces the active code cell; a
+   * multi-block answer is mapped onto the trailing run of cells ENDING at the
+   * active cell (last block → active cell). Marks the notebook dirty so Ctrl+S
+   * persists — no auto-save, the user reviews the diff first.
+   */
+  const applyCells = useCallback((updated: { source: string }[]) => {
+    if (updated.length === 0) return;
+    setCells((prev) => {
+      if (prev.length === 0) return prev;
+      let activeIdx = activeCellId ? prev.findIndex((c) => c.id === activeCellId) : -1;
+      if (activeIdx < 0) {
+        // No explicit active cell — target the last CODE cell.
+        for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].type === 'code') { activeIdx = i; break; } }
+        if (activeIdx < 0) activeIdx = prev.length - 1;
+      }
+      const startIdx = Math.max(0, activeIdx - (updated.length - 1));
+      const next = [...prev];
+      updated.forEach((u, i) => {
+        const tgt = startIdx + i;
+        if (tgt <= activeIdx && next[tgt]) next[tgt] = { ...next[tgt], source: u.source, output: undefined };
+      });
+      return next;
+    });
+    setDirty(true);
+    setRunMsg('Applied Copilot suggestion — review and Save (Ctrl+S) to persist.');
+  }, [activeCellId]);
+
+
   // CRITICAL: use patchCell (not updateCell) for output mutations so source
   // edits the user makes WHILE the cell is running don't get overwritten
   // by the stale `cell` snapshot captured here. That bug caused Save to
@@ -865,6 +898,7 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'view', label: 'View', groups: [
         { label: 'Panes', actions: [
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+          { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
           { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
@@ -881,6 +915,7 @@ export function NotebookEditor({ item, id }: Props) {
     ];
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
+    copilotOpen,
     run, save, del, loadList, insertCell, openAttach,
   ]);
 
@@ -938,7 +973,8 @@ export function NotebookEditor({ item, id }: Props) {
         </div>
       }
       main={
-        <div className={s.pad}>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
@@ -1037,6 +1073,7 @@ export function NotebookEditor({ item, id }: Props) {
               onClick={run}
             >{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
@@ -1234,6 +1271,18 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </>
           )}
+        </div>
+        <CopilotChatPane
+          open={copilotOpen}
+          onOpenChange={setCopilotOpen}
+          notebookId={notebookId}
+          workspaceId={workspaceId}
+          cells={cells}
+          activeCellId={activeCellId}
+          attachedSources={attachedSources}
+          defaultLang={defaultLang}
+          onApplyCells={applyCells}
+        />
         </div>
       }
     />
