@@ -77,3 +77,6 @@ output clusterName string = adxCluster.name
 output clusterUri string = adxCluster.properties.uri
 output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
 output clusterPrincipalId string = adxCluster.identity.principalId
+// ARM resource id of the cluster — used by workspace-monitor.bicep to set the
+// EventHub data connection's managedIdentityResourceId to the cluster's MI.
+output clusterResourceId string = adxCluster.id

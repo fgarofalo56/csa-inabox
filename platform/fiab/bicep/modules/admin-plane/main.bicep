@@ -114,6 +114,15 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Deploy the read-only Workspace-Monitoring ADX database + Azure Monitor diagnostic-export pipeline (Fabric workspace-monitoring parity). Requires adxEnabled (new cluster). Default off.')
+param workspaceMonitorEnabled bool = false
+
+@description('Monitoring database name (underscores only so the kql-dashboard data-source slug round-trips). Must match LOOM_WORKSPACE_MONITOR_DB.')
+param workspaceMonitorDbName string = 'loomdb_workspace_monitor'
+
+@description('Event Hub namespace ARM resource id for the LAW→EventHub→ADX live monitoring feed. Empty → DB + seeded tables work; live continuous ingestion is wired once set.')
+param workspaceMonitorEventHubNamespaceId string = ''
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -620,6 +629,23 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   }
 }
 
+// Workspace-monitoring ADX database + Azure Monitor diagnostic-export pipeline.
+// Read-only telemetry store (Fabric workspace-monitoring parity, no Fabric).
+// Console UAMI gets Admin (provisioner seeds tables); admin group gets Viewer.
+module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled && adxEnabled && empty(existingAdxClusterName)) {
+  name: 'workspace-monitor'
+  params: {
+    location: location
+    adxClusterName: adxCluster!.outputs.clusterName
+    monitorDbName: workspaceMonitorDbName
+    lawName: monitoring.outputs.lawName
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    adminEntraGroupId: adminEntraGroupId
+    eventHubNamespaceId: workspaceMonitorEventHubNamespaceId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // =====================================================================
 // 10. Catalog dispatcher (Purview / UC managed / Atlas-on-AKS)
 // =====================================================================
@@ -834,6 +860,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // Workspace-monitoring read-only ADX DB (Azure Monitor diag-export
+            // parity for Fabric workspace monitoring). Set only when deployed so
+            // the provisioner + dashboard target the real DB; '' → honest gate.
+            { name: 'LOOM_WORKSPACE_MONITOR_DB', value: (workspaceMonitorEnabled && adxEnabled && empty(existingAdxClusterName)) ? workspaceMonitorDbName : '' }
+            // Full ARM id of the Event Hub namespace for the live LAW→EH→ADX
+            // monitoring feed. Empty → the monitoring DB + seeded tables still
+            // work; the continuous ingest connection is wired once this is set.
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: workspaceMonitorEventHubNamespaceId }
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
