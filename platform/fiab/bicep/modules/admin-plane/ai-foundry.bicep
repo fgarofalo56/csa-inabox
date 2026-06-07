@@ -114,6 +114,29 @@ resource hubUamiDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
+// AzureML Compute Operator — lets the Console UAMI list / start / stop /
+// restart Compute Instances on the Foundry hub workspace. Required by the CI
+// lifecycle BFF routes:
+//   GET  /api/foundry/computes
+//   POST /api/foundry/computes/{id}/start
+//   GET  /api/foundry/computes/{id}/status
+// `AzureML Data Scientist` (granted to the admin group above) does NOT include
+// Microsoft.MachineLearningServices/workspaces/computes/* — so without this
+// grant the routes return 403 with an honest-gate MessageBar naming this role.
+// Role: e503ece1-11d0-4e8e-8e2c-7a6c3bf38815
+resource amlComputeOperatorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: foundryHub
+  name: guid(foundryHub.id, consolePrincipalId, 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+  properties: {
+    // AzureML Compute Operator
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Private endpoint to the Hub
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${foundryHub.name}'

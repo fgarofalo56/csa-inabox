@@ -665,21 +665,47 @@ export async function getLivyStatement(poolName: string, sessionId: number, stmt
 
 // === Async-friendly helpers used by /api/items/notebook/[id]/run + /runs/[runId] ===
 
-export async function createLivySessionAsync(poolName: string, kind: 'pyspark' | 'spark' | 'sparkr' | 'sql' = 'pyspark', jobName?: string): Promise<{ id: number; state: string; appInfo?: any }> {
+/**
+ * Per-session sizing knobs surfaced by the notebook editor's "Configure
+ * session" dialog. Each maps 1:1 onto a real Livy session-create field. Omit
+ * any and the Synapse defaults below apply.
+ */
+export interface LivySessionSizing {
+  numExecutors?: number;
+  executorMemory?: string;   // e.g. "4g"
+  executorCores?: number;
+  driverMemory?: string;     // e.g. "4g"
+  driverCores?: number;
+  heartbeatTimeoutInSecond?: number;  // session idle timeout
+}
+
+export async function createLivySessionAsync(
+  poolName: string,
+  kind: 'pyspark' | 'spark' | 'sparkr' | 'sql' = 'pyspark',
+  jobName?: string,
+  sizing?: LivySessionSizing,
+): Promise<{ id: number; state: string; appInfo?: any; request: Record<string, unknown> }> {
+  // Build the real Livy session-create body. Sizing overrides the Synapse
+  // defaults; the body is returned verbatim so callers can show an honest
+  // "Spark session JSON" receipt of exactly what provisioned the session.
+  const request: Record<string, unknown> = {
+    kind,
+    name: jobName || `loom-session-${Date.now()}`,
+    driverMemory: sizing?.driverMemory || '4g',
+    driverCores: sizing?.driverCores ?? 4,
+    executorMemory: sizing?.executorMemory || '4g',
+    executorCores: sizing?.executorCores ?? 4,
+    numExecutors: sizing?.numExecutors ?? 2,
+  };
+  if (typeof sizing?.heartbeatTimeoutInSecond === 'number' && sizing.heartbeatTimeoutInSecond > 0) {
+    request.heartbeatTimeoutInSecond = sizing.heartbeatTimeoutInSecond;
+  }
   const r = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        kind,
-        name: jobName || `loom-session-${Date.now()}`,
-        driverMemory: '4g', driverCores: 4,
-        executorMemory: '4g', executorCores: 4,
-        numExecutors: 2,
-      }),
-    },
+    { method: 'POST', body: JSON.stringify(request) },
   );
-  return jsonOrThrow(r, `createLivySession(${poolName})`);
+  const sess = await jsonOrThrow<{ id: number; state: string; appInfo?: any }>(r, `createLivySession(${poolName})`);
+  return { ...sess, request };
 }
 
 export async function getLivySession(poolName: string, sessionId: number): Promise<{ id: number; state: string; appInfo?: any }> {
