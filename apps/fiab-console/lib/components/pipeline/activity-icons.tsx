@@ -19,6 +19,7 @@ import {
   Tag20Regular, AddCircle20Regular, Filter20Regular, Globe20Regular,
   PlugConnected20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular,
   Mail20Regular, Apps20Regular,
+  DataUsage20Regular, Flash20Regular, Server20Regular, Stream20Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
 
@@ -26,6 +27,7 @@ import type { JSX } from 'react';
 const ICONS: Record<string, JSX.Element> = {
   Copy: <DocumentArrowRight20Regular />,
   RefreshDataflow: <ArrowFlowUpRight20Regular />,
+  ExecuteWranglingDataflow: <ArrowFlowUpRight20Regular />,
   ExecuteDataFlow: <Flowchart20Regular />,
   Lookup: <SearchInfo20Regular />,
   GetMetadata: <DocumentText20Regular />,
@@ -52,6 +54,10 @@ const ICONS: Record<string, JSX.Element> = {
   Fail: <ErrorCircle20Regular />,
   Validation: <CheckmarkCircle20Regular />,
   Office365Outlook: <Mail20Regular />,
+  HDInsightHive: <DataUsage20Regular />,
+  HDInsightSpark: <Flash20Regular />,
+  HDInsightMapReduce: <Server20Regular />,
+  HDInsightStreaming: <Stream20Regular />,
 };
 
 /** Return the Fluent icon element for an activity type (generic fallback). */
