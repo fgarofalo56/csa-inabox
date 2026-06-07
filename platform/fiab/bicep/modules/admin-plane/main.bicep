@@ -725,6 +725,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
+            // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
+            // Commercial / GCC use database.windows.net; GCC-High / IL5 use the US-Gov audience.
+            { name: 'LOOM_SYNAPSE_SQL_TOKEN_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'database.usgovcloudapi.net' : 'database.windows.net' }
             // Synapse SQL endpoint suffix — Commercial defaults to azuresynapse.net
             // in synapse-sql-client.ts; gov clouds set azuresynapse.us here.
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }

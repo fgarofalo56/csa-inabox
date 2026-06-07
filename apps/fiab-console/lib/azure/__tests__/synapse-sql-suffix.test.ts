@@ -18,7 +18,7 @@ vi.mock('@azure/identity', async () => {
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
 
-import { getSynapseSqlSuffix, serverlessTarget, dedicatedTarget } from '../synapse-sql-client';
+import { getSynapseSqlSuffix, serverlessTarget, dedicatedTarget, serverlessEndpoint } from '../synapse-sql-client';
 
 const SAVED = { AZURE_CLOUD: process.env.AZURE_CLOUD };
 
@@ -79,5 +79,17 @@ describe('dedicatedTarget — sovereign FQDN', () => {
   it('Gov dedicated FQDN', () => {
     process.env.AZURE_CLOUD = 'AzureUSGovernment';
     expect(dedicatedTarget().server).toBe('syn-loom-default.sql.azuresynapse.usgovcloudapi.net');
+  });
+});
+
+describe('serverlessEndpoint — public FQDN for badges/receipts', () => {
+  it('Commercial -ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(serverlessEndpoint()).toBe('syn-loom-default-ondemand.sql.azuresynapse.net');
+  });
+
+  it('Gov -ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    expect(serverlessEndpoint()).toBe('syn-loom-default-ondemand.sql.azuresynapse.usgovcloudapi.net');
   });
 });

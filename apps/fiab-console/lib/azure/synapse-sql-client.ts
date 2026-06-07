@@ -14,7 +14,15 @@
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import sql from 'mssql';
 
-const SQL_SCOPE = 'https://database.windows.net/.default';
+/**
+ * TDS AAD token scope — cloud-portable.
+ *   Commercial / GCC : https://database.windows.net/.default
+ *   GCC-High / IL5   : https://database.usgovcloudapi.net/.default
+ * Set via `LOOM_SYNAPSE_SQL_TOKEN_SCOPE` (host without scheme / .default).
+ */
+function sqlScope(): string {
+  return `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net'}/.default`;
+}
 // Prefer explicit UAMI when LOOM_UAMI_CLIENT_ID is set (Container App
 // runtime). Fall back to the default chain for local dev (az CLI).
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -71,6 +79,11 @@ export function serverlessTarget(database = 'master'): SynapseTarget {
   };
 }
 
+/** Public Serverless endpoint FQDN for the env-bound workspace (UI badges / receipts). */
+export function serverlessEndpoint(): string {
+  return `${required('LOOM_SYNAPSE_WORKSPACE')}-ondemand.${getSynapseSqlSuffix()}`;
+}
+
 function required(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env var: ${key}`);
@@ -81,7 +94,7 @@ async function getPool(target: SynapseTarget): Promise<sql.ConnectionPool> {
   const existing = pools.get(target.cacheKey);
   if (existing?.connected) return existing;
 
-  const token = await credential.getToken(SQL_SCOPE);
+  const token = await credential.getToken(sqlScope());
   if (!token?.token) throw new Error('Failed to acquire AAD token for Synapse SQL');
 
   const pool = new sql.ConnectionPool({
@@ -112,6 +125,10 @@ export interface QueryResult {
   rowCount: number;
   executionMs: number;
   truncated: boolean;
+  /** TDS PRINT / RAISERROR (severity ≤ 10) info messages — surfaced in the Messages pane. */
+  messages: string[];
+  /** Rows affected by the last statement (non-SELECT DDL/DML returns this; SELECT returns 0). */
+  recordsAffected: number;
 }
 
 const MAX_ROWS = 5_000;
@@ -120,25 +137,40 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
   const started = Date.now();
   const pool = await getPool(target);
   const req = pool.request();
-  
+
+  // Capture TDS info/warning messages (PRINT, RAISERROR with severity ≤ 10).
+  // These are how Synapse surfaces non-fatal diagnostics; the editor shows
+  // them in the Messages tab alongside the result grid (SSMS/ADS parity).
+  const messages: string[] = [];
+  req.on('info', (info: any) => {
+    const msg = info?.message ?? (typeof info === 'string' ? info : '');
+    if (msg) messages.push(String(msg));
+  });
+
   // Wrap query execution with an explicit timeout to catch cold-start latency.
   // Synapse serverless OPENROWSET on CSV files can take 30-60s on first run.
   const queryPromise = req.query(sqlText);
-  const timeoutPromise = new Promise<never>((_, reject) => 
+  const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
   );
-  
+
   const result = await Promise.race([queryPromise, timeoutPromise]);
   const recordset = result.recordset || [];
   const columns = recordset.length
     ? Object.keys(recordset[0])
     : Object.keys((result as any).recordsets?.[0]?.columns || {});
   const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+  // mssql sums rowsAffected per statement; report the last/total for DDL receipts.
+  const affected = Array.isArray(result.rowsAffected)
+    ? result.rowsAffected.reduce((a: number, b: number) => a + b, 0)
+    : 0;
   return {
     columns,
     rows,
     rowCount: recordset.length,
     executionMs: Date.now() - started,
     truncated: recordset.length > MAX_ROWS,
+    messages,
+    recordsAffected: affected,
   };
 }

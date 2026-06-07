@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { serverlessTarget, executeQuery, getSynapseSqlSuffix } from '@/lib/azure/synapse-sql-client';
+import { serverlessTarget, serverlessEndpoint, executeQuery } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +38,7 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     workspace: process.env.LOOM_SYNAPSE_WORKSPACE,
-    endpoint: `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}`,
+    endpoint: process.env.LOOM_SYNAPSE_WORKSPACE ? serverlessEndpoint() : '',
     databases,
     lake,
     samples: [
