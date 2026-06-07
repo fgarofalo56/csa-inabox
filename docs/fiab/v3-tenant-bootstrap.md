@@ -297,6 +297,58 @@ az role assignment create --assignee-object-id <console-uami-oid> \
 ```
 (Granted live on kv-loom-… 2026-06-06.)
 
+## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
+
+The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a
+Consumption Logic App + Office 365 Outlook connection deployed by
+`platform/fiab/bicep/modules/integration/approval-logicapp.bicep` (wired into the
+DLZ landing-zone as module `approvalLogicApp`). Bicep creates the
+`office365-loom-approval` connection but **cannot** perform the interactive OAuth
+consent — that is a one-time admin action.
+
+### Why a one-time step is required
+
+The Office 365 Outlook managed connector authenticates as a **licensed mailbox**
+via delegated OAuth. There is no service-principal / managed-identity path for
+`/approvalmail/$subscriptions`, so a human with a licensed mailbox must authorize
+the connection once. Until then the `Send_approval_email` action returns `401`
+and the Approval activity surfaces a clear error.
+
+### Step 1 — Authorize the connection
+
+1. Portal → the DLZ resource group → open Logic App `logic-loom-approval-<region>`.
+2. **Logic app designer** → select the **Send_approval_email** action →
+   **Change connection** → **Add new** → sign in with a licensed Office 365
+   mailbox (the "from" sender for approval emails).
+3. **GCC-High / IL5:** choose the **AzureUSGovernment** authentication endpoint
+   (`login.microsoftonline.us`) and confirm `AZURE_CLOUD=AzureUSGovernment` is set
+   on the Console (admin-plane sets this automatically for GCC-High / IL5).
+
+### Step 2 — Confirm Console wiring
+
+The Console reads the Logic App via `LOOM_APPROVAL_LOGIC_APP_NAME`
+(default `logic-loom-approval-<region>`) and `LOOM_APPROVAL_LOGIC_APP_RG`
+(defaults to `LOOM_DLZ_RG`). For an existing deployment:
+```bash
+az containerapp update --name <loom-console> -g <loom-admin-rg> \
+  --set-env-vars "LOOM_APPROVAL_LOGIC_APP_NAME=logic-loom-approval-<region>" \
+                 "LOOM_APPROVAL_LOGIC_APP_RG=<dlz-rg>"
+```
+
+### Step 3 — Verify
+
+In a pipeline, add an **Approval (Logic App)** activity, declare a `string`
+parameter `approverEmail`, click **Fetch trigger URL** (populates the activity
+`url`), Save + Publish, then Run. An approval email arrives; **Approve**
+continues the pipeline, **Reject** fails the branch.
+
+### Bicep sync
+
+`approval-logicapp.bicep` deploys the workflow + O365 connection + Logic App
+Contributor grant for the Console UAMI (so the BFF can call `listCallbackUrl`).
+`admin-plane/main.bicep` exposes `loomApprovalLogicAppName` /
+`loomApprovalLogicAppRg` as env vars. Only the OAuth consent above is manual.
+
 ## Reference Lakehouse — cross-account RBAC {#reference-lakehouse-cross-account-rbac}
 
 Loom's **Reference Lakehouses** federation (lakehouse explorer → **References →

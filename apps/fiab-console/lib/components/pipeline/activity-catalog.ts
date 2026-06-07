@@ -343,6 +343,44 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     }),
   },
   {
+    // Approval activity — Azure-native parity for Fabric's "Office 365 Outlook →
+    // Send approval email" + Power Automate approvals. Implemented as a native
+    // ADF/Synapse WebHook activity that POSTs to a Consumption Logic App trigger.
+    // ADF injects `callBackUri` into the POST body; the Logic App runs the O365
+    // "Send approval email" action (blocks until the approver clicks Approve /
+    // Reject) and POSTs {StatusCode, Output|Error} back to callBackUri. A 200
+    // status continues the pipeline; a 400 fails the branch. No Fabric / Power
+    // Automate dependency — see platform/fiab/bicep/modules/integration/
+    // approval-logicapp.bicep.
+    key: 'ApprovalWebhook', label: 'Approval (Logic App)',
+    description:
+      'Pause the pipeline and send an Office 365 approval email via a Consumption ' +
+      'Logic App. Resumes when the approver clicks Approve or Reject. Requires ' +
+      'approval-logicapp.bicep deployed and LOOM_APPROVAL_LOGIC_APP_NAME set; ' +
+      'fetch the trigger URL in the Settings tab.',
+    category: 'control-flow', type: 'WebHook', namePrefix: 'Approval',
+    color: '#0062ad', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'WebHook', dependsOn: [],
+      typeProperties: {
+        url: '',
+        method: 'POST',
+        timeout: '04:00:00', // 4 h approval SLA; Logic Apps Consumption allows up to 90 d.
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          value:
+            "@json(concat('{\"pipelineName\":\"', pipeline().Pipeline, '\",\"runId\":\"', " +
+            "pipeline().RunId, '\",\"approverEmail\":\"', pipeline().parameters.approverEmail, '\"}'))",
+          type: 'Expression',
+        },
+        reportStatusOnCallBack: true,
+      },
+      // Discriminator so activity-forms renders the Approval form (not the plain
+      // Webhook form) even though both share ADF wire type `WebHook`.
+      userProperties: [{ name: '_loomKind', value: 'ApprovalWebhook' }],
+    }),
+  },
+  {
     key: 'Fail', label: 'Fail',
     description: 'Stop the pipeline with a custom error message and error code.',
     category: 'control-flow', type: 'Fail', namePrefix: 'Fail',
@@ -492,6 +530,25 @@ export function findByType(type?: string): ActivityTypeDef | undefined {
 /** Lookup by palette key. */
 export function findByKey(key: string): ActivityTypeDef | undefined {
   return ACTIVITY_CATALOG.find((a) => a.key === key);
+}
+
+/**
+ * Resolve the catalog def for a concrete activity instance. Some Loom palette
+ * entries share an ADF wire `type` but differ by a `_loomKind` user property
+ * (e.g. plain Webhook vs Approval — both ADF type `WebHook`). Prefer the
+ * `_loomKind` match so the right label / colour / form is used; fall back to
+ * the first type match.
+ */
+export function findForActivity(activity: PipelineActivity | null | undefined): ActivityTypeDef | undefined {
+  if (!activity) return undefined;
+  const kind = Array.isArray(activity.userProperties)
+    ? (activity.userProperties.find((p) => p.name === '_loomKind')?.value as string | undefined)
+    : undefined;
+  if (kind) {
+    const byKind = ACTIVITY_CATALOG.find((a) => a.key === kind);
+    if (byKind) return byKind;
+  }
+  return findByType(activity.type);
 }
 
 /** All activities in a category, in palette order. */

@@ -154,6 +154,12 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
+@description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
+param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
+
+@description('Approval Logic App resource group. Empty defaults to LOOM_DLZ_RG (where the DLZ approval Logic App is deployed).')
+param loomApprovalLogicAppRg string = ''
+
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
@@ -731,6 +737,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Approval activity (F25) - Consumption Logic App + O365 approval
+            // email backing the pipeline editor's Approval activity. Empty name
+            // -> the approval-logicapp route returns an honest 503 naming the
+            // bicep module + env var (no Fabric / Power Automate dependency).
+            { name: 'LOOM_APPROVAL_LOGIC_APP_NAME', value: loomApprovalLogicAppName }
+            { name: 'LOOM_APPROVAL_LOGIC_APP_RG', value: !empty(loomApprovalLogicAppRg) ? loomApprovalLogicAppRg : loomDlzRg }
             // Copy Job (F14) — watermark control table address. When the server
             // is unset, incremental copy surfaces an honest-gate MessageBar and
             // full copy still works; see data/copy-job-control.bicep.

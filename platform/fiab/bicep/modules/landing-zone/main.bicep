@@ -297,6 +297,31 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
 }
 
 // =====================================================================
+// 9a. Approval Logic App (F25) — Consumption Logic App + O365 Outlook
+//
+// Backs the pipeline editor's Approval activity: an ADF/Synapse WebHook
+// activity POSTs to this Logic App's HTTP trigger; the Logic App sends an
+// Office 365 approval email and calls back the ADF callBackUri (Approve →
+// continue, Reject → fail). Azure-native — no Fabric / Power Automate.
+// Deterministic name `logic-loom-approval-<region>` so the Console targets it
+// via LOOM_APPROVAL_LOGIC_APP_NAME (defaulted in admin-plane/main.bicep). The
+// O365 connection is authorized post-deploy (see the module header + bootstrap).
+// =====================================================================
+
+@description('Provision the approval Logic App (F25) backing the pipeline Approval activity.')
+param approvalLogicAppEnabled bool = true
+
+module approvalLogicApp '../integration/approval-logicapp.bicep' = if (approvalLogicAppEnabled) {
+  name: 'dlz-approval-logicapp'
+  params: {
+    location: location
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 9b. Scaled Self-Hosted Integration Runtime (VMSS, scale-to-0)
 //
 // A shared 4-node self-hosted IR for the DLZ that costs nothing while idle:
@@ -397,4 +422,5 @@ output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVect
 // CSA Loom no-cuts-sweep — ADF wiring outputs
 output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''
 output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
+output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
 output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''

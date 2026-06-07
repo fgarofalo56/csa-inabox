@@ -16,8 +16,11 @@
  *   https://learn.microsoft.com/azure/data-factory/control-flow-* (per activity)
  */
 
-import { Field, Input, Dropdown, Option, Switch, Caption1,
-  MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
+import { useState } from 'react';
+import {
+  Field, Input, Dropdown, Option, Switch, Caption1, Button, Spinner,
+  MessageBar, MessageBarBody, MessageBarTitle,
+} from '@fluentui/react-components';
 import { ExpressionField } from './dynamic-content';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
@@ -180,6 +183,24 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
     { path: 'reportStatusOnCallBack', label: 'Report status on callback', kind: 'bool',
       hint: 'Let the callback report a failure status back to the activity.' },
   ],
+  // Approval (Logic App + O365) — the Loom-native parity for Fabric's approval
+  // email. Same WebHook wire shape, but the form points the operator at the
+  // approval Logic App provisioning route instead of a raw callback URL.
+  ApprovalWebhook: [
+    { path: 'url', label: 'Logic App trigger URL', kind: 'text', required: true,
+      placeholder: 'https://prod-XX.<region>.logic.azure.com:443/workflows/…/triggers/manual/run?…',
+      hint:
+        'HTTP trigger URL of the approval Logic App. Use "Fetch trigger URL" above ' +
+        '(provisioned by approval-logicapp.bicep / LOOM_APPROVAL_LOGIC_APP_NAME), ' +
+        'or paste it manually.' },
+    { path: 'timeout', label: 'Approval timeout', kind: 'text', placeholder: '04:00:00',
+      hint: 'How long ADF waits for the Logic App callback before failing (d.hh:mm:ss). ' +
+            'Maximum 90 days on Logic Apps Consumption.' },
+    { path: 'reportStatusOnCallBack', label: 'Report status on callback', kind: 'bool',
+      hint:
+        'Required. When true the Logic App callback body {StatusCode, Output, Error} ' +
+        'controls success/failure — Approve → 200 continues, Reject → 400 fails the branch.' },
+  ],
   Validation: [
     { path: 'dataset.referenceName', label: 'Dataset', kind: 'text', required: true,
       hint: 'The file/folder dataset to validate exists.' },
@@ -281,6 +302,13 @@ export function hasActivityForm(type: string | undefined): boolean {
   return !!type && Array.isArray(ACTIVITY_FORMS[type]) && ACTIVITY_FORMS[type].length > 0;
 }
 
+/** Read the Loom discriminator (`_loomKind`) off an activity, if present. */
+export function activityLoomKind(activity: PipelineActivity): string | undefined {
+  return Array.isArray(activity.userProperties)
+    ? (activity.userProperties.find((p) => p.name === '_loomKind')?.value as string | undefined)
+    : undefined;
+}
+
 // ── dotted-path get/set on a plain object (supports `a.b` and `a[0].b`) ──────
 function tokenize(path: string): Array<string | number> {
   const out: Array<string | number> = [];
@@ -321,15 +349,113 @@ export interface ActivityFormProps {
   parameters: PipelineParameter[];
   variables: PipelineVariable[];
   allActivities: PipelineActivity[];
+  /** Item id of the pipeline being edited — enables live helpers (e.g. the
+   *  Approval activity's "Fetch trigger URL" call). Omit to hide them. */
+  itemId?: string;
   /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
   pipelineId?: string;
-  /** Workspace id — used by the Evaluate pre-fill API call. */
+  /** Workspace id of the pipeline being edited. */
   workspaceId?: string;
+  /** API slug for the editor host (default 'data-pipeline'). */
+  apiSlug?: string;
+}
+
+/**
+ * Approval-specific helper rendered above the typed fields when the activity is
+ * the Loom "Approval (Logic App)" kind. Calls the approval-logicapp BFF route to
+ * provision/link the Consumption Logic App and populate the activity URL. Honest
+ * gate (no-vaporware): a 503 surfaces the exact Bicep module + env var, never a
+ * dead button.
+ */
+function ApprovalTriggerUrlFetcher({
+  activity, onPatch, itemId, workspaceId, apiSlug,
+}: {
+  activity: PipelineActivity;
+  onPatch: (patch: Partial<PipelineActivity>) => void;
+  itemId?: string;
+  workspaceId?: string;
+  apiSlug: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<{ reason: string; remediation: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const canFetch = !!itemId && !!workspaceId && itemId !== 'new';
+
+  async function fetchUrl() {
+    if (!canFetch) return;
+    setBusy(true); setGate(null); setErr(null); setOk(null);
+    try {
+      const r = await fetch(
+        `/api/items/${apiSlug}/${encodeURIComponent(itemId!)}/approval-logicapp` +
+          `?workspaceId=${encodeURIComponent(workspaceId!)}`,
+      );
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok && j.triggerUrl) {
+        const tp = { ...((activity.typeProperties as Record<string, unknown>) || {}), url: j.triggerUrl };
+        onPatch({ typeProperties: tp });
+        setOk(`Linked Logic App "${j.workflowName}" — trigger URL populated.`);
+        return;
+      }
+      if (j?.gate) { setGate(j.gate); return; }
+      setErr(j?.error || `Request failed (${r.status}).`);
+    } catch (e) {
+      setErr((e as Error)?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <Caption1>
+        The Approval activity posts to a Consumption Logic App that sends an Office 365
+        approval email and calls back. Declare a <strong>string</strong> pipeline
+        parameter <code>approverEmail</code> (Parameters tab) so each run can target a
+        recipient. <strong>Approve</strong> continues the pipeline; <strong>Reject</strong> fails the branch.
+      </Caption1>
+      <div>
+        <Button appearance="primary" size="small" disabled={!canFetch || busy} onClick={fetchUrl}>
+          {busy ? <Spinner size="tiny" label="Linking…" /> : 'Fetch trigger URL'}
+        </Button>
+      </div>
+      {!canFetch && (
+        <Caption1>Save the pipeline first to enable automatic Logic App linking, or paste the trigger URL below.</Caption1>
+      )}
+      {ok && (
+        <MessageBar intent="success">
+          <MessageBarBody>{ok}</MessageBarBody>
+        </MessageBar>
+      )}
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Approval Logic App not configured</MessageBarTitle>
+            {gate.reason} {gate.remediation}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {err && (
+        <MessageBar intent="error">
+          <MessageBarBody>{err}</MessageBarBody>
+        </MessageBar>
+      )}
+    </div>
+  );
 }
 
 /** Renders the typed form for the activity's type, or null if none is defined. */
-export function ActivityForm({ activity, onPatch, parameters, variables, allActivities, pipelineId, workspaceId }: ActivityFormProps) {
-  const schema = activity.type ? ACTIVITY_FORMS[activity.type] : undefined;
+export function ActivityForm({
+  activity, onPatch, parameters, variables, allActivities,
+  itemId, workspaceId, apiSlug = 'data-pipeline', pipelineId,
+}: ActivityFormProps) {
+  // Discriminate Loom palette variants that share an ADF wire type (e.g.
+  // Approval vs plain Webhook — both ADF type `WebHook`) via `_loomKind`.
+  const loomKind = activityLoomKind(activity);
+  const schema = (loomKind && ACTIVITY_FORMS[loomKind])
+    ? ACTIVITY_FORMS[loomKind]
+    : (activity.type ? ACTIVITY_FORMS[activity.type] : undefined);
   if (!schema) return null;
   const tp = (activity.typeProperties as any) || {};
 
@@ -368,9 +494,18 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
         </MessageBar>
       )}
       <Caption1>
-        Typed configuration for <strong>{activity.type}</strong> — the same fields the Azure portal exposes.
+        Typed configuration for <strong>{loomKind === 'ApprovalWebhook' ? 'Approval (Logic App)' : activity.type}</strong> — the same fields the Azure portal exposes.
         Expression fields offer <em>Add dynamic content</em> + IntelliSense.
       </Caption1>
+      {loomKind === 'ApprovalWebhook' && (
+        <ApprovalTriggerUrlFetcher
+          activity={activity}
+          onPatch={onPatch}
+          itemId={itemId}
+          workspaceId={workspaceId}
+          apiSlug={apiSlug}
+        />
+      )}
       {schema.map((fld) => {
         const raw = fld.rootPath ? getPath(activity, fld.path) : getPath(tp, fld.path);
         const strVal = raw == null ? '' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
