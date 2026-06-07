@@ -27,6 +27,7 @@ import {
   createTablesShortcut,
   dropShortcutObject,
   dropExternalBinding,
+  dropDeltaSharingCredential,
   externalSourceGate,
   bindExternalSource,
   type EngineGate,
@@ -36,7 +37,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse'];
+const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
 
 function isGate(x: unknown): x is EngineGate {
@@ -110,7 +111,7 @@ export async function POST(req: NextRequest) {
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
 
-  const isExternal = targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse';
+  const isExternal = targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' || targetType === 'delta_sharing';
 
   // --- External cloud sources (S3/GCS/Dataverse): pre-flight honest-gate. ---
   // Gate ONLY when the credentialRef is absent or the vault isn't configured;
@@ -131,7 +132,7 @@ export async function POST(req: NextRequest) {
       const result = await bindExternalSource({
         lakehouseId,
         name,
-        targetType: targetType as 's3' | 'gcs' | 'dataverse',
+        targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing',
         targetUri,
         credentialRef: credentialRef!,
       });
@@ -187,9 +188,18 @@ export async function POST(req: NextRequest) {
   }
 
   // For S3/GCS the engine table reads from the object URI (covered by the UC
-  // external location / Synapse data source); Dataverse + ADLS read via abfss.
+  // external location / Synapse data source); Dataverse + ADLS read via abfss;
+  // Delta Sharing reads via the delta_sharing provider (credential profile +
+  // parsed share coordinates passed through to createTablesShortcut).
   let externalForTable:
-    | { objectUri: string; ucExternalLocation?: string; synapseDataSource?: string; objectKey?: string }
+    | {
+        objectUri: string;
+        ucExternalLocation?: string;
+        synapseDataSource?: string;
+        objectKey?: string;
+        deltaSharing?: ExternalBinding['deltaSharing'];
+        lakehouseId?: string;
+      }
     | undefined;
   if (binding && (targetType === 's3' || targetType === 'gcs')) {
     const m = binding.readUri.match(/^(?:s3a?|gs):\/\/[^/]+\/?(.*)$/i);
@@ -198,6 +208,12 @@ export async function POST(req: NextRequest) {
       ucExternalLocation: binding.ucExternalLocation,
       synapseDataSource: binding.synapse?.dataSource,
       objectKey: m ? m[1] : '',
+    };
+  } else if (binding && targetType === 'delta_sharing') {
+    externalForTable = {
+      objectUri: binding.readUri,
+      deltaSharing: binding.deltaSharing,
+      lakehouseId,
     };
   }
 
@@ -270,6 +286,13 @@ export async function DELETE(req: NextRequest) {
       // deletes source bytes.
       if ((existing.targetType === 's3' || existing.targetType === 'gcs') && existing.engine === 'databricks') {
         await dropExternalBinding(lakehouseId, existing.name, existing.credentialRef?.storageCredentialName).catch(() => {
+          /* best-effort */
+        });
+      }
+      // Delta Sharing Tables shortcuts wrote a credential file to a UC Volume —
+      // remove it (best-effort). Never touches the shared source data.
+      if (existing.targetType === 'delta_sharing' && existing.engine === 'databricks') {
+        await dropDeltaSharingCredential(lakehouseId, existing.name).catch(() => {
           /* best-effort */
         });
       }

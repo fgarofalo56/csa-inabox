@@ -32,9 +32,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'mounted-adf':          reg(() => import('./mounted-adf-editor'),       'MountedAdfEditor'),
   'event-schema-set':     reg(() => import('./event-schema-set-editor'),  'EventSchemaSetEditor'),
   'airflow-job':          reg(() => import('./airflow-job-editor'),       'AirflowJobEditor'),
-  'spark-job-definition': reg(() => import('./phase2-misc-editors'),      'SparkJobDefinitionEditor'),
+  'spark-job-definition': reg(() => import('./spark-job-definition-editor'), 'SparkJobDefinitionEditor'),
   'environment':          reg(() => import('./phase2-misc-editors'),      'EnvironmentEditor'),
-  'copy-job':             reg(() => import('./phase2-misc-editors'),      'CopyJobEditor'),
+  'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
+  'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
 
   // Phase 3
@@ -68,7 +69,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
   // v2.1 — Synapse Spark pool + Pipeline + Warehouse alias real-REST wired (ARM + dev endpoint)
   'synapse-dedicated-sql-pool':  reg(() => import('./synapse-sql-editors'),    'SynapseDedicatedSqlPoolEditor'),
-  'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
+  'synapse-serverless-sql-pool': reg(() => import('./synapse-serverless-sql-editor'), 'SynapseServerlessSqlEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
   'synapse-notebook':            reg(() => import('./synapse-notebook-editor'), 'SynapseNotebookEditor'),

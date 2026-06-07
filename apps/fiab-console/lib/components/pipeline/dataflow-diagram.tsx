@@ -94,7 +94,7 @@ const QUERY_PALETTE: QueryStepDef[] = [
 ];
 
 /** Parse `shared <Name> = … ;` query declarations out of an M section. */
-function parseQueries(m: string): Array<{ name: string; body: string }> {
+export function parseQueries(m: string): Array<{ name: string; body: string }> {
   const out: Array<{ name: string; body: string }> = [];
   // Match: shared Name = <body up to a top-level semicolon>;
   // We split on `shared` boundaries then take name + body to the trailing `;`.
