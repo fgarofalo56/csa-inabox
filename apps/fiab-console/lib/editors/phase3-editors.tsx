@@ -42,6 +42,10 @@ import {
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import {
+  ColumnGridDesigner, toKustoSchema, parseKustoSchema, validateColumns,
+  type ColumnDef,
+} from '@/lib/components/adx/column-grid-designer';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
@@ -902,7 +906,13 @@ interface KqlDbInfo {
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
-type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
+type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest' | 'alter-table' | 'drop-table';
+
+const DEFAULT_TABLE_COLUMNS: ColumnDef[] = [
+  { name: 'ts', type: 'datetime' },
+  { name: 'tenant', type: 'string' },
+  { name: 'value', type: 'long' },
+];
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -916,6 +926,10 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizardKind, setWizardKind] = useState<KqlWizardKind | null>(null);
   const [wizName, setWizName] = useState('');
   const [wizSchema, setWizSchema] = useState('ts:datetime, tenant:string, value:long');
+  // Visual column-grid state for the table create / alter schema designer.
+  const [wizColumns, setWizColumns] = useState<ColumnDef[]>(DEFAULT_TABLE_COLUMNS);
+  // For alter-table / drop-table: the target table name (read-only in the dialog).
+  const [wizAlterTarget, setWizAlterTarget] = useState('');
   const [wizSource, setWizSource] = useState(''); // table name (mv source / update policy source)
   const [wizQuery, setWizQuery] = useState(''); // MV query / function body / update policy query
   const [wizArgs, setWizArgs] = useState(''); // function arg list, e.g. "x:long"
@@ -980,24 +994,90 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
+    setWizColumns(DEFAULT_TABLE_COLUMNS); setWizAlterTarget('');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
   }, []);
 
-  // Issue a `.create` mgmt command via the existing query route (POST is the
-  // same; mgmt commands starting with `.` are auto-routed to /v1/rest/mgmt).
+  // Open the schema designer in ALTER mode for an existing table. Fetches the
+  // current CSL schema so the grid pre-populates with the live columns; the
+  // analyst then appends new columns (.alter-merge — additive, no data loss).
+  const openAlterTable = useCallback(async (tableName: string) => {
+    setWizardKind('alter-table'); setWizError(null); setWizSuccess(null);
+    setWizAlterTarget(tableName); setWizColumns([]);
+    try {
+      const r = await fetch(`/api/adx/tables?id=${encodeURIComponent(id)}&schema=${encodeURIComponent(tableName)}`);
+      const j = await r.json();
+      if (j.ok && j.cslSchema) setWizColumns(parseKustoSchema(j.cslSchema));
+    } catch {
+      // Pre-population is best-effort — the analyst can still add columns.
+    }
+  }, [id]);
+
+  const openDropTable = useCallback((tableName: string) => {
+    setWizardKind('drop-table'); setWizError(null); setWizSuccess(null);
+    setWizAlterTarget(tableName);
+  }, []);
+
+  // Submit the wizard. Table create / alter / drop go through the dedicated
+  // `/api/adx/tables` route (POST/PATCH/DELETE → real .create / .alter-merge /
+  // .drop control commands). The other object types issue a `.` mgmt command
+  // via the query route (auto-routed to /v1/rest/mgmt). No mocks.
   const submitWizard = useCallback(async () => {
     if (!wizardKind) return;
     setWizError(null); setWizSuccess(null);
+
+    // --- Table schema designer flows (dedicated ADX route) ---
+    if (wizardKind === 'table' || wizardKind === 'alter-table' || wizardKind === 'drop-table') {
+      const tablesRoute = `/api/adx/tables?id=${encodeURIComponent(id)}`;
+      setWizSubmitting(true);
+      try {
+        let res: Response;
+        let receipt = '';
+        if (wizardKind === 'table') {
+          if (!wizName.trim()) { setWizError('Table name is required'); setWizSubmitting(false); return; }
+          const colErr = validateColumns(wizColumns);
+          if (colErr) { setWizError(colErr); setWizSubmitting(false); return; }
+          const schema = toKustoSchema(wizColumns);
+          res = await fetch(tablesRoute, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: wizName.trim(), schema }),
+          });
+          receipt = `Table "${wizName.trim()}" created — .create table ["${wizName.trim()}"] (${schema}).`;
+        } else if (wizardKind === 'alter-table') {
+          const colErr = validateColumns(wizColumns);
+          if (colErr) { setWizError(colErr); setWizSubmitting(false); return; }
+          const schema = toKustoSchema(wizColumns);
+          res = await fetch(tablesRoute, {
+            method: 'PATCH', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: wizAlterTarget, schema }),
+          });
+          receipt = `Table "${wizAlterTarget}" altered — .alter-merge table ["${wizAlterTarget}"] (${schema}).`;
+        } else {
+          res = await fetch(`${tablesRoute}&name=${encodeURIComponent(wizAlterTarget)}`, { method: 'DELETE' });
+          receipt = `Table "${wizAlterTarget}" dropped — .drop table ["${wizAlterTarget}"] ifexists.`;
+        }
+        const j = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+        if (!j.ok) {
+          setWizError(j.error || 'Command failed');
+        } else {
+          setWizSuccess(`Done. ${receipt} Refreshing…`);
+          await load();
+          setTimeout(() => { setWizardKind(null); }, 800);
+        }
+      } catch (e: any) {
+        setWizError(e?.message || String(e));
+      } finally {
+        setWizSubmitting(false);
+      }
+      return;
+    }
+
     if (wizardKind !== 'ingest' && !wizName.trim()) {
       setWizError('Name is required');
       return;
     }
     let mgmtCmd = '';
     switch (wizardKind) {
-      case 'table':
-        // Fabric parity: .create table TableName (col:type, col:type, …)
-        mgmtCmd = `.create table ${wizName} (${wizSchema})`;
-        break;
       case 'mv':
         if (!wizSource || !wizQuery) { setWizError('Source table + query required'); return; }
         // .create materialized-view NAME on table SRC { QUERY }
@@ -1049,7 +1129,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizColumns, wizAlterTarget, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
 
   const ribbon: RibbonTab[] = useMemo(() => {
     return [
@@ -1085,6 +1165,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             <AdxDatabaseTree
               itemId={id}
               refreshKey={treeRefreshKey}
+              onAlterTable={openAlterTable}
+              onDropTable={openDropTable}
               onOpenQuery={(q) => {
                 setKql(q);
                 const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
@@ -1233,6 +1315,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>
                   {wizardKind === 'table' && 'New table (.create table)'}
+                  {wizardKind === 'alter-table' && `Edit schema — ${wizAlterTarget} (.alter-merge table)`}
+                  {wizardKind === 'drop-table' && `Drop table — ${wizAlterTarget}`}
                   {wizardKind === 'mv' && 'New materialized view (.create materialized-view)'}
                   {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
@@ -1242,11 +1326,44 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {wizardKind === 'table' && (
                       <>
-                        <Caption1>Table name</Caption1>
-                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events" />
-                        <Caption1>Schema (col:type, col:type, …)</Caption1>
-                        <Textarea value={wizSchema} onChange={(_: unknown, d: any) => setWizSchema(d.value)} rows={3} style={{ fontFamily: 'Consolas, monospace' }} />
+                        <Field label="Table name" required>
+                          <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events" />
+                        </Field>
+                        <Field label="Columns">
+                          <ColumnGridDesigner columns={wizColumns} onChange={setWizColumns} disabled={wizSubmitting} />
+                        </Field>
                       </>
+                    )}
+                    {wizardKind === 'alter-table' && (
+                      <>
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>.alter-merge table — additive</MessageBarTitle>
+                            New columns are appended to <strong>{wizAlterTarget}</strong>; existing
+                            columns and their data are preserved. Removing a row here will NOT drop
+                            that column (use .drop column separately). To rename or change a column
+                            type, drop and recreate the column.
+                          </MessageBarBody>
+                        </MessageBar>
+                        <Field label="Columns (existing + new)">
+                          <ColumnGridDesigner
+                            columns={wizColumns}
+                            onChange={setWizColumns}
+                            disabled={wizSubmitting}
+                            emptyHint="Loading current columns… add new columns to append."
+                          />
+                        </Field>
+                      </>
+                    )}
+                    {wizardKind === 'drop-table' && (
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          <MessageBarTitle>Drop table {wizAlterTarget}?</MessageBarTitle>
+                          This permanently deletes <strong>{wizAlterTarget}</strong> and all its data.
+                          The command issued is <code>.drop table [&quot;{wizAlterTarget}&quot;] ifexists</code>.
+                          This cannot be undone.
+                        </MessageBarBody>
+                      </MessageBar>
                     )}
                     {wizardKind === 'mv' && (
                       <>
@@ -1298,7 +1415,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setWizardKind(null)} disabled={wizSubmitting}>Cancel</Button>
-                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : 'Create'}</Button>
+                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>
+                    {wizSubmitting ? 'Submitting…'
+                      : wizardKind === 'drop-table' ? 'Drop table'
+                      : wizardKind === 'alter-table' ? 'Apply (.alter-merge)'
+                      : 'Create'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
