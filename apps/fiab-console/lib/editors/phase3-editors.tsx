@@ -4882,18 +4882,37 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                         <div style={{ flex: 1, minWidth: 140 }}>
                           <Caption1>Column (from query result)</Caption1>
-                          <Input
-                            value={t.drillthrough?.column || ''}
-                            placeholder="e.g. State"
-                            aria-label="Drillthrough column"
-                            onChange={(_: unknown, d: any) => {
-                              const column = d.value;
-                              const paramName = t.drillthrough?.paramName || '';
-                              updateTile(i, {
-                                drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
-                              });
-                            }}
-                          />
+                          {t.result?.ok && (t.result.columns?.length ?? 0) > 0 ? (
+                            <Select
+                              value={t.drillthrough?.column || ''}
+                              aria-label="Drillthrough column"
+                              onChange={(_: unknown, d: any) => {
+                                const column = d.value;
+                                const paramName = t.drillthrough?.paramName || '';
+                                updateTile(i, {
+                                  drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                                });
+                              }}
+                            >
+                              <option value="">(none)</option>
+                              {(t.result.columns || []).map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </Select>
+                          ) : (
+                            <Input
+                              value={t.drillthrough?.column || ''}
+                              placeholder="Run the tile to pick a column"
+                              aria-label="Drillthrough column"
+                              onChange={(_: unknown, d: any) => {
+                                const column = d.value;
+                                const paramName = t.drillthrough?.paramName || '';
+                                updateTile(i, {
+                                  drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                                });
+                              }}
+                            />
+                          )}
                         </div>
                         <div style={{ flex: 1, minWidth: 140 }}>
                           <Caption1>Target parameter</Caption1>
