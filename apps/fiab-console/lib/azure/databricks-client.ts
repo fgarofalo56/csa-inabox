@@ -530,104 +530,6 @@ export async function getRunOutput(runId: number): Promise<RunOutput> {
 }
 
 // ============================================================
-// Interactive command execution  (api/1.2 — Execution Context API)
-//
-// The real Databricks analog of a Livy interactive session: an execution
-// context is bound to an all-purpose cluster + language and persists state
-// (variables, imports) across commands — exactly the per-cell notebook
-// semantics F16 needs when LOOM_NOTEBOOK_BACKEND=databricks. A "context" maps
-// to a Loom Livy "session"; a "command" maps to a "statement".
-//
-// Docs: https://docs.databricks.com/api/workspace/commandexecution
-// ============================================================
-
-export type DbxCommandLanguage = 'python' | 'scala' | 'sql' | 'r';
-
-export interface DbxExecutionContext {
-  id: string;
-  status?: string; // Pending | Running | Error | Cancelling | Cancelled
-}
-
-/** Create an execution context on an all-purpose cluster (interactive session). */
-export async function createExecutionContext(
-  clusterId: string,
-  language: DbxCommandLanguage,
-): Promise<DbxExecutionContext> {
-  const res = await dbxFetch('/api/1.2/contexts/create', {
-    method: 'POST',
-    body: JSON.stringify({ clusterId, language }),
-  });
-  return asJsonOrThrow<DbxExecutionContext>(res, 'createExecutionContext');
-}
-
-/** Poll an execution context's status (Pending → Running → Error/Cancelled). */
-export async function getExecutionContextStatus(
-  clusterId: string,
-  contextId: string,
-): Promise<DbxExecutionContext> {
-  const res = await dbxFetch(
-    `/api/1.2/contexts/status?clusterId=${encodeURIComponent(clusterId)}&contextId=${encodeURIComponent(contextId)}`,
-  );
-  return asJsonOrThrow<DbxExecutionContext>(res, 'getExecutionContextStatus');
-}
-
-/** Destroy an execution context (session teardown). 404/already-gone is fine. */
-export async function destroyExecutionContext(clusterId: string, contextId: string): Promise<void> {
-  const res = await dbxFetch('/api/1.2/contexts/destroy', {
-    method: 'POST',
-    body: JSON.stringify({ clusterId, contextId }),
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`destroyExecutionContext failed ${res.status}: ${await res.text()}`);
-  }
-}
-
-export interface DbxCommand {
-  id: string;
-}
-
-export interface DbxCommandResults {
-  resultType?: 'text' | 'table' | 'image' | 'error' | string;
-  data?: unknown;
-  schema?: Array<{ name?: string; type?: string }>;
-  cause?: string;
-  summary?: string;
-  fileName?: string;
-}
-
-export interface DbxCommandStatus {
-  id: string;
-  status?: string; // Queued | Running | Cancelling | Finished | Cancelled | Error
-  results?: DbxCommandResults | null;
-}
-
-/** Submit a command (cell) to an execution context. Returns the command id. */
-export async function executeCommand(
-  clusterId: string,
-  contextId: string,
-  language: DbxCommandLanguage,
-  command: string,
-): Promise<DbxCommand> {
-  const res = await dbxFetch('/api/1.2/commands/execute', {
-    method: 'POST',
-    body: JSON.stringify({ clusterId, contextId, language, command }),
-  });
-  return asJsonOrThrow<DbxCommand>(res, 'executeCommand');
-}
-
-/** Poll a command's status + results. */
-export async function getCommandStatus(
-  clusterId: string,
-  contextId: string,
-  commandId: string,
-): Promise<DbxCommandStatus> {
-  const res = await dbxFetch(
-    `/api/1.2/commands/status?clusterId=${encodeURIComponent(clusterId)}&contextId=${encodeURIComponent(contextId)}&commandId=${encodeURIComponent(commandId)}`,
-  );
-  return asJsonOrThrow<DbxCommandStatus>(res, 'getCommandStatus');
-}
-
-// ============================================================
 // Jobs  (api/2.1/jobs)
 // ============================================================
 export interface JobSpec {
@@ -983,6 +885,7 @@ export type CommandLanguage = 'python' | 'sql' | 'scala' | 'r';
 
 export interface ExecutionContext {
   id: string;
+  status?: string; // Pending | Running | Error | Cancelling | Cancelled
 }
 
 /**
