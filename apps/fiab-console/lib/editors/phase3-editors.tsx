@@ -40,6 +40,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Table20Regular,
+  Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
@@ -60,6 +61,12 @@ import {
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
 import { EventHubsNamespaceTree } from '@/lib/components/eventhubs/eventhubs-tree';
+import {
+  evalConditionalRules,
+  CF_OPERATORS, CF_COLORS, CF_ICONS, CF_THEMES,
+  type ConditionalRule, type CfCondition, type CfMatch,
+  type CfColor, type CfIcon, type CfOperator, type CfTheme,
+} from '@/lib/azure/kql-dashboard-model';
 
 const useStyles = makeStyles({
   monaco: {
@@ -139,6 +146,61 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
+// ---- Conditional-formatting render helpers (Fabric RTD parity) ----
+// Map a CfColor bucket to Fluent palette tokens (bg + readable fg). The model's
+// pure evaluator returns the *semantic* color; the renderer owns the theme.
+const CF_COLOR_TOKENS: Record<CfColor, { bg: string; fg: string }> = {
+  red: { bg: tokens.colorPaletteRedBackground2, fg: tokens.colorPaletteRedForeground2 },
+  yellow: { bg: tokens.colorPaletteYellowBackground2, fg: tokens.colorPaletteYellowForeground2 },
+  green: { bg: tokens.colorPaletteGreenBackground2, fg: tokens.colorPaletteGreenForeground2 },
+  blue: { bg: tokens.colorPaletteBlueBackground2, fg: tokens.colorPaletteBlueForeground2 },
+};
+
+function cfIconEl(icon: CfIcon | undefined): JSX.Element | null {
+  switch (icon) {
+    case 'warning': return <Warning20Regular />;
+    case 'error': return <ErrorCircle20Regular />;
+    case 'success': return <CheckmarkCircle20Regular />;
+    case 'info': return <Info20Regular />;
+    default: return null;
+  }
+}
+
+/** Resolve a CfMatch into concrete CSS bg/fg + icon element + tag/hideText. */
+function cfDecoration(match: CfMatch): { bg: string; fg: string; icon: JSX.Element | null; tag?: string; hideText?: boolean; applyTo: 'cells' | 'row'; targetColumn?: string; cellColumns?: string[] } {
+  let bg: string;
+  let fg: string;
+  if (match.bg) {
+    // value-rule gradient (precomputed CSS)
+    bg = match.bg;
+    fg = match.fg || tokens.colorNeutralForeground1;
+  } else {
+    const t = CF_COLOR_TOKENS[match.color || 'red'];
+    if (match.style === 'light') {
+      bg = t.bg;
+      fg = tokens.colorNeutralForeground1;
+    } else {
+      bg = t.bg;
+      fg = t.fg;
+    }
+  }
+  return { bg, fg, icon: cfIconEl(match.icon), tag: match.tag, hideText: match.hideText, applyTo: match.applyTo, targetColumn: match.targetColumn, cellColumns: match.cellColumns };
+}
+
+/** Per-column numeric min/max across the result, for color-by-value auto-scale. */
+function computeColStats(columns: string[], rows: unknown[][]): Record<string, { min: number; max: number }> {
+  const out: Record<string, { min: number; max: number }> = {};
+  for (let c = 0; c < columns.length; c++) {
+    let min = Infinity, max = -Infinity, seen = false;
+    for (const r of rows) {
+      const n = Number(r[c]);
+      if (Number.isFinite(n) && r[c] !== '' && r[c] !== null) { seen = true; if (n < min) min = n; if (n > max) max = n; }
+    }
+    if (seen) out[columns[c]] = { min, max };
+  }
+  return out;
+}
+
 // Dashboard tile visual types — superset that matches the ADX `render`
 // operator visualizations exposed by Fabric Real-Time Dashboards.
 type TileViz = 'table' | 'timechart' | 'line' | 'bar' | 'column' | 'pie' | 'stat' | 'map';
@@ -162,20 +224,28 @@ function pickNumericCol(columns: string[], rows: unknown[][]): number {
 }
 
 /** Single big-number KPI card (ADX `card` / Fabric "stat" visual). */
-function StatCard({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+function StatCard({ columns, rows, conditionalRules }: { columns: string[]; rows: unknown[][]; conditionalRules?: ConditionalRule[] }) {
   const numericColIdx = pickNumericCol(columns, rows);
   const cellIdx = numericColIdx >= 0 ? numericColIdx : 0;
   const raw = rows[0]?.[cellIdx];
   const num = Number(raw);
   const display = Number.isFinite(num) && raw !== '' && raw !== null ? num.toLocaleString() : fmtCell(raw);
+  // Conditional formatting decorates the whole card from the first row.
+  const stats = useMemo(() => computeColStats(columns, rows), [columns, rows]);
+  const match = evalConditionalRules(conditionalRules, rows[0] || [], columns, stats);
+  const deco = match ? cfDecoration(match) : undefined;
   return (
     <div role="img" aria-label="stat card" style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: 16, minHeight: 120, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-      background: tokens.colorNeutralBackground1,
+      background: deco?.bg ?? tokens.colorNeutralBackground1,
     }}>
-      <div style={{ fontSize: 40, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{columns[cellIdx] || 'value'}</Caption1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {deco?.icon && <span style={{ display: 'inline-flex', color: deco.fg ?? tokens.colorBrandForeground1 }}>{deco.icon}</span>}
+        <div style={{ fontSize: 40, fontWeight: 700, color: deco?.fg ?? tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
+      </div>
+      <Caption1 style={{ color: deco?.fg ?? tokens.colorNeutralForeground3 }}>{columns[cellIdx] || 'value'}</Caption1>
+      {deco?.tag && <Caption1 style={{ color: deco.fg ?? tokens.colorNeutralForeground3, fontStyle: 'italic' }}>{deco.tag}</Caption1>}
     </div>
   );
 }
@@ -331,13 +401,13 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
 }
 
 /** Render any tile result by its visual type — table / charts / stat / pie / map. */
-function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
+function TileVisual({ viz, result, conditionalRules }: { viz: TileViz; result: KqlResult; conditionalRules?: ConditionalRule[] }) {
   const columns = result.columns || [];
   const rows = result.rows || [];
   if (rows.length === 0) return <Caption1>No rows.</Caption1>;
   switch (viz) {
     case 'stat':
-      return <StatCard columns={columns} rows={rows} />;
+      return <StatCard columns={columns} rows={rows} conditionalRules={conditionalRules} />;
     case 'pie':
       return <PieChart columns={columns} rows={rows} />;
     case 'map':
@@ -349,19 +419,56 @@ function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
       return <ResultChart columns={columns} rows={rows} kind={viz} />;
     case 'table':
     default:
-      return (
-        <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
-          <Table aria-label="tile result" size="small">
-            <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-            <TableBody>
-              {rows.slice(0, 100).map((row, i) => (
-                <TableRow key={i}>{columns.map((_, j) => <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtCell(row[j])}</TableCell>)}</TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      );
+      return <ConditionalTable columns={columns} rows={rows} conditionalRules={conditionalRules} />;
   }
+}
+
+/**
+ * Result table with conditional formatting applied per row/cell (Fabric RTD
+ * "color by condition" / "color by value"). Without rules it renders exactly
+ * like the prior plain table.
+ */
+function ConditionalTable({ columns, rows, conditionalRules }: { columns: string[]; rows: unknown[][]; conditionalRules?: ConditionalRule[] }) {
+  const stats = useMemo(() => computeColStats(columns, rows), [columns, rows]);
+  const hasRules = Array.isArray(conditionalRules) && conditionalRules.length > 0;
+  return (
+    <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+      <Table aria-label="tile result" size="small">
+        <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+        <TableBody>
+          {rows.slice(0, 100).map((row, i) => {
+            const match = hasRules ? evalConditionalRules(conditionalRules, row, columns, stats) : undefined;
+            const deco = match ? cfDecoration(match) : undefined;
+            const rowBg = deco?.applyTo === 'row' ? deco.bg : undefined;
+            const rowFg = deco?.applyTo === 'row' ? deco.fg : undefined;
+            return (
+              <TableRow key={i} style={rowBg ? { backgroundColor: rowBg } : undefined}>
+                {columns.map((col, j) => {
+                  const inCellTarget = deco && deco.applyTo === 'cells' && (
+                    deco.targetColumn ? deco.targetColumn === col : (deco.cellColumns ? deco.cellColumns.includes(col) : true)
+                  );
+                  const cellMatch = inCellTarget ? deco : undefined;
+                  const bg = cellMatch ? cellMatch.bg : rowBg;
+                  const fg = cellMatch ? cellMatch.fg : rowFg;
+                  const showIcon = !!cellMatch?.icon;
+                  const hideText = cellMatch?.hideText;
+                  return (
+                    <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap', backgroundColor: bg, color: fg }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {showIcon && <span style={{ display: 'inline-flex', color: fg }}>{cellMatch!.icon}</span>}
+                        {!hideText && fmtCell(row[j])}
+                        {cellMatch?.tag && <span style={{ fontStyle: 'italic', opacity: 0.85 }}>{cellMatch.tag}</span>}
+                      </span>
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
 }
 
 // Full chart family the ADX web UI exposes, plus Table. The picker switches the
@@ -1713,6 +1820,7 @@ interface DashTile {
   database?: string;
   w?: number; // grid column span 1..12
   h?: number; // grid row units 1..8
+  conditionalRules?: ConditionalRule[];
   result?: KqlResult;
   error?: string;
 }
@@ -1755,6 +1863,170 @@ function genId(): string {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   } catch { /* noop */ }
   return 'ds-' + Math.random().toString(36).slice(2, 10);
+}
+
+const CF_COLOR_LABELS: Record<CfColor, string> = { red: 'Red', yellow: 'Yellow', green: 'Green', blue: 'Blue' };
+const CF_ICON_LABELS: Record<CfIcon, string> = { warning: 'Warning', error: 'Error', success: 'Success', info: 'Info' };
+const CF_THEME_LABELS: Record<CfTheme, string> = {
+  'traffic-lights': 'Traffic lights', cold: 'Cold', warm: 'Warm', blue: 'Blue', red: 'Red', yellow: 'Yellow',
+};
+
+/** A column field — Select when the live result has columns, else a free Input. */
+function CfColumnField({ value, columns, onChange, label }: { value: string; columns: string[]; onChange: (v: string) => void; label: string }) {
+  if (columns.length > 0) {
+    return (
+      <Select size="small" value={value} aria-label={label} onChange={(_: unknown, d: any) => onChange(d.value)}>
+        {!columns.includes(value) && <option value={value}>{value || '(pick column)'}</option>}
+        {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+      </Select>
+    );
+  }
+  return <Input size="small" value={value} aria-label={label} placeholder="column name" onChange={(_: unknown, d: any) => onChange(d.value)} />;
+}
+
+/**
+ * Per-tile conditional-formatting rule editor (Fabric Real-Time Dashboard
+ * parity). Supports "Color by condition" (threshold → color/icon/tag, AND-ed
+ * conditions, cells-or-row) and table-only "Color by value" (gradient theme).
+ * Every field is a dropdown / typed Input — no freeform JSON (operator
+ * no-freeform-config mandate). Rules apply client-side at render time.
+ */
+function ConditionalFormattingEditor({ viz, rules, columns, onChange }: {
+  viz: 'table' | 'stat';
+  rules: ConditionalRule[];
+  columns: string[];
+  onChange: (rules: ConditionalRule[]) => void;
+}) {
+  const isTable = viz === 'table';
+  const update = (idx: number, patch: Partial<ConditionalRule>) =>
+    onChange(rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  const removeRule = (idx: number) => onChange(rules.filter((_, i) => i !== idx));
+  const addRule = (type: 'condition' | 'value') => {
+    const col = columns[0] || '';
+    const base: ConditionalRule = type === 'condition'
+      ? { type, color: 'red', colorStyle: 'bold', applyTo: 'cells', conditions: [{ column: col, operator: '>', value: '' }] }
+      : { type, theme: 'traffic-lights', column: col, applyTo: 'cells' };
+    onChange([...rules, base]);
+  };
+  const updateCond = (ri: number, ci: number, patch: Partial<CfCondition>) =>
+    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: (r.conditions || []).map((c, j) => (j === ci ? { ...c, ...patch } : c)) } : r)));
+  const addCond = (ri: number) =>
+    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: [...(r.conditions || []), { column: columns[0] || '', operator: '>', value: '' }] } : r)));
+  const removeCond = (ri: number, ci: number) =>
+    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: (r.conditions || []).filter((_, j) => j !== ci) } : r)));
+
+  const fieldRow: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' };
+  return (
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <Caption1 style={{ fontWeight: 600 }}>Conditional formatting</Caption1>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <Button size="small" icon={<Add20Regular />} onClick={() => addRule('condition')}>Color by condition</Button>
+          {isTable && <Button size="small" icon={<Add20Regular />} onClick={() => addRule('value')}>Color by value</Button>}
+        </div>
+      </div>
+      {columns.length === 0 && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Run the tile first to pick columns from its real result. You can still type column names below.</Caption1>
+      )}
+      {rules.length === 0 && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rules — cells render unstyled. Add a rule to color cells by a data threshold.</Caption1>
+      )}
+      {rules.map((rule, ri) => (
+        <div key={ri} style={{ border: `1px solid ${tokens.colorNeutralStroke3}`, borderRadius: 4, padding: 8, display: 'flex', flexDirection: 'column', gap: 6, background: tokens.colorNeutralBackground1 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between' }}>
+            <Badge appearance="outline" color={rule.type === 'value' ? 'informative' : 'brand'}>{rule.type === 'value' ? 'Color by value' : 'Color by condition'}</Badge>
+            <Input size="small" style={{ flex: 1 }} value={rule.name || ''} placeholder={`Rule ${ri + 1} name (optional)`} aria-label={`Rule ${ri + 1} name`} onChange={(_: unknown, d: any) => update(ri, { name: d.value || undefined })} />
+            <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete rule ${ri + 1}`} onClick={() => removeRule(ri)} />
+          </div>
+
+          {rule.type === 'condition' ? (
+            <>
+              {(rule.conditions || []).map((cond, ci) => (
+                <div key={ci} style={fieldRow}>
+                  {ci > 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>AND</Caption1>}
+                  <div style={{ minWidth: 130 }}>
+                    <CfColumnField label={`Rule ${ri + 1} condition ${ci + 1} column`} value={cond.column} columns={columns} onChange={(v) => updateCond(ri, ci, { column: v })} />
+                  </div>
+                  <Select size="small" value={cond.operator} aria-label={`Rule ${ri + 1} condition ${ci + 1} operator`} onChange={(_: unknown, d: any) => updateCond(ri, ci, { operator: d.value as CfOperator })}>
+                    {CF_OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
+                  </Select>
+                  <Input
+                    size="small"
+                    style={{ width: 110 }}
+                    value={cond.value || ''}
+                    aria-label={`Rule ${ri + 1} condition ${ci + 1} value`}
+                    placeholder="value"
+                    disabled={cond.operator === 'is empty' || cond.operator === 'is not empty'}
+                    onChange={(_: unknown, d: any) => updateCond(ri, ci, { value: d.value })}
+                  />
+                  {(rule.conditions || []).length > 1 && (
+                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove condition ${ci + 1}`} onClick={() => removeCond(ri, ci)} />
+                  )}
+                </div>
+              ))}
+              <div>
+                <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={() => addCond(ri)}>Add condition</Button>
+              </div>
+              <div style={fieldRow}>
+                <Label size="small">Color</Label>
+                <Select size="small" value={rule.color || 'red'} aria-label={`Rule ${ri + 1} color`} onChange={(_: unknown, d: any) => update(ri, { color: d.value as CfColor })}>
+                  {CF_COLORS.map((c) => <option key={c} value={c}>{CF_COLOR_LABELS[c]}</option>)}
+                </Select>
+                <Label size="small">Style</Label>
+                <Select size="small" value={rule.colorStyle || 'bold'} aria-label={`Rule ${ri + 1} style`} onChange={(_: unknown, d: any) => update(ri, { colorStyle: d.value as 'bold' | 'light' })}>
+                  <option value="bold">Bold</option>
+                  <option value="light">Light</option>
+                </Select>
+                <Label size="small">Icon</Label>
+                <Select size="small" value={rule.icon || ''} aria-label={`Rule ${ri + 1} icon`} onChange={(_: unknown, d: any) => update(ri, { icon: (d.value || undefined) as CfIcon | undefined })}>
+                  <option value="">None</option>
+                  {CF_ICONS.map((ic) => <option key={ic} value={ic}>{CF_ICON_LABELS[ic]}</option>)}
+                </Select>
+                <Label size="small">Tag</Label>
+                <Input size="small" style={{ width: 110 }} value={rule.tag || ''} placeholder="optional" aria-label={`Rule ${ri + 1} tag`} onChange={(_: unknown, d: any) => update(ri, { tag: d.value || undefined })} />
+              </div>
+            </>
+          ) : (
+            <div style={fieldRow}>
+              <Label size="small">Column</Label>
+              <div style={{ minWidth: 130 }}>
+                <CfColumnField label={`Rule ${ri + 1} value column`} value={rule.column || ''} columns={columns} onChange={(v) => update(ri, { column: v })} />
+              </div>
+              <Label size="small">Theme</Label>
+              <Select size="small" value={rule.theme || 'traffic-lights'} aria-label={`Rule ${ri + 1} theme`} onChange={(_: unknown, d: any) => update(ri, { theme: d.value as CfTheme })}>
+                {CF_THEMES.map((th) => <option key={th} value={th}>{CF_THEME_LABELS[th]}</option>)}
+              </Select>
+              <Label size="small">Min</Label>
+              <Input size="small" type="number" style={{ width: 80 }} value={rule.minValue ?? '' as any} placeholder="auto" aria-label={`Rule ${ri + 1} min`} onChange={(_: unknown, d: any) => update(ri, { minValue: d.value === '' ? undefined : Number(d.value) })} />
+              <Label size="small">Max</Label>
+              <Input size="small" type="number" style={{ width: 80 }} value={rule.maxValue ?? '' as any} placeholder="auto" aria-label={`Rule ${ri + 1} max`} onChange={(_: unknown, d: any) => update(ri, { maxValue: d.value === '' ? undefined : Number(d.value) })} />
+              <Switch label="Reverse" checked={!!rule.reverseColors} aria-label={`Rule ${ri + 1} reverse colors`} onChange={(_: unknown, d: any) => update(ri, { reverseColors: d.checked || undefined })} />
+            </div>
+          )}
+
+          {isTable && (
+            <div style={fieldRow}>
+              <Label size="small">Apply to</Label>
+              <Select size="small" value={rule.applyTo || 'cells'} aria-label={`Rule ${ri + 1} apply to`} onChange={(_: unknown, d: any) => update(ri, { applyTo: d.value as 'cells' | 'row' })}>
+                <option value="cells">Matched cells</option>
+                <option value="row">Entire row</option>
+              </Select>
+              {(rule.applyTo || 'cells') === 'cells' && (
+                <>
+                  <Label size="small">Target column</Label>
+                  <Select size="small" value={rule.targetColumn || ''} aria-label={`Rule ${ri + 1} target column`} onChange={(_: unknown, d: any) => update(ri, { targetColumn: d.value || undefined })}>
+                    <option value="">{rule.type === 'value' ? '(graded column)' : '(all conditioned columns)'}</option>
+                    {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </Select>
+                  <Switch label="Hide text" checked={!!rule.hideText} aria-label={`Rule ${ri + 1} hide text`} onChange={(_: unknown, d: any) => update(ri, { hideText: d.checked || undefined })} />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -2147,7 +2419,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               {t.error && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
               {t.result && t.result.ok && (
                 <div style={{ marginTop: 8, flex: 1, minHeight: 0 }}>
-                  <TileVisual viz={t.viz} result={t.result} />
+                  <TileVisual viz={t.viz} result={t.result} conditionalRules={t.conditionalRules} />
                 </div>
               )}
               {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
@@ -2190,6 +2462,14 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     ariaLabel={`Tile ${i + 1} KQL`}
                   />
                   <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
+                  {(t.viz === 'table' || t.viz === 'stat') && (
+                    <ConditionalFormattingEditor
+                      viz={t.viz}
+                      rules={t.conditionalRules || []}
+                      columns={t.result?.columns || []}
+                      onChange={(rules) => updateTile(i, { conditionalRules: rules.length ? rules : undefined })}
+                    />
+                  )}
                 </div>
               )}
             </div>

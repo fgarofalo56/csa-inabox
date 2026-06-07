@@ -69,6 +69,77 @@ export interface DashboardParam {
   value?: string | string[];
 }
 
+// ============================================================
+// Conditional formatting (Fabric Real-Time Dashboard parity)
+// https://learn.microsoft.com/fabric/real-time-intelligence/dashboard-conditional-formatting
+// Two rule types per tile, applied to table/stat cells:
+//  - 'condition'  → "Color by condition" (operator threshold → fixed color/icon)
+//  - 'value'      → "Color by value"     (numeric column → gradient theme)
+// Rules are evaluated in order; the LAST matching rule wins (Fabric precedence).
+// ============================================================
+export type CfOperator = '<' | '<=' | '>' | '>=' | '==' | '!=' | 'is empty' | 'is not empty';
+export type CfColor = 'red' | 'yellow' | 'green' | 'blue';
+export type CfIcon = 'warning' | 'error' | 'success' | 'info';
+export type CfTheme = 'traffic-lights' | 'cold' | 'warm' | 'blue' | 'red' | 'yellow';
+
+export const CF_OPERATORS: CfOperator[] = ['<', '<=', '>', '>=', '==', '!=', 'is empty', 'is not empty'];
+export const CF_COLORS: CfColor[] = ['red', 'yellow', 'green', 'blue'];
+export const CF_ICONS: CfIcon[] = ['warning', 'error', 'success', 'info'];
+export const CF_THEMES: CfTheme[] = ['traffic-lights', 'cold', 'warm', 'blue', 'red', 'yellow'];
+
+/** A single AND-ed predicate inside a "color by condition" rule. */
+export interface CfCondition {
+  /** Result column the predicate tests. */
+  column: string;
+  operator: CfOperator;
+  /** Comparand. Ignored for `is empty` / `is not empty`. */
+  value?: string;
+}
+
+export interface ConditionalRule {
+  type: 'condition' | 'value';
+  name?: string;
+  // ---- color-by-condition fields ----
+  colorStyle?: 'bold' | 'light';
+  /** All conditions must pass (AND) for the rule to apply. */
+  conditions?: CfCondition[];
+  color?: CfColor;
+  tag?: string;
+  icon?: CfIcon;
+  /** table only: paint the whole row or just the matched cells. */
+  applyTo?: 'cells' | 'row';
+  /** table + `applyTo:'cells'`: which column's cell to paint. */
+  targetColumn?: string;
+  /** table + `applyTo:'cells'`: hide the cell text, keeping only color/icon. */
+  hideText?: boolean;
+  // ---- color-by-value fields ----
+  /** The numeric column graded onto the gradient. */
+  column?: string;
+  theme?: CfTheme;
+  minValue?: number;
+  maxValue?: number;
+  reverseColors?: boolean;
+}
+
+/** A resolved decoration for one cell/row, produced by `evalConditionalRules`. */
+export interface CfMatch {
+  /** Discrete bucket color (condition rules) → renderer maps to a Fluent token. */
+  color?: CfColor;
+  /** Precomputed gradient CSS (value rules). */
+  bg?: string;
+  /** Readable foreground for the gradient bg (value rules). */
+  fg?: string;
+  icon?: CfIcon;
+  tag?: string;
+  style: 'bold' | 'light';
+  applyTo: 'cells' | 'row';
+  /** In `cells` mode: the single column to paint (value rules, or explicit pick). */
+  targetColumn?: string;
+  /** In `cells` mode with no `targetColumn`: paint these columns (the conditioned ones). */
+  cellColumns?: string[];
+  hideText?: boolean;
+}
+
 export interface DashboardTile {
   title: string;
   kql: string;
@@ -80,6 +151,128 @@ export interface DashboardTile {
   /** Grid geometry — column span 1..12, row height in grid units. */
   w?: number;
   h?: number;
+  /** Per-tile conditional-formatting rules (table/stat cells). */
+  conditionalRules?: ConditionalRule[];
+}
+
+// Gradient stops per theme, low→high (RGB). Mirrors Fabric's color-by-value
+// palettes; interpolated by `evalConditionalRules`.
+const CF_THEME_STOPS: Record<CfTheme, [number, number, number][]> = {
+  'traffic-lights': [[216, 59, 1], [247, 180, 0], [16, 124, 16]],
+  cold: [[199, 224, 244], [0, 90, 158]],
+  warm: [[255, 241, 184], [202, 80, 16], [168, 0, 0]],
+  blue: [[222, 235, 250], [0, 69, 120]],
+  red: [[253, 231, 229], [168, 0, 0]],
+  yellow: [[255, 244, 206], [180, 120, 0]],
+};
+
+function clamp01(t: number): number {
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+function lerpChannel(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+/** Interpolate a theme gradient at position t∈[0,1]; returns CSS bg + readable fg. */
+export function gradientColor(theme: CfTheme, t: number, reverse?: boolean): { bg: string; fg: string } {
+  const stops = CF_THEME_STOPS[theme] || CF_THEME_STOPS['traffic-lights'];
+  const tt = clamp01(reverse ? 1 - clamp01(t) : t);
+  const seg = tt * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(seg));
+  const f = seg - i;
+  const c0 = stops[i], c1 = stops[i + 1];
+  const r = lerpChannel(c0[0], c1[0], f);
+  const g = lerpChannel(c0[1], c1[1], f);
+  const b = lerpChannel(c0[2], c1[2], f);
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  return { bg: `rgb(${r}, ${g}, ${b})`, fg: lum > 140 ? '#1b1b1b' : '#ffffff' };
+}
+
+function cellByColumn(columns: string[], row: unknown[], name: string | undefined): unknown {
+  if (!name) return undefined;
+  const idx = columns.indexOf(name);
+  return idx >= 0 ? row[idx] : undefined;
+}
+
+function isEmptyCell(cell: unknown): boolean {
+  return cell === null || cell === undefined || cell === '';
+}
+
+/** Evaluate one condition predicate against a cell value. */
+export function evalCondition(cell: unknown, op: CfOperator, value: string | undefined): boolean {
+  if (op === 'is empty') return isEmptyCell(cell);
+  if (op === 'is not empty') return !isEmptyCell(cell);
+  const cn = Number(cell);
+  const vn = Number(value);
+  const numeric = value !== undefined && value !== '' && Number.isFinite(cn) && Number.isFinite(vn) && cell !== null && cell !== '' && cell !== undefined;
+  switch (op) {
+    case '==': return numeric ? cn === vn : String(cell) === String(value);
+    case '!=': return numeric ? cn !== vn : String(cell) !== String(value);
+    case '<': return numeric ? cn < vn : String(cell) < String(value);
+    case '<=': return numeric ? cn <= vn : String(cell) <= String(value);
+    case '>': return numeric ? cn > vn : String(cell) > String(value);
+    case '>=': return numeric ? cn >= vn : String(cell) >= String(value);
+    default: return false;
+  }
+}
+
+/**
+ * Resolve the conditional-formatting decoration for one row. Rules are
+ * evaluated in order; the LAST matching rule wins (Fabric precedence). Returns
+ * `undefined` when no rule matches (cell renders unstyled).
+ *
+ * `colStats` (optional) gives per-column min/max across the whole result so a
+ * color-by-value rule without explicit min/max auto-scales like Fabric.
+ */
+export function evalConditionalRules(
+  rules: ConditionalRule[] | undefined,
+  row: unknown[],
+  columns: string[],
+  colStats?: Record<string, { min: number; max: number }>,
+): CfMatch | undefined {
+  if (!Array.isArray(rules) || rules.length === 0) return undefined;
+  let match: CfMatch | undefined;
+  for (const rule of rules) {
+    if (rule.type === 'value') {
+      const raw = cellByColumn(columns, row, rule.column);
+      const n = Number(raw);
+      if (!Number.isFinite(n)) continue;
+      const stats = rule.column ? colStats?.[rule.column] : undefined;
+      const min = Number.isFinite(rule.minValue as number) ? (rule.minValue as number)
+        : stats ? stats.min : 0;
+      const max = Number.isFinite(rule.maxValue as number) ? (rule.maxValue as number)
+        : stats ? stats.max : 100;
+      const span = max - min;
+      const t = span === 0 ? 0.5 : (n - min) / span;
+      const { bg, fg } = gradientColor(rule.theme || 'traffic-lights', t, rule.reverseColors);
+      match = {
+        bg, fg,
+        style: rule.colorStyle || 'bold',
+        applyTo: rule.applyTo === 'row' ? 'row' : 'cells',
+        targetColumn: rule.targetColumn || rule.column,
+        hideText: rule.hideText,
+        tag: rule.tag,
+        icon: rule.icon,
+      };
+    } else {
+      const conds = Array.isArray(rule.conditions) ? rule.conditions : [];
+      if (conds.length === 0) continue;
+      const allPass = conds.every((c) => evalCondition(cellByColumn(columns, row, c.column), c.operator, c.value));
+      if (!allPass) continue;
+      match = {
+        color: rule.color || 'red',
+        icon: rule.icon,
+        tag: rule.tag,
+        style: rule.colorStyle || 'bold',
+        applyTo: rule.applyTo === 'row' ? 'row' : 'cells',
+        targetColumn: rule.targetColumn || undefined,
+        cellColumns: rule.targetColumn ? undefined : conds.map((c) => c.column).filter(Boolean),
+        hideText: rule.hideText,
+      };
+    }
+  }
+  return match;
 }
 
 export interface DashboardModel {
@@ -234,6 +427,7 @@ export function sanitizeModel(input: any): DashboardModel {
           database: t?.database ? String(t.database).slice(0, 200) : undefined,
           w: clampInt(t?.w, 1, 12),
           h: clampInt(t?.h, 1, 8),
+          conditionalRules: sanitizeConditionalRules(t?.conditionalRules),
         }))
         .filter((t: DashboardTile) => t.kql.length > 0 && t.kql.length <= 65_536)
         .slice(0, 100)
@@ -252,4 +446,52 @@ function clampInt(v: any, min: number, max: number): number | undefined {
   const n = Number(v);
   if (!Number.isFinite(n)) return undefined;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+/** Coerce arbitrary input into clean ConditionalRule[] (max 20 rules/tile). */
+function sanitizeConditionalRules(input: any): ConditionalRule[] | undefined {
+  if (!Array.isArray(input) || input.length === 0) return undefined;
+  const rules = input
+    .map((r: any): ConditionalRule | null => {
+      const type = r?.type === 'value' ? 'value' : 'condition';
+      const base: ConditionalRule = {
+        type,
+        name: r?.name ? String(r.name).slice(0, 120) : undefined,
+        colorStyle: r?.colorStyle === 'light' ? 'light' : 'bold',
+        icon: CF_ICONS.includes(r?.icon) ? r.icon : undefined,
+        tag: r?.tag ? String(r.tag).slice(0, 80) : undefined,
+        applyTo: r?.applyTo === 'row' ? 'row' : 'cells',
+        targetColumn: r?.targetColumn ? String(r.targetColumn).slice(0, 200) : undefined,
+        hideText: r?.hideText === true ? true : undefined,
+      };
+      if (type === 'value') {
+        if (!r?.column) return null;
+        base.column = String(r.column).slice(0, 200);
+        base.theme = CF_THEMES.includes(r?.theme) ? r.theme : 'traffic-lights';
+        base.minValue = Number.isFinite(Number(r?.minValue)) && r?.minValue !== '' && r?.minValue != null ? Number(r.minValue) : undefined;
+        base.maxValue = Number.isFinite(Number(r?.maxValue)) && r?.maxValue !== '' && r?.maxValue != null ? Number(r.maxValue) : undefined;
+        base.reverseColors = r?.reverseColors === true ? true : undefined;
+      } else {
+        base.color = CF_COLORS.includes(r?.color) ? r.color : 'red';
+        const conds: CfCondition[] = Array.isArray(r?.conditions)
+          ? r.conditions
+              .map((c: any): CfCondition | null => {
+                if (!c?.column || !CF_OPERATORS.includes(c?.operator)) return null;
+                return {
+                  column: String(c.column).slice(0, 200),
+                  operator: c.operator,
+                  value: c?.value !== undefined && c?.value !== null ? String(c.value).slice(0, 200) : undefined,
+                };
+              })
+              .filter((c: CfCondition | null): c is CfCondition => c !== null)
+              .slice(0, 10)
+          : [];
+        if (conds.length === 0) return null;
+        base.conditions = conds;
+      }
+      return base;
+    })
+    .filter((r: ConditionalRule | null): r is ConditionalRule => r !== null)
+    .slice(0, 20);
+  return rules.length > 0 ? rules : undefined;
 }
