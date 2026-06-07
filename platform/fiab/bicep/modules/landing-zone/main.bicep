@@ -41,9 +41,6 @@ param consolePrincipalId string = ''
 @description('Loom Console UAMI name — used for the SQL admin login (must match the UAMI resource).')
 param consoleUamiName string = ''
 
-@description('Shared ADX cluster system-assigned MI principal id (admin plane). Threaded to the Synapse storage RBAC grant so the Eventhouse Delta endpoint can read this lakehouse over managed identity. Empty = skip.')
-param adxClusterPrincipalId string = ''
-
 @description('Admin Plane spoke private DNS zone ID for privatelink.sql.azuresynapse.net. Required for the Synapse SQL PE to register DNS.')
 param synapseSqlPrivateDnsZoneId string = ''
 
