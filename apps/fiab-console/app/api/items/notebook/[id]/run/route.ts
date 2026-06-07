@@ -93,6 +93,45 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       }, { status: 400 });
     }
 
+    // ---- AML Compute Instance path (Azure-native; no Fabric/Spark needed) ----
+    // The notebook editor's "Azure ML" workspace toggle picks an `aml-ci:<name>`
+    // compute. We submit a Command job that runs the cell's code (python -c / R)
+    // on that CI, then return a runId the client polls via /runs/[runId].
+    // Auto-start: a Stopped CI is kicked before submit so the job has compute.
+    if (compute.startsWith('aml-ci:')) {
+      const ciName = compute.slice('aml-ci:'.length);
+      const {
+        submitCiJob, startCI, getCI, ciIsStopped, amlIsConfigured, AmlNotConfiguredError,
+      } = await import('@/lib/azure/aml-client');
+      if (!amlIsConfigured()) {
+        const e = new AmlNotConfiguredError(['LOOM_AML_WORKSPACE', 'LOOM_AML_REGION']);
+        return err(e.message, 200, e.hint);
+      }
+      // Auto-start a stopped CI so the run has somewhere to land.
+      let autoStarted = false;
+      try {
+        const ci = await getCI(ciName);
+        if (ci && ciIsStopped(ci.state)) { await startCI(ciName); autoStarted = true; }
+      } catch { /* probe/start best-effort — submit still attempted */ }
+      // R cells run via Rscript; everything else via python.
+      const lang: 'python' | 'r' = stmtKind === 'sparkr' ? 'r' : 'python';
+      const job = await submitCiJob({
+        ciName,
+        code,
+        lang,
+        displayName: `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''}`,
+      });
+      return NextResponse.json({
+        ok: true,
+        runId: `aml-ci:${job.name}`,
+        status: job.status || 'NotStarted',
+        autoStarted,
+        compute: { kind: 'aml-ci', ciName },
+        cellId: cellId || null,
+        sourcePreview: code.slice(0, 200),
+      });
+    }
+
     if (compute.startsWith('spark:')) {
       const pool = compute.slice('spark:'.length);
       const { createLivySessionAsync, getLivySession } = await import('@/lib/azure/synapse-dev-client');

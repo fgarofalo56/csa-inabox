@@ -31,6 +31,7 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { DatastoreExplorer } from '@/lib/components/notebook/datastore-explorer';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 // Ribbon is now built dynamically inside the component so each action can
@@ -88,6 +89,13 @@ function useWorkspaces() {
 
 const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run cell to queue execution.\ndf = spark.range(10)\ndf.show()\n`;
 
+// AML-path Python starter — runs on a Compute Instance, not a Spark pool, so it
+// uses plain Python (no implicit `spark` session). Drag a datastore path from
+// the Datastores sidebar to read data. `deltalake` ships delta-rs schema reads.
+const STARTER_AML_PY = `# Azure ML notebook (Python 3.10 on a Compute Instance)\n# Drag a datastore path from the Datastores sidebar to insert an abfss:// URI.\n# Delta schema via delta-rs:\n#   from deltalake import DeltaTable\n#   print(DeltaTable("abfss://<fs>@<acct>.dfs.core.windows.net/<path>").schema().json())\nprint("Hello from your AML Compute Instance")\n`;
+
+const STARTER_AML_R = `# Azure ML notebook (R on a Compute Instance)\n# Run with the R kernel. Drag a datastore path from the Datastores sidebar.\nprint("Hello from R on your AML Compute Instance")\n`;
+
 function starterCells(): NotebookCell[] {
   return [
     { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
@@ -95,11 +103,6 @@ function starterCells(): NotebookCell[] {
   ];
 }
 
-function encodePy(src: string): string {
-  // browser btoa needs latin-1 — encode utf-8 first.
-  return typeof window === 'undefined' ? Buffer.from(src, 'utf-8').toString('base64')
-    : btoa(unescape(encodeURIComponent(src)));
-}
 function decodePy(b64: string): string {
   try {
     return typeof window === 'undefined' ? Buffer.from(b64, 'base64').toString('utf-8')
@@ -112,9 +115,12 @@ interface Props { item: FabricItemType; id: string; }
 interface ComputeTarget {
   id: string;
   name: string;
-  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
+  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql' | 'aml-ci';
   state?: string;
 }
+
+/** Notebook compute backend: Loom-native Spark/Databricks vs the Azure ML path. */
+type WorkspaceType = 'loom' | 'aml';
 
 function useComputes() {
   const [computes, setComputes] = useState<ComputeTarget[]>([]);
@@ -137,10 +143,36 @@ function isComputeRunning(state?: string): boolean {
   return COMPUTE_RUNNING.includes(state || '');
 }
 
+/** AML Compute Instance states that mean "stopped — needs (auto-)start". */
+const CI_STOPPED = ['Stopped', 'stopped', 'Deallocated'];
+function isCiStopped(state?: string): boolean {
+  return CI_STOPPED.includes(state || '');
+}
+
+/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set). */
+function useAmlConfigured() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await (await fetch('/api/aml/compute-instances')).json();
+        if (!cancelled) setConfigured(j.ok === true || j.configured === true);
+      } catch { if (!cancelled) setConfigured(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return configured;
+}
+
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const cp = useComputes();
+  const amlConfigured = useAmlConfigured();
+  // Notebook compute backend toggle. Defaults to Loom-native Spark/Databricks;
+  // the user flips to Azure ML when they want a Compute Instance + datastores.
+  const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('loom');
   const [workspaceId, setWorkspaceId] = useState('');
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
@@ -158,6 +190,8 @@ export function NotebookEditor({ item, id }: Props) {
   const [jobs, setJobs] = useState<JobLite[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
+  // New-notebook kernel — Python 3.10 (pyspark/python cells) or R (sparkr).
+  const [createKernel, setCreateKernel] = useState<'python' | 'r'>('python');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
@@ -172,13 +206,27 @@ export function NotebookEditor({ item, id }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
 
-  // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
+  // Which compute kinds are runnable for the active workspace type.
+  const computeMatchesType = useCallback((c: ComputeTarget): boolean => {
+    return workspaceType === 'aml'
+      ? c.kind === 'aml-ci'
+      : (c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+  }, [workspaceType]);
+
+  // Auto-pick the first runnable compute for the active workspace type. Also
+  // clears a selection that no longer matches after the user flips the toggle
+  // (e.g. a Spark pool selected, then switched to Azure ML).
   useEffect(() => {
+    const selected = cp.computes.find(c => c.id === computeId);
+    if (computeId && selected && !computeMatchesType(selected)) {
+      setComputeId('');
+      return;
+    }
     if (!computeId && cp.computes.length) {
-      const first = cp.computes.find(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+      const first = cp.computes.find(computeMatchesType);
       if (first) setComputeId(first.id);
     }
-  }, [cp.computes, computeId]);
+  }, [cp.computes, computeId, computeMatchesType]);
 
   // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
   // immediately POST to /run with no code to initialize the Livy session in the background.
@@ -212,13 +260,19 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) return;
     setStartingCompute(true); setRunMsg('Starting compute…');
     try {
-      const r = await fetch(`/api/loom/compute-targets/${encodeURIComponent(computeId)}/start`, { method: 'POST' });
+      // AML Compute Instances start via the AML route; Spark/Databricks via the
+      // generic compute-targets verb route. computeId is `aml-ci:<name>`.
+      const isAmlCi = computeId.startsWith('aml-ci:');
+      const startUrl = isAmlCi
+        ? `/api/aml/compute-instances/${encodeURIComponent(computeId.slice('aml-ci:'.length))}/start`
+        : `/api/loom/compute-targets/${encodeURIComponent(computeId)}/start`;
+      const r = await fetch(startUrl, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
-        setRunMsg(`Could not start compute: ${j?.error || `HTTP ${r.status}`}`);
+        setRunMsg(`Could not start compute: ${j?.error || j?.hint || `HTTP ${r.status}`}`);
         return;
       }
-      // Poll state until it reports running (cluster start is ~60-90s).
+      // Poll state until it reports running (cluster/CI start is ~60-90s+).
       const startedAt = Date.now();
       while (Date.now() - startedAt < 8 * 60 * 1000) {
         await new Promise(res => setTimeout(res, 5000));
@@ -231,6 +285,21 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg(`Could not start compute: ${e?.message || String(e)}`);
     } finally { setStartingCompute(false); }
   }, [computeId, cp]);
+
+  // Auto-start a stopped AML Compute Instance when it's selected in AML mode.
+  // Debounced 1.5s so flipping through the picker doesn't fire a start per
+  // option. Tracks the last CI we kicked so we don't re-POST every refresh.
+  const autoStartedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (workspaceType !== 'aml' || !computeId.startsWith('aml-ci:')) return;
+    if (!selectedCompute || !isCiStopped(selectedCompute.state)) return;
+    if (autoStartedRef.current === computeId) return;
+    const t = setTimeout(() => {
+      autoStartedRef.current = computeId;
+      void startCompute();
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [workspaceType, computeId, selectedCompute, startCompute]);
 
   // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
   // the owning workspace from the Cosmos record and auto-select it so the
@@ -456,7 +525,7 @@ export function NotebookEditor({ item, id }: Props) {
       // Poll the run endpoint every 4s for status — Synapse cold-start can
       // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
       let runId: string = j.runId;
-      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
+      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId || j.compute?.ciName || ''} — ${j.status} (runId ${runId})${j.autoStarted ? ' · auto-started CI' : ''}`);
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       // Adaptive polling tuned to feel native: fast while a statement is actually
@@ -501,10 +570,14 @@ export function NotebookEditor({ item, id }: Props) {
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
     try {
-      const definition = {
-        format: 'fabricGitSource',
-        parts: [{ path: 'notebook-content.py', payload: encodePy(STARTER_PY), payloadType: 'InlineBase64' }],
-      };
+      // Kernel-aware starter. On the AML path the cells run on a Compute
+      // Instance (plain Python 3.10 / R), not a Spark pool. `lang` drives the
+      // editor's default cell language after loadDetail re-parses the record.
+      const aml = workspaceType === 'aml';
+      const isR = createKernel === 'r';
+      const code = isR ? STARTER_AML_R : (aml ? STARTER_AML_PY : STARTER_PY);
+      const lang: NotebookCellLang = isR ? 'sparkr' : (aml ? 'python' : 'pyspark');
+      const definition = { code, lang };
       const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -516,7 +589,7 @@ export function NotebookEditor({ item, id }: Props) {
       await loadList(workspaceId);
       if (j.notebook?.id) setNotebookId(j.notebook.id);
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, loadList]);
+  }, [workspaceId, createName, createKernel, workspaceType, loadList]);
 
   // Import a desktop notebook file (.ipynb / .py / .sql / .scala / .r) into
   // the current workspace as a Loom notebook with every cell populated.
@@ -587,6 +660,31 @@ export function NotebookEditor({ item, id }: Props) {
     setCells(prev => prev.map(c => c.id === id ? next : c));
     setDirty(true);
   }, []);
+
+  /**
+   * Insert a datastore path (abfss:// / wasbs://) into a code cell. Called by
+   * the Datastores sidebar on click AND on drag-drop. Appends to the active
+   * code cell when there is one; otherwise to the first/last code cell; if the
+   * notebook has no code cell yet, a fresh one is created with the path.
+   */
+  const insertDatastorePath = useCallback((path: string) => {
+    setCells(prev => {
+      const snippet = `"${path}"`;
+      const activeIdx = prev.findIndex(c => c.id === activeCellId && c.type === 'code');
+      const idx = activeIdx >= 0 ? activeIdx : prev.map(c => c.type).lastIndexOf('code');
+      if (idx >= 0) {
+        const cell = prev[idx];
+        const sep = cell.source && !cell.source.endsWith('\n') ? '\n' : '';
+        const nextCells = [...prev];
+        nextCells[idx] = { ...cell, source: cell.source + sep + snippet };
+        return nextCells;
+      }
+      // No code cell — append a new one carrying the path.
+      const fresh = { ...emptyCell('code', defaultLang), source: snippet };
+      return [...prev, fresh];
+    });
+    setDirty(true);
+  }, [activeCellId, defaultLang]);
 
   /**
    * Patch only specific fields on a cell — used by the Run flow so output
@@ -763,13 +861,17 @@ export function NotebookEditor({ item, id }: Props) {
       ]},
       { id: 'help', label: 'Help', groups: [
         { label: 'Resources', actions: [
-          { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
+          { label: 'Notebook docs', onClick: () => window.open(
+            workspaceType === 'aml'
+              ? 'https://learn.microsoft.com/azure/machine-learning/how-to-run-jupyter-notebooks'
+              : 'https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook',
+            '_blank') },
         ]},
       ]},
     ];
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
-    run, save, del, loadList, insertCell, openAttach,
+    workspaceType, run, save, del, loadList, insertCell, openAttach,
   ]);
 
   return (
@@ -823,12 +925,40 @@ export function NotebookEditor({ item, id }: Props) {
               </Button>
             </>
           )}
+
+          {/* AML path: Datastores sidebar — Azure ML studio "Data > Datastores"
+              parity. Click or drag a datastore's abfss:// / wasbs:// path into a
+              code cell. Honest gate inside when AML isn't configured. */}
+          {workspaceType === 'aml' && (
+            <DatastoreExplorer onInsertPath={insertDatastorePath} />
+          )}
         </div>
       }
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            {/* Compute backend toggle — Loom-native Spark/Databricks vs the
+                Azure ML Compute Instance path. Default Loom; flip to Azure ML
+                for a CI + datastores. No Fabric dependency on either path. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <Caption1>Compute backend</Caption1>
+              <div style={{ display: 'flex', gap: 0 }}>
+                <Button
+                  size="small"
+                  appearance={workspaceType === 'loom' ? 'primary' : 'outline'}
+                  onClick={() => setWorkspaceType('loom')}
+                  style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+                >Loom (Spark)</Button>
+                <Button
+                  size="small"
+                  appearance={workspaceType === 'aml' ? 'primary' : 'outline'}
+                  onClick={() => setWorkspaceType('aml')}
+                  style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+                  title={amlConfigured === false ? 'Azure ML workspace not configured — the picker will explain what to set' : 'Run on an Azure ML Compute Instance'}
+                >Azure ML</Button>
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
@@ -839,13 +969,13 @@ export function NotebookEditor({ item, id }: Props) {
               </Select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
-              <Caption1>Compute target</Caption1>
+              <Caption1>{workspaceType === 'aml' ? 'Compute Instance' : 'Compute target'}</Caption1>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
                   <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
-                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : (workspaceType === 'aml' ? 'Select a Compute Instance' : 'Select compute')}</option>}
                     {cp.computes
-                      .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                      .filter(computeMatchesType)
                       .map(c => (
                         <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
                       ))}
@@ -860,9 +990,9 @@ export function NotebookEditor({ item, id }: Props) {
                     {selectedCompute?.state || 'unknown'}
                   </Badge>
                 )}
-                {/* Start a terminated cluster / paused pool right here. */}
+                {/* Start a terminated cluster / paused pool / stopped AML CI here. */}
                 {computeId && selectedCompute && !isComputeRunning(selectedCompute.state) &&
-                  (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql') && (
+                  (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql' || selectedCompute.kind === 'aml-ci') && (
                   <Button
                     appearance="primary"
                     size="small"
@@ -897,10 +1027,22 @@ export function NotebookEditor({ item, id }: Props) {
               </DialogTrigger>
               <DialogSurface>
                 <DialogBody>
-                  <DialogTitle>Create Fabric notebook</DialogTitle>
+                  <DialogTitle>{workspaceType === 'aml' ? 'New notebook (Azure ML)' : 'Create notebook'}</DialogTitle>
                   <DialogContent>
-                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Caption1>Name</Caption1>
+                        <Input placeholder="My notebook" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Caption1>Kernel</Caption1>
+                        <Select aria-label="Kernel" value={createKernel} onChange={(_, d) => setCreateKernel(d.value as 'python' | 'r')}>
+                          <option value="python">Python 3.10</option>
+                          <option value="r">R</option>
+                        </Select>
+                      </div>
+                      {createErr && <MessageBar intent="error"><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    </div>
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -996,14 +1138,28 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {!cp.loading && !cp.error && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
+          {!cp.loading && !cp.error && workspaceType === 'loom' && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>No notebook compute is available</MessageBarTitle>
                 Notebooks run on a Synapse Spark pool or a Databricks cluster. Provision one and
                 set <code>LOOM_SYNAPSE_WORKSPACE</code> (Synapse Spark) or
                 {' '}<code>LOOM_DATABRICKS_HOSTNAME</code> (Databricks) so it appears in the compute
-                picker above. You can still edit and save cells without compute.
+                picker above. You can still edit and save cells without compute. Or switch the
+                compute backend to <strong>Azure ML</strong> to run on a Compute Instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No Azure ML Compute Instance is available</MessageBarTitle>
+                The Azure ML path runs cells on a Compute Instance. Set{' '}
+                <code>LOOM_AML_WORKSPACE</code> + <code>LOOM_AML_REGION</code> to a deployed Azure
+                Machine Learning workspace (the deploy-planner <code>mlWorkspace</code> module
+                provisions one), grant the Console UAMI <strong>AzureML Data Scientist</strong>,
+                then create a Compute Instance in that workspace. You can still edit and save cells
+                without compute, or switch the backend to <strong>Loom (Spark)</strong>.
               </MessageBarBody>
             </MessageBar>
           )}

@@ -303,6 +303,11 @@ param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
 param existingFoundryRg string = ''
 
+@description('Azure ML workspace name backing the notebook AML path (deploy-planner mlWorkspace module). Empty → the AML notebook toggle honest-gates (LOOM_AML_WORKSPACE unset).')
+param amlWorkspaceName string = ''
+@description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
+param amlWorkspaceRg string = ''
+
 // Effective "reuse-or-new" identities used for Console env wiring below.
 var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGroup().name
 var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
@@ -1152,6 +1157,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
+            // Azure ML workspace backing the notebook "Azure ML" compute path
+            // (aml-client.ts → list/start Compute Instances, list datastores,
+            // submit Command jobs). Empty → the AML toggle honest-gates. The
+            // deploy-planner mlWorkspace module provisions the workspace + grants
+            // the Console UAMI AzureML Data Scientist. No Fabric dependency.
+            { name: 'LOOM_AML_WORKSPACE', value: amlWorkspaceName }
+            { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : resourceGroup().name }
+            { name: 'LOOM_AML_REGION', value: location }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. The dedicated Agent Service account
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;

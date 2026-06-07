@@ -51,6 +51,32 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       return 'pyspark';
     })();
 
+    // ---- AML Compute Instance Command job poll ----
+    // runId = "aml-ci:<jobName>". Maps the AML job status to the cell-output
+    // contract the editor already understands. Azure-native — no Fabric.
+    if (runId.startsWith('aml-ci:')) {
+      const jobName = runId.slice('aml-ci:'.length);
+      const { getCiJob, amlJobIsTerminal } = await import('@/lib/azure/aml-client');
+      const job = await getCiJob(jobName);
+      if (!job) return NextResponse.json({ ok: true, status: 'NotStarted', runId, phase: 'job-pending' });
+      const terminal = amlJobIsTerminal(job.status);
+      const ok = job.status === 'Completed';
+      return NextResponse.json({
+        ok: true,
+        status: job.status || 'NotStarted',
+        runId,
+        phase: terminal ? 'job-complete' : 'job-running',
+        output: terminal ? (ok ? {
+          status: 'ok',
+          textPlain: `Job ${jobName} completed on the AML Compute Instance. View driver logs + outputs in the run's "Outputs + logs" tab.`,
+        } : {
+          status: 'error',
+          ename: job.status,
+          evalue: `AML job ${jobName} ended with status '${job.status}'. Open the run's "Outputs + logs" for the full traceback.`,
+        }) : null,
+      });
+    }
+
     if (runId.startsWith('spark:')) {
       const [, pool, sessionIdStr, statementIdStr] = runId.split(':');
       const sessionId = Number(sessionIdStr);

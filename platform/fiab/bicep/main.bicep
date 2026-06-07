@@ -355,6 +355,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     existingAdxClusterRg: existingAdxClusterRg
     existingFoundryAccountName: existingFoundryAccountName
     existingFoundryRg: existingFoundryRg
+    // Azure ML workspace for the notebook AML path. Name is the deterministic
+    // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
+    // we wire it WITHOUT referencing dpMlWorkspace.outputs (that module depends
+    // on adminPlane's UAMI principal — referencing its output here would create
+    // a cycle). Empty when the module isn't enabled → AML toggle honest-gates.
+    amlWorkspaceName: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : ''
+    amlWorkspaceRg: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? singleDlzRg.name : ''
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
