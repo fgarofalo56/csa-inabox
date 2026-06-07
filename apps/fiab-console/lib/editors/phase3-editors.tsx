@@ -3212,6 +3212,10 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [alertActivators, setAlertActivators] = useState<Array<{ id: string; name: string }>>([]);
   const [alertErr, setAlertErr] = useState<string | null>(null);
   const [alertBusy, setAlertBusy] = useState(false);
+  // Share dialog — one-for-one with the ADX web UI / Fabric "Share" affordance:
+  // copy the canonical item URL so a workspace member with view access can open
+  // the same queryset. Loom RBAC governs who can actually open it.
+  const [shareOpen, setShareOpen] = useState(false);
   // NL2KQL Copilot assist (generate / explain / fix) — inline build-assist over
   // the Loom AOAI deployment. State machine mirrors the Notebook assist edge.
   type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
@@ -3485,6 +3489,9 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Save to dashboard', onClick: canPinAlert ? openPinDialog : undefined, disabled: !canPinAlert },
         { label: 'Set alert', onClick: canPinAlert ? openAlertDialog : undefined, disabled: !canPinAlert },
       ]},
+      { label: 'Share', actions: [
+        { label: 'Copy link', onClick: () => setShareOpen(true) },
+      ]},
     ]},
   ], [loading, canRun, run, cancel, saving, canSave, saveAll, canPinAlert, openPinDialog, openAlertDialog]);
 
@@ -3655,6 +3662,26 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setAlertDlgOpen(false)} disabled={alertBusy}>Cancel</Button>
                   <Button appearance="primary" onClick={submitAlert} disabled={alertBusy}>{alertBusy ? 'Creating…' : 'Create rule'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={shareOpen} onOpenChange={(_: unknown, d: any) => setShareOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Share queryset</DialogTitle>
+                <DialogContent>
+                  <Caption1>Anyone with access to this Loom item can open it. Permissions are managed via the workspace item ACL (Loom RBAC).</Caption1>
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <Caption1>Canonical URL</Caption1>
+                    <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly aria-label="Queryset URL" />
+                    <Button appearance="outline" onClick={() => { if (typeof navigator !== 'undefined' && navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(() => {}); }}>Copy URL</Button>
+                    <Caption1>To grant another user access, add them to this item via the workspace permissions page. Tenant-wide sharing is not enabled in this deployment.</Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="primary" onClick={() => setShareOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
