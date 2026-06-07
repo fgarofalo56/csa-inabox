@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular, Settings20Regular,
+  History20Regular, ArrowUpload20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -35,6 +35,8 @@ import {
   SessionConfigDialog, toConfigureOptions, sessionConfigEquals, normalizeSessionConfig,
   DEFAULT_SESSION_CONFIG, type SessionConfig,
 } from '@/lib/components/notebook/session-config-dialog';
+import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
+import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 // Ribbon is now built dynamically inside the component so each action can
@@ -175,6 +177,10 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Copilot chat pane (docked right drawer, ~25% width)
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  // Variable explorer (Synapse/Fabric "Variables" View-pane parity)
+  const [variablesOpen, setVariablesOpen] = useState(false);
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
@@ -190,6 +196,17 @@ export function NotebookEditor({ item, id }: Props) {
   const [cfgSaving, setCfgSaving] = useState(false);
   const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
   const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
+
+  // Schema hint for inline code completion (ghost text): the attached
+  // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
+  // real items this notebook is bound to (no Fabric dependency).
+  const inlineSchemaContext = useMemo(() => {
+    if (!attachedSources.length) return undefined;
+    const lines = attachedSources.map(
+      (a) => `${a.kind} "${a.displayName}"${a.isDefault ? ' (default)' : ''}`,
+    );
+    return `Attached data sources:\n${lines.join('\n')}`;
+  }, [attachedSources]);
 
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
@@ -709,7 +726,37 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
-  // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  /**
+   * Apply Copilot's returned code block(s) back into the notebook. The pane
+   * parses fenced code blocks from the streamed AOAI answer (in document
+   * order) and calls this. A single block replaces the active code cell; a
+   * multi-block answer is mapped onto the trailing run of cells ENDING at the
+   * active cell (last block → active cell). Marks the notebook dirty so Ctrl+S
+   * persists — no auto-save, the user reviews the diff first.
+   */
+  const applyCells = useCallback((updated: { source: string }[]) => {
+    if (updated.length === 0) return;
+    setCells((prev) => {
+      if (prev.length === 0) return prev;
+      let activeIdx = activeCellId ? prev.findIndex((c) => c.id === activeCellId) : -1;
+      if (activeIdx < 0) {
+        // No explicit active cell — target the last CODE cell.
+        for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].type === 'code') { activeIdx = i; break; } }
+        if (activeIdx < 0) activeIdx = prev.length - 1;
+      }
+      const startIdx = Math.max(0, activeIdx - (updated.length - 1));
+      const next = [...prev];
+      updated.forEach((u, i) => {
+        const tgt = startIdx + i;
+        if (tgt <= activeIdx && next[tgt]) next[tgt] = { ...next[tgt], source: u.source, output: undefined };
+      });
+      return next;
+    });
+    setDirty(true);
+    setRunMsg('Applied Copilot suggestion — review and Save (Ctrl+S) to persist.');
+  }, [activeCellId]);
+
+
   // CRITICAL: use patchCell (not updateCell) for output mutations so source
   // edits the user makes WHILE the cell is running don't get overwritten
   // by the stale `cell` snapshot captured here. That bug caused Save to
@@ -787,6 +834,103 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, computeId, defaultLang, sessionCfg, patchCell, loadJobs]);
 
+  /**
+   * Variable explorer — submit a Python introspection snippet to the ACTIVE
+   * Livy session and return parsed VarRow[]. Reuses the same warm session as
+   * runCell (the run route reuses `state.sparkSession`), so it sees variables
+   * that earlier cells defined. Goes through the Task-3 execute path:
+   * POST /run (with a sentinel cellId) + poll /runs/[runId].
+   *
+   * We use `globals()` rather than the IPython `%whos` magic because Synapse
+   * Spark runs plain PySpark via Livy (no IPython kernel) — `%whos` would be a
+   * SyntaxError there. The snippet prints one JSON line behind a marker so the
+   * row data survives any Spark log noise in stdout, then deletes its temps so
+   * they don't show up in the next inspection.
+   *
+   * Honest gate: if no workspace/notebook/compute is selected we throw a
+   * human-readable error which the pane surfaces in a MessageBar — no silent
+   * failure, per no-vaporware.
+   */
+  const inspectVariables = useCallback(async (): Promise<VarRow[]> => {
+    if (!workspaceId || !notebookId) {
+      throw new Error('Open or create a notebook first.');
+    }
+    if (!computeId) {
+      throw new Error('Pick a Spark compute target on the toolbar before inspecting variables.');
+    }
+    if (!computeId.startsWith('spark:')) {
+      throw new Error('The variable explorer runs on a Synapse Spark (Livy) session. Select a Synapse Spark compute target.');
+    }
+    const INSPECT_SOURCE = [
+      'import json as __loom_j__',
+      '__loom_v__ = []',
+      "__loom_skip__ = ('In','Out','exit','quit','get_ipython','spark','sc','sqlContext','spark_session')",
+      'for __loom_k__ in list(globals().keys()):',
+      "    if __loom_k__.startswith('_') or __loom_k__ in __loom_skip__:",
+      '        continue',
+      '    __loom_val__ = globals()[__loom_k__]',
+      "    if type(__loom_val__).__name__ in ('module','function','type','builtin_function_or_method'):",
+      '        continue',
+      '    try:',
+      "        __loom_l__ = len(__loom_val__) if hasattr(__loom_val__, '__len__') else None",
+      '    except Exception:',
+      '        __loom_l__ = None',
+      '    try:',
+      '        __loom_r__ = repr(__loom_val__)[:300]',
+      '    except Exception:',
+      "        __loom_r__ = '<unrepresentable>'",
+      "    __loom_v__.append({'n': __loom_k__, 't': type(__loom_val__).__name__, 'l': __loom_l__, 'r': __loom_r__})",
+      "print('__LOOM_VARS__:' + __loom_j__.dumps(__loom_v__))",
+      'del __loom_j__, __loom_v__, __loom_skip__',
+    ].join('\n');
+
+    const r = await fetch(
+      `/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: computeId, cellId: '__loom_inspect__', source: INSPECT_SOURCE, lang: 'pyspark' }),
+      },
+    );
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'variable inspection dispatch failed');
+    let runId: string = j.runId;
+    const start = Date.now();
+    const MAX_MS = 12 * 60 * 1000;
+    let pollInterval = 600;
+    while (Date.now() - start < MAX_MS) {
+      await new Promise(res => setTimeout(res, pollInterval));
+      const pollRes = await fetch(
+        `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+      );
+      const p = await pollRes.json();
+      if (!p.ok) throw new Error(p.error || `poll failed (${pollRes.status})`);
+      if (p.runId && p.runId !== runId) runId = p.runId;
+      const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
+      pollInterval = cold ? 2000 : 600;
+      if (p.output) {
+        if (p.output.status === 'error') {
+          throw new Error(`${p.output.ename || 'Error'}: ${p.output.evalue || 'kernel raised an error'}`);
+        }
+        const text: string = p.output.textPlain || '';
+        const markerIdx = text.lastIndexOf('__LOOM_VARS__:');
+        if (markerIdx < 0) return [];
+        const jsonStr = text.slice(markerIdx + '__LOOM_VARS__:'.length).split('\n')[0].trim();
+        let raw: Array<{ n: string; t: string; l: number | null; r: string }>;
+        try {
+          raw = JSON.parse(jsonStr);
+        } catch {
+          throw new Error('Could not parse the kernel variable snapshot.');
+        }
+        return raw.map(x => ({ name: x.n, type: x.t, len: x.l, repr: x.r }));
+      }
+      if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+        throw new Error(`Spark session ended with status ${p.status}`);
+      }
+    }
+    throw new Error('Variable inspection timed out.');
+  }, [workspaceId, notebookId, computeId]);
+
   // Build the Fabric-parity ribbon with real handlers. Previously these were
   // decorative labels with no onClick — the Ribbon component auto-disables
   // un-wired actions, which gave the user two visually-identical Save buttons
@@ -826,6 +970,8 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'view', label: 'View', groups: [
         { label: 'Panes', actions: [
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+          { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
+          { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
       { id: 'run', label: 'Run', groups: [
@@ -844,6 +990,7 @@ export function NotebookEditor({ item, id }: Props) {
     ];
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
+    copilotOpen,
     run, save, del, loadList, insertCell, openAttach, openConfigDialog,
   ]);
 
@@ -901,7 +1048,8 @@ export function NotebookEditor({ item, id }: Props) {
         </div>
       }
       main={
-        <div className={s.pad}>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
@@ -1007,6 +1155,8 @@ export function NotebookEditor({ item, id }: Props) {
               onClick={openConfigDialog}
             >Configure session</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
+            <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
 
@@ -1018,6 +1168,16 @@ export function NotebookEditor({ item, id }: Props) {
             workspaceId={workspaceId}
             computeId={computeId}
             onRerun={run}
+          />
+
+          {/* Variable explorer — right-side OverlayDrawer; inspects the live
+              Livy session via the Task-3 execute path. Python-only, like
+              Synapse Studio / Fabric. */}
+          <VariablesPane
+            open={variablesOpen}
+            onOpenChange={setVariablesOpen}
+            onInspect={inspectVariables}
+            defaultLang={defaultLang}
           />
 
           {/* Phase 2: Attach Lakehouse modal */}
@@ -1143,6 +1303,20 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
+                        schemaContext={inlineSchemaContext}
+                        notebookId={notebookId}
+                        onInsertBelow={(newCell) => {
+                          setCells(prev => {
+                            const spliceIdx = prev.findIndex(cell => cell.id === c.id);
+                            if (spliceIdx < 0) return [...prev, newCell];
+                            const next = [...prev];
+                            next.splice(spliceIdx + 1, 0, newCell);
+                            return next;
+                          });
+                          setActiveCellId(newCell.id);
+                          setDirty(true);
+                        }}
                       />
                     ) : (
                       <MarkdownCell
@@ -1219,6 +1393,18 @@ export function NotebookEditor({ item, id }: Props) {
           >
             {sessionStatus}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
           </Badge>
+        </div>
+        <CopilotChatPane
+          open={copilotOpen}
+          onOpenChange={setCopilotOpen}
+          notebookId={notebookId}
+          workspaceId={workspaceId}
+          cells={cells}
+          activeCellId={activeCellId}
+          attachedSources={attachedSources}
+          defaultLang={defaultLang}
+          onApplyCells={applyCells}
+        />
         </div>
       }
     />
