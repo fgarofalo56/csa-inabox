@@ -57,7 +57,7 @@ For the ADX web UI / Fabric KQL database schema tree, each object type exposes a
 | # | ADX/Fabric object | Capabilities in the real UI |
 |---|-------------------|------------------------------|
 | 1 | **Tables** | list w/ count + row count + size, New (column schema builder / `.create table`), open (take 100), drop, table schema |
-| 2 | **Functions** | list w/ count, New (args + body / `.create-or-alter function`), open (invoke), drop |
+| 2 | **Functions** | list w/ count, New + **Edit** (params grid `name:type` + KQL body / `.create-or-alter function`), open (invoke), drop |
 | 3 | **Materialized views** | list w/ count, New (source table + aggregation query / `.create materialized-view`), open, drop |
 | 4 | **Ingestion mappings** | list w/ count (csv/tsv/psv/json/avro/parquet/orc), **New mapping wizard** (format selector + sample-file schema auto-detect + source→column→datatype grid / `.create-or-alter … mapping`), drop |
 | 5 | **Database schema** | view the flat schema (`.show database schema [as json]`) |
@@ -85,7 +85,7 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Tables** — New (schema builder textarea) | ✅ | `POST /api/adx/tables` → `.create table T (col:type, …)` |
 | **Tables** — open (take 100) | ✅ | row click loads `["T"] \| take 100` into the editor |
 | **Tables** — drop | ✅ | `DELETE /api/adx/tables?name=` → `.drop table T ifexists` |
-| **Functions** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/functions` → `.show functions` / `.create-or-alter function NAME(args){body}` / `.drop function` |
+| **Functions** — list / count / open / **create + edit + drop** | ✅ | structured stored-function editor (name field, **params grid** `name:type` with a typed dropdown, **Monaco KQL body**, save + delete, success receipt) owned by `KqlDatabaseEditor`, opened from the ribbon (New → Function) and the navigator's per-row **Edit** action. `GET/POST/DELETE /api/adx/functions` → `.show functions` (Body surfaced for edit) / `.create-or-alter function NAME(args){body}` / `.drop function` |
 | **Materialized views** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/materialized-views` → `.show materialized-views` / `.create materialized-view NAME on table SRC {query}` / `.drop materialized-view` |
 | **Materialized views** — backfill on create | ✅ | Backfill toggle in the create wizard → `POST .../materialized-views {backfill:true}` → `.create async materialized-view with (backfill=true) NAME on table SRC {query}`; receipt notes the async operation. Source-table picker + monaco-kusto KQL body in the KqlDatabaseEditor ribbon wizard. |
 | **Ingestion mappings** — list / count / drop | ✅ | `GET/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.drop <table\|database> … ingestion <kind> mapping "N"` |

@@ -2578,7 +2578,10 @@ interface KqlDbInfo {
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
-type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest' | 'data-connection' | 'alter-table' | 'drop-table' | 'follower';
+// Functions are authored through the structured stored-function editor below
+// (params grid + KQL body), so 'function' is intentionally NOT a generic
+// wizard kind — it has its own dialog (openFnEditor / submitFnEditor).
+type KqlWizardKind = 'table' | 'mv' | 'update-policy' | 'ingest' | 'data-connection' | 'alter-table' | 'drop-table' | 'follower';
 
 const DEFAULT_TABLE_COLUMNS: ColumnDef[] = [
   { name: 'ts', type: 'datetime' },
@@ -2594,6 +2597,45 @@ interface DcConnectionRow { name?: string; kind?: string; tableName?: string; co
 // ADX-supported data formats offered by the wizard. RAW is intentionally
 // excluded — IoT Hub data connections do not support it (per ADX docs).
 const DC_FORMATS = ['MULTIJSON', 'JSON', 'CSV', 'TSV', 'PSV', 'SCSV', 'SOHSV', 'TXT', 'TSVE', 'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE'];
+
+/**
+ * Scalar parameter data types accepted in a KQL stored-function signature
+ * (`paramName:paramType`). Mirrors the scalar types valid in `let` / function
+ * signatures per the .create-or-alter function reference. Surfaced as a real
+ * dropdown so the params grid never relies on free-typed type strings.
+ */
+const FN_PARAM_TYPES = [
+  'string', 'long', 'int', 'real', 'double', 'decimal',
+  'bool', 'datetime', 'timespan', 'dynamic', 'guid',
+] as const;
+
+type FnParam = { name: string; type: string };
+
+/**
+ * Parse a KQL function parameters string as returned by `.show functions`
+ * (e.g. "(days:int, tenant:string)") into structured rows for the params grid.
+ * A no-arg signature ("" or "()") yields [].
+ */
+function parseFnParams(raw: string | undefined): FnParam[] {
+  if (!raw) return [];
+  const inner = raw.replace(/^\(/, '').replace(/\)$/, '').trim();
+  if (!inner) return [];
+  return inner
+    .split(',')
+    .map((p) => {
+      const [n, t] = p.split(':');
+      return { name: (n || '').trim(), type: (t || 'string').trim() };
+    })
+    .filter((p) => p.name);
+}
+
+/** Serialize the params grid back into the `name:type, …` argument list. */
+function serializeFnParams(params: FnParam[]): string {
+  return params
+    .filter((p) => p.name.trim())
+    .map((p) => `${p.name.trim()}:${p.type || 'string'}`)
+    .join(', ');
+}
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2612,8 +2654,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // For alter-table / drop-table: the target table name (read-only in the dialog).
   const [wizAlterTarget, setWizAlterTarget] = useState('');
   const [wizSource, setWizSource] = useState(''); // table name (mv source / update policy source)
-  const [wizQuery, setWizQuery] = useState(''); // MV query / function body / update policy query
-  const [wizArgs, setWizArgs] = useState(''); // function arg list, e.g. "x:long"
+  const [wizQuery, setWizQuery] = useState(''); // MV query / update policy query
   const [wizBackfill, setWizBackfill] = useState(false); // MV: .create async materialized-view with (backfill=true)
   // Live source-table picker for the MV wizard — fetched from /api/adx/tables.
   const [wizTables, setWizTables] = useState<string[]>([]);
@@ -2699,6 +2740,20 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [dcError, setDcError] = useState<string | null>(null);
   const [dcSuccess, setDcSuccess] = useState<string | null>(null);
   const [dcExisting, setDcExisting] = useState<DcConnectionRow[] | null>(null);
+
+  // ---- Stored function editor (params grid + KQL body, /api/adx/functions) ----
+  // Owned here so both the ribbon (New → Function) and the navigator's per-row
+  // "Edit function" affordance open the same structured editor.
+  const [fnDlgOpen, setFnDlgOpen] = useState(false);
+  const [fnDlgMode, setFnDlgMode] = useState<'create' | 'edit'>('create');
+  const [fnName, setFnName] = useState('');
+  const [fnNameLocked, setFnNameLocked] = useState(false); // true in edit mode
+  const [fnParams, setFnParams] = useState<FnParam[]>([]);
+  const [fnBody, setFnBody] = useState('');
+  const [fnErr, setFnErr] = useState<string | null>(null);
+  const [fnBusy, setFnBusy] = useState(false);
+  const [fnDeleteBusy, setFnDeleteBusy] = useState(false);
+  const [fnReceipt, setFnReceipt] = useState<{ name: string; action: 'saved' | 'deleted'; rowCount?: number; ts: string } | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -2888,7 +2943,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizColumns(DEFAULT_TABLE_COLUMNS); setWizAlterTarget('');
     // preTable: when called from a tree "Get data" hover, pre-fill the target table.
-    setWizSource(preTable || ''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    setWizSource(preTable || ''); setWizQuery(''); setWizIngestFile(null);
     setWizIngestFormat('csv'); setWizIngestMapping('');
     // Event Hub data-connection fields
     setWizDcHub(''); setWizDcConsumerGroup(''); setWizDcFormat('JSON');
@@ -3111,10 +3166,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           setWizSubmitting(false);
         }
         return;
-      case 'function':
-        // .create function NAME(args) { body }
-        mgmtCmd = `.create-or-alter function with (folder = "Loom", docstring = "Created via CSA Loom") ${wizName}(${wizArgs}) { ${wizQuery} }`;
-        break;
       case 'update-policy': {
         // Target table = wizName; source table = wizSource. Prefer a stored
         // function (wizFn) over the inline KQL query (wizQuery).
@@ -3207,8 +3258,80 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizColumns, wizAlterTarget, wizSource, wizQuery, wizArgs, wizBackfill, wizIngestFile, wizIngestFormat, wizIngestMapping, wizFn, wizTransactional, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load,
+  }, [wizardKind, wizName, wizSchema, wizColumns, wizAlterTarget, wizSource, wizQuery, wizBackfill, wizIngestFile, wizIngestFormat, wizIngestMapping, wizFn, wizTransactional, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load,
       wizDcEhGate, wizDcHub, wizDcConsumerGroup, wizDcTargetTable, wizDcMappingRule, wizDcFormat, wizDcCompression]);
+
+  // ---------------------------------------------------------------
+  // Stored function editor (params grid + KQL body) — real control
+  // commands via the dedicated /api/adx/functions BFF route
+  // (.create-or-alter function / .drop function on /v1/rest/mgmt).
+  // ---------------------------------------------------------------
+  const openFnEditor = useCallback((fn?: { name: string; parameters?: string; body?: string }) => {
+    setFnErr(null); setFnReceipt(null); setFnBusy(false); setFnDeleteBusy(false);
+    if (fn) {
+      setFnDlgMode('edit');
+      setFnName(fn.name);
+      setFnNameLocked(true);
+      setFnParams(parseFnParams(fn.parameters));
+      // .show functions returns the body wrapped in `{ … }`; strip the braces
+      // for editing — createFunction re-wraps it on save.
+      setFnBody((fn.body || '').replace(/^\s*\{/, '').replace(/\}\s*$/, '').trim());
+    } else {
+      setFnDlgMode('create');
+      setFnName('');
+      setFnNameLocked(false);
+      setFnParams([]);
+      setFnBody('');
+    }
+    setFnDlgOpen(true);
+  }, []);
+
+  const submitFnEditor = useCallback(async () => {
+    if (!fnName.trim()) { setFnErr('Function name is required'); return; }
+    if (!fnBody.trim()) { setFnErr('Body is required, e.g. "events | take 10"'); return; }
+    setFnBusy(true); setFnErr(null); setFnReceipt(null);
+    try {
+      const res = await fetch(`/api/adx/functions?id=${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: fnName.trim(),
+          args: serializeFnParams(fnParams),
+          body: fnBody.trim(),
+        }),
+      });
+      const j = await res.json();
+      if (!j.ok) { setFnErr(j.error || `Save failed (HTTP ${res.status})`); return; }
+      setFnReceipt({ name: fnName.trim(), action: 'saved', rowCount: j.rowCount, ts: new Date().toISOString() });
+      setTreeRefreshKey((k) => k + 1);
+      setFnNameLocked(true); // it now exists — re-saves are alters
+      setFnDlgMode('edit');
+    } catch (e: any) {
+      setFnErr(e?.message || String(e));
+    } finally {
+      setFnBusy(false);
+    }
+  }, [id, fnName, fnParams, fnBody]);
+
+  const deleteFnEditor = useCallback(async () => {
+    if (!fnName.trim()) return;
+    setFnDeleteBusy(true); setFnErr(null); setFnReceipt(null);
+    try {
+      const res = await fetch(
+        `/api/adx/functions?id=${encodeURIComponent(id)}&name=${encodeURIComponent(fnName.trim())}`,
+        { method: 'DELETE' },
+      );
+      const j = await res.json();
+      if (!j.ok) { setFnErr(j.error || `Delete failed (HTTP ${res.status})`); return; }
+      setFnReceipt({ name: fnName.trim(), action: 'deleted', ts: new Date().toISOString() });
+      setTreeRefreshKey((k) => k + 1);
+      setTimeout(() => setFnDlgOpen(false), 900);
+    } catch (e: any) {
+      setFnErr(e?.message || String(e));
+    } finally {
+      setFnDeleteBusy(false);
+    }
+  }, [id, fnName]);
 
   // Detach the follower configuration — restores read/write on the item.
   const detachFollower = useCallback(async () => {
@@ -3391,7 +3514,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'New', actions: [
           { label: 'Table', onClick: () => openWizard('table'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Materialized view', onClick: () => openWizard('mv'), disabled: isFollower, title: isFollower ? roTitle : undefined },
-          { label: 'Function', onClick: () => openWizard('function'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Function', onClick: () => openFnEditor(), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Update policy', onClick: () => openWizard('update-policy'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Ingestion mapping', onClick: () => setMappingWizOpen(true), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Shortcut (follower DB)',
@@ -3417,7 +3540,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         ]},
       ]},
     ];
-  }, [openWizard, openDcWizard, info?.isFollower]);
+  }, [openWizard, openFnEditor, openDcWizard, info?.isFollower]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -3434,6 +3557,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
                 el?.focus();
               }}
+              onEditFunction={(fn) => openFnEditor(fn)}
               onGetData={(tableName) => openWizard('ingest', tableName)}
               onCreateDashboard={createDashboardFromTable}
             />
@@ -3680,7 +3804,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'alter-table' && `Edit schema — ${wizAlterTarget} (.alter-merge table)`}
                   {wizardKind === 'drop-table' && `Drop table — ${wizAlterTarget}`}
                   {wizardKind === 'mv' && 'New materialized view (.create materialized-view)'}
-                  {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
                   {wizardKind === 'ingest' && 'Get data — ingest a file (.ingest with format + mapping)'}
                   {wizardKind === 'data-connection' && 'New Event Hub data connection'}
@@ -3770,16 +3893,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                       </>
                       );
                     })()}
-                    {wizardKind === 'function' && (
-                      <>
-                        <Caption1>Function name</Caption1>
-                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="fn_recent_events" />
-                        <Caption1>Argument list (e.g. <code>days:int</code>)</Caption1>
-                        <Input value={wizArgs} onChange={(_: unknown, d: any) => setWizArgs(d.value)} placeholder="days:int" />
-                        <Caption1>Body</Caption1>
-                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | where ts > ago(days*1d)" />
-                      </>
-                    )}
                     {wizardKind === 'update-policy' && (
                       <>
                         <Caption1>Target table (receives the transformed rows)</Caption1>
@@ -3980,6 +4093,127 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                       : wizardKind === 'alter-table' ? 'Apply (.alter-merge)'
                       : wizardKind === 'follower' ? 'Attach follower'
                       : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* ---- Stored function editor (create / edit / delete) ---- */}
+          <Dialog open={fnDlgOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setFnDlgOpen(false); }}>
+            <DialogSurface style={{ maxWidth: 720 }}>
+              <DialogBody>
+                <DialogTitle>
+                  {fnDlgMode === 'create'
+                    ? 'New function (.create-or-alter function)'
+                    : `Edit function · ${fnName}`}
+                </DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Field label="Function name" required hint="Stored as a database-scoped KQL function (folder: Loom).">
+                      <Input
+                        value={fnName}
+                        readOnly={fnNameLocked}
+                        disabled={fnNameLocked}
+                        onChange={(_: unknown, d: any) => setFnName(d.value)}
+                        placeholder="fn_recent_events"
+                        style={fnNameLocked ? { fontFamily: 'Consolas, monospace', fontWeight: 600 } : undefined}
+                      />
+                    </Field>
+
+                    <Field label="Parameters" hint="Typed signature, e.g. days:int. Leave empty for a no-argument function.">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {fnParams.map((p, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <Input
+                              size="small"
+                              placeholder="paramName"
+                              value={p.name}
+                              onChange={(_: unknown, d: any) => setFnParams((prev) => prev.map((x, xi) => (xi === i ? { ...x, name: d.value } : x)))}
+                              style={{ flex: 1 }}
+                              aria-label={`Parameter ${i + 1} name`}
+                            />
+                            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>:</Caption1>
+                            <Select
+                              size="small"
+                              value={p.type}
+                              onChange={(_: unknown, d: any) => setFnParams((prev) => prev.map((x, xi) => (xi === i ? { ...x, type: d.value } : x)))}
+                              style={{ minWidth: 130 }}
+                              aria-label={`Parameter ${i + 1} type`}
+                            >
+                              {FN_PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </Select>
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              icon={<Delete20Regular />}
+                              onClick={() => setFnParams((prev) => prev.filter((_, xi) => xi !== i))}
+                              aria-label={`Remove parameter ${i + 1}`}
+                            />
+                          </div>
+                        ))}
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          icon={<Add20Regular />}
+                          onClick={() => setFnParams((prev) => [...prev, { name: '', type: 'string' }])}
+                          style={{ alignSelf: 'flex-start' }}
+                        >
+                          Add parameter
+                        </Button>
+                        {fnParams.length === 0 && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            No parameters — function takes no arguments.
+                          </Caption1>
+                        )}
+                      </div>
+                    </Field>
+
+                    <Field label="Body (KQL)" required>
+                      <MonacoTextarea
+                        value={fnBody}
+                        onChange={setFnBody}
+                        language="kql"
+                        height={220}
+                        minHeight={140}
+                        ariaLabel="Function body KQL editor"
+                      />
+                    </Field>
+
+                    {fnReceipt && (
+                      <MessageBar intent="success">
+                        <MessageBarBody>
+                          <MessageBarTitle>{fnReceipt.action === 'saved' ? 'Saved' : 'Deleted'}</MessageBarTitle>
+                          Function <code>{fnReceipt.name}</code>{' '}
+                          {fnReceipt.action === 'saved'
+                            ? <>created/altered via <code>.create-or-alter function</code>{fnReceipt.rowCount !== undefined ? ` (${fnReceipt.rowCount} rows returned)` : ''}.</>
+                            : <>dropped via <code>.drop function</code>.</>}
+                          {' '}<Caption1>{fnReceipt.ts}</Caption1>
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {fnErr && (
+                      <MessageBar intent="error">
+                        <MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{fnErr}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setFnDlgOpen(false)} disabled={fnBusy || fnDeleteBusy}>Close</Button>
+                  {fnDlgMode === 'edit' && (
+                    <Button
+                      appearance="subtle"
+                      icon={<Delete20Regular />}
+                      disabled={fnBusy || fnDeleteBusy}
+                      onClick={deleteFnEditor}
+                      style={{ color: tokens.colorPaletteRedForeground1 }}
+                    >
+                      {fnDeleteBusy ? 'Deleting…' : 'Delete function'}
+                    </Button>
+                  )}
+                  <Button appearance="primary" disabled={fnBusy || fnDeleteBusy} onClick={submitFnEditor}>
+                    {fnBusy ? 'Saving…' : 'Save'}
                   </Button>
                 </DialogActions>
               </DialogBody>
