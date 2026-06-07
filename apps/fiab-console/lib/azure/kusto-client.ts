@@ -563,7 +563,7 @@ export async function executePurgeCommit(
 // ============================================================
 
 /** Safe-quote a KQL entity name as a bracketed string literal: `["name"]`. */
-function qName(name: string): string {
+export function qName(name: string): string {
   return `["${name.replace(/"/g, '\\"')}"]`;
 }
 
@@ -885,6 +885,86 @@ export async function ingestInline(db: string, table: string, rows: unknown[][])
     .join('\n');
   const command = `.ingest inline into table ["${table}"] <|\n${csv}`;
   return executeMgmtCommand(db, command);
+}
+
+/**
+ * `.create-or-alter external table <Name> kind=delta (h@'<abfssUri>;impersonate')`
+ *
+ * Creates the Delta external table that a continuous-export job writes into.
+ * The `;impersonate` suffix routes storage auth through the cluster's
+ * system-assigned managed identity — no SAS key or storage account key.
+ *
+ * Requires the cluster MI to hold Storage Blob Data Contributor on the
+ * target ADLS Gen2 account (provisioned by adx-cluster.bicep).
+ *
+ * Per Learn:
+ *   https://learn.microsoft.com/kusto/management/external-tables-delta-lake
+ *   https://learn.microsoft.com/kusto/management/data-export/continuous-export-with-managed-identity
+ *
+ * @param db       KQL database name
+ * @param extName  External table name (must be unique; must not clash with a regular table)
+ * @param abfssUri Full abfss:// URI for the Delta folder (WITHOUT ;impersonate)
+ *                 Example: abfss://bronze@mystorageaccount.dfs.core.windows.net/exports/orders
+ */
+export async function createOrAlterExternalTableDelta(
+  db: string,
+  extName: string,
+  abfssUri: string,
+): Promise<KustoQueryResult> {
+  if (!extName.trim()) throw new KustoError('createOrAlterExternalTableDelta: extName required', 400);
+  if (!/^abfss:\/\//i.test(abfssUri)) {
+    throw new KustoError('createOrAlterExternalTableDelta: abfssUri must start with abfss://', 400);
+  }
+  // Escape single-quotes inside the URI for the KQL string literal.
+  const escaped = abfssUri.replace(/'/g, "\\'");
+  const cmd = `.create-or-alter external table ${qName(extName)} kind=delta (h@'${escaped};impersonate')`;
+  return executeMgmtCommand(db, cmd);
+}
+
+/**
+ * `.create-or-alter continuous-export <Name>
+ *    over (<sourceTable>)
+ *    to table <extTableName>
+ *    with (intervalBetweenRuns=<interval>, managedIdentity=system)
+ *  <| <sourceTable>`
+ *
+ * Exports new rows from a KQL fact table into a Delta external table on each
+ * interval. Uses `managedIdentity=system` because the external table's
+ * connection string uses impersonation (cluster system-assigned MI), which
+ * is required per the Kusto docs.
+ *
+ * Per Learn:
+ *   https://learn.microsoft.com/kusto/management/data-export/create-alter-continuous
+ *
+ * @param db           KQL database name
+ * @param exportName   Unique continuous-export name within the database
+ * @param sourceTable  Fact-table name in the database (the `over (T)` clause)
+ * @param extTableName External Delta table name (created by createOrAlterExternalTableDelta)
+ * @param interval     KQL timespan string: '5m' | '15m' | '1h' | '6h' | '24h' etc.
+ *                     Minimum 1 minute per docs; recommended >= several minutes.
+ */
+export async function createOrAlterContinuousExport(
+  db: string,
+  exportName: string,
+  sourceTable: string,
+  extTableName: string,
+  interval: string,
+): Promise<KustoQueryResult> {
+  if (!exportName.trim() || !sourceTable.trim() || !extTableName.trim() || !interval.trim()) {
+    throw new KustoError('createOrAlterContinuousExport: all params required', 400);
+  }
+  // Validate interval looks like a KQL timespan (e.g. 5m, 1h, 24h)
+  if (!/^\d+[smhd]$/.test(interval.trim())) {
+    throw new KustoError(`createOrAlterContinuousExport: invalid interval "${interval}" — use KQL timespan e.g. 5m, 1h, 24h`, 400);
+  }
+  const cmd = [
+    `.create-or-alter continuous-export ${qName(exportName)}`,
+    `over (${qName(sourceTable)})`,
+    `to table ${qName(extTableName)}`,
+    `with (intervalBetweenRuns=${interval.trim()}, managedIdentity=system)`,
+    `<| ${qName(sourceTable)}`,
+  ].join(' ');
+  return executeMgmtCommand(db, cmd);
 }
 
 /**
