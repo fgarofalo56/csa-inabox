@@ -29,7 +29,10 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM scope is cloud-aware: sovereign clouds (GCC-High / IL5) use the
+// usgovcloudapi.net management host. Set LOOM_ARM_SCOPE accordingly in
+// sovereign deployments; defaults to Commercial.
+const ARM_SCOPE = process.env.LOOM_ARM_SCOPE || 'https://management.azure.com/.default';
 const KUSTO_API = '2023-08-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -78,8 +81,12 @@ export function readKustoArmConfig(): KustoClusterArmConfig {
   return { subscriptionId, resourceGroup, clusterName };
 }
 
+// ARM management host, cloud-aware to match ARM_SCOPE. Sovereign clouds set
+// LOOM_ARM_HOST=https://management.usgovcloudapi.net.
+const ARM_HOST = (process.env.LOOM_ARM_HOST || 'https://management.azure.com').replace(/\/+$/, '');
+
 function clusterUrl(cfg: KustoClusterArmConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
+  return `${ARM_HOST}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
@@ -152,4 +159,28 @@ export async function updateKustoClusterSku(
     return shape({ id: cfg.clusterName, name: cfg.clusterName, sku: body.sku, properties: { provisioningState: 'Updating' } });
   }
   return shape(await r.json());
+}
+
+/**
+ * ARM DELETE Microsoft.Kusto/clusters/{cluster}/databases/{name}.
+ * Database deletion is an ARM-plane operation (it deallocates persistent
+ * storage), mirroring `createDatabase` in kusto-client.ts.
+ *
+ * Returns { provisioningState: 'Succeeded' } on 200 (sync delete) or
+ * { provisioningState: 'Deleting' } on 202 (async long-running operation).
+ * The caller identity (Console UAMI) must hold Contributor on the cluster
+ * scope — the same role used to create databases.
+ *
+ * Grounded in Microsoft Learn (Databases - Delete REST operation):
+ *   DELETE .../clusters/{cluster}/databases/{name}?api-version=2023-08-15
+ */
+export async function deleteKustoDatabase(dbName: string): Promise<{ provisioningState: string }> {
+  const cfg = readKustoArmConfig();
+  const url = `${clusterUrl(cfg)}/databases/${encodeURIComponent(dbName)}?api-version=${KUSTO_API}`;
+  const r = await callArm(url, { method: 'DELETE' });
+  // 200 sync delete, 202 async delete, 204 already-gone are all success.
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `deleteKustoDatabase(${dbName}) failed ${r.status}`);
+  }
+  return { provisioningState: r.status === 202 ? 'Deleting' : 'Succeeded' };
 }

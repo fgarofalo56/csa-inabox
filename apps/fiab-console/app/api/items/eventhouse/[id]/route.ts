@@ -1,11 +1,12 @@
 /**
  * GET /api/items/eventhouse/[id]
- * Returns cluster URI + list of KQL databases on the shared Loom Kusto cluster.
+ * Returns cluster URI + list of KQL databases (with size / retention /
+ * hot-cache / table count) on the shared Loom Kusto cluster.
  */
 
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { clusterUri, defaultDatabase, listDatabases, KustoError } from '@/lib/azure/kusto-client';
+import { clusterUri, defaultDatabase, listDatabasesWithDetails, KustoError } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   try {
-    const databases = await listDatabases();
+    const databases = await listDatabasesWithDetails();
     return NextResponse.json({
       ok: true,
       cluster: clusterUri(),
