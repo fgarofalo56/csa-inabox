@@ -34,7 +34,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armScope } from './cloud-endpoints';
+import { armScope, isGovCloud } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 
@@ -54,11 +54,27 @@ export class MlflowNotConfiguredError extends Error {
     super('Azure ML MLflow tracking is not configured in this deployment');
     this.name = 'MlflowNotConfiguredError';
     this.missing = missing;
-    this.hint =
-      `Set ${missing.join(' + ')} to a deployed Azure Machine Learning workspace, ` +
-      `then grant the Console UAMI the AzureML Data Scientist role on it. ` +
-      `LOOM_AML_WORKSPACE / LOOM_AML_REGION fall back to LOOM_FOUNDRY_NAME / ` +
-      `LOOM_FOUNDRY_REGION when those are set.`;
+    // In a sovereign boundary (GCC-High / IL5) the commercial
+    // `*.api.azureml.ms` tracking host is not the right data plane, and
+    // Microsoft does not publicly document a stable alternate hostname. The
+    // only supported path there is an explicit tracking URI — name it.
+    if (missing.includes('LOOM_MLFLOW_TRACKING_URI')) {
+      this.hint =
+        `Set LOOM_MLFLOW_TRACKING_URI to the Azure Machine Learning workspace ` +
+        `MLflow tracking URI for this boundary — obtain it with ` +
+        `\`az ml workspace show --query mlflow_tracking_uri -o tsv\` against the ` +
+        `target IL5 / GCC-High workspace — then grant the Console UAMI the ` +
+        `AzureML Data Scientist role on that workspace. In Commercial / GCC you ` +
+        `may instead set LOOM_AML_WORKSPACE + LOOM_AML_REGION + ` +
+        `LOOM_SUBSCRIPTION_ID and the tracking URI is constructed automatically.`;
+    } else {
+      this.hint =
+        `Set ${missing.join(' + ')} to a deployed Azure Machine Learning workspace, ` +
+        `then grant the Console UAMI the AzureML Data Scientist role on it. ` +
+        `LOOM_AML_WORKSPACE / LOOM_AML_REGION fall back to LOOM_FOUNDRY_NAME / ` +
+        `LOOM_FOUNDRY_REGION when those are set. Alternatively set ` +
+        `LOOM_MLFLOW_TRACKING_URI directly (required in IL5 / GCC-High).`;
+    }
   }
 }
 
@@ -83,11 +99,51 @@ interface MlflowConfig {
 }
 
 /**
- * Resolve the MLflow tracking base URI from env. Workspace + region honor the
- * task's dedicated vars first, then fall back to the Foundry hub env so an
- * already-configured Loom keeps working without new vars.
+ * Resolve the MLflow tracking base URI from env.
+ *
+ * Priority:
+ *   1. LOOM_MLFLOW_TRACKING_URI — an explicit AML MLflow tracking URI. This is
+ *      the ONLY supported path in a sovereign boundary (GCC-High / IL5) where
+ *      the commercial `*.api.azureml.ms` host is wrong and no public alternate
+ *      hostname is documented. The URI is what `az ml workspace show
+ *      --query mlflow_tracking_uri` returns; private-link workspaces also use a
+ *      boundary-specific shape that only this override can express.
+ *   2. LOOM_AML_WORKSPACE + LOOM_AML_REGION + LOOM_SUBSCRIPTION_ID — the
+ *      Commercial / GCC auto-construction (workspace + region honor the
+ *      Foundry hub env as a fallback so an already-configured Loom keeps
+ *      working without new vars).
+ *
+ * In a Gov boundary with neither set we throw naming LOOM_MLFLOW_TRACKING_URI
+ * specifically (auto-construction is not valid there).
  */
 export function mlflowConfig(): MlflowConfig {
+  // 1. Explicit tracking URI override (required for IL5 / GCC-High).
+  const explicit = process.env.LOOM_MLFLOW_TRACKING_URI?.trim();
+  if (explicit) {
+    // `azureml://...` tracking URIs map 1:1 to the https data-plane host; the
+    // bearer ARM token authenticates both. Normalize + strip a trailing
+    // `/mlflow/...` suffix duplication / trailing slashes, then derive the
+    // ids from the path for the MlflowConfig shape (best-effort).
+    let base = explicit.replace(/^azureml:\/\//, 'https://').replace(/\/+$/, '');
+    const subMatch = base.match(/subscriptions\/([^/]+)/i);
+    const rgMatch = base.match(/resourceGroups\/([^/]+)/i);
+    const wsMatch = base.match(/workspaces\/([^/]+)/i);
+    return {
+      region: process.env.LOOM_AML_REGION || process.env.LOOM_FOUNDRY_REGION || 'unknown',
+      subscriptionId: subMatch?.[1] || process.env.LOOM_SUBSCRIPTION_ID || '',
+      resourceGroup: rgMatch?.[1] || process.env.LOOM_AML_RG || process.env.LOOM_FOUNDRY_RG || '',
+      workspace: wsMatch?.[1] || process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME || '',
+      base,
+    };
+  }
+
+  // 2. Auto-construction — valid only in Commercial / GCC (public Azure
+  // endpoints). In a Gov boundary the `*.api.azureml.ms` host is wrong, so the
+  // explicit override is mandatory there.
+  if (isGovCloud()) {
+    throw new MlflowNotConfiguredError(['LOOM_MLFLOW_TRACKING_URI']);
+  }
+
   const missing: string[] = [];
   const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
   if (!subscriptionId) missing.push('LOOM_SUBSCRIPTION_ID');
@@ -390,4 +446,35 @@ export async function getMetricHistory(runId: string, metricKey: string, maxResu
   // Sort by step then timestamp so the chart plots a clean left-to-right series.
   out.sort((a, b) => (a.step ?? 0) - (b.step ?? 0) || (a.timestamp ?? 0) - (b.timestamp ?? 0));
   return out;
+}
+
+// ---------------- Artifacts ----------------
+
+export interface MlflowArtifact {
+  /** Path relative to the run's artifact root (e.g. `model/MLmodel`). */
+  path: string;
+  /** True for a directory (expandable in the artifact tree). */
+  isDir: boolean;
+  /** File size in bytes (absent / undefined for directories). */
+  fileSize?: number;
+}
+
+/**
+ * GET <base>/api/2.0/mlflow/artifacts/list?run_id=...&path=...
+ * https://mlflow.org/docs/latest/rest-api.html#list-artifacts
+ * Lists the artifacts logged under a run (one directory level at `path`). The
+ * studio "Outputs + logs" tree is built by recursing into `isDir` entries.
+ * Returns [] on 404 (run has no artifacts / path doesn't exist).
+ */
+export async function listArtifacts(runId: string, path?: string): Promise<MlflowArtifact[]> {
+  const query: Record<string, string> = { run_id: runId };
+  if (path) query.path = path;
+  const res = await mlflowFetch('/artifacts/list', { method: 'GET', query });
+  if (res.status === 404) return [];
+  const j = await readMlflowJson<{ files?: any[] }>(res);
+  return (j.files || []).map((f) => ({
+    path: f.path,
+    isDir: f.is_dir ?? f.isDir ?? false,
+    fileSize: numOrUndef(f.file_size ?? f.fileSize),
+  }));
 }
