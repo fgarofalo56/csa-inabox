@@ -904,6 +904,18 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+  // Purge dialog state — GDPR record erasure (ADX two-step .purge).
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeTableList, setPurgeTableList] = useState<Array<{ name: string }>>([]);
+  const [purgeTable, setPurgeTable] = useState('');
+  const [purgeColumns, setPurgeColumns] = useState<Array<{ name: string; type: string }>>([]);
+  const [purgePredicates, setPurgePredicates] = useState<Array<{ column: string; op: string; value: string }>>([{ column: '', op: '==', value: '' }]);
+  const [purgeStep, setPurgeStep] = useState<'idle' | 'verified' | 'done'>('idle');
+  const [purgeVerifyResult, setPurgeVerifyResult] = useState<{ numRecordsToPurge: number; estimatedPurgeExecutionTime: string; verificationToken: string } | null>(null);
+  const [purgeCommitResult, setPurgeCommitResult] = useState<{ operationId: string; state: string; postPurgeCount: number | null } | null>(null);
+  const [purgeConfirmText, setPurgeConfirmText] = useState('');
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  const [purgeErr, setPurgeErr] = useState<string | null>(null);
   // Databases browser: tile/list view toggle + delete confirmation flow.
   const [dbView, setDbView] = useState<'tile' | 'list'>('tile');
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -1244,6 +1256,99 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [id, autoscaleEnabled, autoscaleMin, autoscaleMax, load]);
 
+  // Purge records (GDPR erasure) — ADX two-step .purge against the DM endpoint.
+  // Open: load tables for the selected database (table picker source).
+  const openPurgeDialog = useCallback(async () => {
+    setPurgeOpen(true);
+    setPurgeStep('idle');
+    setPurgeVerifyResult(null);
+    setPurgeCommitResult(null);
+    setPurgeConfirmText('');
+    setPurgeErr(null);
+    setPurgeTable('');
+    setPurgeColumns([]);
+    setPurgePredicates([{ column: '', op: '==', value: '' }]);
+    if (!selectedDb) return;
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/purge?database=${encodeURIComponent(selectedDb)}`);
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (j.ok) setPurgeTableList(j.tables || []);
+      else setPurgeErr(j.error || 'failed to load tables');
+    } catch (e: any) {
+      setPurgeErr(e?.message || String(e));
+    }
+  }, [id, selectedDb]);
+
+  // Table picked → load its columns (predicate-builder source).
+  const onPurgeTableChange = useCallback(async (tableName: string) => {
+    setPurgeTable(tableName);
+    setPurgeColumns([]);
+    if (!selectedDb || !tableName) return;
+    try {
+      const r = await fetch(
+        `/api/items/eventhouse/${id}/purge?database=${encodeURIComponent(selectedDb)}&table=${encodeURIComponent(tableName)}`,
+      );
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false };
+      if (j.ok) setPurgeColumns(j.columns || []);
+    } catch { /* non-blocking — predicate column can still be picked once reloaded */ }
+  }, [id, selectedDb]);
+
+  // Step 1 — verify: preview record count + obtain the verification token.
+  const runPurgeVerify = useCallback(async () => {
+    if (!selectedDb || !purgeTable) return;
+    setPurgeBusy(true);
+    setPurgeErr(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/purge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ database: selectedDb, table: purgeTable, predicates: purgePredicates, step: 'verify' }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) { setPurgeErr(j.error || 'verify failed'); return; }
+      setPurgeVerifyResult({
+        numRecordsToPurge: j.numRecordsToPurge,
+        estimatedPurgeExecutionTime: j.estimatedPurgeExecutionTime,
+        verificationToken: j.verificationToken,
+      });
+      setPurgeStep('verified');
+    } catch (e: any) {
+      setPurgeErr(e?.message || String(e));
+    } finally {
+      setPurgeBusy(false);
+    }
+  }, [id, selectedDb, purgeTable, purgePredicates]);
+
+  // Step 2 — commit: irreversibly schedule the purge using the token + typed confirm.
+  const runPurgeCommit = useCallback(async () => {
+    if (!selectedDb || !purgeTable || !purgeVerifyResult?.verificationToken) return;
+    if (purgeConfirmText !== 'PURGE') { setPurgeErr('Type PURGE exactly to confirm'); return; }
+    setPurgeBusy(true);
+    setPurgeErr(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/purge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          database: selectedDb, table: purgeTable, predicates: purgePredicates,
+          step: 'commit', verificationToken: purgeVerifyResult.verificationToken,
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) { setPurgeErr(j.error || 'commit failed'); return; }
+      setPurgeCommitResult({ operationId: j.operationId, state: j.state, postPurgeCount: j.postPurgeCount });
+      setPurgeStep('done');
+    } catch (e: any) {
+      setPurgeErr(e?.message || String(e));
+    } finally {
+      setPurgeBusy(false);
+    }
+  }, [id, selectedDb, purgeTable, purgePredicates, purgeVerifyResult, purgeConfirmText]);
+
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
   // Dev(No SLA)/Basic-tier SKUs reject optimizedAutoscale — drives the honest gate.
@@ -1298,6 +1403,11 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+        { label: 'Purge records (GDPR)', onClick: hasDbs && selectedDb ? openPurgeDialog : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs || !selectedDb
+            ? 'select a database first'
+            : 'Predicate-based GDPR erasure via ADX .purge (two-step verify→commit, irreversible)' },
         { label: 'Auto-scale', onClick: state?.ok ? () => { setAutoscaleResult(null); setAutoscaleOpen(true); } : undefined,
           disabled: !state?.ok,
           title: !state?.ok ? 'cluster must be reachable' : 'configure optimized auto-scale (min/max instances)' },
@@ -1309,7 +1419,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Refresh', onClick: load },
       ]},
     ]},
-  ], [hasDbs, selectedDb, openKqlEditor, load, state?.ok]);
+  ], [hasDbs, selectedDb, openKqlEditor, load, openPurgeDialog, state?.ok]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -1796,6 +1906,167 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     <Button appearance="primary" onClick={applyPolicies} disabled={policiesBusy}>
                       {policiesBusy ? 'Applying…' : 'Apply'}
                     </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Purge records dialog — GDPR erasure via ADX two-step .purge */}
+            <Dialog open={purgeOpen} onOpenChange={(_, d) => { if (!purgeBusy) setPurgeOpen(d.open); }}>
+              <DialogSurface style={{ maxWidth: 620 }}>
+                <DialogBody>
+                  <DialogTitle>Purge records — {selectedDb}</DialogTitle>
+                  <DialogContent>
+                    {purgeStep === 'idle' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>Irreversible erasure</MessageBarTitle>
+                            Purge permanently deletes matching records from storage (GDPR /
+                            right-to-be-forgotten). It cannot be undone. Use only when required by a
+                            privacy obligation. Requires Database Admin on the cluster.
+                          </MessageBarBody>
+                        </MessageBar>
+                        <div>
+                          <Label>Table</Label>
+                          <Select value={purgeTable} onChange={(_, d) => onPurgeTableChange(d.value)} style={{ width: '100%' }}>
+                            <option value="">— select a table —</option>
+                            {purgeTableList.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                          </Select>
+                        </div>
+                        {purgeTable && (
+                          <div>
+                            <Label>Predicate — all conditions are joined with AND</Label>
+                            {purgePredicates.map((pred, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                                <Select
+                                  value={pred.column}
+                                  onChange={(_, d) => setPurgePredicates((ps) => ps.map((p, j) => (j === i ? { ...p, column: d.value } : p)))}
+                                  style={{ minWidth: 150 }}
+                                >
+                                  <option value="">— column —</option>
+                                  {purgeColumns.length
+                                    ? purgeColumns.map((c) => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)
+                                    : <option disabled>loading schema…</option>}
+                                </Select>
+                                <Select
+                                  value={pred.op}
+                                  onChange={(_, d) => setPurgePredicates((ps) => ps.map((p, j) => (j === i ? { ...p, op: d.value } : p)))}
+                                  style={{ minWidth: 110 }}
+                                >
+                                  {(['==', '!=', '>', '<', '>=', '<=', 'contains', 'startswith'] as const).map((op) => (
+                                    <option key={op} value={op}>{op}</option>
+                                  ))}
+                                </Select>
+                                <Input
+                                  value={pred.value}
+                                  onChange={(_, d) => setPurgePredicates((ps) => ps.map((p, j) => (j === i ? { ...p, value: d.value } : p)))}
+                                  placeholder="value"
+                                  style={{ flex: 1 }}
+                                />
+                                {purgePredicates.length > 1 && (
+                                  <Button
+                                    size="small"
+                                    appearance="subtle"
+                                    icon={<Delete20Regular />}
+                                    aria-label="Remove condition"
+                                    onClick={() => setPurgePredicates((ps) => ps.filter((_, j) => j !== i))}
+                                  />
+                                )}
+                              </div>
+                            ))}
+                            <Button
+                              size="small"
+                              appearance="outline"
+                              icon={<Add20Regular />}
+                              onClick={() => setPurgePredicates((ps) => [...ps, { column: '', op: '==', value: '' }])}
+                              style={{ marginTop: 8 }}
+                            >
+                              Add condition
+                            </Button>
+                            <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                              Predicate:{' '}
+                              <code style={{ fontFamily: 'Consolas, monospace' }}>
+                                where {purgePredicates.filter((p) => p.column && p.value).map((p) => `["${p.column}"] ${p.op} "${p.value}"`).join(' and ') || '(incomplete)'}
+                              </code>
+                            </Caption1>
+                          </div>
+                        )}
+                        {purgeErr && <MessageBar intent="error"><MessageBarBody>{purgeErr}</MessageBarBody></MessageBar>}
+                      </div>
+                    )}
+
+                    {purgeStep === 'verified' && purgeVerifyResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>Confirm purge</MessageBarTitle>
+                            <strong>{purgeVerifyResult.numRecordsToPurge.toLocaleString()}</strong> record(s) in{' '}
+                            <strong>{purgeTable}</strong> will be permanently erased. Estimated purge time:{' '}
+                            {purgeVerifyResult.estimatedPurgeExecutionTime || 'unknown'}. This action cannot be undone.
+                          </MessageBarBody>
+                        </MessageBar>
+                        <div>
+                          <Label required>Type PURGE to confirm</Label>
+                          <Input
+                            value={purgeConfirmText}
+                            onChange={(_, d) => setPurgeConfirmText(d.value)}
+                            placeholder="PURGE"
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                        {purgeErr && <MessageBar intent="error"><MessageBarBody>{purgeErr}</MessageBarBody></MessageBar>}
+                      </div>
+                    )}
+
+                    {purgeStep === 'done' && purgeCommitResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <MessageBar intent="success">
+                          <MessageBarBody>
+                            <MessageBarTitle>Purge scheduled</MessageBarTitle>
+                            Operation ID:{' '}
+                            <code style={{ fontFamily: 'Consolas, monospace' }}>{purgeCommitResult.operationId || '(pending)'}</code>.
+                            State: {purgeCommitResult.state}. Post-purge match count:{' '}
+                            {purgeCommitResult.postPurgeCount != null ? purgeCommitResult.postPurgeCount.toLocaleString() : '(checking…)'}.
+                          </MessageBarBody>
+                        </MessageBar>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          ADX purge runs in the background: Phase 1 (soft-delete; rows no longer visible)
+                          completes in minutes to hours; Phase 2 (hard-delete from storage) follows within
+                          5–30 days. Track status with{' '}
+                          <code style={{ fontFamily: 'Consolas, monospace' }}>.show purges {purgeCommitResult.operationId}</code>{' '}
+                          against the data-management endpoint.
+                        </Caption1>
+                      </div>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setPurgeOpen(false)} disabled={purgeBusy}>
+                      {purgeStep === 'done' ? 'Close' : 'Cancel'}
+                    </Button>
+                    {purgeStep === 'idle' && (
+                      <Button
+                        appearance="primary"
+                        onClick={runPurgeVerify}
+                        disabled={purgeBusy || !purgeTable || purgePredicates.every((p) => !p.column || !p.value)}
+                      >
+                        {purgeBusy ? 'Verifying…' : 'Verify (preview records)'}
+                      </Button>
+                    )}
+                    {purgeStep === 'verified' && (
+                      <>
+                        <Button appearance="outline" onClick={() => { setPurgeStep('idle'); setPurgeErr(null); }} disabled={purgeBusy}>
+                          Back
+                        </Button>
+                        <Button
+                          appearance="primary"
+                          onClick={runPurgeCommit}
+                          disabled={purgeBusy || purgeConfirmText !== 'PURGE'}
+                        >
+                          {purgeBusy ? 'Purging…' : 'Commit purge'}
+                        </Button>
+                      </>
+                    )}
                   </DialogActions>
                 </DialogBody>
               </DialogSurface>

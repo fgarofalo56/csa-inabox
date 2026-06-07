@@ -26,6 +26,21 @@ const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || 'https://adx-csa-loom-
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
 const MAX_ROWS = 5_000;
 
+/**
+ * Data Management (ingestion) endpoint — `.purge table records` commands MUST
+ * target this URI, NOT the data-plane CLUSTER_URI. Grounded in Microsoft Learn
+ * (Data purge):
+ *   https://learn.microsoft.com/kusto/concepts/data-purge?view=azure-data-explorer
+ * Topology: the engine URI `https://<c>.<region>.kusto.windows.net` maps to the
+ * DM URI `https://ingest-<c>.<region>.kusto.windows.net`. The ARM
+ * `clusterDataIngestionUri` output is wired into LOOM_KUSTO_DM_URI in
+ * platform/fiab/bicep/modules/admin-plane/main.bicep; when unset we derive it by
+ * prepending `ingest-` to the cluster host (works for Commercial + Gov suffixes).
+ */
+const DM_URI =
+  process.env.LOOM_KUSTO_DM_URI ||
+  CLUSTER_URI.replace(/^(https?:\/\/)/i, '$1ingest-');
+
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
@@ -128,6 +143,37 @@ async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, cs
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
     const msg = (json?.error?.['@message'] || json?.error?.message || text || 'Kusto request failed').toString();
+    throw new KustoError(msg, res.status, json || text);
+  }
+  return json;
+}
+
+/**
+ * Send a control command to the Data Management (ingestion) endpoint — required
+ * for `.purge table records` (the engine endpoint rejects purge). Same v1
+ * request/response shape as {@link postRest} but against {@link DM_URI}. The AAD
+ * token scope stays the cluster URI's `.default` (the DM endpoint accepts the
+ * same audience). Grounded in Microsoft Learn (Data purge).
+ */
+async function postMgmtDm(db: string, csl: string): Promise<any> {
+  const token = await getToken();
+  const url = `${DM_URI}/v1/rest/mgmt`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json; charset=utf-8',
+      'accept': 'application/json',
+      'x-ms-client-request-id': `loom-purge.${Math.random().toString(36).slice(2)}`,
+    },
+    body: JSON.stringify({ db, csl }),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.['@message'] || json?.error?.message || text || 'Kusto DM request failed').toString();
     throw new KustoError(msg, res.status, json || text);
   }
   return json;
@@ -349,6 +395,94 @@ export async function getTableSchema(db: string, table: string): Promise<unknown
   const schemaIdx = r.columns.indexOf('Schema');
   const raw = r.rows[0][schemaIdx >= 0 ? schemaIdx : 1];
   try { return JSON.parse(String(raw)); } catch { return raw; }
+}
+
+// ============================================================
+// Purge helpers — GDPR record erasure via the ADX two-step `.purge`.
+// Grounded in Microsoft Learn (Data purge):
+//   https://learn.microsoft.com/kusto/concepts/data-purge?view=azure-data-explorer
+// Commands target the DM endpoint (postMgmtDm), not the data endpoint, and
+// require Database Admin on the target database. The Console UAMI holds
+// AllDatabasesAdmin on the shared cluster. enablePurge: true is set in
+// platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep.
+// ============================================================
+
+/**
+ * The KQL operators the guided predicate builder allows + the structured
+ * predicate → `where` translation live in the dependency-free
+ * `kusto-purge-predicate` module so they can be unit-tested without loading the
+ * Azure SDKs. Re-exported here so the .purge route imports a single surface.
+ */
+export {
+  PURGE_ALLOWED_OPS,
+  PurgePredicateError,
+  buildPurgeWhere,
+} from './kusto-purge-predicate';
+export type { PurgeOp, PurgePredicatePart } from './kusto-purge-predicate';
+function purgeColIdx(cols: string[], key: string): number {
+  return cols.findIndex((c) => c.toLowerCase().includes(key.toLowerCase()));
+}
+
+export interface PurgeVerifyResult {
+  numRecordsToPurge: number;
+  estimatedPurgeExecutionTime: string;
+  verificationToken: string;
+}
+
+/**
+ * Step 1 — verify: scans the predicate and returns the record count + a
+ * verification token. NO records are deleted. The token is required for step 2.
+ * Syntax: `.purge table ["T"] records in database ["DB"] <| where …`
+ */
+export async function executePurgeVerify(
+  database: string,
+  table: string,
+  predicateWhere: string,
+): Promise<PurgeVerifyResult> {
+  const csl = `.purge table ["${table}"] records in database ["${database}"] <| ${predicateWhere}`;
+  const json = await postMgmtDm(database, csl);
+  const cols: string[] = ((json?.Tables?.[0]?.Columns) || []).map((c: any) => String(c.ColumnName));
+  const row: unknown[] = json?.Tables?.[0]?.Rows?.[0] || [];
+  return {
+    numRecordsToPurge: Number(row[purgeColIdx(cols, 'numrecords')] ?? row[purgeColIdx(cols, 'num')] ?? 0),
+    estimatedPurgeExecutionTime: String(row[purgeColIdx(cols, 'estimated')] ?? ''),
+    verificationToken: String(row[purgeColIdx(cols, 'verification')] ?? row[purgeColIdx(cols, 'token')] ?? ''),
+  };
+}
+
+export interface PurgeCommitResult {
+  operationId: string;
+  state: string;
+  databaseName: string;
+  tableName: string;
+  scheduledTime: string;
+}
+
+/**
+ * Step 2 — commit: executes the purge using the token from step 1. Deletion
+ * begins asynchronously (irreversible). Returns the operation id for tracking.
+ * Syntax: `.purge table ["T"] records in database ["DB"] with(verificationtoken=h'…') <| where …`
+ */
+export async function executePurgeCommit(
+  database: string,
+  table: string,
+  predicateWhere: string,
+  verificationToken: string,
+): Promise<PurgeCommitResult> {
+  const csl =
+    `.purge table ["${table}"] records in database ["${database}"]` +
+    ` with(verificationtoken=h'${verificationToken.replace(/'/g, "\\'")}')` +
+    ` <| ${predicateWhere}`;
+  const json = await postMgmtDm(database, csl);
+  const cols: string[] = ((json?.Tables?.[0]?.Columns) || []).map((c: any) => String(c.ColumnName));
+  const row: unknown[] = json?.Tables?.[0]?.Rows?.[0] || [];
+  return {
+    operationId: String(row[purgeColIdx(cols, 'operationid')] ?? row[purgeColIdx(cols, 'operation')] ?? ''),
+    state: String(row[purgeColIdx(cols, 'state')] ?? 'Scheduled'),
+    databaseName: String(row[purgeColIdx(cols, 'database')] ?? database),
+    tableName: String(row[purgeColIdx(cols, 'table')] ?? table),
+    scheduledTime: String(row[purgeColIdx(cols, 'scheduled')] ?? ''),
+  };
 }
 
 // ============================================================
