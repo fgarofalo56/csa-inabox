@@ -39,6 +39,7 @@ import {
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
 import { LoadToTableWizard } from './components/load-to-table-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -269,12 +270,24 @@ export function LakehouseEditor({ item, id }: Props) {
     sparkConfig?: Record<string, string>;
     timeTravelDays?: number;
     deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
+    liquidClustering?: { tableName: string; columns: string[] };
+    fabricToggles?: { vorder: boolean; autotune: boolean; nativeExecution: boolean };
   }
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LakehouseSettings>({});
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSparkConfText, setSettingsSparkConfText] = useState('');
+  // Liquid-clustering form state (Fabric F12 parity → real ALTER TABLE … CLUSTER BY)
+  const [lcTableName, setLcTableName] = useState('');
+  const [lcColumns, setLcColumns] = useState('');          // comma-separated input
+  const [lcApplied, setLcApplied] = useState<boolean | null>(null);
+  const [lcSql, setLcSql] = useState<string | null>(null);
+  const [lcGate, setLcGate] = useState<string | null>(null);
+  const [lcError, setLcError] = useState<string | null>(null);
+  // Cloud boundary (commercial | gcc | gcch | il5) — drives honest per-cloud
+  // disclosures for the Fabric-only acceleration gates.
+  const [cloud, setCloud] = useState<'commercial' | 'gcc' | 'gcch' | 'il5'>('commercial');
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
@@ -630,11 +643,15 @@ export function LakehouseEditor({ item, id }: Props) {
     setSettingsBusy(true); setSettingsError(null);
     try {
       const r = await fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Load settings');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
+      if (j.cloud) setCloud(j.cloud);
       const cfg = j.settings?.sparkConfig || {};
       setSettingsSparkConfText(Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join('\n'));
+      setLcTableName(j.settings?.liquidClustering?.tableName || '');
+      setLcColumns((j.settings?.liquidClustering?.columns || []).join(', '));
+      setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
@@ -664,6 +681,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const saveSettings = useCallback(async () => {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
+    setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
     try {
       const sparkConfig: Record<string, string> = {};
       for (const line of settingsSparkConfText.split(/\r?\n/)) {
@@ -671,6 +689,10 @@ export function LakehouseEditor({ item, id }: Props) {
         const idx = t.indexOf('=');
         if (idx > 0) sparkConfig[t.slice(0, idx).trim()] = t.slice(idx + 1).trim();
       }
+      const trimmedTable = lcTableName.trim();
+      const liquidClustering = trimmedTable
+        ? { tableName: trimmedTable, columns: lcColumns.split(',').map((c) => c.trim()).filter(Boolean) }
+        : undefined;
       const r = await fetch(`/api/lakehouse/settings`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -681,16 +703,28 @@ export function LakehouseEditor({ item, id }: Props) {
           sparkConfig,
           timeTravelDays: settings.timeTravelDays ?? 7,
           deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
+          liquidClustering,
+          fabricToggles: settings.fabricToggles,
         }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Save settings');
+      const j = await parseJsonOrError<{
+        ok: boolean; error?: string; settings?: LakehouseSettings;
+        clusteringApplied?: boolean; clusteringSql?: string;
+        clusteringGate?: string; clusteringError?: string;
+      }>(r, 'Save settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || settings);
+      setLcApplied(j.clusteringApplied ?? null);
+      setLcSql(j.clusteringSql || null);
+      setLcGate(j.clusteringGate || null);
+      setLcError(j.clusteringError || null);
       setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
-      setSettingsOpen(false);
+      // Keep the dialog open when clustering needs the user's attention (gate or
+      // error) so the MessageBar is visible; otherwise close as before.
+      if (!j.clusteringGate && !j.clusteringError) setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, settings, settingsSparkConfText]);
+  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns]);
 
   // ---- reference lakehouses: load / mutate / browse / preview ---------
   const loadReferences = useCallback(async () => {
@@ -2692,14 +2726,141 @@ export function LakehouseEditor({ item, id }: Props) {
                       label={settings.deltaDefaults?.autoOptimize ?? true ? 'Enabled' : 'Disabled'}
                     />
                   </Field>
-                  <Field label="Spark conf (one KEY=VALUE per line)">
+
+                  {/* ---- Liquid clustering (Fabric F12 parity → real ALTER TABLE … CLUSTER BY) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>Liquid clustering</Subtitle2>
+                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                    <MessageBarBody>
+                      Liquid clustering replaces static partitioning and ZORDER. On save, Loom runs a
+                      real <code>ALTER TABLE delta.`abfss://…` CLUSTER BY (&lt;columns&gt;)</code> on the
+                      named Delta table via a Databricks SQL Warehouse — no Fabric dependency. Run{' '}
+                      <code>OPTIMIZE</code> in a notebook afterward to re-cluster existing rows. Requires{' '}
+                      <strong>LOOM_DATABRICKS_HOSTNAME</strong> to be set.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Field label="Table to cluster" hint="Delta table under /Tables/ in this container.">
+                    {(() => {
+                      const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                      const liveNames = Array.isArray(listing)
+                        ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
+                        : [];
+                      const bundleNames = bundleDeltaTables.map((t) => t.name);
+                      const allNames = Array.from(new Set([...liveNames, ...bundleNames])).sort();
+                      if (allNames.length > 0) {
+                        return (
+                          <Dropdown
+                            selectedOptions={lcTableName ? [lcTableName] : []}
+                            value={lcTableName}
+                            placeholder="Select a Delta table"
+                            onOptionSelect={(_, d) => setLcTableName(d.optionValue || '')}
+                          >
+                            {allNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                          </Dropdown>
+                        );
+                      }
+                      return (
+                        <Input
+                          value={lcTableName}
+                          onChange={(_, d) => setLcTableName(d.value)}
+                          placeholder="bronze_player_profile"
+                        />
+                      );
+                    })()}
+                  </Field>
+                  <Field label="Clustering columns" hint="Comma-separated, e.g. player_id, filing_timestamp. Order does not matter.">
+                    <Input
+                      value={lcColumns}
+                      onChange={(_, d) => setLcColumns(d.value)}
+                      placeholder="player_id, filing_timestamp"
+                    />
+                  </Field>
+                  {lcGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody><MessageBarTitle>Liquid clustering gate</MessageBarTitle>{lcGate}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {lcError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>ALTER TABLE failed</MessageBarTitle>{lcError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {lcApplied && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>
+                        <MessageBarTitle>Clustering applied</MessageBarTitle>
+                        ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
+                        {lcSql ? <><br /><code style={{ fontSize: 11 }}>{lcSql}</code></> : null}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ---- Fabric-only acceleration (honest gate, F22) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>Fabric-only acceleration (honest gate)</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.vorder ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: d.checked, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
+                      label="V-Order (spark.sql.parquet.vorder.default)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        V-Order is a write-time Parquet layout optimization available exclusively on Fabric
+                        Spark runtimes. On the Azure-native path (Synapse Spark / Databricks), OPTIMIZE runs
+                        standard Delta compaction without V-Order encoding — this toggle is persisted but has
+                        no effect on Azure.{cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.autotune ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: d.checked, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
+                      label="Autotune (spark.ms.autotune.enabled)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        Autotune is a Fabric ML-based query optimizer compatible only with Fabric Runtime 1.2.
+                        The key <code>spark.ms.autotune.enabled</code> is silently ignored on Azure Synapse
+                        Spark pools and Databricks clusters.{cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.nativeExecution ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: d.checked } }))}
+                      label="Native execution engine (Velox / Apache Gluten)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        The native execution engine (Velox + Apache Gluten vectorized C++) is exclusive to
+                        Fabric Spark Runtime 1.3 and 2.0 — enabled at the Fabric capacity/runtime layer, not
+                        via a Spark config key. It has no effect on Azure Synapse Spark or Databricks. This
+                        toggle records intent for when the lakehouse is accessed from a Fabric Spark session.
+                        {cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+
+                  <Field
+                    label="Spark conf (one KEY=VALUE per line)"
+                    hint="Keys under spark.ms.* or spark.sql.parquet.vorder.* are Fabric-only and have no effect on the Azure-native Spark path."
+                  >
                     <Textarea
                       rows={6}
                       value={settingsSparkConfText}
                       onChange={(_, d) => setSettingsSparkConfText(d.value)}
-                      placeholder="spark.sql.shuffle.partitions=200"
+                      placeholder={'spark.sql.shuffle.partitions=200\nspark.executor.memory=4g'}
                     />
                   </Field>
+                  {sparkConfigWarnings(settingsSparkConfText).map((w, i) => (
+                    <MessageBar key={`${w.intent}-${i}`} intent={w.intent}>
+                      <MessageBarBody><MessageBarTitle>{w.title}</MessageBarTitle>{w.body}</MessageBarBody>
+                    </MessageBar>
+                  ))}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>

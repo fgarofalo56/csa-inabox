@@ -69,3 +69,27 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 - Reference Lakehouses (F8) → `/api/lakehouse/references` (GET list + workspace picker, POST add/remove) over Cosmos `items` (`state.referencedLakehouseIds`, validated to the same workspace to prevent reference-injection); `/api/lakehouse/references/paths` (GET only — read-only ADLS `listPaths` with optional `state.storageAccount`); read-only preview via `/api/lakehouse/preview?...&account=` (account-scoped OPENROWSET, validated `^[a-z0-9]{3,24}$`). Cross-account references require the Console UAMI to hold **Storage Blob Data Reader** on the referenced storage account — see `docs/fiab/v3-tenant-bootstrap.md#reference-lakehouse-cross-account-rbac`. Same-account references work out of the box (the UAMI already holds Storage Blob Data Contributor on the primary LOOM ADLS account).
 
 Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**
+
+## Settings — table optimization & acceleration (F12 / F22)
+
+Source UI: Fabric Lakehouse table maintenance + Spark/Delta optimization —
+https://learn.microsoft.com/azure/databricks/delta/clustering ·
+https://learn.microsoft.com/fabric/data-engineering/delta-optimization-and-v-order ·
+https://learn.microsoft.com/fabric/data-engineering/autotune ·
+https://learn.microsoft.com/fabric/data-engineering/native-execution-engine-overview
+
+Route: `apps/fiab-console/app/api/lakehouse/settings/route.ts` · Editor Settings dialog: `apps/fiab-console/lib/editors/lakehouse-editor.tsx` · Validation: `apps/fiab-console/lib/editors/lakehouse-spark-conf.ts`
+
+| # | Capability | Status | Backend / disclosure |
+|---|---|---|---|
+| F12 | **Liquid clustering** — pick clustering columns for a Delta table | ✅ | Real `ALTER TABLE delta.\`abfss://…/Tables/<t>\` CLUSTER BY (<cols>)` via a Databricks SQL Warehouse (`executeStatement`). Azure-native, no Fabric. Table picker enumerated from the live `/Tables/` listing (+ bundle tables) — no freeform unless empty. Honest gate when `LOOM_DATABRICKS_HOSTNAME` unset / no warehouse exists; columns persist to Cosmos either way. Success MessageBar echoes the exact SQL and reminds to run `OPTIMIZE`. |
+| F22a | **V-Order** toggle (`spark.sql.parquet.vorder.default`) | ⚠️ honest-gate | Persists preference to Cosmos. `MessageBar intent="warning"` states it is Fabric-Spark-only and that the Azure path (Synapse Spark / Databricks `OPTIMIZE`) runs standard Delta compaction without V-Order. No false "enabled-on-Azure" claim. |
+| F22b | **Autotune** toggle (`spark.ms.autotune.enabled`) | ⚠️ honest-gate | Persists preference. Warning MessageBar: Fabric Runtime 1.2 only; key silently ignored on Synapse Spark / Databricks. |
+| F22c | **Native execution engine** (Velox / Apache Gluten) | ⚠️ honest-gate | Persists preference. Warning MessageBar: Fabric Runtime 1.3 / 2.0 only; enabled at the capacity/runtime layer, not via a Spark config key. |
+| F22d | **sparkConfig typo validation** | ✅ | `sparkConfigWarnings()` flags common typos (missing `spark.sql.` prefix, `BroadCast` casing, abbreviated `mem`, `enable`→`enabled`, legacy `vorder.enable`) as errors with the correct key + hint, and flags Fabric-only keys (`spark.ms.*`, `spark.sql.parquet.vorder.*`) as warnings. Unit-tested (`lib/editors/__tests__/lakehouse-spark-conf.test.ts`). |
+
+Per-cloud honesty: the GET response returns the cloud boundary (commercial / gcc / gcch / il5, inferred from `AZURE_AUTHORITY_HOST` + `LOOM_GCCH`/`LOOM_IL5`); in GCC/GCC-High/IL5 the Fabric-only toggles append a note that there is no Fabric F-SKU / Fabric Spark path in that cloud so the preference has no runtime effect anywhere.
+
+Bicep: `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` (optional warehouse pin, blank → first RUNNING warehouse) added to `platform/fiab/bicep/modules/admin-plane/main.bicep`. Liquid clustering reuses the already-deployed `LOOM_DATABRICKS_HOSTNAME` + Console UAMI Databricks workspace access.
+
+Grade: **A+ (liquid clustering hits a real Databricks DDL backend; the three Fabric-only accelerators are honest persisted-preference gates with precise warning MessageBars — never a fake Azure "enabled"; sparkConfig validation is unit-tested; bicep-synced).**
