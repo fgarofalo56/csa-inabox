@@ -270,3 +270,40 @@ export function canAddTypeAtLevel(root: PipelineActivity[], path: DrillPath, chi
 export function canDrillInto(container: PipelineActivity): boolean {
   return isContainerType(container.type);
 }
+
+/**
+ * Pop one step off the drill path — Fabric's keyboard spec maps Backspace to
+ * "Return to previous canvas" (Learn: data-factory/keyboard-shortcuts). Safe on
+ * an empty path (stays empty).
+ */
+export function popDrill(path: DrillPath): DrillPath {
+  return path.slice(0, -1);
+}
+
+/** One branch's content for the inline mini-preview inside a container node. */
+export interface MiniPreviewSection {
+  /** Branch label as shown in the breadcrumb (e.g. 'Activities', 'True'). */
+  label: string;
+  /** The (capped) inner activities to render as mini tiles. */
+  activities: PipelineActivity[];
+  /** Total count in this branch (may exceed the sliced `activities` length). */
+  totalCount: number;
+}
+
+/**
+ * Return the branch sections for the inline mini-preview rendered inside a
+ * container node — Fabric's "updated canvas experience" shows a summary of a
+ * container's inner activities directly on the parent canvas (Learn:
+ * data-factory/pipeline-canvas-experience). Caps each branch at `limit` items;
+ * the caller shows "+N more" when totalCount exceeds the slice. Non-container
+ * activities yield no sections.
+ */
+export function miniPreviewSections(
+  activity: PipelineActivity,
+  limit = 3,
+): MiniPreviewSection[] {
+  return branchesOf(activity).map((b) => {
+    const all = readBranchActivities(activity, b.branch);
+    return { label: b.label, activities: all.slice(0, limit), totalCount: all.length };
+  });
+}

@@ -38,6 +38,9 @@ param workspaceId string
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
+@description('DLZ ADLS Gen2 storage account NAME (same RG). When set, the ADF system-assigned MI is granted Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
+param adlsAccountName string = ''
+
 // =====================================================================
 // Data Factory
 // =====================================================================
@@ -51,6 +54,28 @@ resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
     publicNetworkAccess: 'Disabled'
   }
 }
+
+// ---------------------------------------------------------------------
+// HDInsight pipeline activities (F17) — Hive / Spark / MapReduce / Streaming
+//
+// ADF natively executes all four HDInsight activity types at this factory's
+// api-version (2018-06-01); no extra factory config is required to *run* them.
+// They target an `AzureHDInsight` linked service that names a cluster. The
+// cluster is NOT provisioned here — HDInsight clusters are long-lived and
+// cost-significant, so they are stood up out-of-band by the operator. To wire
+// the activities up:
+//   1. Provision (or reuse) an Azure HDInsight cluster, VNet-injected into the
+//      spoke so this private-only factory can reach it.
+//   2. In the Loom console: Manage -> Linked services -> New -> Azure HDInsight,
+//      pointing at that cluster.
+//   3. Set the admin-plane param `loomHdinsightLinkedService` (env vars
+//      LOOM_HDINSIGHT_LINKED_SERVICE + NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE)
+//      to that linked-service name so new activities pre-fill the cluster.
+//   When unset, the four activities render fully but show an honest MessageBar
+//   gate naming LOOM_HDINSIGHT_LINKED_SERVICE (no Fabric dependency anywhere).
+//   For on-demand HDInsight clusters, also grant the Console UAMI the
+//   "HDInsight Cluster Operator" role on the cluster resource.
+// ---------------------------------------------------------------------
 
 // =====================================================================
 // Private endpoint
@@ -103,6 +128,28 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 }
 
 // =====================================================================
+// RBAC — ADF system-assigned MI → Storage Blob Data Contributor on the DLZ
+// ADLS Gen2 account (built-in role: ba92f5b4-2d11-453d-a403-e96b0029c9fe).
+// Required so Dataflow Gen2 (WranglingDataFlow) can write its Parquet/CSV
+// sink to ADLS via the factory MI. Scoped to the storage account; assumes
+// it lives in this RG (the DLZ orchestrator passes its name).
+// =====================================================================
+
+resource adlsAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(adlsAccountName)) {
+  name: empty(adlsAccountName) ? 'placeholder' : adlsAccountName
+}
+
+resource adfAdlsBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adlsAccountName)) {
+  scope: adlsAccount
+  name: guid(adf.id, adlsAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  properties: {
+    principalId: adf.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  }
+}
+
+// =====================================================================
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
@@ -111,6 +158,11 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'diag-loom-stdz'
   properties: {
     workspaceId: workspaceId
+    // Resource-specific (Dedicated) mode routes ADF diagnostic logs into the
+    // typed ADFPipelineRun / ADFActivityRun tables instead of the legacy
+    // AzureDiagnostics catch-all. The Output-pane Log Analytics fallback
+    // (runs older than ADF's 45-day native window) queries these typed tables.
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       { category: 'ActivityRuns',  enabled: true }
       { category: 'PipelineRuns',  enabled: true }
