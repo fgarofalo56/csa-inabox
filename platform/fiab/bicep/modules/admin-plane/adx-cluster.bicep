@@ -52,6 +52,12 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
     enableDiskEncryption: true
     enableDoubleEncryption: false
     enableStreamingIngest: true
+    // enablePurge: required for `.purge table records` (GDPR / right-to-be-
+    // forgotten erasure). The .purge command targets the Data Management
+    // endpoint (ingest-<cluster>.<region>.kusto.windows.net), not the data
+    // endpoint, and requires Database Admin on the target database. The Console
+    // UAMI holds AllDatabasesAdmin (granted via az kusto
+    // cluster-principal-assignment create; see docs/fiab/v3-tenant-bootstrap.md).
     enablePurge: true
     enableAutoStop: true
     publicNetworkAccess: 'Enabled'

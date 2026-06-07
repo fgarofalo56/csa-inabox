@@ -827,6 +827,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Each prefers a reused existing<Service> (any RG/sub) over the
             // provisioned module output, and is '' when neither → honest gate.
             { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
+            // Data Management (ingestion) endpoint — REQUIRED for `.purge table
+            // records` (GDPR erasure); the engine endpoint rejects purge. Prefer
+            // the ARM clusterDataIngestionUri; for a reused cluster derive the
+            // ingest-* host. kusto-client falls back to prepending `ingest-` to
+            // the cluster URI when this is unset.
+            { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
