@@ -34,6 +34,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'airflow-job':          reg(() => import('./airflow-job-editor'),       'AirflowJobEditor'),
   'spark-job-definition': reg(() => import('./phase2-misc-editors'),      'SparkJobDefinitionEditor'),
   'environment':          reg(() => import('./phase2-misc-editors'),      'EnvironmentEditor'),
+  'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
   'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
 

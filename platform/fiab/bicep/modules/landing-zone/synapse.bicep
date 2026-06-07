@@ -167,7 +167,11 @@ resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (
     }
     sparkVersion: sparkPoolSparkVersion
     isComputeIsolationEnabled: false
-    sessionLevelPackagesEnabled: false
+    // Session-level packages MUST be enabled so the spark-environment item
+    // (F18) can install pip/conda packages at session scope and bake
+    // libraryRequirements onto the pool on publish. The Loom console flips
+    // this on publish too, but enabling it here avoids a first-publish race.
+    sessionLevelPackagesEnabled: true
     dynamicExecutorAllocation: {
       enabled: true
       minExecutors: 1
