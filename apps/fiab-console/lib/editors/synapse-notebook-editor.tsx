@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip, Input, Link,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip, Input, Link, Switch,
   Tree, TreeItem, TreeItemLayout, Dropdown, Option,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
@@ -51,6 +51,19 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
+import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
+
+/** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
+interface AmlScheduleRow {
+  name: string;
+  displayName?: string;
+  isEnabled: boolean;
+  provisioningState?: string;
+  frequency?: string;
+  interval?: number;
+  startTime?: string;
+  timeZone?: string;
+}
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -299,6 +312,63 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // New-notebook name field.
   const [newName, setNewName] = useState('');
+
+  // ── Notebook scheduling (AML job schedules — recurrence only) ───────────────
+  const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false);
+  const [schedules, setSchedules] = useState<AmlScheduleRow[]>([]);
+  const [schedulesConfigured, setSchedulesConfigured] = useState<boolean | null>(null);
+  const [scheduleGateHint, setScheduleGateHint] = useState<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const refreshSchedules = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`);
+      const j = await r.json();
+      if (j?.configured === false) {
+        setSchedulesConfigured(false);
+        setScheduleGateHint(j.hint || null);
+        setSchedules([]);
+      } else if (j?.ok) {
+        setSchedulesConfigured(true);
+        setScheduleGateHint(null);
+        setSchedules(j.schedules || []);
+      }
+    } catch { /* leave prior state — non-fatal */ }
+  }, [id]);
+  useEffect(() => { refreshSchedules(); }, [refreshSchedules]);
+
+  const createSchedule = useCallback(async (params: ScheduleCreateParams) => {
+    setScheduleBusy(true); setScheduleError(null);
+    try {
+      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const j = await r.json();
+      if (j?.configured === false) { setScheduleError(j?.hint || 'Notebook scheduling not configured'); return; }
+      if (!j?.ok) { setScheduleError(j?.error || 'Create failed'); return; }
+      setScheduleWizardOpen(false);
+      setBanner({ intent: 'success', text: `Schedule "${j.schedule?.displayName || j.schedule?.name}" created — every ${j.schedule?.interval} ${String(j.schedule?.frequency || '').toLowerCase()}.` });
+      await refreshSchedules();
+    } catch (e: any) {
+      setScheduleError(e?.message || String(e));
+    } finally { setScheduleBusy(false); }
+  }, [id, refreshSchedules]);
+
+  const toggleSchedule = useCallback(async (scheduleName: string, isEnabled: boolean) => {
+    try {
+      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scheduleName, isEnabled }),
+      });
+      const j = await r.json();
+      if (j?.ok) await refreshSchedules();
+      else setBanner({ intent: 'error', text: j?.error || j?.hint || 'Schedule update failed' });
+    } catch (e: any) {
+      setBanner({ intent: 'error', text: e?.message || String(e) });
+    }
+  }, [id, refreshSchedules]);
 
   // Lightweight client-side schema hint for the per-cell AI assist (F21). The
   // server route grounds primarily on T2 env (bronze/silver/gold) + Synapse
@@ -726,6 +796,9 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         { label: 'Delete', onClick: openName ? deleteOpen : undefined, disabled: !openName },
         { label: 'Refresh', onClick: refreshList },
       ]},
+      { label: 'Scheduling', actions: [
+        { label: 'Schedule', onClick: openName ? () => setScheduleWizardOpen(true) : undefined, disabled: !openName, title: !openName ? 'Open a notebook first' : 'Create a recurrence schedule (Azure ML job schedule)' },
+      ]},
     ]},
   ], [openName, attachedCompute, backend, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList]);
 
@@ -947,6 +1020,67 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
               ))}
             </div>
           )}
+
+          {/* ── Notebook schedules (AML job schedules) ───────────────────────── */}
+          {!gate && schedulesConfigured === false && scheduleGateHint && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Notebook scheduling not configured</MessageBarTitle>
+                {scheduleGateHint} Bicep: <code>platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep</code>.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={refreshSchedules}>Re-check</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {!gate && schedulesConfigured && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Caption1>Schedules ({schedules.length})</Caption1>
+                <Button size="small" appearance="subtle" onClick={refreshSchedules}>Refresh</Button>
+              </div>
+              {schedules.length === 0 ? (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  No schedules — click <strong>Schedule</strong> in the ribbon to create one.
+                </Caption1>
+              ) : (
+                <Table size="extra-small" aria-label="Notebook schedules">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>Recurrence</TableHeaderCell>
+                      <TableHeaderCell>Start</TableHeaderCell>
+                      <TableHeaderCell>State</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {schedules.map((sc) => (
+                      <TableRow key={sc.name}>
+                        <TableCell>{sc.displayName || sc.name}</TableCell>
+                        <TableCell>Every {sc.interval ?? 1} {String(sc.frequency || '').toLowerCase()}</TableCell>
+                        <TableCell>{sc.startTime ? new Date(sc.startTime).toLocaleString() : '—'}</TableCell>
+                        <TableCell>
+                          <Switch
+                            label={sc.isEnabled ? 'Enabled' : 'Disabled'}
+                            checked={sc.isEnabled}
+                            onChange={(_, d) => toggleSchedule(sc.name, d.checked)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )}
+
+          <ScheduleWizard
+            open={scheduleWizardOpen}
+            onClose={() => { setScheduleWizardOpen(false); setScheduleError(null); }}
+            onCreate={createSchedule}
+            busy={scheduleBusy}
+            error={scheduleError}
+          />
         </div>
       }
     />
