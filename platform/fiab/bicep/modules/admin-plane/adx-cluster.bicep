@@ -45,6 +45,19 @@ param skuTier string = 'Basic'
 @description('Capacity (instance count). 1 for Dev SKUs.')
 param skuCapacity int = 1
 
+@description('Enable optimized auto-scale on the cluster. Must be false for Dev(No SLA)/Basic-tier SKUs (ARM rejects optimizedAutoscale on Basic tier).')
+param enableOptimizedAutoscale bool = false
+
+@description('Optimized auto-scale minimum instance count. Ignored when enableOptimizedAutoscale is false.')
+@minValue(2)
+@maxValue(1000)
+param autoscaleMinimum int = 2
+
+@description('Optimized auto-scale maximum instance count. Ignored when enableOptimizedAutoscale is false.')
+@minValue(2)
+@maxValue(1000)
+param autoscaleMaximum int = 10
+
 @description('LAW resource id for diagnostic settings.')
 param workspaceId string
 
@@ -68,6 +81,15 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
     enablePurge: true
     enableAutoStop: true
     publicNetworkAccess: 'Enabled'
+    // Optimized auto-scale — null when disabled (Dev/Basic SKUs reject it).
+    // version is always 1 per the ARM schema. Mirrors the runtime ARM PATCH
+    // surfaced in the Eventhouse editor (Manage › Auto-scale).
+    optimizedAutoscale: enableOptimizedAutoscale ? {
+      isEnabled: true
+      minimum: autoscaleMinimum
+      maximum: autoscaleMaximum
+      version: 1
+    } : null
   }
 }
 
