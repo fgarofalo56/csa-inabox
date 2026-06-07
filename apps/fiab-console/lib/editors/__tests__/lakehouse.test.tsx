@@ -23,6 +23,10 @@ describe('LakehouseEditor', () => {
           { name: 'Tables', isDirectory: true, size: 0 },
         ],
       }),
+      '/api/lakehouse/schemas': () => ({
+        ok: true,
+        schemas: [{ id: 'lh-1::dbo', lakehouseId: 'lakehouse-fixture', name: 'dbo', isDefault: true, status: 'active' }],
+      }),
     });
   });
   afterEach(() => { vi.restoreAllMocks(); });
@@ -37,7 +41,7 @@ describe('LakehouseEditor', () => {
     expect(screen.getAllByRole('button', { name: /Refresh/i }).length).toBeGreaterThan(0);
   });
 
-  it('renders the Files / Tables / Preview / SQL / Shortcuts tab strip', async () => {
+  it('renders the Files / Tables / Schemas / Preview / SQL / Shortcuts tab strip', async () => {
     render(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-1" />);
     await waitFor(() => {
       expect(screen.getAllByText('lakehouse-fixture').length).toBeGreaterThan(0);
@@ -47,12 +51,12 @@ describe('LakehouseEditor', () => {
     // tab appears twice in the DOM (both aria-selected). That is a cosmetic
     // render artifact, not two real tabs — assert each tab label is present
     // (>=1) rather than requiring exactly one, so the strip's real contents
-    // (Files / Tables / Preview / SQL / Shortcuts) are still verified.
-    for (const name of ['Files', 'Tables', 'Preview', 'SQL', 'Shortcuts']) {
+    // (Files / Tables / Schemas / Preview / SQL / Shortcuts) are still verified.
+    for (const name of ['Files', 'Tables', 'Schemas', 'Preview', 'SQL', 'Shortcuts']) {
       expect(screen.getAllByRole('tab', { name }).length).toBeGreaterThan(0);
     }
-    // The non-selected tabs render exactly once; the strip exposes 5 distinct
-    // tab labels, so there are at least 5 tab elements total.
-    expect(screen.getAllByRole('tab').length).toBeGreaterThanOrEqual(5);
+    // The non-selected tabs render exactly once; the strip exposes 6 distinct
+    // tab labels, so there are at least 6 tab elements total.
+    expect(screen.getAllByRole('tab').length).toBeGreaterThanOrEqual(6);
   });
 });

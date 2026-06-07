@@ -20,6 +20,9 @@ vi.mock('@/lib/azure/shortcut-engines', () => ({
   resolveAndTestAdls: vi.fn(),
   createTablesShortcut: vi.fn(),
   dropShortcutObject: vi.fn(),
+  dropExternalBinding: vi.fn(),
+  dropDeltaSharingCredential: vi.fn(),
+  bindExternalSource: vi.fn(),
   externalSourceGate: vi.fn(() => null),
 }));
 
@@ -29,7 +32,7 @@ import {
   listShortcuts, createShortcut, deleteShortcut, getShortcut,
 } from '@/lib/azure/lakehouse-shortcuts';
 import {
-  resolveAndTestAdls, createTablesShortcut, dropShortcutObject, externalSourceGate,
+  resolveAndTestAdls, createTablesShortcut, dropShortcutObject, externalSourceGate, bindExternalSource,
 } from '@/lib/azure/shortcut-engines';
 
 function getReq(qs: string) { return { nextUrl: new URL(`http://x/api/lakehouse/shortcuts?${qs}`) } as any; }
@@ -110,6 +113,35 @@ describe('POST /api/lakehouse/shortcuts', () => {
     const j = await res.json();
     expect(j.ok).toBe(false);
     expect(j.code).toBe('needs_credential');
+  });
+  it('honest-gates a Delta Sharing source with no credential (503)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (externalSourceGate as any).mockReturnValue({ gated: true, code: 'needs_credential', hint: 'store the Delta Sharing credential file' });
+    const res = await POST(postReq({
+      lakehouseId: 'lh', name: 'ds', kind: 'files', targetType: 'delta_sharing',
+      targetUri: 'delta-sharing://share/schema/table',
+    }));
+    expect(res.status).toBe(503);
+    const j = await res.json();
+    expect(j.code).toBe('needs_credential');
+  });
+  it('creates a Delta Sharing Files shortcut via bindExternalSource', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (bindExternalSource as any).mockResolvedValue({
+      readUri: 'delta-sharing://share/schema/table',
+      deltaSharing: { profile: { endpoint: 'https://x/', bearerToken: 't' }, share: 'share', schema: 'schema', table: 'table' },
+    });
+    (createShortcut as any).mockImplementation(async (d: any) => ({ ...d, id: 'lh:files::ds', fullPath: 'Files/ds', status: 'active' }));
+    const res = await POST(postReq({
+      lakehouseId: 'lh', name: 'ds', kind: 'files', targetType: 'delta_sharing',
+      targetUri: 'delta-sharing://share/schema/table',
+      credentialRef: { kind: 'deltaSharing', keyVaultSecret: 'ds-cred' },
+    }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(true);
+    expect(j.data.targetType).toBe('delta_sharing');
+    expect(bindExternalSource).toHaveBeenCalledTimes(1);
   });
 });
 

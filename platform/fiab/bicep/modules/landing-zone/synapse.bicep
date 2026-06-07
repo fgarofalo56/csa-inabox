@@ -71,6 +71,12 @@ param deployDedicatedPool bool = true
 
 // Spark pool — required for Notebook editor (Loom-native notebook execution
 // dispatches to either this Spark pool via Livy or to a Databricks cluster).
+// Also powers the Lakehouse "Load to Table" wizard (F6): it submits a PySpark
+// Livy job that reads a CSV/Parquet/JSON file and writes a managed Delta table
+// under the container's Tables/ folder. That job runs under the Synapse
+// workspace MSI, which the synapseStorageRbac module below grants Storage Blob
+// Data Contributor on the default ADLS (the Hive metastore warehouse path).
+// Keep deploySparkPool=true for the wizard to have a compute target.
 // Auto-pause keeps idle cost low.
 @description('Deploy the loompool Spark pool used by notebook + spark-job editors.')
 param deploySparkPool bool = true
@@ -88,6 +94,9 @@ param sparkPoolSparkVersion string = '3.4'
 @minValue(5)
 @maxValue(10080)
 param sparkPoolAutoPauseDelay int = 15
+
+@description('Enable compute isolation on the Spark pool. Required for IL5 (dedicated physical hosts); incurs additional cost. Leave false for Commercial/GCC.')
+param sparkPoolIsolatedCompute bool = false
 
 @description('Dedicated SQL pool name (must match a SQL identifier; no dashes).')
 param dedicatedPoolName string = 'loompool'
@@ -166,8 +175,12 @@ resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (
       delayInMinutes: sparkPoolAutoPauseDelay
     }
     sparkVersion: sparkPoolSparkVersion
-    isComputeIsolationEnabled: false
-    sessionLevelPackagesEnabled: false
+    isComputeIsolationEnabled: sparkPoolIsolatedCompute
+    // Session-level packages MUST be enabled so the spark-environment item
+    // (F18) can install pip/conda packages at session scope and bake
+    // libraryRequirements onto the pool on publish. The Loom console flips
+    // this on publish too, but enabling it here avoids a first-publish race.
+    sessionLevelPackagesEnabled: true
     dynamicExecutorAllocation: {
       enabled: true
       minExecutors: 1
@@ -302,6 +315,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
   params: {
     defaultStorageAccountName: defaultStorageAccountName
     synapseManagedIdentityPrincipalId: synapseWs.identity.principalId
+    // Console UAMI gets Storage Blob Data Reader on the lakehouse SA so the BFF
+    // live Tables catalog scan can read _delta_log without Contributor.
+    consolePrincipalId: skipRoleGrants ? '' : consolePrincipalId
   }
 }
 
@@ -347,6 +363,51 @@ for role in "${ROLES[@]}"; do
 done
 '''
   }
+}
+
+// Grant the Loom Console UAMI the Synapse data-plane role "Synapse Compute
+// Operator" scoped to the loompool Spark pool so it can submit Livy interactive
+// sessions + notebook statements (F16 — per-cell execution). This is a Synapse
+// RBAC role (data plane), NOT an ARM IAM role — it must be applied via
+// `az synapse role assignment create`, not Microsoft.Authorization/roleAssignments.
+//
+// Synapse Compute Operator allows the UAMI to: submit + cancel Spark jobs /
+// notebooks and view pool logs. It does NOT grant artifact publish/delete or
+// SQL pool access (those stay with Synapse Administrator / SQL admin).
+//
+// Requires synapseRoleAssignmentUamiId to already hold Synapse Administrator
+// (the same prerequisite as roleAssignmentScript above).
+resource consoleSparkSubmitRoleScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (!empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants) {
+  name: 'assign-console-spark-submit-${domainName}'
+  location: location
+  tags: complianceTags
+  kind: 'AzureCLI'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${synapseRoleAssignmentUamiId}': {}
+    }
+  }
+  properties: {
+    azCliVersion: '2.64.0'
+    retentionInterval: 'PT1H'
+    timeout: 'PT15M'
+    arguments: '${synapseWs.name} ${consolePrincipalId} ${sparkPoolName}'
+    scriptContent: '''
+WORKSPACE=$1
+PRINCIPAL=$2
+POOL=$3
+echo "Assigning 'Synapse Compute Operator' to SP $PRINCIPAL on $WORKSPACE/bigDataPools/$POOL..."
+az synapse role assignment create \
+  --workspace-name "$WORKSPACE" \
+  --role "Synapse Compute Operator" \
+  --assignee-object-id "$PRINCIPAL" \
+  --assignee-principal-type ServicePrincipal \
+  --scope "workspaces/${WORKSPACE}/bigDataPools/${POOL}" \
+  || echo "  (already assigned or insufficient permissions — verify manually)"
+'''
+  }
+  dependsOn: [ sparkPool ]
 }
 
 // =====================================================================
@@ -517,3 +578,4 @@ output dedicatedPoolName string = deployDedicatedPool ? dedicatedPool.name : ''
 output dedicatedPoolId string = deployDedicatedPool ? dedicatedPool.id : ''
 output sparkPoolName string = deploySparkPool ? sparkPool.name : ''
 output sparkPoolId string = deploySparkPool ? sparkPool.id : ''
+output consoleSparkSubmitRoleAssigned bool = !empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
