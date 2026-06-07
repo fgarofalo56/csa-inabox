@@ -51,7 +51,11 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  // Gov clouds (GCC-High / DoD) issue AOAI tokens for the .us audience; commercial
+  // uses .com. LOOM_AOAI_AUDIENCE is set per-cloud by admin-plane/main.bicep.
+  const audience = process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com';
+  const scope = `${audience.replace(/\/+$/, '')}/.default`;
+  const t = await credential.getToken(scope);
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }
