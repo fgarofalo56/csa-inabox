@@ -550,6 +550,17 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
     { metric: 'TotalCalls', aggregation: 'Total', label: 'Total calls' },
     { metric: 'TotalTokens', aggregation: 'Total', label: 'Total tokens' },
   ],
+  // Azure Stream Analytics streaming jobs — the headline health metrics the
+  // ASA portal Overview surfaces (SU% utilization, watermark delay, backlog).
+  // Metrics are only emitted while the job is Running.
+  // https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-streamanalytics-streamingjobs-metrics
+  'microsoft.streamanalytics/streamingjobs': [
+    { metric: 'ResourceUtilization', aggregation: 'Average', label: 'SU % Utilization' },
+    { metric: 'OutputWatermarkDelaySeconds', aggregation: 'Maximum', label: 'Watermark Delay (s)' },
+    { metric: 'InputEventsSourcesBacklogged', aggregation: 'Maximum', label: 'Backlogged Events' },
+    { metric: 'InputEvents', aggregation: 'Total', label: 'Input Events' },
+    { metric: 'OutputEvents', aggregation: 'Total', label: 'Output Events' },
+  ],
 };
 
 /** Metrics catalog entries for a resource type (lower-cased lookup). */
