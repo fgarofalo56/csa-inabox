@@ -309,6 +309,9 @@ param defaultStorageResourceGroup string = resourceGroup().name
 @description('Grant the Synapse workspace MSI Storage Blob Data Contributor on the default SA (needed for Spark Hive metastore). Disable only if granted out-of-band.')
 param grantSynapseStorageRole bool = true
 
+@description('Shared ADX cluster system-assigned MI principal id. When set, granted Storage Blob Data Reader on the lakehouse storage account so the Eventhouse Delta-endpoint (.create external table kind=delta) can read this lakehouse over managed identity. Empty = skip.')
+param adxClusterPrincipalId string = ''
+
 module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorageRole && !skipRoleGrants) {
   name: 'synapse-storage-rbac-${domainName}'
   scope: resourceGroup(defaultStorageResourceGroup)
@@ -318,6 +321,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // Console UAMI gets Storage Blob Data Reader on the lakehouse SA so the BFF
     // live Tables catalog scan can read _delta_log without Contributor.
     consolePrincipalId: skipRoleGrants ? '' : consolePrincipalId
+    // Shared ADX cluster MI gets Storage Blob Data Reader so the Eventhouse
+    // Delta endpoint (external table kind=delta) can read this lakehouse.
+    adxClusterPrincipalId: skipRoleGrants ? '' : adxClusterPrincipalId
   }
 }
 

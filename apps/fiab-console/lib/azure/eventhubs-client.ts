@@ -32,7 +32,8 @@ import {
 // ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
 // behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
 // so every Event Hubs ARM call below targets the correct ARM host instead of
-// management.azure.com.
+// management.azure.com. LOOM_ARM_ENDPOINT (set via bicep) takes precedence and
+// mirrors adf-client / azure-sql-client / setup routes.
 function armBase(): string {
   const explicit = process.env.LOOM_ARM_ENDPOINT;
   if (explicit) return explicit.replace(/\/+$/, '');

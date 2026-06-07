@@ -20,10 +20,26 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
+import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
 
 const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || 'https://adx-csa-loom-shared.eastus2.kusto.windows.net';
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
 const MAX_ROWS = 5_000;
+
+/**
+ * Data Management (ingestion) endpoint — `.purge table records` commands MUST
+ * target this URI, NOT the data-plane CLUSTER_URI. Grounded in Microsoft Learn
+ * (Data purge):
+ *   https://learn.microsoft.com/kusto/concepts/data-purge?view=azure-data-explorer
+ * Topology: the engine URI `https://<c>.<region>.kusto.windows.net` maps to the
+ * DM URI `https://ingest-<c>.<region>.kusto.windows.net`. The ARM
+ * `clusterDataIngestionUri` output is wired into LOOM_KUSTO_DM_URI in
+ * platform/fiab/bicep/modules/admin-plane/main.bicep; when unset we derive it by
+ * prepending `ingest-` to the cluster host (works for Commercial + Gov suffixes).
+ */
+const DM_URI =
+  process.env.LOOM_KUSTO_DM_URI ||
+  CLUSTER_URI.replace(/^(https?:\/\/)/i, '$1ingest-');
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -101,6 +117,67 @@ export function kustoConfigGate(): { missing: string } | null {
   return null;
 }
 
+/**
+ * Build the ADX-proxy `cluster()` URI for the configured Log Analytics
+ * workspace (or App Insights component).
+ *
+ * Uses `LOOM_LOG_ANALYTICS_RESOURCE_ID` (the full ARM resource ID emitted by
+ * monitoring.bicep → main.bicep → the loom-console container env). The ADX
+ * cluster resolves the cross-cluster reference server-side at query time; the
+ * Console UAMI holds Log Analytics Reader on the workspace (granted by
+ * monitoring.bicep `consoleLaReader`), so no separate token is needed — the
+ * federated query runs as a normal ADX `/v1/rest/query`.
+ *
+ * Proxy hosts (grounded in Microsoft Learn — "Query data in Azure Monitor
+ * using Azure Data Explorer", additional-syntax-examples):
+ *   Commercial / GCC : adx.monitor.azure.com
+ *   GCC-High / IL5   : adx.monitor.azure.us
+ *
+ * Returns `null` when `LOOM_LOG_ANALYTICS_RESOURCE_ID` is not configured
+ * (the operator has not deployed a Log Analytics workspace / the env var is
+ * unset) so callers can render an honest gate instead of a phantom call.
+ */
+export function laProxyClusterUri(): string | null {
+  const rid = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim();
+  if (!rid) return null;
+  const host = process.env.AZURE_CLOUD === 'AzureUSGovernment'
+    ? 'adx.monitor.azure.us'
+    : 'adx.monitor.azure.com';
+  const path = rid.startsWith('/') ? rid : `/${rid}`;
+  return `https://${host}${path}`;
+}
+
+/**
+ * Extract the workspace (or component) name from
+ * `LOOM_LOG_ANALYTICS_RESOURCE_ID`. The ARM resource ID ends with
+ * `/workspaces/<name>` (Log Analytics) or `/components/<name>` (App Insights);
+ * the ADX proxy `database()` argument is exactly that trailing name.
+ * Returns `null` when the env var is unset.
+ */
+export function laWorkspaceName(): string | null {
+  const rid = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim();
+  if (!rid) return null;
+  return rid.split('/').filter(Boolean).pop() ?? null;
+}
+
+/**
+ * Honest config gate for cross-service (ADX → Log Analytics / App Insights)
+ * federated queries. Returns `{ missing }` naming the exact env var when
+ * `LOOM_LOG_ANALYTICS_RESOURCE_ID` is absent, else `null` when the feature is
+ * available.
+ *
+ * Unlike {@link kustoConfigGate}, this never gates on cloud boundary — the
+ * `adx.monitor.azure.us` endpoint is supported for ADX-initiated cross-service
+ * queries in Government clouds, so only the missing-env-var situation gates the
+ * feature.
+ */
+export function laConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim()) {
+    return { missing: 'LOOM_LOG_ANALYTICS_RESOURCE_ID' };
+  }
+  return null;
+}
+
 async function getToken(): Promise<string> {
   const scope = `${CLUSTER_URI}/.default`;
   const t = await credential.getToken(scope);
@@ -127,6 +204,37 @@ async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, cs
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
     const msg = (json?.error?.['@message'] || json?.error?.message || text || 'Kusto request failed').toString();
+    throw new KustoError(msg, res.status, json || text);
+  }
+  return json;
+}
+
+/**
+ * Send a control command to the Data Management (ingestion) endpoint — required
+ * for `.purge table records` (the engine endpoint rejects purge). Same v1
+ * request/response shape as {@link postRest} but against {@link DM_URI}. The AAD
+ * token scope stays the cluster URI's `.default` (the DM endpoint accepts the
+ * same audience). Grounded in Microsoft Learn (Data purge).
+ */
+async function postMgmtDm(db: string, csl: string): Promise<any> {
+  const token = await getToken();
+  const url = `${DM_URI}/v1/rest/mgmt`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json; charset=utf-8',
+      'accept': 'application/json',
+      'x-ms-client-request-id': `loom-purge.${Math.random().toString(36).slice(2)}`,
+    },
+    body: JSON.stringify({ db, csl }),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.['@message'] || json?.error?.message || text || 'Kusto DM request failed').toString();
     throw new KustoError(msg, res.status, json || text);
   }
   return json;
@@ -213,6 +321,83 @@ export async function listDatabases(): Promise<Array<{ name: string; prettyName?
   }));
 }
 
+/**
+ * Per-database summary for the Databases browser (tile + list views).
+ * Sourced from a single `.show databases details` bulk call.
+ */
+export interface KustoDatabaseSummary {
+  name: string;
+  prettyName?: string;
+  persistentStorage?: string;
+  /** TotalSize bytes → MB. */
+  totalSizeMb?: number;
+  /** RetentionPolicy.SoftDeletePeriod (timespan days component). */
+  retentionDays?: number;
+  /** CachingPolicy.DataHotSpan (timespan days component). */
+  hotCacheDays?: number;
+  /** NumberOfTables. */
+  tableCount?: number;
+}
+
+/**
+ * `.show databases details` — one bulk control command against NetDefaultDB
+ * that returns size, retention, caching, and table count for every database
+ * on the cluster. Used by the Databases browser so each tile/row shows real
+ * size + retention without a per-database round trip.
+ *
+ * Grounded in Microsoft Learn (`.show databases details`): returns
+ * DatabaseName, PrettyName, PersistentStorage, TotalSize (bytes),
+ * RetentionPolicy (JSON), CachingPolicy (JSON), NumberOfTables.
+ */
+export async function listDatabasesWithDetails(): Promise<KustoDatabaseSummary[]> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show databases details');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('DatabaseName');
+  const prettyIdx = idx('PrettyName');
+  const storIdx = idx('PersistentStorage');
+  const sizeIdx = idx('TotalSize');
+  const retIdx = idx('RetentionPolicy');
+  const cacheIdx = idx('CachingPolicy');
+  const tabIdx = idx('NumberOfTables');
+
+  // Timespan-days parser: SoftDeletePeriod/DataHotSpan look like "365.00:00:00"
+  // (days.hh:mm:ss). The leading integer before the first '.' is the day count.
+  // A pure-time value ("06:00:00") has ':' in its head segment, so days = 0.
+  function parseTimespanDays(raw: unknown): number | undefined {
+    if (typeof raw !== 'string' || !raw) return undefined;
+    const head = raw.split('.')[0];
+    if (head.includes(':')) return 0;
+    const days = parseInt(head, 10);
+    return Number.isFinite(days) ? days : undefined;
+  }
+
+  function policyDays(policy: unknown, key: 'SoftDeletePeriod' | 'DataHotSpan'): number | undefined {
+    if (typeof policy !== 'string' || !policy) return undefined;
+    try {
+      const p = JSON.parse(policy);
+      return parseTimespanDays(p?.[key]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return r.rows.map((row) => {
+    const sizeRaw = sizeIdx >= 0 ? row[sizeIdx] : undefined;
+    const sizeNum = typeof sizeRaw === 'number' ? sizeRaw : Number(sizeRaw);
+    const tabRaw = tabIdx >= 0 ? row[tabIdx] : undefined;
+    const tabNum = typeof tabRaw === 'number' ? tabRaw : Number(tabRaw);
+    return {
+      name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+      prettyName: prettyIdx >= 0 ? (row[prettyIdx] as string) || undefined : undefined,
+      persistentStorage: storIdx >= 0 ? (row[storIdx] as string) || undefined : undefined,
+      totalSizeMb: Number.isFinite(sizeNum) ? sizeNum / (1024 * 1024) : undefined,
+      retentionDays: retIdx >= 0 ? policyDays(row[retIdx], 'SoftDeletePeriod') : undefined,
+      hotCacheDays: cacheIdx >= 0 ? policyDays(row[cacheIdx], 'DataHotSpan') : undefined,
+      tableCount: Number.isFinite(tabNum) ? tabNum : undefined,
+    };
+  });
+}
+
 /** `.show tables` for a given database. */
 export async function listTables(db: string): Promise<Array<{ name: string; folder?: string; docString?: string }>> {
   const r = await executeMgmtCommand(db, '.show tables');
@@ -227,15 +412,17 @@ export async function listTables(db: string): Promise<Array<{ name: string; fold
 }
 
 /** `.show functions` — stored KQL functions (ADX schema-tree parity). */
-export async function listFunctions(db: string): Promise<Array<{ name: string; parameters?: string; folder?: string; docString?: string }>> {
+export async function listFunctions(db: string): Promise<Array<{ name: string; parameters?: string; body?: string; folder?: string; docString?: string }>> {
   const r = await executeMgmtCommand(db, '.show functions');
   const nameIdx = r.columns.indexOf('Name');
   const paramIdx = r.columns.indexOf('Parameters');
+  const bodyIdx = r.columns.indexOf('Body');
   const folderIdx = r.columns.indexOf('Folder');
   const docIdx = r.columns.indexOf('DocString');
   return r.rows.map((row) => ({
     name: String(row[nameIdx >= 0 ? nameIdx : 0]),
     parameters: paramIdx >= 0 ? (row[paramIdx] as string) : undefined,
+    body: bodyIdx >= 0 ? ((row[bodyIdx] as string) || undefined) : undefined,
     folder: folderIdx >= 0 ? (row[folderIdx] as string) : undefined,
     docString: docIdx >= 0 ? (row[docIdx] as string) : undefined,
   }));
@@ -274,6 +461,94 @@ export async function getTableSchema(db: string, table: string): Promise<unknown
 }
 
 // ============================================================
+// Purge helpers — GDPR record erasure via the ADX two-step `.purge`.
+// Grounded in Microsoft Learn (Data purge):
+//   https://learn.microsoft.com/kusto/concepts/data-purge?view=azure-data-explorer
+// Commands target the DM endpoint (postMgmtDm), not the data endpoint, and
+// require Database Admin on the target database. The Console UAMI holds
+// AllDatabasesAdmin on the shared cluster. enablePurge: true is set in
+// platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep.
+// ============================================================
+
+/**
+ * The KQL operators the guided predicate builder allows + the structured
+ * predicate → `where` translation live in the dependency-free
+ * `kusto-purge-predicate` module so they can be unit-tested without loading the
+ * Azure SDKs. Re-exported here so the .purge route imports a single surface.
+ */
+export {
+  PURGE_ALLOWED_OPS,
+  PurgePredicateError,
+  buildPurgeWhere,
+} from './kusto-purge-predicate';
+export type { PurgeOp, PurgePredicatePart } from './kusto-purge-predicate';
+function purgeColIdx(cols: string[], key: string): number {
+  return cols.findIndex((c) => c.toLowerCase().includes(key.toLowerCase()));
+}
+
+export interface PurgeVerifyResult {
+  numRecordsToPurge: number;
+  estimatedPurgeExecutionTime: string;
+  verificationToken: string;
+}
+
+/**
+ * Step 1 — verify: scans the predicate and returns the record count + a
+ * verification token. NO records are deleted. The token is required for step 2.
+ * Syntax: `.purge table ["T"] records in database ["DB"] <| where …`
+ */
+export async function executePurgeVerify(
+  database: string,
+  table: string,
+  predicateWhere: string,
+): Promise<PurgeVerifyResult> {
+  const csl = `.purge table ["${table}"] records in database ["${database}"] <| ${predicateWhere}`;
+  const json = await postMgmtDm(database, csl);
+  const cols: string[] = ((json?.Tables?.[0]?.Columns) || []).map((c: any) => String(c.ColumnName));
+  const row: unknown[] = json?.Tables?.[0]?.Rows?.[0] || [];
+  return {
+    numRecordsToPurge: Number(row[purgeColIdx(cols, 'numrecords')] ?? row[purgeColIdx(cols, 'num')] ?? 0),
+    estimatedPurgeExecutionTime: String(row[purgeColIdx(cols, 'estimated')] ?? ''),
+    verificationToken: String(row[purgeColIdx(cols, 'verification')] ?? row[purgeColIdx(cols, 'token')] ?? ''),
+  };
+}
+
+export interface PurgeCommitResult {
+  operationId: string;
+  state: string;
+  databaseName: string;
+  tableName: string;
+  scheduledTime: string;
+}
+
+/**
+ * Step 2 — commit: executes the purge using the token from step 1. Deletion
+ * begins asynchronously (irreversible). Returns the operation id for tracking.
+ * Syntax: `.purge table ["T"] records in database ["DB"] with(verificationtoken=h'…') <| where …`
+ */
+export async function executePurgeCommit(
+  database: string,
+  table: string,
+  predicateWhere: string,
+  verificationToken: string,
+): Promise<PurgeCommitResult> {
+  const csl =
+    `.purge table ["${table}"] records in database ["${database}"]` +
+    ` with(verificationtoken=h'${verificationToken.replace(/'/g, "\\'")}')` +
+    ` <| ${predicateWhere}`;
+  const json = await postMgmtDm(database, csl);
+  const cols: string[] = ((json?.Tables?.[0]?.Columns) || []).map((c: any) => String(c.ColumnName));
+  const row: unknown[] = json?.Tables?.[0]?.Rows?.[0] || [];
+  return {
+    operationId: String(row[purgeColIdx(cols, 'operationid')] ?? row[purgeColIdx(cols, 'operation')] ?? ''),
+    state: String(row[purgeColIdx(cols, 'state')] ?? 'Scheduled'),
+    databaseName: String(row[purgeColIdx(cols, 'database')] ?? database),
+    tableName: String(row[purgeColIdx(cols, 'table')] ?? table),
+    scheduledTime: String(row[purgeColIdx(cols, 'scheduled')] ?? ''),
+  };
+}
+
+// ============================================================
 // kusto-mgmt-client surface — typed list/create/delete for the
 // ADX/KQL database navigator (adx-database-tree).
 //
@@ -290,7 +565,7 @@ export async function getTableSchema(db: string, table: string): Promise<unknown
 // ============================================================
 
 /** Safe-quote a KQL entity name as a bracketed string literal: `["name"]`. */
-function qName(name: string): string {
+export function qName(name: string): string {
   return `["${name.replace(/"/g, '\\"')}"]`;
 }
 
@@ -376,6 +651,161 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
   }));
 }
 
+// ============================================================
+// External Delta tables + query acceleration — the "lakehouse /
+// warehouse endpoint" surface. Binds an ADLS Gen2 Delta Lake path to an
+// ADX external table (schema auto-inferred from the delta log) and turns
+// on the query_acceleration policy so the Delta data is queryable via KQL
+// within seconds. Grounded in Microsoft Learn:
+//   .create-or-alter external table … kind=delta
+//     https://learn.microsoft.com/kusto/management/external-tables-delta-lake
+//   .alter external table … policy query_acceleration
+//     https://learn.microsoft.com/kusto/management/alter-query-acceleration-policy-command
+//   .show external table … policy query_acceleration
+//     https://learn.microsoft.com/kusto/management/show-query-acceleration-policy-command
+//   external_table() + managed-identity storage auth
+//     https://learn.microsoft.com/azure/data-explorer/external-tables-managed-identities
+// ============================================================
+
+export interface KustoExternalTable {
+  name: string;
+  tableType?: string; // 'Delta' for delta external tables
+  folder?: string;
+  docString?: string;
+  properties?: string; // raw JSON properties blob
+}
+
+/** `.show external tables` — list every external table in a database. */
+export async function listExternalTables(db: string): Promise<KustoExternalTable[]> {
+  const r = await executeMgmtCommand(db, '.show external tables');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('TableName');
+  const typeIdx = idx('TableType');
+  const folderIdx = idx('Folder');
+  const docIdx = idx('DocString');
+  const propIdx = idx('Properties');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    tableType: typeIdx >= 0 ? (row[typeIdx] as string) || undefined : undefined,
+    folder: folderIdx >= 0 ? (row[folderIdx] as string) || undefined : undefined,
+    docString: docIdx >= 0 ? (row[docIdx] as string) || undefined : undefined,
+    properties: propIdx >= 0 ? (row[propIdx] as string) || undefined : undefined,
+  }));
+}
+
+/**
+ * `.create-or-alter external table T kind=delta (connStr) with (...)`.
+ *
+ * `abfssUri` is the Delta table ROOT (e.g.
+ * `abfss://bronze@acct.dfs.core.windows.net/path`). Storage auth uses the
+ * cluster system-assigned MI (`;managed_identity=system`) by default, or a
+ * user-assigned MI object id when `opts.miObjectId` is supplied. The schema is
+ * omitted so ADX auto-infers it from the latest delta-log version.
+ *
+ * Requires AllDatabasesAdmin on the cluster (the Console UAMI already holds
+ * this); the cluster's MI must hold Storage Blob Data Reader on the ADLS
+ * account. No Fabric / OneLake dependency — works against the stand-alone ADX
+ * cluster.
+ */
+export async function createExternalDeltaTable(
+  db: string,
+  name: string,
+  abfssUri: string,
+  opts?: { folder?: string; docString?: string; miObjectId?: string },
+): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('createExternalDeltaTable: name is required', 400);
+  const uri = abfssUri.trim();
+  if (!uri || !/^abfss:\/\//i.test(uri)) {
+    throw new KustoError('createExternalDeltaTable: abfssUri must be an abfss:// URI', 400);
+  }
+  const auth = opts?.miObjectId ? `;managed_identity=${opts.miObjectId}` : ';managed_identity=system';
+  const connStr = `h@'${uri}${auth}'`;
+  const withParts: string[] = [];
+  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
+  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
+  const command = `.create-or-alter external table ${qName(name)}\nkind=delta\n(\n  ${connStr}\n)${withClause}`;
+  return executeMgmtCommand(db, command);
+}
+
+/**
+ * `.alter external table T policy query_acceleration '{"IsEnabled":true,"Hot":"Nd"}'`.
+ *
+ * `hotDays` is the number of days of Delta data cached for sub-second KQL
+ * queries (minimum 1). The background caching job starts within seconds;
+ * full build time scales with the Delta table size. Requires Database Admin.
+ */
+export async function setQueryAccelerationPolicy(
+  db: string,
+  externalTableName: string,
+  hotDays: number,
+): Promise<KustoQueryResult> {
+  if (!externalTableName.trim()) {
+    throw new KustoError('setQueryAccelerationPolicy: externalTableName is required', 400);
+  }
+  if (!Number.isFinite(hotDays) || hotDays < 1) {
+    throw new KustoError('setQueryAccelerationPolicy: hotDays must be >= 1', 400);
+  }
+  const policy = JSON.stringify({ IsEnabled: true, Hot: `${Math.floor(hotDays)}.00:00:00` });
+  const command = `.alter external table ${qName(externalTableName)} policy query_acceleration '${policy}'`;
+  return executeMgmtCommand(db, command);
+}
+
+export interface QueryAccelerationPolicyResult {
+  policyName?: string;
+  entityName?: string;
+  policy?: unknown;
+  raw: string;
+}
+
+/**
+ * `.show external table T policy query_acceleration` — the applied policy
+ * (the receipt). Returns null when no policy is set on the table.
+ */
+export async function showQueryAccelerationPolicy(
+  db: string,
+  externalTableName: string,
+): Promise<QueryAccelerationPolicyResult | null> {
+  const r = await executeMgmtCommand(
+    db,
+    `.show external table ${qName(externalTableName)} policy query_acceleration`,
+  );
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const nameIdx = r.columns.indexOf('PolicyName');
+  const entityIdx = r.columns.indexOf('EntityName');
+  const raw = String(r.rows[0][polIdx >= 0 ? polIdx : r.columns.length - 1] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { /* keep raw string */ }
+  return {
+    policyName: nameIdx >= 0 ? (r.rows[0][nameIdx] as string) : undefined,
+    entityName: entityIdx >= 0 ? (r.rows[0][entityIdx] as string) : undefined,
+    policy,
+    raw,
+  };
+}
+
+/**
+ * `.create-or-alter function NAME() { external_table("T") }` — a stored KQL
+ * function that wraps the external Delta table so callers can query the
+ * mirrored view with a clean `NAME()` invocation instead of remembering the
+ * `external_table(...)` syntax. This is the "mirrored KQL view".
+ */
+export async function createExternalTableView(
+  db: string,
+  viewName: string,
+  externalTableName: string,
+): Promise<KustoQueryResult> {
+  if (!viewName.trim() || !externalTableName.trim()) {
+    throw new KustoError('createExternalTableView: viewName and externalTableName are required', 400);
+  }
+  const body = `external_table("${externalTableName.replace(/"/g, '\\"')}")`;
+  return executeMgmtCommand(
+    db,
+    `.create-or-alter function with (folder = "Loom Delta", docstring = "Delta view via CSA Loom") ${viewName}() { ${body} }`,
+  );
+}
+
 export interface KustoDatabasePolicy {
   /** Policy name: retention | caching | sharding | mergepolicy | streamingingestion. */
   kind: string;
@@ -416,6 +846,173 @@ export async function showDatabasePolicies(db: string): Promise<KustoDatabasePol
   return out;
 }
 
+// ============================================================
+// Cluster capacity policy + live capacity (Capacity / throttle panel).
+//
+// Grounded in Microsoft Learn (Kusto management commands):
+//   .show cluster policy capacity  — full capacity policy JSON (AllDatabasesMonitor)
+//   .show capacity                 — live slot utilization for every op type
+//   .alter-merge cluster policy capacity ```<json>``` — patch the policy (AllDatabasesAdmin)
+// The capacity policy object components: IngestionCapacity, ExportCapacity,
+// ExtentsMergeCapacity, ExtentsPartitionCapacity, MaterializedViewsCapacity,
+// QueryAccelerationCapacity, … (see capacity-policy doc).
+// ============================================================
+
+/** Allow-listed capacity-policy component names a Loom user may patch. */
+export const CAPACITY_POLICY_COMPONENTS = [
+  'IngestionCapacity',
+  'ExportCapacity',
+  'ExtentsMergeCapacity',
+  'ExtentsPartitionCapacity',
+  'MaterializedViewsCapacity',
+] as const;
+export type CapacityPolicyComponent = (typeof CAPACITY_POLICY_COMPONENTS)[number];
+
+/**
+ * `.show cluster policy capacity` — the full cluster capacity policy as a
+ * parsed JSON object (`{ IngestionCapacity: {…}, ExportCapacity: {…}, … }`).
+ * Requires AllDatabasesMonitor (the Console UAMI holds AllDatabasesAdmin which
+ * is a superset). Runs against NetDefaultDB like the other cluster-scope
+ * commands. The command returns a single row; the policy JSON lives in a
+ * "Policy" column (some cluster builds name it "PolicyText") — we scan the row
+ * for the cell that parses to a JSON object carrying a capacity component.
+ */
+export async function showClusterCapacityPolicy(): Promise<Record<string, unknown>> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show cluster policy capacity');
+  if (!r.rows.length) return {};
+  const row = r.rows[0];
+  // Prefer an explicitly named column.
+  const named = ['Policy', 'PolicyText', 'PolicyName'];
+  for (const colName of named) {
+    const idx = r.columns.indexOf(colName);
+    if (idx >= 0) {
+      const parsed = tryParsePolicy(row[idx]);
+      if (parsed) return parsed;
+    }
+  }
+  // Fallback: scan every cell for a JSON object that looks like a capacity policy.
+  for (const cell of row) {
+    const parsed = tryParsePolicy(cell);
+    if (parsed) return parsed;
+  }
+  return {};
+}
+
+function tryParsePolicy(cell: unknown): Record<string, unknown> | null {
+  if (typeof cell !== 'string') return null;
+  const t = cell.trim();
+  if (!t.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(t);
+    if (obj && typeof obj === 'object') return obj as Record<string, unknown>;
+  } catch { /* not the JSON cell */ }
+  return null;
+}
+
+export interface CapacitySlot {
+  resource: string;
+  total: number;
+  consumed: number;
+  remaining: number;
+  origin: string;
+}
+
+/**
+ * `.show capacity` — live slot utilization for every data-management operation
+ * type. Columns: Resource | Total | Consumed | Remaining | Origin. Requires
+ * Database User (the UAMI has it). Runs against NetDefaultDB (cluster scope).
+ */
+export async function showCapacitySlots(): Promise<CapacitySlot[]> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show capacity');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const resIdx = idx('Resource');
+  const totIdx = idx('Total');
+  const conIdx = idx('Consumed');
+  const remIdx = idx('Remaining');
+  const oriIdx = idx('Origin');
+  const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0);
+  return r.rows.map((row) => ({
+    resource: String(row[resIdx >= 0 ? resIdx : 0] ?? ''),
+    total: num(row[totIdx >= 0 ? totIdx : 1]),
+    consumed: num(row[conIdx >= 0 ? conIdx : 2]),
+    remaining: num(row[remIdx >= 0 ? remIdx : 3]),
+    origin: String(row[oriIdx >= 0 ? oriIdx : 4] ?? ''),
+  }));
+}
+
+/**
+ * `.alter-merge cluster policy capacity ```<json>``` ` — patch-merge one or
+ * more capacity-policy components into the existing policy (un-mentioned
+ * components are preserved). Requires AllDatabasesAdmin. `patch` keys MUST be
+ * allow-listed capacity component names. Returns the raw mgmt result (the new
+ * effective policy).
+ */
+export async function alterMergeCapacityPolicy(patch: Record<string, unknown>): Promise<KustoQueryResult> {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) throw new KustoError('alterMergeCapacityPolicy: patch must contain at least one capacity component', 400);
+  for (const k of keys) {
+    if (!(CAPACITY_POLICY_COMPONENTS as readonly string[]).includes(k)) {
+      throw new KustoError(`alterMergeCapacityPolicy: unsupported component "${k}"`, 400);
+    }
+  }
+  const json = JSON.stringify(patch);
+  const command = `.alter-merge cluster policy capacity \`\`\`${json}\`\`\``;
+  return executeMgmtCommand('NetDefaultDB', command);
+}
+
+export interface KustoUpdatePolicyEntry {
+  IsEnabled: boolean;
+  Source: string;
+  Query: string;
+  IsTransactional: boolean;
+  PropagateIngestionProperties: boolean;
+}
+
+/**
+ * `.alter table ["<target>"] policy update @'[...]'` — set the table update
+ * policy (transform-on-ingest ETL). `policies` is the serialized array of
+ * policy objects; each fires the `Query` (a stored function call or inline KQL
+ * over the `Source` table) whenever data lands in `Source`, routing the
+ * transformed rows into `<target>`. Uses the `@'...'` verbatim-string form so
+ * the embedded JSON only needs single-quote escaping (same pattern as
+ * {@link createIngestionMapping}). Real Kusto control command — no mocks.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/alter-table-update-policy-command
+ */
+export async function setTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+  policies: KustoUpdatePolicyEntry[],
+): Promise<KustoQueryResult> {
+  const escaped = JSON.stringify(policies).replace(/'/g, "\\'");
+  return executeMgmtCommand(
+    db,
+    `.alter table ${qName(targetTable)} policy update @'${escaped}'`,
+  );
+}
+
+/**
+ * `.show table ["<target>"] policy update` — read the table's update policy.
+ * Returns the parsed policy plus the raw JSON string Kusto reports back (the
+ * "receipt" confirming the cluster accepted the config), or null when the
+ * command returns no rows. Mirrors {@link showDatabasePolicies} in shape.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/show-table-update-policy-command
+ */
+export async function showTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+): Promise<{ policy: unknown; raw: string } | null> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(targetTable)} policy update`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { policy = raw; }
+  return { policy, raw };
+}
+
 /** `.show database <db> schema as json` — flat read-only schema object. */
 export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
   const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);
@@ -430,6 +1027,31 @@ export async function createTable(db: string, name: string, schema: string): Pro
   const cols = schema.trim();
   if (!cols) throw new KustoError('createTable: schema is required (e.g. "ts:datetime, value:long")', 400);
   return executeMgmtCommand(db, `.create table ${qName(name)} (${cols})`);
+}
+
+/**
+ * `.alter-merge table T (schema)` — ADDITIVE schema change. New columns are
+ * appended; existing columns and their data are preserved. This is the safe
+ * "add column" path used by the schema designer's ALTER flow. (A full
+ * `.alter table` replaces the schema and drops omitted columns with data loss,
+ * so it is intentionally NOT exposed.) Requires Table Admin.
+ * Grounded in Microsoft Learn: `.alter-merge table` command.
+ */
+export async function alterMergeTable(db: string, name: string, schema: string): Promise<KustoQueryResult> {
+  const cols = schema.trim();
+  if (!cols) throw new KustoError('alterMergeTable: schema is required (e.g. "newcol:string")', 400);
+  return executeMgmtCommand(db, `.alter-merge table ${qName(name)} (${cols})`);
+}
+
+/**
+ * `.show table T cslschema` — returns the table's schema as a CSL string
+ * (`col:type,col:type`) for pre-populating the schema designer's ALTER grid.
+ */
+export async function getTableCslSchema(db: string, table: string): Promise<string> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} cslschema`);
+  if (!r.rows.length) return '';
+  const schemaIdx = r.columns.findIndex((c) => /schema/i.test(c));
+  return String(r.rows[0][schemaIdx >= 0 ? schemaIdx : 1] ?? '');
 }
 
 /** `.drop table T ifexists`. */
@@ -454,17 +1076,30 @@ export async function dropFunction(db: string, name: string): Promise<KustoQuery
   return executeMgmtCommand(db, `.drop function ${name} ifexists`);
 }
 
-/** `.create materialized-view NAME on table SRC { query }`. */
+/**
+ * `buildCreateMaterializedViewCommand` (pure command builder) lives in the
+ * dependency-free `kusto-mv-command` module and is re-exported here for
+ * callers that import from `kusto-client`. `createMaterializedView` is the
+ * runtime entry point.
+ */
+export { buildCreateMaterializedViewCommand };
+
+/**
+ * `.create [async] materialized-view [with (backfill=true)] NAME on table SRC { query }`.
+ *
+ * When `opts.backfill` is true the view is created over the source table's
+ * existing data. Per ADX/Eventhouse rules a backfilling create MUST be `async`
+ * (the mgmt endpoint returns an operation row rather than blocking until the
+ * backfill finishes — track it with `.show operations`).
+ */
 export async function createMaterializedView(
   db: string, name: string, sourceTable: string, query: string,
+  opts?: { backfill?: boolean },
 ): Promise<KustoQueryResult> {
   if (!sourceTable.trim() || !query.trim()) {
     throw new KustoError('createMaterializedView: source table and query are required', 400);
   }
-  return executeMgmtCommand(
-    db,
-    `.create materialized-view ${name} on table ${qName(sourceTable.trim())} { ${query.trim()} }`,
-  );
+  return executeMgmtCommand(db, buildCreateMaterializedViewCommand(name, sourceTable, query, opts));
 }
 
 /** `.drop materialized-view NAME ifexists`. */
@@ -521,6 +1156,86 @@ export async function ingestInline(db: string, table: string, rows: unknown[][])
     .join('\n');
   const command = `.ingest inline into table ["${table}"] <|\n${csv}`;
   return executeMgmtCommand(db, command);
+}
+
+/**
+ * `.create-or-alter external table <Name> kind=delta (h@'<abfssUri>;impersonate')`
+ *
+ * Creates the Delta external table that a continuous-export job writes into.
+ * The `;impersonate` suffix routes storage auth through the cluster's
+ * system-assigned managed identity — no SAS key or storage account key.
+ *
+ * Requires the cluster MI to hold Storage Blob Data Contributor on the
+ * target ADLS Gen2 account (provisioned by adx-cluster.bicep).
+ *
+ * Per Learn:
+ *   https://learn.microsoft.com/kusto/management/external-tables-delta-lake
+ *   https://learn.microsoft.com/kusto/management/data-export/continuous-export-with-managed-identity
+ *
+ * @param db       KQL database name
+ * @param extName  External table name (must be unique; must not clash with a regular table)
+ * @param abfssUri Full abfss:// URI for the Delta folder (WITHOUT ;impersonate)
+ *                 Example: abfss://bronze@mystorageaccount.dfs.core.windows.net/exports/orders
+ */
+export async function createOrAlterExternalTableDelta(
+  db: string,
+  extName: string,
+  abfssUri: string,
+): Promise<KustoQueryResult> {
+  if (!extName.trim()) throw new KustoError('createOrAlterExternalTableDelta: extName required', 400);
+  if (!/^abfss:\/\//i.test(abfssUri)) {
+    throw new KustoError('createOrAlterExternalTableDelta: abfssUri must start with abfss://', 400);
+  }
+  // Escape single-quotes inside the URI for the KQL string literal.
+  const escaped = abfssUri.replace(/'/g, "\\'");
+  const cmd = `.create-or-alter external table ${qName(extName)} kind=delta (h@'${escaped};impersonate')`;
+  return executeMgmtCommand(db, cmd);
+}
+
+/**
+ * `.create-or-alter continuous-export <Name>
+ *    over (<sourceTable>)
+ *    to table <extTableName>
+ *    with (intervalBetweenRuns=<interval>, managedIdentity=system)
+ *  <| <sourceTable>`
+ *
+ * Exports new rows from a KQL fact table into a Delta external table on each
+ * interval. Uses `managedIdentity=system` because the external table's
+ * connection string uses impersonation (cluster system-assigned MI), which
+ * is required per the Kusto docs.
+ *
+ * Per Learn:
+ *   https://learn.microsoft.com/kusto/management/data-export/create-alter-continuous
+ *
+ * @param db           KQL database name
+ * @param exportName   Unique continuous-export name within the database
+ * @param sourceTable  Fact-table name in the database (the `over (T)` clause)
+ * @param extTableName External Delta table name (created by createOrAlterExternalTableDelta)
+ * @param interval     KQL timespan string: '5m' | '15m' | '1h' | '6h' | '24h' etc.
+ *                     Minimum 1 minute per docs; recommended >= several minutes.
+ */
+export async function createOrAlterContinuousExport(
+  db: string,
+  exportName: string,
+  sourceTable: string,
+  extTableName: string,
+  interval: string,
+): Promise<KustoQueryResult> {
+  if (!exportName.trim() || !sourceTable.trim() || !extTableName.trim() || !interval.trim()) {
+    throw new KustoError('createOrAlterContinuousExport: all params required', 400);
+  }
+  // Validate interval looks like a KQL timespan (e.g. 5m, 1h, 24h)
+  if (!/^\d+[smhd]$/.test(interval.trim())) {
+    throw new KustoError(`createOrAlterContinuousExport: invalid interval "${interval}" — use KQL timespan e.g. 5m, 1h, 24h`, 400);
+  }
+  const cmd = [
+    `.create-or-alter continuous-export ${qName(exportName)}`,
+    `over (${qName(sourceTable)})`,
+    `to table ${qName(extTableName)}`,
+    `with (intervalBetweenRuns=${interval.trim()}, managedIdentity=system)`,
+    `<| ${qName(sourceTable)}`,
+  ].join(' ');
+  return executeMgmtCommand(db, cmd);
 }
 
 /**
