@@ -132,10 +132,7 @@ param aiFoundryEnabled bool = false
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
-@description('Azure Machine Learning workspace name for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → mlflow-client.ts falls back to LOOM_FOUNDRY_NAME (the AI Foundry hub workspace). Set explicitly for a dedicated AML workspace (deploy-planner mlWorkspaceEnabled or BYO).')
-param loomAmlWorkspace string = ''
-
-@description('Resource group of the AML workspace for MLflow tracking. Empty → falls back to LOOM_FOUNDRY_RG.')
+@description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
 param loomAmlRg string = ''
 
 @description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
@@ -279,6 +276,22 @@ param frontDoorEnabled bool = false
 @description('Optional vanity URL for the console (e.g. csa-loom.contoso.ai) — set in the Setup Wizard. Creates a Front Door managed-cert custom domain; the deploy outputs the CNAME + _dnsauth TXT to add at your DNS provider. Empty = use the generated Front Door host.')
 param loomVanityDomain string = ''
 
+// Standalone Azure ML workspace coordinates for the AML control-plane
+// navigator (aml-client.ts / resolveAmlTarget). All optional — empty values
+// fall back to the AI Foundry hub env (LOOM_FOUNDRY_*) + the deployment
+// subscription in the resolver, so existing deployments are unaffected.
+@description('AML workspace name for the standalone AML client (LOOM_AML_WORKSPACE). Empty falls back to the AI Foundry hub name.')
+param loomAmlWorkspace string = ''
+
+@description('Resource group of the AML workspace (LOOM_AML_RESOURCE_GROUP). Empty falls back to LOOM_FOUNDRY_RG.')
+param loomAmlResourceGroup string = ''
+
+@description('Subscription id of the AML workspace (LOOM_AML_SUBSCRIPTION). Empty falls back to the deployment subscription.')
+param loomAmlSubscription string = ''
+
+@description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to the deployment location.')
+param loomAmlRegion string = ''
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -354,7 +367,6 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     agentFoundryEnabled: agentFoundryEnabled
-    loomAmlWorkspace: loomAmlWorkspace
     loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
@@ -388,6 +400,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomSessionSecret: loomSessionSecret
     loomVersion: loomVersion
     appImageTags: appImageTags
+    // Standalone AML workspace coords for the AML control-plane navigator.
+    loomAmlWorkspace: loomAmlWorkspace
+    loomAmlResourceGroup: loomAmlResourceGroup
+    loomAmlSubscription: loomAmlSubscription
+    loomAmlRegion: loomAmlRegion
   }
 }
 

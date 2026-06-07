@@ -31,6 +31,18 @@ export interface NotebookState {
     displayName: string;
     isDefault?: boolean;
   }[];
+  /**
+   * Curated Azure ML Environment attached to this notebook (libraries: PyPI /
+   * Conda packages, base image). Azure-native 1:1 for a Fabric notebook
+   * Environment — see aml-environments-client.ts. Optional; a notebook runs
+   * without one (inline %pip/%conda still works against the live session).
+   */
+  attachedAmlEnv?: { name: string; version: string };
+  /**
+   * Custom libraries attached to this notebook (.jar / .whl filenames or paths)
+   * surfaced to the Spark / Databricks runtime as session-level packages.
+   */
+  customLibraries?: string[];
   activeSessionId?: string;
 }
 

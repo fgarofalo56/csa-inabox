@@ -3,17 +3,27 @@
  *
  * Register a NEW version of the BOUND registered model from a model artifact
  * URI (azureml://… run output, datastore path, or a registered run's outputs).
- * Real ARM PUT of a model version under the bound workspace's registry:
- *   PUT .../workspaces/{ws}/models/{modelName}/versions/{ver}
+ *
+ * Two backends, picked by whether a source run id is supplied:
+ *   - WITHOUT runId — real ARM PUT of a model version under the bound
+ *     workspace's registry:  PUT .../workspaces/{ws}/models/{name}/versions/{ver}
+ *   - WITH runId (register-FROM-RUN) — real MLflow REST
+ *     `model-versions/create` with `run_id`, so the new version records lineage
+ *     back to the training run (the ARM PUT path cannot carry run lineage).
  *
  * `[id]` is the Loom item GUID; modelName + workspace come from the binding.
  *
- * Body: { modelUri: string, version?: string, modelType?: string, description?: string }
- *   412 { ok:false, code:'unbound' } when the item isn't bound yet.
+ * Body: { modelUri: string, version?: string, modelType?: string,
+ *         description?: string, runId?: string }
+ *   412 { ok:false, code:'unbound' }              when the item isn't bound yet.
+ *   412 { ok:false, code:'mlflow_unconfigured' }  when runId given but AML MLflow env unset.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { registerModelVersion, FoundryError } from '@/lib/azure/foundry-client';
+import {
+  createMlflowModelVersion, MlflowNotConfiguredError, MlflowError,
+} from '@/lib/azure/mlflow-client';
 import {
   resolveModelBinding, modelBindingErrorResponse, ML_MODEL_ITEM_TYPE,
 } from '@/lib/azure/model-binding';
@@ -39,12 +49,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const modelUri = String(body?.modelUri || '').trim();
     if (!modelUri) return NextResponse.json({ ok: false, error: 'modelUri is required (e.g. azureml://jobs/<run>/outputs/artifacts/paths/model/)' }, { status: 400 });
     const modelType = MODEL_TYPES.has(String(body?.modelType)) ? String(body.modelType) : 'mlflow_model';
+    const runId = String(body?.runId || '').trim();
+    const description = body?.description ? String(body.description) : `Registered via Loom for ${binding.modelName}`;
 
+    // Register-from-run: MLflow REST so the version records source-run lineage.
+    if (runId) {
+      try {
+        const version = await createMlflowModelVersion(
+          binding.modelName,
+          { source: modelUri, runId, description },
+          binding.workspaceName,
+        );
+        return NextResponse.json({ ok: true, model: binding.modelName, version, lineage: { runId: version.runId || runId } });
+      } catch (e: any) {
+        if (e instanceof MlflowNotConfiguredError) {
+          return NextResponse.json(
+            { ok: false, code: 'mlflow_unconfigured', error: e.message, hint: e.hint, missing: e.missing },
+            { status: 412 },
+          );
+        }
+        const status = e instanceof MlflowError ? e.status : 502;
+        return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
+      }
+    }
+
+    // Default ARM PUT path (no run lineage captured).
     const version = await registerModelVersion(binding.modelName, {
       version: body?.version ? String(body.version) : undefined,
       modelUri,
       modelType: modelType as any,
-      description: body?.description ? String(body.description) : `Registered via Loom for ${binding.modelName}`,
+      description,
       workspaceName: binding.workspaceName,
     });
     return NextResponse.json({ ok: true, model: binding.modelName, version });
