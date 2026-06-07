@@ -29,7 +29,11 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// Cloud-aware ARM base. Commercial → management.azure.com (default); Gov
+// (GCC-High / IL5) sets LOOM_ARM_ENDPOINT=https://management.usgovcloudapi.net
+// via bicep. Mirrors adf-client / azure-sql-client / setup routes.
+const ARM_BASE = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+const ARM_SCOPE = `${ARM_BASE}/.default`;
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
 // authorizationRules, networkRuleSets, disasterRecoveryConfigs.
 const EH_API = '2024-01-01';
@@ -87,7 +91,7 @@ export function readEventHubsConfig(): EventHubsConfig {
 }
 
 function nsUrl(cfg: EventHubsConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
+  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
