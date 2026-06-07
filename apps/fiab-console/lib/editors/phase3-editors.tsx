@@ -498,6 +498,19 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+  // Bind Delta source → ADX external table + query acceleration (lakehouse endpoint).
+  const [deltaOpen, setDeltaOpen] = useState(false);
+  const [deltaTableName, setDeltaTableName] = useState('');
+  const [deltaAbfss, setDeltaAbfss] = useState('');
+  const [deltaHotDays, setDeltaHotDays] = useState<number>(7);
+  const [deltaKqlView, setDeltaKqlView] = useState<boolean>(true);
+  const [deltaBusy, setDeltaBusy] = useState(false);
+  const [deltaResult, setDeltaResult] = useState<{
+    ok?: boolean; error?: string; hint?: string;
+    externalTableName?: string; accelerationPolicy?: unknown;
+    kqlViewName?: string; sampleQuery?: string;
+    steps?: Array<{ step: string; ok: boolean; detail?: string }>;
+  } | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -626,6 +639,40 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
 
+  // Bind an ADLS Gen2 Delta path to an ADX external table + query acceleration.
+  // Real backend: .create-or-alter external table kind=delta /
+  // .alter external table policy query_acceleration via the continuous-export
+  // BFF route. Lakehouse/warehouse Delta becomes KQL-queryable within seconds —
+  // no Fabric / OneLake dependency.
+  const onBindDelta = useCallback(async () => {
+    if (!selectedDb || !deltaTableName.trim() || !deltaAbfss.trim()) {
+      setDeltaResult({ ok: false, error: 'Database, external table name, and ADLS abfss:// path are required' });
+      return;
+    }
+    setDeltaBusy(true);
+    setDeltaResult(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/continuous-export`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          database: selectedDb,
+          tableName: deltaTableName.trim(),
+          abfssUri: deltaAbfss.trim(),
+          hotDays: deltaHotDays,
+          createKqlView: deltaKqlView,
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      setDeltaResult(j);
+    } catch (e: any) {
+      setDeltaResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDeltaBusy(false);
+    }
+  }, [id, selectedDb, deltaTableName, deltaAbfss, deltaHotDays, deltaKqlView]);
+
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
 
@@ -644,6 +691,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
       { label: 'Manage', actions: [
         { label: 'Data policies', onClick: hasDbs && selectedDb ? () => setPoliciesOpen(true) : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs ? 'create a KQL database first' : !selectedDb ? 'select a database below' : undefined },
+        { label: 'Bind Delta source', onClick: hasDbs && selectedDb ? () => { setDeltaResult(null); setDeltaOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs ? 'create a KQL database first' : !selectedDb ? 'select a database below' : undefined },
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
@@ -861,6 +911,115 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     <Button appearance="secondary" onClick={() => setPoliciesOpen(false)}>Cancel</Button>
                     <Button appearance="primary" onClick={applyPolicies} disabled={policiesBusy}>
                       {policiesBusy ? 'Applying…' : 'Apply'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Bind Delta source — ADX external table over an ADLS Gen2 Delta path
+                + query acceleration. The lakehouse/warehouse endpoint: Delta data
+                becomes KQL-queryable within seconds, no copy, no Fabric. */}
+            <Dialog open={deltaOpen} onOpenChange={(_, d) => { setDeltaOpen(d.open); if (!d.open) setDeltaResult(null); }}>
+              <DialogSurface style={{ maxWidth: 560 }}>
+                <DialogBody>
+                  <DialogTitle>Bind Delta source to KQL external table</DialogTitle>
+                  <DialogContent>
+                    <Caption1>
+                      Creates an ADX external table over an ADLS Gen2 Delta Lake path (lakehouse
+                      Bronze/Silver/Gold or a warehouse Delta export) and applies a query
+                      acceleration policy. The Delta data is queryable via KQL within seconds of
+                      binding — no copy, no ingestion job. The ADX cluster managed identity must
+                      hold Storage Blob Data Reader on the target ADLS account.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                      <div>
+                        <Label required>Target KQL database</Label>
+                        <Select value={selectedDb} onChange={(_, d) => setSelectedDb(d.value)}>
+                          {(state?.databases || []).map((db) => (
+                            <option key={db.name} value={db.name}>{db.name}</option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <Label required>External table name</Label>
+                        <Input value={deltaTableName} onChange={(_, d) => setDeltaTableName(d.value)} placeholder="bronze_orders_delta" />
+                        <Caption1>KQL identifier: starts with a letter, alphanumeric + underscore only.</Caption1>
+                      </div>
+                      <div>
+                        <Label required>ADLS Gen2 Delta path (abfss://)</Label>
+                        <Input
+                          value={deltaAbfss}
+                          onChange={(_, d) => setDeltaAbfss(d.value)}
+                          placeholder="abfss://bronze@account.dfs.core.windows.net/orders/"
+                          style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                        />
+                        <Caption1>Root folder of the Delta table (the folder containing _delta_log).</Caption1>
+                      </div>
+                      <div>
+                        <Label>Query acceleration hot window (days)</Label>
+                        <Input
+                          type="number"
+                          value={String(deltaHotDays)}
+                          onChange={(_, d) => setDeltaHotDays(Math.max(1, parseInt(d.value, 10) || 7))}
+                        />
+                        <Caption1>Delta files within this window are cached in ADX for sub-second queries (min 1 day).</Caption1>
+                      </div>
+                      <div>
+                        <Switch
+                          checked={deltaKqlView}
+                          onChange={(_, d) => setDeltaKqlView(!!d.checked)}
+                          label={deltaKqlView ? 'Create KQL view function (recommended)' : 'External table only'}
+                        />
+                        <Caption1>
+                          Creates <code>{deltaTableName ? `${deltaTableName}_view()` : '<name>_view()'}</code> — a
+                          stored function wrapping <code>external_table()</code> for clean KQL access.
+                        </Caption1>
+                      </div>
+                    </div>
+
+                    {deltaResult && !deltaResult.ok && (
+                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Binding failed</MessageBarTitle>
+                          {deltaResult.error}
+                          {deltaResult.hint && <div style={{ marginTop: 6 }}><Caption1>{deltaResult.hint}</Caption1></div>}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    {deltaResult?.ok && (
+                      <MessageBar intent="success" style={{ marginTop: 12 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>External table {deltaResult.externalTableName} bound</MessageBarTitle>
+                          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            {deltaResult.kqlViewName && (
+                              <Caption1>KQL view: <code>{deltaResult.kqlViewName}()</code></Caption1>
+                            )}
+                            {deltaResult.accelerationPolicy != null && (
+                              <Caption1>Acceleration policy: <code>{JSON.stringify(deltaResult.accelerationPolicy)}</code></Caption1>
+                            )}
+                            {deltaResult.sampleQuery && (
+                              <Caption1>Sample query: <code>{deltaResult.sampleQuery}</code></Caption1>
+                            )}
+                            {(deltaResult.steps || []).map((st, i) => (
+                              <Caption1 key={i} style={{ color: st.ok ? tokens.colorStatusSuccessForeground1 : tokens.colorStatusWarningForeground1 }}>
+                                {st.ok ? '✓' : '⚠'} {st.step}{st.detail ? `: ${st.detail}` : ''}
+                              </Caption1>
+                            ))}
+                          </div>
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => { setDeltaOpen(false); setDeltaResult(null); }}>Close</Button>
+                    <Button
+                      appearance="primary"
+                      onClick={onBindDelta}
+                      disabled={deltaBusy || !selectedDb || !deltaTableName.trim() || !deltaAbfss.trim()}
+                    >
+                      {deltaBusy ? 'Binding…' : 'Bind Delta source'}
                     </Button>
                   </DialogActions>
                 </DialogBody>

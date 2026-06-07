@@ -1194,6 +1194,11 @@ output uamiActivatorPrincipalId string = identity.outputs.uamiActivatorPrincipal
 output uamiMirroringId string = identity.outputs.uamiMirroringId
 output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 
+// Shared ADX cluster system-assigned MI principal id (empty when BYO existing
+// cluster or ADX disabled). Threaded to the DLZ Synapse storage RBAC grant so
+// the Eventhouse Delta endpoint can read the lakehouse over managed identity.
+output adxClusterPrincipalId string = (adxEnabled && empty(existingAdxClusterName)) ? adxCluster!.outputs.clusterPrincipalId : ''
+
 // Pass-through for DLZs
 output privateDnsZoneIds object = network.outputs.privateDnsZoneIds
 output lawId string = monitoring.outputs.lawId
