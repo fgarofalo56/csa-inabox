@@ -350,7 +350,6 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
   const toggleCollapsed = () => onChange({ ...cell, collapsed: !cell.collapsed });
 
   const exec = cell.executionCount ? `[${cell.executionCount}]` : '[ ]';
-  const locked = !!cell.locked;
   const collapsed = !!cell.collapsed;
   const lineCount = cell.source ? cell.source.split('\n').length : 0;
   const magic = detectCellMagic(cell.source);
