@@ -154,6 +154,12 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
+@description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
+param loomParamKeyVaultUri string = ''
+
+@description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
+param loomParamAppConfigEndpoint string = ''
+
 @description('Loom HDInsight cluster linked-service name (backs the four ADF HDInsight pipeline activities — Hive/Spark/MapReduce/Streaming). Empty leaves the editor honest-gated until an Azure HDInsight linked service is registered in the factory.')
 param loomHdinsightLinkedService string = ''
 
@@ -714,6 +720,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
+            // F4: schedule-time pipeline parameter overrides. KV defaults to the
+            // admin-plane vault (Console UAMI already has Secrets Officer there);
+            // point at a separate vault by overriding loomParamKeyVaultUri and
+            // granting the Console identity "Key Vault Secrets User" on it.
+            { name: 'LOOM_PARAM_KEYVAULT', value: !empty(loomParamKeyVaultUri) ? loomParamKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // App Configuration source for parameter overrides. Empty disables
+            // the App Config path; set to an App Configuration endpoint and grant
+            // the Console identity "App Configuration Data Reader" to enable.
+            { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
             // Copy Job (F14) — watermark control table address. When the server

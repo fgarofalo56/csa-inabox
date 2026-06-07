@@ -711,6 +711,12 @@ export interface AdfTrigger {
       pipelineReference: { referenceName: string; type: 'PipelineReference' };
       parameters?: Record<string, unknown>;
     }>;
+    // Tumbling-window triggers reference a SINGLE pipeline (singular `pipeline`)
+    // rather than the `pipelines[]` array used by schedule/event triggers.
+    pipeline?: {
+      pipelineReference: { referenceName: string; type: 'PipelineReference' };
+      parameters?: Record<string, unknown>;
+    };
     annotations?: unknown[];
     typeProperties?: Record<string, unknown>;
   };

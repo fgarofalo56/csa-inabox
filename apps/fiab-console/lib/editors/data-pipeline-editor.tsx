@@ -51,6 +51,7 @@ import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/can
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
+import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
 import type { PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
@@ -235,6 +236,10 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
+  // F4: which schedule-time parameter sources the deployment has configured.
+  const [paramSources, setParamSources] = useState<{ kvAvailable: boolean; appConfigAvailable: boolean }>(
+    { kvAvailable: false, appConfigAvailable: false },
+  );
 
   // "Practice with sample data" landing-card state. Seeds real ADLS + runs a
   // real ADF copy pipeline — honest gate when LOOM_SAMPLE_ADLS is unset.
@@ -289,7 +294,10 @@ export function DataPipelineEditor({ item, id }: Props) {
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}/triggers?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
-      if (j.ok) setTriggers(j.triggers || []);
+      if (j.ok) {
+        setTriggers(j.triggers || []);
+        if (j.paramSources) setParamSources(j.paramSources);
+      }
     } catch { /* keep last */ }
   }, []);
 
@@ -699,14 +707,20 @@ export function DataPipelineEditor({ item, id }: Props) {
   }, [dispatchToast]);
 
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
-  const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
+  // paramBindings carry per-parameter value sources (direct / Key Vault / App
+  // Config); the BFF route resolves KV/App Config server-side at creation time.
+  const createTriggerWith = useCallback(async (
+    name: string,
+    properties: Record<string, unknown>,
+    paramBindings: Record<string, ParamBinding>,
+  ) => {
     if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), properties }),
+        body: JSON.stringify({ name: name.trim(), properties, parameterBindings: paramBindings }),
       });
       const j = await r.json();
       if (!j.ok) { setTriggerErr(j.error || 'create failed'); return; }
@@ -1242,6 +1256,9 @@ export function DataPipelineEditor({ item, id }: Props) {
             open={scheduleOpen}
             onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
             onCreate={createTriggerWith}
+            pipelineParams={parameters}
+            kvAvailable={paramSources.kvAvailable}
+            appConfigAvailable={paramSources.appConfigAvailable}
             busy={triggerBusy}
             error={triggerErr}
           />
