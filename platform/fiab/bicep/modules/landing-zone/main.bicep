@@ -288,6 +288,11 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // Grant the ADF factory MSI Storage Blob Data Contributor on the DLZ storage
+    // account so MSI-auth linked services can read/write ADLS Gen2 (backs the
+    // "Practice with sample data" copy pipeline) and Dataflow Gen2 Parquet/CSV sinks.
+    storageAccountId: storage.outputs.storageAccountId
+    adlsAccountName: storage.outputs.storageAccountName
   }
 }
 
@@ -392,3 +397,4 @@ output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVect
 // CSA Loom no-cuts-sweep — ADF wiring outputs
 output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''
 output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
+output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''

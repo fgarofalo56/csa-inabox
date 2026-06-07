@@ -14,8 +14,13 @@ param defaultStorageAccountName string
 @description('Synapse workspace system-assigned MI principal (object) id.')
 param synapseManagedIdentityPrincipalId string
 
+@description('Console UAMI principal (object) id — granted Storage Blob Data Reader so the BFF live Tables catalog scan can list paths + read _delta_log entries without needing write/Contributor. Empty = skip.')
+param consolePrincipalId string = ''
+
 // Storage Blob Data Contributor
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+// Storage Blob Data Reader (read-only data plane — sufficient for the catalog scan)
+var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
 resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
   name: defaultStorageAccountName
@@ -27,6 +32,19 @@ resource grant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty
   properties: {
     principalId: synapseManagedIdentityPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Console UAMI → Storage Blob Data Reader on the lakehouse storage account.
+// Powers the live Delta catalog scan in /api/lakehouse/tables (ADLS listing +
+// _delta_log read). Read-only by design — catalog discovery never writes.
+resource consoleReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+  name: guid(sa.id, consolePrincipalId, storageBlobDataReaderRoleId)
+  scope: sa
+  properties: {
+    principalId: consolePrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
     principalType: 'ServicePrincipal'
   }
 }
