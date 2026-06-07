@@ -39,9 +39,13 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
-  MathFormula20Regular, Table20Regular,
+  MathFormula20Regular, Table20Regular, Flowchart20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import {
+  SchemaDiagramCanvas,
+  type SchemaGraphNode, type SchemaGraphEdge, type SchemaNodeKind,
+} from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
@@ -924,6 +928,18 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  // Query | Diagram tab — the Diagram tab is the React Flow entity diagram of
+  // the live ADX database (tables / MVs / functions / shortcuts + dependency
+  // edges), Fabric RTI schema-graph parity built on the Azure-native cluster.
+  const [editorTab, setEditorTab] = useState<'query' | 'diagram'>('query');
+  const [graphData, setGraphData] = useState<{ nodes: SchemaGraphNode[]; edges: SchemaGraphEdge[] } | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  // Delete-from-diagram confirmation dialog.
+  const [deleteDlgOpen, setDeleteDlgOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ name: string; kind: SchemaNodeKind } | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -976,6 +992,65 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [loading, id, run]);
+
+  // Lazy-load the entity diagram graph from the live ADX schema. Only fires
+  // for a saved database (id !== 'new'). Real backend: GET schema-graph →
+  // .show database schema as json + .show materialized-views + .show functions.
+  const loadGraph = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setGraphLoading(true); setGraphError(null);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/schema-graph`);
+      const j = await r.json();
+      if (!j.ok) setGraphError(j.error || 'Schema graph failed');
+      else setGraphData({ nodes: j.nodes || [], edges: j.edges || [] });
+    } catch (e: any) {
+      setGraphError(e?.message || String(e));
+    } finally {
+      setGraphLoading(false);
+    }
+  }, [id]);
+
+  // Fetch the graph the first time the Diagram tab is opened (and after a
+  // delete clears graphData). Narrow deps so it doesn't re-fetch on every
+  // graphData change.
+  useEffect(() => {
+    if (editorTab === 'diagram' && !graphData && !graphLoading && id && id !== 'new') {
+      loadGraph();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorTab, graphData, id]);
+
+  // Drop a table / materialized-view / function from the diagram. Issues a real
+  // `.drop ... ifexists` mgmt command via the existing /query route (mgmt
+  // commands starting with `.` are auto-routed to /v1/rest/mgmt) against ADX.
+  const deleteFromDiagram = useCallback(async () => {
+    if (!deleteTarget) return;
+    const { name, kind } = deleteTarget;
+    const cmd =
+      kind === 'table' ? `.drop table ["${name}"] ifexists`
+      : kind === 'materialized-view' ? `.drop materialized-view ["${name}"] ifexists`
+      : kind === 'function' ? `.drop function ["${name}"] ifexists`
+      : kind === 'shortcut' ? `.drop external table ["${name}"]`
+      : null;
+    if (!cmd) { setDeleteError('This entity type cannot be deleted from the diagram.'); return; }
+    setDeleteSubmitting(true); setDeleteError(null);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kql: cmd }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setDeleteError(j.error || 'Delete failed'); return; }
+      setDeleteDlgOpen(false); setDeleteTarget(null);
+      setGraphData(null); // force the Diagram tab to re-fetch
+      await Promise.all([load(), loadGraph()]);
+    } catch (e: any) {
+      setDeleteError(e?.message || String(e));
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  }, [deleteTarget, id, load, loadGraph]);
 
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
@@ -1125,6 +1200,17 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarBody>
             </MessageBar>
           )}
+          <TabList
+            selectedValue={editorTab}
+            onTabSelect={(_: unknown, d: any) => setEditorTab(d.value as 'query' | 'diagram')}
+            style={{ marginBottom: 4 }}
+          >
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="diagram" icon={<Flowchart20Regular />}>Diagram</Tab>
+          </TabList>
+
+          {editorTab === 'query' && (
+          <>
           <MonacoTextarea
             value={kql}
             onChange={setKql}
@@ -1227,6 +1313,69 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               )}
             </div>
           )}
+          </>
+          )}
+
+          {editorTab === 'diagram' && (
+            id && id !== 'new'
+              ? graphLoading
+                ? <Spinner label="Loading entity diagram…" />
+                : graphError
+                  ? (
+                    <MessageBar intent="error">
+                      <MessageBarBody>
+                        <MessageBarTitle>Entity diagram unavailable</MessageBarTitle>
+                        {graphError}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )
+                  : (
+                    <SchemaDiagramCanvas
+                      nodes={graphData?.nodes || []}
+                      edges={graphData?.edges || []}
+                      onQueryNode={(name, kind) => {
+                        setKql(kind === 'function' ? `${name}()` : `["${name}"]\n| take 100`);
+                        setEditorTab('query');
+                      }}
+                      onDeleteNode={(name, kind) => {
+                        setDeleteTarget({ name, kind }); setDeleteError(null); setDeleteDlgOpen(true);
+                      }}
+                    />
+                  )
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Save the KQL database first</MessageBarTitle>
+                    The entity diagram appears once this database is saved and bound to a Kusto database.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
+          {/* Delete-from-diagram confirmation — issues a real .drop ... ifexists
+              mgmt command against the live ADX cluster via the /query route. */}
+          <Dialog open={deleteDlgOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) { setDeleteDlgOpen(false); setDeleteTarget(null); } }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Delete {deleteTarget?.kind} &quot;{deleteTarget?.name}&quot;?</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <Caption1>
+                      Issues a <code>.drop {deleteTarget?.kind ?? ''} [&quot;{deleteTarget?.name ?? ''}&quot;]</code> management
+                      command against the live ADX cluster. This cannot be undone.
+                    </Caption1>
+                    {deleteError && <MessageBar intent="error"><MessageBarBody>{deleteError}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" disabled={deleteSubmitting} onClick={() => { setDeleteDlgOpen(false); setDeleteTarget(null); }}>Cancel</Button>
+                  <Button appearance="primary" disabled={deleteSubmitting} onClick={deleteFromDiagram}>
+                    {deleteSubmitting ? 'Deleting…' : 'Delete'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           <Dialog open={!!wizardKind} onOpenChange={(_: unknown, d: any) => { if (!d.open) setWizardKind(null); }}>
             <DialogSurface>
