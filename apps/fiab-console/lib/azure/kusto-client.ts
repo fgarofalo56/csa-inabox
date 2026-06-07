@@ -101,6 +101,67 @@ export function kustoConfigGate(): { missing: string } | null {
   return null;
 }
 
+/**
+ * Build the ADX-proxy `cluster()` URI for the configured Log Analytics
+ * workspace (or App Insights component).
+ *
+ * Uses `LOOM_LOG_ANALYTICS_RESOURCE_ID` (the full ARM resource ID emitted by
+ * monitoring.bicep → main.bicep → the loom-console container env). The ADX
+ * cluster resolves the cross-cluster reference server-side at query time; the
+ * Console UAMI holds Log Analytics Reader on the workspace (granted by
+ * monitoring.bicep `consoleLaReader`), so no separate token is needed — the
+ * federated query runs as a normal ADX `/v1/rest/query`.
+ *
+ * Proxy hosts (grounded in Microsoft Learn — "Query data in Azure Monitor
+ * using Azure Data Explorer", additional-syntax-examples):
+ *   Commercial / GCC : adx.monitor.azure.com
+ *   GCC-High / IL5   : adx.monitor.azure.us
+ *
+ * Returns `null` when `LOOM_LOG_ANALYTICS_RESOURCE_ID` is not configured
+ * (the operator has not deployed a Log Analytics workspace / the env var is
+ * unset) so callers can render an honest gate instead of a phantom call.
+ */
+export function laProxyClusterUri(): string | null {
+  const rid = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim();
+  if (!rid) return null;
+  const host = process.env.AZURE_CLOUD === 'AzureUSGovernment'
+    ? 'adx.monitor.azure.us'
+    : 'adx.monitor.azure.com';
+  const path = rid.startsWith('/') ? rid : `/${rid}`;
+  return `https://${host}${path}`;
+}
+
+/**
+ * Extract the workspace (or component) name from
+ * `LOOM_LOG_ANALYTICS_RESOURCE_ID`. The ARM resource ID ends with
+ * `/workspaces/<name>` (Log Analytics) or `/components/<name>` (App Insights);
+ * the ADX proxy `database()` argument is exactly that trailing name.
+ * Returns `null` when the env var is unset.
+ */
+export function laWorkspaceName(): string | null {
+  const rid = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim();
+  if (!rid) return null;
+  return rid.split('/').filter(Boolean).pop() ?? null;
+}
+
+/**
+ * Honest config gate for cross-service (ADX → Log Analytics / App Insights)
+ * federated queries. Returns `{ missing }` naming the exact env var when
+ * `LOOM_LOG_ANALYTICS_RESOURCE_ID` is absent, else `null` when the feature is
+ * available.
+ *
+ * Unlike {@link kustoConfigGate}, this never gates on cloud boundary — the
+ * `adx.monitor.azure.us` endpoint is supported for ADX-initiated cross-service
+ * queries in Government clouds, so only the missing-env-var situation gates the
+ * feature.
+ */
+export function laConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim()) {
+    return { missing: 'LOOM_LOG_ANALYTICS_RESOURCE_ID' };
+  }
+  return null;
+}
+
 async function getToken(): Promise<string> {
   const scope = `${CLUSTER_URI}/.default`;
   const t = await credential.getToken(scope);
