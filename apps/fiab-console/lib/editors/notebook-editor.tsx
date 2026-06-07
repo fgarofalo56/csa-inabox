@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular, Sparkle20Regular, BracesVariable20Regular,
+  History20Regular, ArrowUpload20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +31,10 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import {
+  SessionConfigDialog, toConfigureOptions, sessionConfigEquals, normalizeSessionConfig,
+  DEFAULT_SESSION_CONFIG, type SessionConfig,
+} from '@/lib/components/notebook/session-config-dialog';
 import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
@@ -40,7 +44,7 @@ import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState
 // below the component declarations.
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
+  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, position: 'relative' },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     width: '100%', minHeight: 280,
@@ -52,6 +56,9 @@ const useStyles = makeStyles({
   treePad: { padding: 8 },
   tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  // Bottom-left session status badge — overlays the editor surface like the
+  // Synapse Studio session indicator (Idle / Running / Error).
+  statusBadge: { position: 'absolute', bottom: 12, left: 12, zIndex: 5 },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -177,6 +184,18 @@ export function NotebookEditor({ item, id }: Props) {
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
+
+  // Session configuration ("Configure session" dialog) — sizes the real Livy
+  // Spark session (executors / memory / idle timeout). Persisted per-notebook
+  // in Cosmos; applied to the session-create body before the first statement
+  // runs (the %%configure equivalent). `cfgDraft` is the in-dialog edit copy so
+  // Cancel discards. `sessionStatus` drives the bottom-left status badge.
+  const [sessionCfg, setSessionCfg] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDraft, setCfgDraft] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDialogOpen, setCfgDialogOpen] = useState(false);
+  const [cfgSaving, setCfgSaving] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
+  const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
 
   // Schema hint for inline code completion (ghost text): the attached
   // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
@@ -321,6 +340,10 @@ export function NotebookEditor({ item, id }: Props) {
       }
       // Phase 2: attached data sources.
       setAttachedSources(Array.isArray(j.definition?.attachedSources) ? j.definition.attachedSources : []);
+      // Session sizing config (Configure session dialog). Defaults when unset.
+      setSessionCfg(j.definition?.sessionConfig
+        ? normalizeSessionConfig(j.definition.sessionConfig)
+        : DEFAULT_SESSION_CONFIG);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -449,6 +472,41 @@ export function NotebookEditor({ item, id }: Props) {
     void persistSources(next);
   }, [attachedSources, persistSources]);
 
+  // Open the Configure-session dialog seeded with the current sizing.
+  const openConfigDialog = useCallback(() => {
+    setCfgDraft(sessionCfg);
+    setCfgDialogOpen(true);
+  }, [sessionCfg]);
+
+  // Apply + persist the session sizing. Saves only the sessionConfig slice
+  // (the PUT route handles it independently of cells, so this never clobbers
+  // in-progress edits). The next run re-sizes the Livy session because the
+  // run route recreates the session when the requested sizing changes.
+  const applySessionConfig = useCallback(async () => {
+    const next = normalizeSessionConfig(cfgDraft);
+    setSessionCfg(next);
+    setCfgDialogOpen(false);
+    if (!workspaceId || !notebookId) return; // unsaved 'new' notebook — keep in memory
+    if (sessionConfigEquals(next, sessionCfg)) return;
+    setCfgSaving(true);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: { sessionConfig: next } }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        if (j.definition?.sessionConfig) setSessionCfg(normalizeSessionConfig(j.definition.sessionConfig));
+        setRunMsg(`Session configured: ${next.numExecutors} executors · ${next.executorMemoryGb} GB · ${next.timeoutMinutes} min timeout. Re-sizes on next run.`);
+      } else {
+        setRunMsg(`Could not save session config: ${j.error || 'unknown'}`);
+      }
+    } catch (e: any) {
+      setRunMsg(`Could not save session config: ${e?.message || e}`);
+    } finally { setCfgSaving(false); }
+  }, [cfgDraft, sessionCfg, workspaceId, notebookId]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     if (!computeId) {
@@ -456,19 +514,22 @@ export function NotebookEditor({ item, id }: Props) {
       return;
     }
     setRunning(true);
+    setSessionStatus('Running');
     setRunMsg('Submitting run…');
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId }),
+        body: JSON.stringify({ compute: computeId, sessionConfig: toConfigureOptions(sessionCfg) }),
       });
       const j = await r.json();
       if (!j.ok) {
         setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
         setRunning(false);
+        setSessionStatus('Error');
         return;
       }
+      if (j.session) setSessionReceipt(j.session);
 
       // Poll the run endpoint every 4s for status — Synapse cold-start can
       // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
@@ -498,21 +559,25 @@ export function NotebookEditor({ item, id }: Props) {
           if (p.output.status === 'ok') {
             const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
             setRunMsg(`✓ Completed:\n${txt}`);
+            setSessionStatus('Idle');
           } else if (p.output.status === 'error') {
             setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+            setSessionStatus('Error');
           } else {
             setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+            setSessionStatus('Idle');
           }
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
           setRunMsg(`Run ended: ${p.status}${p.resultState ? ` (${p.resultState})` : ''}`);
+          setSessionStatus('Error');
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } finally { setRunning(false); }
-  }, [workspaceId, notebookId, computeId, loadJobs]);
+  }, [workspaceId, notebookId, computeId, sessionCfg, loadJobs]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -701,20 +766,23 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     if (cell.type !== 'code') return;
     patchCell(cell.id, { output: { status: 'pending' } });
+    setSessionStatus('Running');
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang }),
+        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang, sessionConfig: toConfigureOptions(sessionCfg) }),
       });
       const j = await r.json();
       if (!j.ok) {
         patchCell(cell.id, { output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
         setRunMsg(`Cell run failed: ${j.error}`);
+        setSessionStatus('Error');
         return;
       }
+      if (j.session) setSessionReceipt(j.session);
       let runId: string = j.runId;
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
@@ -725,6 +793,7 @@ export function NotebookEditor({ item, id }: Props) {
         const p = await pollRes.json();
         if (!p.ok) {
           patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          setSessionStatus('Error');
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
@@ -749,18 +818,21 @@ export function NotebookEditor({ item, id }: Props) {
             },
           });
           setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
+          setSessionStatus(p.output.status === 'ok' ? 'Idle' : 'Error');
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
           patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          setSessionStatus('Error');
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+      setSessionStatus('Error');
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionCfg, patchCell, loadJobs]);
 
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
@@ -906,6 +978,9 @@ export function NotebookEditor({ item, id }: Props) {
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
         ]},
+        { label: 'Session', actions: [
+          { label: 'Configure session', onClick: () => openConfigDialog() },
+        ]},
       ]},
       { id: 'help', label: 'Help', groups: [
         { label: 'Resources', actions: [
@@ -916,7 +991,7 @@ export function NotebookEditor({ item, id }: Props) {
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
     copilotOpen,
-    run, save, del, loadList, insertCell, openAttach,
+    run, save, del, loadList, insertCell, openAttach, openConfigDialog,
   ]);
 
   return (
@@ -1072,6 +1147,13 @@ export function NotebookEditor({ item, id }: Props) {
                 : undefined}
               onClick={run}
             >{running ? 'Queuing…' : 'Run'}</Button>
+            <Button
+              appearance="outline"
+              icon={<Settings20Regular />}
+              disabled={cfgSaving}
+              title="Set Spark session executors, memory, and idle timeout"
+              onClick={openConfigDialog}
+            >Configure session</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
@@ -1168,6 +1250,23 @@ export function NotebookEditor({ item, id }: Props) {
             </MessageBar>
           )}
           {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+
+          {/* Honest receipt: the real Livy session-create body that provisioned
+              the running Spark session. numExecutors here is what the session
+              actually runs with — confirms the Configure-session sizing. */}
+          {sessionReceipt && typeof sessionReceipt.numExecutors === 'number' && (
+            <MessageBar intent="success">
+              <MessageBarBody>
+                <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
+                Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
+                {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
+                {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
+                {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
+                <br />
+                <code style={{ fontSize: 11 }}>{JSON.stringify(sessionReceipt)}</code>
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {notebookId && (
             <>
@@ -1271,6 +1370,29 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </>
           )}
+
+          {/* Configure session dialog — sliders + numeric field, no JSON. */}
+          <SessionConfigDialog
+            open={cfgDialogOpen}
+            config={cfgDraft}
+            onConfigChange={setCfgDraft}
+            onApply={applySessionConfig}
+            onClose={() => setCfgDialogOpen(false)}
+          />
+
+          {/* Bottom-left session status badge (Idle / Running / Error). */}
+          <Badge
+            className={s.statusBadge}
+            appearance="filled"
+            color={sessionStatus === 'Running' ? 'warning' : sessionStatus === 'Error' ? 'danger' : 'success'}
+            title={
+              sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
+                ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
+                : `Session ${sessionStatus.toLowerCase()}`
+            }
+          >
+            {sessionStatus}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
+          </Badge>
         </div>
         <CopilotChatPane
           open={copilotOpen}

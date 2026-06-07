@@ -97,28 +97,49 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const pool = compute.slice('spark:'.length);
       const { createLivySessionAsync, getLivySession } = await import('@/lib/azure/synapse-dev-client');
 
+      // Session sizing from the "Configure session" dialog. The editor sends
+      // the real Livy keys; we fall back to the notebook's saved config, then
+      // to Synapse defaults inside createLivySessionAsync. NO freeform JSON —
+      // these are the four structured fields the dialog produces.
+      const rawCfg = (body?.sessionConfig && typeof body.sessionConfig === 'object')
+        ? body.sessionConfig
+        : (state.sparkSessionSizing && typeof state.sparkSessionSizing === 'object' ? state.sparkSessionSizing : null);
+      const sizing = rawCfg ? {
+        numExecutors: typeof rawCfg.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
+        executorMemory: typeof rawCfg.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
+        driverMemory: typeof rawCfg.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
+        heartbeatTimeoutInSecond: typeof rawCfg.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
+      } : undefined;
+      const sizingKey = sizing ? JSON.stringify(sizing) : '';
+
       // REUSE an existing live Livy session for this pool+kind instead of
       // creating a new one per cell. A Synapse Spark pool cold-starts in
       // minutes; creating a fresh session for every cell meant every run paid
       // that cold start — the "takes forever" symptom. A pyspark session also
       // hosts sql/spark statements via per-statement kind, so one session
       // serves Python + Spark SQL + Scala cells. Only re-create when the saved
-      // session is gone or terminal.
+      // session is gone, terminal, OR its sizing differs from the requested
+      // config (so %%configure / Configure-session changes take effect — Livy
+      // sizing is fixed at session create, so a new config needs a new session).
       let sessionId: number | undefined;
       let sessState = 'starting';
       let reused = false;
+      let sessionReceipt: Record<string, unknown> | null = null;
       const saved = state.sparkSession;
-      if (saved && saved.pool === pool && saved.kind === sessKind && typeof saved.id === 'number') {
+      const savedKey = saved && typeof saved.sizingKey === 'string' ? saved.sizingKey : '';
+      if (saved && saved.pool === pool && saved.kind === sessKind && typeof saved.id === 'number' && savedKey === sizingKey) {
         try {
           const live = await getLivySession(pool, saved.id);
           if (['idle', 'busy', 'starting', 'not_started'].includes(live.state)) {
             sessionId = saved.id; sessState = live.state; reused = true;
+            sessionReceipt = saved.request || null;
           }
         } catch { /* stale/expired → fall through to create */ }
       }
       if (sessionId === undefined) {
-        const sess = await createLivySessionAsync(pool, sessKind);
+        const sess = await createLivySessionAsync(pool, sessKind, undefined, sizing);
         sessionId = sess.id; sessState = sess.state;
+        sessionReceipt = sess.request;
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
@@ -129,7 +150,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: stmtKind, cellId };
         await items.item(nb.id, workspaceId).replace({
           ...nb,
-          state: { ...state, pendingRuns, sparkSession: { pool, id: sessionId, kind: sessKind } },
+          state: {
+            ...state,
+            pendingRuns,
+            sparkSession: { pool, id: sessionId, kind: sessKind, sizingKey, request: sessionReceipt },
+            ...(rawCfg ? { sparkSessionSizing: rawCfg } : {}),
+          },
           updatedAt: new Date().toISOString(),
         } as WorkspaceItem);
       } catch { /* non-fatal — poll will fall back to state.code */ }
@@ -141,6 +167,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         reusedSession: reused,
         compute: { kind: 'synapse-spark', pool },
         cellId: cellId || null,
+        // Honest receipt: the real Livy session-create body that provisioned
+        // (or is reusing) this session — `numExecutors` here is what the Spark
+        // session actually runs with.
+        session: sessionReceipt
+          ? { id: sessionId, state: sessState, reused, ...sessionReceipt }
+          : { id: sessionId, state: sessState, reused },
         sourcePreview: code.slice(0, 200),
       });
     }
