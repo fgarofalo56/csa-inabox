@@ -195,6 +195,10 @@ export interface FoundryModelSummary {
   tags?: Record<string, string>;
   properties?: Record<string, string>;
   latestVersion?: string;
+  /** ARM systemData.createdAt — when the model container was first registered. */
+  createdAt?: string;
+  /** ARM systemData.lastModifiedAt — last version registration / metadata edit. */
+  lastModifiedAt?: string;
 }
 
 export interface FoundryModelVersion {
@@ -219,6 +223,8 @@ function shapeModelContainer(raw: any): FoundryModelSummary {
     tags: p.tags,
     properties: p.properties,
     latestVersion: p.latestVersion,
+    createdAt: raw?.systemData?.createdAt,
+    lastModifiedAt: raw?.systemData?.lastModifiedAt,
   };
 }
 

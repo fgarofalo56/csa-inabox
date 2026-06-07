@@ -48,6 +48,10 @@ interface Workload {
   id: string; name: string; description?: string;
   category?: string; included?: boolean;
   featureSlugs?: string[];
+  /** Optional experience-home route — when set, opening the workload navigates
+   *  here (the experience switcher landing page) instead of the first
+   *  feature's /new wizard. */
+  homeHref?: string;
 }
 
 const LS_VIEW = 'loom.workload-hub.viewMode.v1';
@@ -172,6 +176,9 @@ export default function WorkloadHubPage() {
   }, [items]);
 
   function openWorkload(w: Workload) {
+    // Experience-home workloads (e.g. Data Science) land on their dedicated
+    // experience page; the rest open the first feature's create wizard.
+    if (w.homeHref) { router.push(w.homeHref); return; }
     const first = (w.featureSlugs || [])[0];
     if (first) router.push(`/items/${first}/new`);
   }
