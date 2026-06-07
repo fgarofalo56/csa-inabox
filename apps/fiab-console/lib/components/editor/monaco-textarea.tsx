@@ -72,6 +72,7 @@ export type MonacoLanguage =
   | 'sparksql'
   | 'r'
   | 'sparkr'
+  | 'csharp'
   | 'kql'
   | 'kusto'
   | 'xml'
@@ -116,6 +117,7 @@ function mapLanguage(lang?: MonacoLanguage): string {
     case 'sql': return 'sql';
     case 'sparkr':
     case 'r': return 'r';
+    case 'csharp': return 'csharp';
     case 'kql':
     case 'kusto': return 'kusto';
     case 'xml': return 'xml';

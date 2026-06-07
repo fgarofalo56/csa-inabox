@@ -417,6 +417,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
+    adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -453,6 +454,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
+    adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled

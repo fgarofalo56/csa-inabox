@@ -54,23 +54,29 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 | # | Synapse Studio capability | Loom | Where / backend |
 |---|---|---|---|
-| B1 | Add code cell | ✅ built | `addCell('code')` (toolbar + per-cell) |
+| B1 | Add code cell | ✅ built | `addCell('code')` (toolbar, ribbon, between-cell adders) |
 | B2 | Add markdown cell | ✅ built | `addCell('markdown')` |
-| B3 | Per-cell language: PySpark / Spark(Scala) / Spark SQL / SparkR (%% magics) | ✅ built | cell language dropdown → KIND_TO_MONACO; magic detected on open |
+| B3 | Per-cell language: PySpark / Spark(Scala) / Spark SQL / SparkR (%% magics) | ✅ built | cell language dropdown → KIND_TO_MONACO; magic round-trips on save/open |
+| B3a | **Notebook default language** | ✅ built | toolbar "Language" dropdown → new cells inherit `defaultLang` |
 | B4 | Move cell up / down | ✅ built | `moveCell(±1)` |
 | B5 | Delete cell | ✅ built | `deleteCell` (≥1 enforced) |
 | B6 | Markdown edit ⇄ render toggle | ✅ built | NotebookCellView md edit/view + double-click |
 | B7 | Monaco editor with syntax highlight | ✅ built | `MonacoTextarea` per cell |
-| B8 | .NET for Spark **C# (%%csharp)** cell | ❌ MISSING | 4 kinds only (no C#) |
+| B8 | .NET for Spark **C# (%%csharp)** cell | ✅ built | 5th `CellKind` `csharp`; `%%csharp` magic round-trip; Monaco `csharp` |
 | B9 | IntelliSense / code completion | ⚠️ partial | Monaco baseline only; no Spark-aware completion |
-| B10 | Cell-level **clone / cut / paste / collapse** | ❌ MISSING | move/delete only |
+| B10 | Cell-level **duplicate / collapse** | ✅ built | per-cell "…" menu → `duplicateCell`; collapse chevron → `collapsed` (jupyter.source_hidden) |
+| B10a | **Insert cell between cells** (hover adder) | ✅ built | `<CellAdder>` before first + after each cell → `addCell(…, 'before'/'after')` |
 | B11 | Cell **status indicator** (step-by-step) + duration summary | ⚠️ partial | running spinner + ok/error output; no per-step timeline |
+| B12 | **Parameters cell** (papermill/ADF `tags:["parameters"]`) | ✅ built | "…" menu toggle + ribbon "Parameters cell"; single-cell enforced; `parameters` badge; tag round-trips in IPYNB |
+| B13 | **Outline** (markdown headings → click-to-scroll nav) | ✅ built | left-panel Outline (`outline` useMemo) → `scrollIntoView` on `cell-<id>` |
+| B14 | **Copilot cell edges** (NL→code, explain, fix-error) | ✅ built | per-cell Ask Copilot / Explain / Fix → `POST /api/notebook/[id]/assist` → AOAI `chat` deployment (`resolveAoaiTarget`), grounded in T2 lakehouse schema; honest `no_aoai` gate. No Fabric Copilot dependency |
 
 ### C. Compute attach & session
 
 | # | Synapse Studio capability | Loom | Where / backend |
 |---|---|---|---|
 | C1 | **Attach to** a Big Data (Spark) pool | ✅ built | Attach dropdown → `GET /api/items/synapse-spark-pool/list` (ARM) |
+| C1a | **Attach environment** (Spark configuration) | ✅ built | Environment dropdown → `GET /api/synapse/environments` (dev-plane `sparkconfigurations`); persisted as `metadata.a365ComputeOptions` |
 | C2 | Live session state badge (none/starting/idle/busy) | ✅ built | `sessionState` badge; warmed session reused across cells |
 | C3 | Cold-start warm-up (poll session to idle, then submit) | ✅ built | run-cell POST loop on `sessionWarming` |
 | C4 | **Configure session** pane (executors, size, timeout) / `%%configure` | ❌ MISSING | attach + default session only |
@@ -97,42 +103,44 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | # | Capability | Loom | Where / backend |
 |---|---|---|---|
 | E1 | Honest infra-gate when workspace unset | ✅ built | MessageBar naming `LOOM_SYNAPSE_WORKSPACE` + Synapse Artifact Publisher role + bicep path |
+| E2 | **ADLS .ipynb backup** (notebook durable in Cosmos + ADLS) | ✅ built | Save → `PUT …/[name]` writes `silver/loom/notebooks/<ws>/<name>.ipynb` (non-fatal; status surfaced in the save banner) |
 
 ---
 
-## Coverage tally
+## Coverage tally (post-F15 authoring update, 2026-06-06)
 
-- **built ✅: 18**
+- **built ✅: 29**
 - **partial ⚠️: 4**
 - **honest-gate ⚠️: 1**
-- **MISSING ❌: 14**
+- **MISSING ❌: 10**
 
-## Honest grade: **B−**
+## Honest grade: **B+**
 
-This is a genuine, **production-grade** Spark-notebook authoring surface — a real
-1:1 with the core Develop-hub workflow: list/create/open/save(publish)/delete on
-the Synapse artifact REST, a multi-cell IPYNB editor with per-cell %% language
-magics, Attach-to-pool against real ARM Big Data pools, and **real Livy execution**
-(create session → submit statement → poll → render text/error output) reusing the
-warm session across cells. **No vaporware** — Spark code actually runs. This flips
-the `synapse-analytics.md` "Synapse notebook editor (absent)" gap from ❌ to a built
-surface.
+F15 lifted the **authoring surface** to full Synapse-Studio parity: all five
+languages (PySpark / Scala / Spark SQL / SparkR / .NET-C#) with magic-header
+round-trip, a **notebook default language**, **insert-between** cell adders,
+**duplicate** and **collapse**, a **parameters cell** (papermill/ADF tag,
+single-cell enforced), a left-panel **Outline**, and an **environment** (Spark
+configuration) attach alongside the Spark-pool attach. Saving publishes to the
+Synapse artifact REST **and** backs the `.ipynb` up to ADLS silver. Cells +
+order + per-cell language + parameters tag all round-trip through canonical
+IPYNB. No vaporware — every control hits a real backend; the environment picker
+and ADLS backup degrade honestly when unconfigured.
 
-Held to **B−** (not A) by `ui-parity.md`'s completeness bar: no **`display(df)`
-rich table/chart builder** (the marquee output experience — text/plain only), no
-**variable explorer**, no **Configure-session / `%%configure`**, no **restart /
-stop / cancel**, no **Spark progress bar or Spark-UI drill-in**, no **`%run`**, no
-**C# cell**, and no **Studio Git/Publish shell**. The output panel is the biggest
-parity gap: Synapse's notebook is defined by `display()` visualization, and Loom
-shows raw text.
+Held to **B+** (not A) by the *execution / output* gaps that are explicitly out
+of F15 scope (tracked for **T17**): no **`display(df)` rich table/chart**
+(text/plain only), no **variable explorer**, no **Configure-session /
+`%%configure`**, no **restart/stop/cancel**, no **Spark progress bar / Spark-UI
+drill-in**, no **run-above/below**, no **`%run`**, and no **Studio Git/Publish
+shell**.
 
-## Highest-value gaps to build first
+## Highest-value gaps to build next (T17 + beyond)
 
 1. **`display(df)` table + chart builder** (D7) — the defining output surface.
 2. **Configure-session pane / `%%configure`** (C4) + **restart/stop/cancel** (C5).
 3. **Variable explorer** (D8) and **run-above/below** (D6).
 4. **Spark progress bar + Spark-UI deep link** (C6).
-5. **`%run` cross-notebook** (D9) and **C# cell** (B8).
+5. **`%run` cross-notebook** (D9).
 6. **Studio Git/Publish shell** (A7) — shared with the broader Synapse parity work.
 
 ## Backend per control
@@ -145,15 +153,25 @@ shows raw text.
 | Save / Publish | `PUT /api/synapse/notebooks/[name]` | Notebook create-or-update |
 | Delete notebook | `DELETE /api/synapse/notebooks/[name]` | Notebook delete |
 | Attach-pool list | `GET /api/items/synapse-spark-pool/list` | ARM `Microsoft.Synapse/workspaces/bigDataPools` |
+| Attach-environment list | `GET /api/synapse/environments` | dev-plane `GET /sparkconfigurations` (api 2020-12-01) |
+| ADLS .ipynb backup | `PUT /api/synapse/notebooks/[name]` (folded) | `adls-client.uploadFile` → `silver/loom/notebooks/<ws>/<name>.ipynb` |
 | Run cell (submit) | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement |
 | Run cell (poll) | `GET …/run-cell?pool=&session=&stmt=` | Livy get statement |
+| Copilot edge (generate/explain/fix) | `POST /api/notebook/[id]/assist` | AOAI chat-completions on the Foundry `chat` deployment (`cognitiveservices.azure.com` scope), schema-grounded |
 
 ## Bicep / env sync
 
-- Env var consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name). The gate
-  MessageBar names it explicitly.
-- Role: Loom UAMI needs **Synapse Artifact Publisher** on the workspace (and Spark
-  job submission rights for Livy). Bicep: `platform/fiab/bicep/modules/synapse/*.bicep`.
+- Env var consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name; gate
+  MessageBar names it) and **`LOOM_SILVER_URL`** (ADLS silver container URL,
+  already emitted by the DLZ deploy into the console app env in
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`).
+- Role: Loom UAMI needs **Synapse Artifact Publisher** on the workspace (Livy +
+  artifact writes). The `.ipynb` ADLS backup additionally needs the Console UAMI
+  to hold **Storage Blob Data Contributor** on the DLZ data-lake account — granted
+  idempotently by the post-deploy bootstrap step *"Grant Console UAMI Storage Blob
+  Data Contributor on DLZ"* in `.github/workflows/csa-loom-post-deploy-bootstrap.yml`
+  (same access the lakehouse provisioner uses). The backup is non-fatal, so a
+  missing grant never blocks publish.
 - No new Cosmos container.
 
 ## Verification

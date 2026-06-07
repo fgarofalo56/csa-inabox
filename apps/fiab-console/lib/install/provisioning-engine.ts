@@ -43,6 +43,9 @@ import { logicAppProvisioner } from './provisioners/logic-app';
 import { synapsePipelineProvisioner } from './provisioners/synapse-pipeline';
 import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
 import { databricksJobProvisioner } from './provisioners/databricks-job';
+import { synapseSqlPoolProvisioner } from './provisioners/synapse-serverless-sql-pool';
+import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
+import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
@@ -71,6 +74,7 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'synapse-pipeline': synapsePipelineProvisioner, // PUT Synapse Studio pipeline + createRun + poll status (real Synapse dev REST)
   'adf-pipeline': adfPipelineProvisioner, // PUT ADF pipeline (ARM) + createRun + poll status (real ARM)
   'databricks-job': databricksJobProvisioner, // create/reset multi-task job w/ shared cluster + run-now + poll (real Jobs 2.1)
+  'synapse-serverless-sql-pool': synapseSqlPoolProvisioner, // lakehouse SQL analytics endpoint: external data source over the lake abfss root + SELECT 1 (real TDS)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
@@ -248,6 +252,105 @@ async function prewarmDedicatedPool(
   }
 }
 
+/**
+ * Post-provision pairing pass. For every step that provisioned successfully,
+ * consult ITEM_PAIRING_RULES and auto-create + provision each declared sibling.
+ * Each sibling is a real Cosmos item (createOwnedItem) whose state.content is
+ * derived from the parent's result, then run through the sibling's provisioner.
+ * Mutates `out` (appends sibling steps) and the parent step's `steps` log.
+ * Never throws — pairing is best-effort and must not sink the install.
+ */
+async function runPairingPass(
+  out: ProvisionStep[],
+  installed: Array<{ itemType: string; id?: string; displayName: string; content?: unknown }>,
+  session: ProvisionerInput['session'],
+  appId: string,
+  workspaceId: string,
+  target: ProvisionTarget,
+): Promise<void> {
+  // Snapshot — we append to `out` inside the loop, so iterate over a copy of the
+  // primary steps only (siblings are never themselves re-paired).
+  const primary = [...out];
+  for (const step of primary) {
+    if (step.result.status !== 'created' && step.result.status !== 'exists') continue;
+    const rules = ITEM_PAIRING_RULES[step.itemType];
+    if (!rules || rules.length === 0) continue;
+
+    const srcItem = installed.find((it) => it.id === step.cosmosItemId);
+    if (!srcItem) continue;
+    const parentInput: ProvisionerInput = {
+      session,
+      target,
+      cosmosItemId: step.cosmosItemId,
+      workspaceId,
+      displayName: step.displayName,
+      content: srcItem.content || {},
+      appId,
+    };
+
+    for (const rule of rules) {
+      const pairedProvisioner = PROVISIONERS[rule.pairedType];
+      if (!pairedProvisioner) {
+        step.result.steps = [
+          ...(step.result.steps || []),
+          `Pairing skipped: no provisioner registered for '${rule.pairedType}'.`,
+        ];
+        continue;
+      }
+      const pairedContent = rule.deriveContent(step.result, parentInput);
+      if (pairedContent === null) continue; // rule opted out (no data to pair on)
+      const pairedName = rule.deriveName?.(parentInput) ?? `${step.displayName} SQL Analytics`;
+
+      // 1. Create the paired Cosmos item (state.content mirrors bundle items).
+      let pairedItemId: string | undefined;
+      try {
+        const created = await createOwnedItem(session, rule.pairedType, {
+          workspaceId,
+          displayName: pairedName,
+          state: { content: pairedContent },
+        });
+        if (created.ok) {
+          pairedItemId = created.item.id;
+          step.result.steps = [
+            ...(step.result.steps || []),
+            `Auto-created paired ${rule.pairedType} item "${pairedName}" (id ${pairedItemId}).`,
+          ];
+        } else {
+          step.result.steps = [
+            ...(step.result.steps || []),
+            `Paired ${rule.pairedType} item creation failed (${created.status}): ${created.error}`,
+          ];
+          continue;
+        }
+      } catch (e: any) {
+        step.result.steps = [
+          ...(step.result.steps || []),
+          `Paired ${rule.pairedType} item creation threw: ${e?.message || String(e)}`,
+        ];
+        continue;
+      }
+
+      // 2. Provision the paired item immediately (real backend, one-shot retry).
+      const pairedInput: ProvisionerInput = {
+        session,
+        target,
+        cosmosItemId: pairedItemId!,
+        workspaceId,
+        displayName: pairedName,
+        content: pairedContent,
+        appId,
+      };
+      const pairedResult = await runWithRetry(pairedProvisioner, pairedInput);
+      out.push({
+        itemType: rule.pairedType,
+        displayName: pairedName,
+        cosmosItemId: pairedItemId!,
+        result: pairedResult,
+      });
+    }
+  }
+}
+
 /** Run provisioning across an installed app's Cosmos items.  Each
  * `installed[i]` is an item just created by createOwnedItem(). */
 export async function runProvisioning(
@@ -294,6 +397,15 @@ export async function runProvisioning(
       out[start + j] = step;
     });
   }
+
+  // Post-provision PAIRING pass — after every primary item is provisioned,
+  // auto-create + provision any 1:1 paired siblings declared in the item
+  // pairing registry (e.g. each lakehouse gets a synapse-serverless-sql-pool so
+  // F3/F14 share one Serverless SQL endpoint). Runs only for items that
+  // actually provisioned (created/exists); each paired item is a REAL Cosmos
+  // item + a REAL provisioner call. Best-effort: a pairing failure is logged on
+  // the parent step and never sinks the install.
+  await runPairingPass(out, installed, session, appId, workspaceId, target);
 
   // Surface the pre-warm log on the warehouse step so the report explains the
   // early resume that ran before this item's own provisioner.
