@@ -518,6 +518,12 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
     { metric: 'CPU', aggregation: 'Average', label: 'CPU %' },
     { metric: 'IngestionUtilization', aggregation: 'Average', label: 'Ingestion util %' },
     { metric: 'KeepAlive', aggregation: 'Average', label: 'Keep-alive' },
+    // Eventhouse overview panel — ingestion + query health + throttling.
+    { metric: 'IngestionLatencyInSeconds', aggregation: 'Average', label: 'Ingest latency (s)' },
+    { metric: 'IngestionVolumeInMB', aggregation: 'Total', label: 'Ingested volume (MB)' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
+    { metric: 'QueryDuration', aggregation: 'Average', label: 'Query duration (ms)' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
   ],
   'microsoft.synapse/workspaces': [
     { metric: 'IntegrationPipelineRunsEnded', aggregation: 'Total', label: 'Pipeline runs ended' },
