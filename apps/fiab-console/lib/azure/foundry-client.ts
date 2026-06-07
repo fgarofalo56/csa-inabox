@@ -1465,3 +1465,220 @@ export async function submitCommandJob(body: {
   const j = await readJson<any>(res);
   return shapeJob(j);
 }
+
+// =====================================================================
+// AML Job Schedules — notebook scheduling (recurrence only, no raw cron).
+//
+// Real ARM control plane:
+//   Microsoft.MachineLearningServices/workspaces/schedules (api 2024-10-01, GA).
+//   PUT    .../schedules/{name}      → create / update (enable is a re-PUT)
+//   GET    .../schedules             → list (paged value/nextLink)
+//   GET    .../schedules/{name}      → read one
+//
+// Trigger is RecurrenceTrigger (frequency Minute|Hour|Day|Week|Month + integer
+// interval) — the dropdown wizard never exposes a cron expression. The action
+// is a CreateJob action wrapping a Command job that runs the notebook on the
+// schedule. ARM-only, so armBase() covers Commercial + GCC-High/IL5 unchanged.
+//
+// Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/templates/microsoft.machinelearningservices/2024-10-01/workspaces/schedules
+//   https://learn.microsoft.com/azure/machine-learning/how-to-schedule-pipeline-job
+// =====================================================================
+
+export type AmlFrequency = 'Minute' | 'Hour' | 'Day' | 'Week' | 'Month';
+
+/** Curated AzureML registry environment the scheduled Command job runs in when
+ *  the caller doesn't pin one. Overridable via env so a deployment can point at
+ *  its own environment. */
+const DEFAULT_SCHEDULE_ENVIRONMENT =
+  process.env.LOOM_AML_SCHEDULE_ENVIRONMENT ||
+  'azureml://registries/azureml/environments/sklearn-1.5/labels/latest';
+
+export interface AmlScheduleConfig {
+  subscriptionId: string;
+  resourceGroup: string;
+  workspace: string;
+}
+
+/** Raised when the AML workspace needed for scheduling isn't configured. The
+ *  route surfaces `hint` in a Fluent MessageBar; the wizard still renders. */
+export class AmlScheduleNotConfiguredError extends Error {
+  hint: string;
+  missing: string[];
+  constructor(missing: string[]) {
+    super('Azure ML job scheduling is not configured in this deployment');
+    this.name = 'AmlScheduleNotConfiguredError';
+    this.missing = missing;
+    this.hint =
+      `Set ${missing.join(' + ')} to a deployed Azure Machine Learning workspace, ` +
+      `then grant the Console UAMI the AzureML Data Scientist role on it. ` +
+      `LOOM_AML_WORKSPACE / LOOM_AML_RG fall back to LOOM_FOUNDRY_NAME / LOOM_FOUNDRY_RG.`;
+  }
+}
+
+/**
+ * Resolve the AML workspace used for notebook schedules. Workspace + RG honor
+ * the task's dedicated vars first, then fall back to the Foundry hub env so an
+ * already-configured Loom keeps working without new vars. No silent default for
+ * the workspace name — an unset workspace is an honest gate, not a guess.
+ */
+export function amlScheduleConfig(): AmlScheduleConfig {
+  const missing: string[] = [];
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
+  if (!subscriptionId) missing.push('LOOM_SUBSCRIPTION_ID');
+  const workspace = process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME;
+  if (!workspace) missing.push('LOOM_AML_WORKSPACE');
+  if (missing.length) throw new AmlScheduleNotConfiguredError(missing);
+  const resourceGroup =
+    process.env.LOOM_AML_RG || process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2';
+  return { subscriptionId: subscriptionId!, resourceGroup, workspace: workspace! };
+}
+
+/** True when scheduling can be reached (env is set). Lets routes branch without try/catch. */
+export function isAmlScheduleConfigured(): boolean {
+  try { amlScheduleConfig(); return true; } catch { return false; }
+}
+
+function amlScheduleArmBase(cfg: AmlScheduleConfig): string {
+  return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}` +
+    `/providers/Microsoft.MachineLearningServices/workspaces/${encodeURIComponent(cfg.workspace)}/schedules`;
+}
+
+/**
+ * The ARM-safe schedule-name prefix for a notebook item. Schedule resource
+ * names allow `[A-Za-z0-9_-]`; we sanitise the Cosmos item id and key every
+ * schedule by this prefix so listing for one notebook is a simple filter.
+ */
+export function notebookSchedulePrefix(notebookId: string): string {
+  const safe = String(notebookId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'nb';
+  return `loom-nb-${safe}-`;
+}
+
+export interface AmlSchedule {
+  name: string;
+  displayName?: string;
+  isEnabled: boolean;
+  provisioningState?: string;
+  triggerType?: string;
+  frequency?: string;
+  interval?: number;
+  startTime?: string;
+  timeZone?: string;
+  createdAt?: string;
+  jobType?: string;
+  actionType?: string;
+}
+
+function shapeSchedule(raw: any): AmlSchedule {
+  const p = raw?.properties || {};
+  const trig = p.trigger || {};
+  const action = p.action || {};
+  const jobDef = action.jobDefinition || {};
+  return {
+    name: raw?.name,
+    displayName: p.displayName,
+    isEnabled: p.isEnabled !== false,
+    provisioningState: p.provisioningState,
+    triggerType: trig.triggerType,
+    frequency: trig.frequency,
+    interval: typeof trig.interval === 'number' ? trig.interval : undefined,
+    startTime: trig.startTime,
+    timeZone: trig.timeZone,
+    createdAt: raw?.systemData?.createdAt,
+    jobType: jobDef.jobType,
+    actionType: action.actionType,
+  };
+}
+
+/** GET .../schedules → all schedules whose name starts with `prefix` (paged). */
+export async function listNotebookSchedules(prefix: string): Promise<AmlSchedule[]> {
+  const cfg = amlScheduleConfig();
+  const base = amlScheduleArmBase(cfg);
+  const all: any[] = [];
+  let res = await armFetch(base, { apiVersion: ML_API });
+  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+  while (j) {
+    if (Array.isArray(j.value)) all.push(...j.value);
+    if (!j.nextLink) break;
+    const token = await credential.getToken(ARM_SCOPE);
+    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+  }
+  return all.map(shapeSchedule).filter((s) => !prefix || (s.name || '').startsWith(prefix));
+}
+
+/** GET .../schedules/{name} → one schedule (null on 404). */
+export async function getSchedule(name: string): Promise<AmlSchedule | null> {
+  const cfg = amlScheduleConfig();
+  const res = await armFetch(`${amlScheduleArmBase(cfg)}/${encodeURIComponent(name)}`, { apiVersion: ML_API });
+  const j = await readJson<any>(res);
+  return j ? shapeSchedule(j) : null;
+}
+
+/**
+ * PUT .../schedules/{name} → create (or update) a recurrence schedule that runs
+ * the notebook as a Command job. `computeId` is optional — when omitted the
+ * Command job runs on AML serverless compute.
+ */
+export async function createNotebookSchedule(name: string, body: {
+  displayName: string;
+  frequency: AmlFrequency;
+  interval: number;
+  startTime?: string;        // ISO-8601 UTC
+  timeZone?: string;
+  isEnabled?: boolean;
+  command?: string;
+  environmentId?: string;
+  computeId?: string;
+  experimentName?: string;
+}): Promise<AmlSchedule> {
+  const cfg = amlScheduleConfig();
+  const trigger: Record<string, unknown> = {
+    triggerType: 'Recurrence',
+    frequency: body.frequency,
+    interval: Math.max(1, Math.floor(body.interval || 1)),
+    timeZone: body.timeZone || 'UTC',
+    ...(body.startTime ? { startTime: body.startTime } : {}),
+  };
+  const jobDefinition: Record<string, unknown> = {
+    jobType: 'Command',
+    displayName: body.displayName || name,
+    experimentName: body.experimentName || 'loom-notebook-schedules',
+    command: body.command || 'echo loom-scheduled-notebook-run',
+    environmentId: body.environmentId || DEFAULT_SCHEDULE_ENVIRONMENT,
+    ...(body.computeId ? { computeId: body.computeId } : {}),
+  };
+  const armBody = {
+    properties: {
+      displayName: body.displayName || name,
+      isEnabled: body.isEnabled !== false,
+      trigger,
+      action: { actionType: 'CreateJob', jobDefinition },
+    },
+  };
+  const res = await armFetch(`${amlScheduleArmBase(cfg)}/${encodeURIComponent(name)}`,
+    { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(res);
+  if (!j) throw new FoundryError(res.status, null, 'Schedule create returned no body');
+  return shapeSchedule(j);
+}
+
+/**
+ * Toggle a schedule's enabled state. AML has no PATCH for schedules in GA, so
+ * we GET the existing resource, flip `isEnabled`, and re-PUT the (read-only
+ * fields stripped) properties.
+ */
+export async function setScheduleEnabled(name: string, isEnabled: boolean): Promise<AmlSchedule> {
+  const cfg = amlScheduleConfig();
+  const path = `${amlScheduleArmBase(cfg)}/${encodeURIComponent(name)}`;
+  const getRes = await armFetch(path, { apiVersion: ML_API });
+  const existing = await readJson<any>(getRes);
+  if (!existing) throw new FoundryError(404, null, `Schedule ${name} not found`);
+  const props = existing.properties || {};
+  // provisioningState is server-owned — drop it before the re-PUT.
+  const { provisioningState: _ps, ...mutable } = props;
+  const armBody = { properties: { ...mutable, isEnabled } };
+  const putRes = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(putRes);
+  return shapeSchedule(j || { ...existing, properties: { ...mutable, isEnabled } });
+}
