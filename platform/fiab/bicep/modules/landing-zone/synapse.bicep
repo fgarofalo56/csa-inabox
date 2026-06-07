@@ -173,7 +173,11 @@ resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (
     }
     sparkVersion: sparkPoolSparkVersion
     isComputeIsolationEnabled: false
-    sessionLevelPackagesEnabled: false
+    // Session-level packages MUST be enabled so the spark-environment item
+    // (F18) can install pip/conda packages at session scope and bake
+    // libraryRequirements onto the pool on publish. The Loom console flips
+    // this on publish too, but enabling it here avoids a first-publish race.
+    sessionLevelPackagesEnabled: true
     dynamicExecutorAllocation: {
       enabled: true
       minExecutors: 1
@@ -308,6 +312,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
   params: {
     defaultStorageAccountName: defaultStorageAccountName
     synapseManagedIdentityPrincipalId: synapseWs.identity.principalId
+    // Console UAMI gets Storage Blob Data Reader on the lakehouse SA so the BFF
+    // live Tables catalog scan can read _delta_log without Contributor.
+    consolePrincipalId: skipRoleGrants ? '' : consolePrincipalId
   }
 }
 

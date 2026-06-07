@@ -16,7 +16,11 @@
  *   https://learn.microsoft.com/azure/data-factory/control-flow-* (per activity)
  */
 
-import { Field, Input, Dropdown, Option, Switch, Caption1 } from '@fluentui/react-components';
+import { useState } from 'react';
+import {
+  Field, Input, Dropdown, Option, Switch, Caption1, Button, Spinner,
+  MessageBar, MessageBarBody, MessageBarTitle,
+} from '@fluentui/react-components';
 import { ExpressionField } from './dynamic-content';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
@@ -33,7 +37,36 @@ interface FieldSpec {
   options?: Array<{ value: string; label: string }>;
   /** Placeholder for text/expr. */
   placeholder?: string;
+  /**
+   * When true the `path` resolves against the activity root object
+   * (e.g. 'linkedServiceName.referenceName') instead of typeProperties.
+   * The renderer reads/writes the root and setPath clones existing nodes,
+   * so sibling fields like `type:'LinkedServiceReference'` are preserved.
+   */
+  rootPath?: boolean;
 }
+
+/** HDInsight debug-info levels (ADF getDebugInfo enum). */
+const HDI_DEBUG_OPTIONS = ['None', 'Always', 'Failure'].map((v) => ({ value: v, label: v }));
+
+/**
+ * Shared "HDI Cluster" field — the activity's top-level `linkedServiceName`
+ * (the AzureHDInsight cluster), NOT a typeProperties field. rootPath routes
+ * the read/write to the activity root.
+ */
+const HDI_CLUSTER_FIELD: FieldSpec = {
+  path: 'linkedServiceName.referenceName',
+  label: 'HDI Cluster linked service',
+  kind: 'text',
+  required: true,
+  hint: 'Name of the AzureHDInsight linked service in this factory (Manage → Linked services → New → Azure HDInsight). Pre-filled from LOOM_HDINSIGHT_LINKED_SERVICE when set.',
+  rootPath: true,
+};
+
+/** Set of HDInsight activity types that share the cluster honest-gate. */
+const HDI_ACTIVITY_TYPES = new Set([
+  'HDInsightHive', 'HDInsightSpark', 'HDInsightMapReduce', 'HDInsightStreaming',
+]);
 
 /** Field schema per ADF/Synapse activity `type`. */
 export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
@@ -150,6 +183,24 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
     { path: 'reportStatusOnCallBack', label: 'Report status on callback', kind: 'bool',
       hint: 'Let the callback report a failure status back to the activity.' },
   ],
+  // Approval (Logic App + O365) — the Loom-native parity for Fabric's approval
+  // email. Same WebHook wire shape, but the form points the operator at the
+  // approval Logic App provisioning route instead of a raw callback URL.
+  ApprovalWebhook: [
+    { path: 'url', label: 'Logic App trigger URL', kind: 'text', required: true,
+      placeholder: 'https://prod-XX.<region>.logic.azure.com:443/workflows/…/triggers/manual/run?…',
+      hint:
+        'HTTP trigger URL of the approval Logic App. Use "Fetch trigger URL" above ' +
+        '(provisioned by approval-logicapp.bicep / LOOM_APPROVAL_LOGIC_APP_NAME), ' +
+        'or paste it manually.' },
+    { path: 'timeout', label: 'Approval timeout', kind: 'text', placeholder: '04:00:00',
+      hint: 'How long ADF waits for the Logic App callback before failing (d.hh:mm:ss). ' +
+            'Maximum 90 days on Logic Apps Consumption.' },
+    { path: 'reportStatusOnCallBack', label: 'Report status on callback', kind: 'bool',
+      hint:
+        'Required. When true the Logic App callback body {StatusCode, Output, Error} ' +
+        'controls success/failure — Approve → 200 continues, Reject → 400 fails the branch.' },
+  ],
   Validation: [
     { path: 'dataset.referenceName', label: 'Dataset', kind: 'text', required: true,
       hint: 'The file/folder dataset to validate exists.' },
@@ -166,10 +217,96 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
     { path: 'sparkJob.referenceName', label: 'Spark job definition', kind: 'text', required: true,
       hint: 'The Synapse Spark job definition to run.' },
   ],
+
+  // ── HDInsight family (F17) — one-for-one with the ADF activity Settings tabs ──
+  HDInsightHive: [
+    HDI_CLUSTER_FIELD,
+    { path: 'scriptLinkedService.referenceName', label: 'Script storage linked service', kind: 'text',
+      hint: 'Azure Blob / ADLS Gen2 linked service holding the .hql file. Omit to use the cluster default storage.' },
+    { path: 'scriptPath', label: 'Script path (.hql)', kind: 'expr', required: true,
+      placeholder: 'scripts/transform.hql',
+      hint: 'Path to the Hive script within the script storage.' },
+    { path: 'getDebugInfo', label: 'Debug info', kind: 'select', options: HDI_DEBUG_OPTIONS,
+      hint: 'When to capture YARN/Hive debug logs to the cluster default storage.' },
+    { path: 'queryTimeout', label: 'Query timeout (minutes)', kind: 'number',
+      hint: 'Required when the cluster has the Enterprise Security Package (ESP). Default 120.' },
+    { path: 'arguments', label: 'Arguments (expression → string[])', kind: 'expr-multiline',
+      hint: 'Hive command-line arguments as an ADF expression, e.g. @json(\'["--hiveconf","x=1"]\'). Complex defines go in the Advanced JSON accordion.' },
+  ],
+  HDInsightSpark: [
+    HDI_CLUSTER_FIELD,
+    { path: 'sparkJobLinkedService.referenceName', label: 'Job storage linked service', kind: 'text',
+      hint: 'Azure Blob / ADLS Gen2 linked service containing the root path. Omit to use the cluster default storage.' },
+    { path: 'rootPath', label: 'Root path (container/folder)', kind: 'expr', required: true,
+      placeholder: 'adfspark/myjob',
+      hint: 'Blob container + folder holding the entry file plus optional /jars and /pyFiles sub-folders.' },
+    { path: 'entryFilePath', label: 'Entry file path (.py or .jar)', kind: 'expr', required: true,
+      placeholder: 'main.py',
+      hint: 'Relative path under the root path to the entry file.' },
+    { path: 'className', label: 'Java / Spark main class', kind: 'text',
+      placeholder: 'org.example.MyJob',
+      hint: 'Required when the entry file is a JAR.' },
+    { path: 'getDebugInfo', label: 'Debug info', kind: 'select', options: HDI_DEBUG_OPTIONS },
+    { path: 'arguments', label: 'Arguments (expression → string[])', kind: 'expr-multiline',
+      hint: 'Spark command-line arguments as an ADF expression. Spark config (sparkConfig) goes in the Advanced JSON accordion.' },
+  ],
+  HDInsightMapReduce: [
+    HDI_CLUSTER_FIELD,
+    { path: 'className', label: 'Main class', kind: 'expr', required: true,
+      placeholder: 'org.apache.hadoop.examples.WordCount',
+      hint: 'Fully-qualified Java class name to execute.' },
+    { path: 'jarLinkedService.referenceName', label: 'JAR storage linked service', kind: 'text',
+      hint: 'Azure Blob / ADLS Gen2 linked service holding the JAR. Omit to use the cluster default storage.' },
+    { path: 'jarFilePath', label: 'JAR file path', kind: 'expr', required: true,
+      placeholder: 'jars/myjob-1.0.jar',
+      hint: 'Path to the primary JAR within the JAR storage.' },
+    { path: 'getDebugInfo', label: 'Debug info', kind: 'select', options: HDI_DEBUG_OPTIONS },
+    { path: 'arguments', label: 'Arguments (expression → string[])', kind: 'expr-multiline',
+      hint: 'MapReduce arguments as an ADF expression. Additional jars (jarlibs) and defines go in the Advanced JSON accordion.' },
+  ],
+  HDInsightStreaming: [
+    HDI_CLUSTER_FIELD,
+    { path: 'mapper', label: 'Mapper executable', kind: 'expr', required: true,
+      placeholder: 'MyMapper.exe',
+      hint: 'Name of the mapper program (must be present in the file paths below).' },
+    { path: 'reducer', label: 'Reducer executable', kind: 'expr', required: true,
+      placeholder: 'MyReducer.exe' },
+    { path: 'combiner', label: 'Combiner executable', kind: 'expr',
+      placeholder: 'MyCombiner.exe',
+      hint: 'Optional intermediate combiner program.' },
+    { path: 'fileLinkedService.referenceName', label: 'File storage linked service', kind: 'text',
+      hint: 'Azure Blob / ADLS Gen2 linked service holding the mapper/reducer/combiner files. Omit for the cluster default storage.' },
+    { path: 'filePaths', label: 'File paths (expression → string[])', kind: 'expr-multiline', required: true,
+      placeholder: '@json(\'["<container>/apps/MyMapper.exe","<container>/apps/MyReducer.exe"]\')',
+      hint: 'Array of paths to the mapper, combiner, and reducer programs as an ADF expression.' },
+    { path: 'input', label: 'Input path (WASB)', kind: 'expr', required: true,
+      placeholder: 'wasb://<container>@<account>.blob.core.windows.net/input/data.txt' },
+    { path: 'output', label: 'Output path (WASB)', kind: 'expr', required: true,
+      placeholder: 'wasb://<container>@<account>.blob.core.windows.net/output/' },
+    { path: 'getDebugInfo', label: 'Debug info', kind: 'select', options: HDI_DEBUG_OPTIONS },
+    { path: 'arguments', label: 'Arguments (expression → string[])', kind: 'expr-multiline',
+      hint: 'Extra streaming arguments as an ADF expression. commandEnvironment and defines go in the Advanced JSON accordion.' },
+  ],
 };
+
+/**
+ * Copy (type: 'Copy') intentionally has NO flat ACTIVITY_FORMS schema. Its
+ * config surface is the four-tab editor in `lib/components/pipeline/copy/*`
+ * (Source / Sink / Mapping / Settings), routed by `properties-panel.tsx`.
+ * `hasActivityForm('Copy')` therefore stays false so the generic form never
+ * renders for Copy. Exported for documentation + tests.
+ */
+export const COPY_TABBED_TYPES = new Set(['Copy']);
 
 export function hasActivityForm(type: string | undefined): boolean {
   return !!type && Array.isArray(ACTIVITY_FORMS[type]) && ACTIVITY_FORMS[type].length > 0;
+}
+
+/** Read the Loom discriminator (`_loomKind`) off an activity, if present. */
+export function activityLoomKind(activity: PipelineActivity): string | undefined {
+  return Array.isArray(activity.userProperties)
+    ? (activity.userProperties.find((p) => p.name === '_loomKind')?.value as string | undefined)
+    : undefined;
 }
 
 // ── dotted-path get/set on a plain object (supports `a.b` and `a[0].b`) ──────
@@ -212,32 +349,171 @@ export interface ActivityFormProps {
   parameters: PipelineParameter[];
   variables: PipelineVariable[];
   allActivities: PipelineActivity[];
+  /** Item id of the pipeline being edited — enables live helpers (e.g. the
+   *  Approval activity's "Fetch trigger URL" call). Omit to hide them. */
+  itemId?: string;
+  /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
+  pipelineId?: string;
+  /** Workspace id of the pipeline being edited. */
+  workspaceId?: string;
+  /** API slug for the editor host (default 'data-pipeline'). */
+  apiSlug?: string;
+}
+
+/**
+ * Approval-specific helper rendered above the typed fields when the activity is
+ * the Loom "Approval (Logic App)" kind. Calls the approval-logicapp BFF route to
+ * provision/link the Consumption Logic App and populate the activity URL. Honest
+ * gate (no-vaporware): a 503 surfaces the exact Bicep module + env var, never a
+ * dead button.
+ */
+function ApprovalTriggerUrlFetcher({
+  activity, onPatch, itemId, workspaceId, apiSlug,
+}: {
+  activity: PipelineActivity;
+  onPatch: (patch: Partial<PipelineActivity>) => void;
+  itemId?: string;
+  workspaceId?: string;
+  apiSlug: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<{ reason: string; remediation: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const canFetch = !!itemId && !!workspaceId && itemId !== 'new';
+
+  async function fetchUrl() {
+    if (!canFetch) return;
+    setBusy(true); setGate(null); setErr(null); setOk(null);
+    try {
+      const r = await fetch(
+        `/api/items/${apiSlug}/${encodeURIComponent(itemId!)}/approval-logicapp` +
+          `?workspaceId=${encodeURIComponent(workspaceId!)}`,
+      );
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok && j.triggerUrl) {
+        const tp = { ...((activity.typeProperties as Record<string, unknown>) || {}), url: j.triggerUrl };
+        onPatch({ typeProperties: tp });
+        setOk(`Linked Logic App "${j.workflowName}" — trigger URL populated.`);
+        return;
+      }
+      if (j?.gate) { setGate(j.gate); return; }
+      setErr(j?.error || `Request failed (${r.status}).`);
+    } catch (e) {
+      setErr((e as Error)?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <Caption1>
+        The Approval activity posts to a Consumption Logic App that sends an Office 365
+        approval email and calls back. Declare a <strong>string</strong> pipeline
+        parameter <code>approverEmail</code> (Parameters tab) so each run can target a
+        recipient. <strong>Approve</strong> continues the pipeline; <strong>Reject</strong> fails the branch.
+      </Caption1>
+      <div>
+        <Button appearance="primary" size="small" disabled={!canFetch || busy} onClick={fetchUrl}>
+          {busy ? <Spinner size="tiny" label="Linking…" /> : 'Fetch trigger URL'}
+        </Button>
+      </div>
+      {!canFetch && (
+        <Caption1>Save the pipeline first to enable automatic Logic App linking, or paste the trigger URL below.</Caption1>
+      )}
+      {ok && (
+        <MessageBar intent="success">
+          <MessageBarBody>{ok}</MessageBarBody>
+        </MessageBar>
+      )}
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Approval Logic App not configured</MessageBarTitle>
+            {gate.reason} {gate.remediation}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {err && (
+        <MessageBar intent="error">
+          <MessageBarBody>{err}</MessageBarBody>
+        </MessageBar>
+      )}
+    </div>
+  );
 }
 
 /** Renders the typed form for the activity's type, or null if none is defined. */
-export function ActivityForm({ activity, onPatch, parameters, variables, allActivities }: ActivityFormProps) {
-  const schema = activity.type ? ACTIVITY_FORMS[activity.type] : undefined;
+export function ActivityForm({
+  activity, onPatch, parameters, variables, allActivities,
+  itemId, workspaceId, apiSlug = 'data-pipeline', pipelineId,
+}: ActivityFormProps) {
+  // Discriminate Loom palette variants that share an ADF wire type (e.g.
+  // Approval vs plain Webhook — both ADF type `WebHook`) via `_loomKind`.
+  const loomKind = activityLoomKind(activity);
+  const schema = (loomKind && ACTIVITY_FORMS[loomKind])
+    ? ACTIVITY_FORMS[loomKind]
+    : (activity.type ? ACTIVITY_FORMS[activity.type] : undefined);
   if (!schema) return null;
   const tp = (activity.typeProperties as any) || {};
 
   const patchTp = (path: string, value: unknown) => {
     onPatch({ typeProperties: setPath(tp, path, value) });
   };
+  // Root-level patch (e.g. linkedServiceName.referenceName). Clone the whole
+  // activity, set the dotted path, then emit only the touched top-level key so
+  // sibling fields (type:'LinkedServiceReference') survive the merge.
+  const patchRoot = (path: string, value: unknown) => {
+    const cloned = JSON.parse(JSON.stringify(activity));
+    const updated = setPath(cloned, path, value);
+    const topKey = path.split('.')[0] as keyof PipelineActivity;
+    onPatch({ [topKey]: (updated as any)[topKey] } as Partial<PipelineActivity>);
+  };
+  const patch = (fld: FieldSpec, value: unknown) =>
+    (fld.rootPath ? patchRoot : patchTp)(fld.path, value);
+
+  // Honest infra-gate: every HDInsight activity targets an AzureHDInsight
+  // linked service. When none is set, name the env var + the manual step.
+  const showHdiGate = HDI_ACTIVITY_TYPES.has(activity.type || '')
+    && !activity.linkedServiceName?.referenceName;
 
   return (
     <>
+      {showHdiGate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No HDInsight cluster linked service configured</MessageBarTitle>
+            Go to <strong>Manage → Linked services</strong>, create a linked service of type{' '}
+            <code>Azure HDInsight</code> pointing at your cluster, then enter its name in the{' '}
+            <em>HDI Cluster linked service</em> field below. Set{' '}
+            <code>LOOM_HDINSIGHT_LINKED_SERVICE</code> in your deployment environment to pre-fill it
+            automatically for new HDInsight activities.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       <Caption1>
-        Typed configuration for <strong>{activity.type}</strong> — the same fields the Azure portal exposes.
+        Typed configuration for <strong>{loomKind === 'ApprovalWebhook' ? 'Approval (Logic App)' : activity.type}</strong> — the same fields the Azure portal exposes.
         Expression fields offer <em>Add dynamic content</em> + IntelliSense.
       </Caption1>
+      {loomKind === 'ApprovalWebhook' && (
+        <ApprovalTriggerUrlFetcher
+          activity={activity}
+          onPatch={onPatch}
+          itemId={itemId}
+          workspaceId={workspaceId}
+          apiSlug={apiSlug}
+        />
+      )}
       {schema.map((fld) => {
-        const raw = getPath(tp, fld.path);
+        const raw = fld.rootPath ? getPath(activity, fld.path) : getPath(tp, fld.path);
         const strVal = raw == null ? '' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
         if (fld.kind === 'bool') {
           return (
             <Field key={fld.path} label={fld.label} hint={fld.hint}>
               <Switch checked={raw === true || raw === 'true'}
-                onChange={(_, d) => patchTp(fld.path, d.checked)} />
+                onChange={(_, d) => patch(fld, d.checked)} />
             </Field>
           );
         }
@@ -247,7 +523,7 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
               <Dropdown
                 value={strVal}
                 selectedOptions={strVal ? [strVal] : []}
-                onOptionSelect={(_, d) => patchTp(fld.path, d.optionValue)}
+                onOptionSelect={(_, d) => patch(fld, d.optionValue)}
               >
                 {(fld.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
               </Dropdown>
@@ -263,7 +539,7 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
                 placeholder="Select one or more…"
                 value={selected.join(', ')}
                 selectedOptions={selected}
-                onOptionSelect={(_, d) => patchTp(fld.path, d.selectedOptions)}
+                onOptionSelect={(_, d) => patch(fld, d.selectedOptions)}
               >
                 {(fld.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
               </Dropdown>
@@ -274,7 +550,7 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
           return (
             <Field key={fld.path} label={fld.label} required={fld.required} hint={fld.hint}>
               <Input type="number" value={strVal} placeholder={fld.placeholder}
-                onChange={(_, d) => patchTp(fld.path, d.value === '' ? undefined : Number(d.value))} />
+                onChange={(_, d) => patch(fld, d.value === '' ? undefined : Number(d.value))} />
             </Field>
           );
         }
@@ -282,7 +558,7 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
           return (
             <Field key={fld.path} label={fld.label} required={fld.required} hint={fld.hint}>
               <Input value={strVal} placeholder={fld.placeholder}
-                onChange={(_, d) => patchTp(fld.path, d.value)} />
+                onChange={(_, d) => patch(fld, d.value)} />
             </Field>
           );
         }
@@ -300,7 +576,9 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
             variables={variables}
             activities={allActivities}
             selfName={activity.name}
-            onChange={(v) => patchTp(fld.path, v)}
+            pipelineId={pipelineId}
+            workspaceId={workspaceId}
+            onChange={(v) => patch(fld, v)}
           />
         );
       })}

@@ -27,7 +27,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Input, Field, Switch, Dropdown, Option, Textarea,
+  Input, Field, Switch, Dropdown, Option, Textarea, Tooltip,
   Toaster, Toast, ToastTitle, useToastController, useId, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -68,6 +68,30 @@ const useStyles = makeStyles({
 
 interface ContainerInfo { name: string; url: string }
 interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string }
+
+/**
+ * Reference-Lakehouse federation (F8) — another in-workspace lakehouse added to
+ * the explorer for side-by-side, READ-ONLY browsing. `account` is the resolved
+ * ADLS account (primary LOOM account unless the lakehouse declares its own);
+ * `reachable` reflects the pass-through RBAC probe (Console UAMI must hold
+ * Storage Blob Data Reader on the referenced containers).
+ */
+interface ReferenceLakehouse {
+  id: string;
+  displayName: string;
+  account: string;
+  containers: string[];
+  reachable: boolean;
+}
+
+/** A file selected inside a referenced lakehouse (drives the read-only preview). */
+interface RefSelection {
+  refId: string;
+  displayName: string;
+  account: string;
+  container: string;
+  entry: PathEntry;
+}
 
 interface PreviewResponse {
   ok: boolean;
@@ -192,6 +216,26 @@ export function LakehouseEditor({ item, id }: Props) {
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ---- Reference lakehouses (F8) --------------------------------------
+  // Other in-workspace lakehouses added to the explorer for side-by-side,
+  // READ-ONLY browsing. The set is persisted on this lakehouse's Cosmos doc
+  // (state.referencedLakehouseIds) via /api/lakehouse/references. File listings
+  // and previews for references go through the read-only references routes /
+  // the account-scoped preview route — write actions are never offered.
+  const [references, setReferences] = useState<ReferenceLakehouse[] | null>(null);
+  const [refsLoading, setRefsLoading] = useState(false);
+  const [refsError, setRefsError] = useState<string | null>(null);
+  const [workspaceLakehouses, setWorkspaceLakehouses] = useState<{ id: string; displayName: string }[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Tree-expansion cache for reference file/folder listings, keyed
+  // `ref::<refId>::<container>::<prefix>` so every reference browses its own
+  // namespace without colliding with the primary lakehouse's openPrefixes.
+  const [refOpenPrefixes, setRefOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
+  // The reference file currently selected for the read-only preview pane.
+  const [refSelection, setRefSelection] = useState<RefSelection | null>(null);
+  const [refPreview, setRefPreview] = useState<PreviewResponse | null>(null);
+  const [refPreviewLoading, setRefPreviewLoading] = useState(false);
+
   // Permissions dialog state — Azure RBAC role assignments at the container scope.
   interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string }
   interface PermRole { name: string; id: string }
@@ -220,6 +264,44 @@ export function LakehouseEditor({ item, id }: Props) {
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
+
+  // ---- Live Delta catalog (Tables tab) ----------------------------------
+  // The Tables tree is the REAL physical Delta catalog: an ADLS Gen2 scan of
+  // the active container's Tables/ directory + a _delta_log read for status /
+  // version, with optional Serverless OPENROWSET COUNT(*) row counts. Azure-
+  // native, NO Fabric dependency. Source: GET /api/lakehouse/tables.
+  interface LiveCatalogTable {
+    schema: string; name: string; adlsPath: string; bulkUrl: string;
+    format: 'delta' | 'parquet' | 'unknown';
+    status: 'ok' | 'empty' | 'broken';
+    latestVersion: number | null;
+    rowCount: number | null; sizeBytes: number | null;
+    lastModified: string | null;
+  }
+  const [liveTables, setLiveTables] = useState<LiveCatalogTable[] | null>(null);
+  const [liveTablesLoading, setLiveTablesLoading] = useState(false);
+  const [liveTablesError, setLiveTablesError] = useState<string | null>(null);
+  const [liveTablesGate, setLiveTablesGate] = useState<string | null>(null);
+
+  const loadLiveTables = useCallback(async () => {
+    if (!activeContainer) return;
+    setLiveTablesLoading(true); setLiveTablesError(null); setLiveTablesGate(null);
+    try {
+      const r = await fetch(
+        `/api/lakehouse/tables?containers=${encodeURIComponent(activeContainer)}&rowCounts=true`,
+      );
+      const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setLiveTables(j.tables || []);
+      setLiveTablesGate(j.gate || null);
+    } catch (e: any) { setLiveTablesError(e?.message || String(e)); }
+    finally { setLiveTablesLoading(false); }
+  }, [activeContainer]);
+
+  useEffect(() => {
+    if (tab === 'tables' && activeContainer) loadLiveTables();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeContainer]);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -541,6 +623,93 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [activeContainer, settings, settingsSparkConfText]);
+
+  // ---- reference lakehouses: load / mutate / browse / preview ---------
+  const loadReferences = useCallback(async () => {
+    if (isNewItem) return;
+    setRefsLoading(true); setRefsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/references?lakehouseId=${encodeURIComponent(id)}`);
+      const j = await parseJsonOrError<{
+        ok: boolean; error?: string;
+        references?: ReferenceLakehouse[];
+        workspaceLakehouses?: { id: string; displayName: string }[];
+      }>(r, 'Load references');
+      if (!j.ok) throw new Error(j.error);
+      setReferences(j.references ?? []);
+      setWorkspaceLakehouses(j.workspaceLakehouses ?? []);
+    } catch (e: any) { setRefsError(e?.message || String(e)); setReferences([]); }
+    finally { setRefsLoading(false); }
+  }, [id, isNewItem]);
+
+  const addReference = useCallback(async (refId: string) => {
+    setRefsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/references', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: id, addId: refId }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Add reference');
+      if (!j.ok) throw new Error(j.error);
+      await loadReferences();
+    } catch (e: any) { setRefsError(e?.message || String(e)); }
+  }, [id, loadReferences]);
+
+  const removeReference = useCallback(async (refId: string) => {
+    setRefsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/references', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: id, removeId: refId }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Remove reference');
+      if (!j.ok) throw new Error(j.error);
+      if (refSelection?.refId === refId) { setRefSelection(null); setRefPreview(null); }
+      await loadReferences();
+    } catch (e: any) { setRefsError(e?.message || String(e)); }
+  }, [id, loadReferences, refSelection]);
+
+  const refCacheKey = useCallback(
+    (refId: string, container: string, prefix: string) => `ref::${refId}::${container}::${prefix}`,
+    [],
+  );
+
+  const loadRefPaths = useCallback(async (refId: string, container: string, prefix: string) => {
+    const key = refCacheKey(refId, container, prefix);
+    setRefOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
+    try {
+      const qs = new URLSearchParams({ refId, container, prefix });
+      const r = await fetch(`/api/lakehouse/references/paths?${qs.toString()}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'Reference paths');
+      setRefOpenPrefixes((p) => ({
+        ...p,
+        [key]: j.ok ? (j.paths ?? []) : { error: j.error || `HTTP ${r.status}` },
+      }));
+    } catch (e: any) {
+      setRefOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
+    }
+  }, [refCacheKey]);
+
+  // Select a file inside a referenced lakehouse and run a READ-ONLY preview via
+  // the account-scoped OPENROWSET route (real Synapse Serverless; pass-through
+  // RBAC). Directories just expand in the tree.
+  const selectRefFile = useCallback(async (ref: ReferenceLakehouse, container: string, entry: PathEntry) => {
+    if (entry.isDirectory) { loadRefPaths(ref.id, container, entry.name); return; }
+    setRefSelection({ refId: ref.id, displayName: ref.displayName, account: ref.account, container, entry });
+    setRefPreview(null); setRefPreviewLoading(true);
+    try {
+      const qs = new URLSearchParams({ container, path: entry.name });
+      if (ref.account) qs.set('account', ref.account);
+      const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+      const j = await parseJsonOrError<PreviewResponse>(r, 'Reference preview');
+      setRefPreview(j);
+    } catch (e: any) {
+      setRefPreview({ ok: false, error: e?.message || String(e) });
+    } finally { setRefPreviewLoading(false); }
+  }, [loadRefPaths]);
+
+  // Load references once on mount (and whenever the item id changes).
+  useEffect(() => { loadReferences(); }, [loadReferences]);
 
   // ---- container load -------------------------------------------------
   useEffect(() => {
@@ -879,6 +1048,56 @@ export function LakehouseEditor({ item, id }: Props) {
     );
   }
 
+  // ---- reference tree renderer (read-only, mirrors renderTreeChildren) -
+  function renderRefTreeChildren(ref: ReferenceLakehouse, container: string, prefix: string): React.ReactElement {
+    const state = refOpenPrefixes[refCacheKey(ref.id, container, prefix)];
+    const base = `ref-${ref.id}-${container}-${prefix}`;
+    if (state === undefined) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-unloaded`} onClick={() => loadRefPaths(ref.id, container, prefix)}>
+          <TreeItemLayout>Click to load…</TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (state === 'loading') {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-loading`}>
+          <TreeItemLayout><Spinner size="tiny" /> Loading…</TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (!Array.isArray(state)) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-err`}>
+          <TreeItemLayout><Caption1>Error: {state.error}</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (state.length === 0) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-empty`}>
+          <TreeItemLayout><Caption1>(empty)</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    return (
+      <>
+        {state.map((entry) => entry.isDirectory ? (
+          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="branch" value={`ref-${ref.id}-${entry.name}`}
+            onClick={() => selectRefFile(ref, container, entry)}>
+            <TreeItemLayout iconBefore={<Folder20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <Tree>{renderRefTreeChildren(ref, container, entry.name)}</Tree>
+          </TreeItem>
+        ) : (
+          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="leaf" value={`ref-${ref.id}-${entry.name}`}
+            onClick={() => selectRefFile(ref, container, entry)}>
+            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+          </TreeItem>
+        ))}
+      </>
+    );
+  }
+
   const canFileAction = !!activeContainer;
   const hasFile = !!activePath && !activePath.isDirectory;
   const ribbon: RibbonTab[] = useMemo(() => [
@@ -910,6 +1129,11 @@ export function LakehouseEditor({ item, id }: Props) {
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
+          {/* Primary lakehouse — always bold to distinguish it from references. */}
+          <Caption1 style={{ display: 'block', padding: '2px 0 6px', fontWeight: tokens.fontWeightBold }}>
+            <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+            {itemQ.data?.displayName ?? 'Primary lakehouse'}
+          </Caption1>
           {containers === null && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}
           {containerError && (
             <MessageBar intent="error">
@@ -937,6 +1161,72 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Tree>{renderTreeChildren(c.name, '')}</Tree>
                 </TreeItem>
               ))}
+            </Tree>
+          )}
+          {/* Live Delta catalog tree — real ADLS scan of the active container's
+              Tables/ dir, grouped by schema, with Delta/non-Delta icons and
+              loading / broken / empty badges. Shown once a container is picked. */}
+          {activeContainer && (liveTables !== null || liveTablesLoading || liveTablesError) && (
+            <Tree aria-label="Live Delta catalog" defaultOpenItems={['live-tables', `live-schema-${activeContainer}`]} style={{ marginTop: 12 }}>
+              <TreeItem itemType="branch" value="live-tables">
+                <TreeItemLayout
+                  iconBefore={<TableSimple20Regular />}
+                  aside={liveTablesLoading ? <Spinner size="extra-tiny" /> : (
+                    <Button appearance="subtle" size="small" icon={<ArrowSync20Regular />}
+                      aria-label="Refresh live tables"
+                      onClick={(e) => { e.stopPropagation(); loadLiveTables(); }} />
+                  )}
+                >
+                  Tables (live)
+                </TreeItemLayout>
+                <Tree>
+                  {liveTablesError && (
+                    <TreeItem itemType="leaf" value="live-tables-error">
+                      <TreeItemLayout iconBefore={<ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />}>
+                        {liveTablesError}
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {!liveTablesError && liveTables !== null && liveTables.length === 0 && (
+                    <TreeItem itemType="leaf" value="live-tables-empty">
+                      <TreeItemLayout iconBefore={<Info20Regular />}>
+                        No Delta tables in /{activeContainer}/Tables/ yet
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {Object.entries(
+                    (liveTables || []).reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                      (acc[t.schema] ??= []).push(t); return acc;
+                    }, {}),
+                  ).map(([schema, schemaTables]) => (
+                    <TreeItem key={schema} itemType="branch" value={`live-schema-${schema}`}>
+                      <TreeItemLayout iconBefore={<Database20Regular />}>{schema} ({schemaTables.length})</TreeItemLayout>
+                      <Tree>
+                        {schemaTables.map((t) => (
+                          <TreeItem key={t.adlsPath} itemType="leaf" value={`live-tbl-${t.adlsPath}`}
+                            title={`${t.format} · ${t.status}${typeof t.latestVersion === 'number' ? ` · v${t.latestVersion}` : ''}`}
+                            onClick={() => setTab('tables')}>
+                            <TreeItemLayout
+                              iconBefore={t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}
+                              aside={
+                                t.status === 'broken'
+                                  ? <Badge appearance="tint" color="danger" size="small">broken</Badge>
+                                  : t.status === 'empty'
+                                  ? <Badge appearance="tint" color="warning" size="small">empty</Badge>
+                                  : t.format !== 'delta'
+                                  ? <Badge appearance="outline" size="small">{t.format}</Badge>
+                                  : null
+                              }
+                            >
+                              {t.name}
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
             </Tree>
           )}
           {hasBundle && (
@@ -999,10 +1289,124 @@ export function LakehouseEditor({ item, id }: Props) {
               </TreeItem>
             </Tree>
           )}
+
+          {/* ── Reference lakehouses (F8) ─────────────────────────────── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 14, padding: '4px 0' }}>
+            <Caption1 style={{ flex: 1, fontWeight: tokens.fontWeightSemibold }}>
+              <LinkMultiple20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              References
+            </Caption1>
+            <Tooltip content={isNewItem ? 'Save the lakehouse first' : 'Add an in-workspace lakehouse to browse side-by-side'} relationship="label">
+              <Button appearance="subtle" size="small" icon={<Add20Regular />} disabled={isNewItem}
+                onClick={() => { loadReferences(); setPickerOpen(true); }} aria-label="Add reference lakehouse" />
+            </Tooltip>
+          </div>
+          {refsLoading && <Spinner size="tiny" label="Loading references…" labelPosition="after" />}
+          {refsError && (
+            <MessageBar intent="error"><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
+          )}
+          {references !== null && references.length === 0 && !refsLoading && (
+            <Caption1 style={{ display: 'block', padding: '0 4px', color: tokens.colorNeutralForeground3 }}>
+              No references. Click + to browse another lakehouse in this workspace side-by-side.
+            </Caption1>
+          )}
+          {references !== null && references.length > 0 && (
+            <Tree aria-label="Reference lakehouses">
+              {references.map((ref) => (
+                <TreeItem key={ref.id} itemType="branch" value={`refroot-${ref.id}`}>
+                  <TreeItemLayout
+                    iconBefore={<Database20Regular />}
+                    aside={
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <Badge appearance="outline" size="small" color="informative">ref</Badge>
+                        {!ref.reachable && (
+                          <Tooltip relationship="label" content="The Console UAMI cannot reach this lakehouse's containers. Grant it Storage Blob Data Reader on the referenced storage account.">
+                            <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
+                          </Tooltip>
+                        )}
+                        <Tooltip relationship="label" content="Remove reference">
+                          <Button appearance="subtle" size="small" aria-label={`Remove ${ref.displayName}`}
+                            onClick={(e) => { e.stopPropagation(); removeReference(ref.id); }}>×</Button>
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    {ref.displayName}
+                  </TreeItemLayout>
+                  <Tree>
+                    {ref.containers.map((c) => (
+                      <TreeItem key={`refc-${ref.id}-${c}`} itemType="branch" value={`refc-${ref.id}-${c}`}
+                        onClick={() => loadRefPaths(ref.id, c, '')}>
+                        <TreeItemLayout iconBefore={<Database20Regular />}>{c}</TreeItemLayout>
+                        <Tree>{renderRefTreeChildren(ref, c, '')}</Tree>
+                      </TreeItem>
+                    ))}
+                  </Tree>
+                </TreeItem>
+              ))}
+            </Tree>
+          )}
         </div>
       }
       main={
         <>
+          {/* Reference-Lakehouse read-only preview pane (F8). Appears above the
+              primary tabs when a file inside a referenced lakehouse is selected.
+              Write actions are rendered DISABLED with an explanatory tooltip —
+              references are read-only by construction (no write BFF route). */}
+          {refSelection && (
+            <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
+              <div className={s.toolbar}>
+                <Badge appearance="filled" color="informative" icon={<LinkMultiple20Regular />}>Reference · read-only</Badge>
+                <Subtitle2>{refSelection.displayName}</Subtitle2>
+                <Caption1>· {refSelection.container}/{leafName(refSelection.entry.name)}</Caption1>
+                <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to upload files.">
+                    <span><Button appearance="primary" icon={<ArrowUpload20Regular />} disabled>Upload</Button></span>
+                  </Tooltip>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to create folders.">
+                    <span><Button appearance="outline" icon={<FolderAdd20Regular />} disabled>New folder</Button></span>
+                  </Tooltip>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to delete files.">
+                    <span><Button appearance="outline" icon={<Delete20Regular />} disabled>Delete</Button></span>
+                  </Tooltip>
+                  <Button appearance="subtle" onClick={() => { setRefSelection(null); setRefPreview(null); }}>Close</Button>
+                </div>
+              </div>
+              {refPreviewLoading && <Spinner size="small" label="Running OPENROWSET…" labelPosition="after" />}
+              {!refPreviewLoading && refPreview && !refPreview.ok && (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <MessageBarTitle>Preview failed</MessageBarTitle>
+                    {refPreview.error} {refPreview.code && <Caption1>· {refPreview.code}</Caption1>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {!refPreviewLoading && refPreview?.ok && (refPreview as any).previewable === false && (
+                <MessageBar intent="info"><MessageBarBody>{(refPreview as any).message || 'This file type is not previewable in-browser.'}</MessageBarBody></MessageBar>
+              )}
+              {!refPreviewLoading && refPreview?.ok && (refPreview.columns?.length ?? 0) > 0 && (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Reference preview rows" size="small">
+                    <TableHeader>
+                      <TableRow>
+                        {(refPreview.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(refPreview.rows || []).map((row, i) => (
+                        <TableRow key={i}>
+                          {(refPreview.columns || []).map((_, j) => (
+                            <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
@@ -1134,42 +1538,49 @@ export function LakehouseEditor({ item, id }: Props) {
               <>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>Delta tables under <code>/Tables/</code></Caption1>
+                  <Caption1>Live Delta catalog — real <code>_delta_log</code> scan of <code>/Tables/</code></Caption1>
                   <Button appearance="outline" icon={<ArrowSync20Regular />}
-                    disabled={!activeContainer}
-                    onClick={() => activeContainer && loadPaths(activeContainer, 'Tables')}>
+                    disabled={!activeContainer || liveTablesLoading}
+                    onClick={() => loadLiveTables()}>
                     Refresh
                   </Button>
                 </div>
                 {(() => {
                   if (!activeContainer) return <Caption1>Select a container.</Caption1>;
-                  const tableListing = openPrefixes[cacheKey(activeContainer, 'Tables')];
-                  if (tableListing === 'loading') return <Spinner size="small" label="Listing tables…" labelPosition="after" />;
-                  if (!tableListing) {
-                    return (
-                      <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
-                    );
+                  if (liveTablesLoading && liveTables === null) {
+                    return <Spinner size="small" label="Scanning Delta catalog…" labelPosition="after" />;
                   }
-                  // Tables/ directory may not exist yet (404 during first provision). Gracefully fall through to bundled content.
-                  const isTablesNotFound = 'error' in tableListing && tableListing.error.toLowerCase().includes('path does not exist');
-                  if ('error' in tableListing && !isTablesNotFound) {
+                  if (liveTablesError) {
                     return (
                       <MessageBar intent="error">
                         <MessageBarBody>
-                          <MessageBarTitle>Could not list tables</MessageBarTitle>
-                          {tableListing.error}
+                          <MessageBarTitle>Could not scan tables</MessageBarTitle>
+                          {liveTablesError}
                         </MessageBarBody>
                       </MessageBar>
                     );
                   }
-                  const tables = (tableListing && !('error' in tableListing) ? (tableListing as PathEntry[]).filter(e => e.isDirectory) : []);
+                  if (liveTablesGate) {
+                    return (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Lakehouse storage not configured</MessageBarTitle>
+                          {liveTablesGate}
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  const tables = liveTables ?? [];
                   if (tables.length === 0) {
+                    // Honest empty — no fabricated rows. Offer the bundle's planned
+                    // tables (if any) as a "what to materialize" reference only.
                     return (
                       <>
                         <MessageBar intent="info">
                           <MessageBarBody>
-                            No Delta tables materialized in ADLS yet. From the Files tab, right-click a
-                            Parquet / CSV / JSON file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                            No Delta tables found under <strong>/{activeContainer}/Tables/</strong>. From the
+                            Files tab, right-click a Parquet / CSV / JSON file and choose
+                            <strong> Load to Tables (Delta)</strong> to materialize one, then Refresh.
                           </MessageBarBody>
                         </MessageBar>
                         {bundleDeltaTables.length > 0 && (
@@ -1213,38 +1624,72 @@ export function LakehouseEditor({ item, id }: Props) {
                       </>
                     );
                   }
+                  // Group by schema (container) for a Fabric-explorer-style layout.
+                  const bySchema = tables.reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                    (acc[t.schema] ??= []).push(t); return acc;
+                  }, {});
+                  const statusIcon = (st: LiveCatalogTable['status']) =>
+                    st === 'ok' ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                    : st === 'broken' ? <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
+                    : <Clock20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />;
                   return (
-                    <Table aria-label="Tables">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHeaderCell>Table</TableHeaderCell>
-                          <TableHeaderCell>Path</TableHeaderCell>
-                          <TableHeaderCell>Last modified</TableHeaderCell>
-                          <TableHeaderCell></TableHeaderCell>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {tables.map((t) => {
-                          const tableName = leafName(t.name);
-                          return (
-                            <TableRow key={t.name}>
-                              <TableCell><strong>{tableName}</strong></TableCell>
-                              <TableCell><code style={{ fontSize: 11 }}>/{t.name}</code></TableCell>
-                              <TableCell>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
-                              <TableCell>
-                                <Button size="small" appearance="primary"
-                                  onClick={() => {
-                                    setSqlText(`-- Read Delta table\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
-                                    setTab('sql');
-                                  }}>
-                                  Query
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {Object.entries(bySchema).map(([schema, schemaTables]) => (
+                        <div key={schema}>
+                          <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                            <Database20Regular /> {schema} <Caption1>({schemaTables.length})</Caption1>
+                          </Subtitle2>
+                          <div className={s.tableWrap}>
+                            <Table aria-label={`Tables in ${schema}`} size="small">
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHeaderCell>Table</TableHeaderCell>
+                                  <TableHeaderCell>Format</TableHeaderCell>
+                                  <TableHeaderCell>Status</TableHeaderCell>
+                                  <TableHeaderCell>Version</TableHeaderCell>
+                                  <TableHeaderCell>Rows</TableHeaderCell>
+                                  <TableHeaderCell>Size</TableHeaderCell>
+                                  <TableHeaderCell>Modified</TableHeaderCell>
+                                  <TableHeaderCell></TableHeaderCell>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {schemaTables.map((t) => (
+                                  <TableRow key={t.adlsPath}>
+                                    <TableCell>
+                                      {t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}{' '}
+                                      <strong>{t.name}</strong>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge appearance={t.format === 'delta' ? 'filled' : 'outline'}
+                                        color={t.format === 'delta' ? 'brand' : 'informative'} size="small">
+                                        {t.format}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell title={t.status}>{statusIcon(t.status)}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.latestVersion === 'number' ? `v${t.latestVersion}` : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.rowCount === 'number' ? t.rowCount.toLocaleString() : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.sizeBytes === 'number' ? formatBytes(t.sizeBytes) : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
+                                    <TableCell>
+                                      <Button size="small" appearance="primary"
+                                        disabled={t.format !== 'delta'}
+                                        title={t.format !== 'delta' ? 'OPENROWSET DELTA query available for Delta tables' : undefined}
+                                        onClick={() => {
+                                          setSqlText(`-- Read Delta table ${t.schema}.${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK '${t.bulkUrl}', FORMAT='DELTA') AS r;`);
+                                          setTab('sql');
+                                        }}>
+                                        Query
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   );
                 })()}
               </>
@@ -1724,6 +2169,65 @@ export function LakehouseEditor({ item, id }: Props) {
                       {scSubmitting ? 'Creating…' : 'Create'}
                     </Button>
                   )}
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Add-reference picker (F8) — lists in-workspace lakehouses not yet referenced. */}
+          <Dialog open={pickerOpen} onOpenChange={(_, d) => setPickerOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 560 }}>
+              <DialogBody>
+                <DialogTitle>Add reference lakehouse</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Browse another lakehouse from this workspace side-by-side. Read actions use pass-through
+                    RBAC — the Console UAMI must hold <strong>Storage Blob Data Reader</strong> on the referenced
+                    containers. Write actions stay disabled on references.
+                  </Caption1>
+                  {refsError && (
+                    <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
+                  )}
+                  {(() => {
+                    const referenced = new Set((references ?? []).map((r) => r.id));
+                    const addable = workspaceLakehouses.filter((lh) => lh.id !== id && !referenced.has(lh.id));
+                    return (
+                      <Table size="small" style={{ marginTop: 12 }} aria-label="Workspace lakehouses">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell>Lakehouse</TableHeaderCell>
+                            <TableHeaderCell></TableHeaderCell>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {addable.map((lh) => (
+                            <TableRow key={lh.id}>
+                              <TableCell>
+                                <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                {lh.displayName}
+                              </TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="primary"
+                                  onClick={() => { addReference(lh.id); setPickerOpen(false); }}>
+                                  Add
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {addable.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2}>
+                                <Caption1>No other lakehouses in this workspace, or all are already referenced.</Caption1>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    );
+                  })()}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setPickerOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
