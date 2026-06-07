@@ -41,8 +41,14 @@ describe('data-science parity doc — zero missing / stub rows', () => {
 
   it('has no stub / coming-soon / deferred banners', () => {
     expect(doc).not.toMatch(/coming soon/i);
-    expect(doc).not.toMatch(/\bstub banner/i);
     expect(doc).not.toMatch(/deferred to v\d/i);
+    // A real stub banner is a coverage row (table line starting with "|") whose
+    // status says "stub" — not the prose claim "Zero stub banners". Scope the
+    // check to table rows, mirroring the ❌ (MISSING) row check above.
+    const stubRows = doc
+      .split('\n')
+      .filter((l) => l.trimStart().startsWith('|') && /\bstub\b/i.test(l));
+    expect(stubRows).toEqual([]);
   });
 
   it('covers the ml-model, ml-experiment, MLflow, and AI Functions surfaces', () => {
