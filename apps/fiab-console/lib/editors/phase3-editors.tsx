@@ -46,6 +46,7 @@ import {
   Sparkle16Regular, Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
 import {
   ColumnGridDesigner, toKustoSchema, parseKustoSchema, validateColumns,
   type ColumnDef,
@@ -2452,6 +2453,10 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  const [wizIngestFormat, setWizIngestFormat] = useState('csv');
+  const [wizIngestMapping, setWizIngestMapping] = useState('');
+  // Ingestion mapping wizard (format selector + auto-detect column grid)
+  const [mappingWizOpen, setMappingWizOpen] = useState(false);
   // Event Hub data-connection wizard
   const [wizDcHub, setWizDcHub] = useState('');
   const [wizDcConsumerGroup, setWizDcConsumerGroup] = useState('');
@@ -2693,6 +2698,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizColumns(DEFAULT_TABLE_COLUMNS); setWizAlterTarget('');
     // preTable: when called from a tree "Get data" hover, pre-fill the target table.
     setWizSource(preTable || ''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    setWizIngestFormat('csv'); setWizIngestMapping('');
     // Event Hub data-connection fields
     setWizDcHub(''); setWizDcConsumerGroup(''); setWizDcFormat('JSON');
     setWizDcCompression('None'); setWizDcTargetTable(''); setWizDcMappingRule('');
@@ -2953,16 +2959,41 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       }
       case 'ingest': {
         if (!wizIngestFile) { setWizError('Choose a file to ingest'); return; }
-        // Real ingest: POST multipart to /api/items/eventhouse/[id]/ingest is per-eventhouse;
-        // for kql-database we accept a one-shot KQL `.ingest inline into table` for very small files.
-        if (wizIngestFile.size > 5 * 1024 * 1024) { setWizError('File too large for inline ingest (5 MB max). Use a Get-data pipeline.'); return; }
         if (!wizSource) { setWizError('Target table required'); return; }
+        const fmt = wizIngestFormat;
+        const mapRef = wizIngestMapping.trim();
+        // Binary formats (Parquet/Avro/ORC) can't be ingested inline — surface
+        // the real blob-ingest command template instead.
+        if (['parquet', 'avro', 'orc'].includes(fmt)) {
+          const blobCmd = [
+            `// ${fmt.toUpperCase()} is a binary format — inline ingest is not supported.`,
+            `// Ingest from blob storage using the mapping you created:`,
+            `.ingest into table ["${wizSource}"] from @'https://<account>.blob.core.windows.net/<container>/<file>.${fmt}'`,
+            mapRef
+              ? `  with (format='${fmt}', ingestionMappingReference='${mapRef}')`
+              : `  with (format='${fmt}')`,
+          ].join('\n');
+          setKql(blobCmd);
+          setWizardKind(null);
+          const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+          el?.focus();
+          return;
+        }
+        // Real inline ingest for small text files (CSV/TSV/PSV/JSON).
+        if (wizIngestFile.size > 5 * 1024 * 1024) { setWizError('File too large for inline ingest (5 MB max). Use a Get-data pipeline or ingest from blob.'); return; }
         const text = await wizIngestFile.text();
-        // .ingest inline only supports CSV without header. Strip first line if user pasted CSV.
         const lines = text.split(/\r?\n/).filter(Boolean);
-        if (lines.length > 0 && /[a-zA-Z]/.test(lines[0])) lines.shift(); // strip header
+        // For CSV-family identity ingest (no mapping reference) the header row would
+        // be ingested as data — strip it. With an explicit mapping reference the
+        // mapping addresses columns by Ordinal/Path so the header must also go.
+        const csvFamily = ['csv', 'tsv', 'psv'].includes(fmt);
+        if (csvFamily && lines.length > 0 && /[a-zA-Z]/.test(lines[0])) lines.shift();
         const body = lines.join('\n');
-        mgmtCmd = `.ingest inline into table ${wizSource} <|\n${body}`;
+        const withClause = [
+          `format='${fmt}'`,
+          mapRef ? `ingestionMappingReference='${mapRef}'` : '',
+        ].filter(Boolean).join(', ');
+        mgmtCmd = `.ingest inline into table ["${wizSource}"] with (${withClause}) <|\n${body}`;
         break;
       }
     }
@@ -2985,7 +3016,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizColumns, wizAlterTarget, wizSource, wizQuery, wizArgs, wizBackfill, wizIngestFile, wizFn, wizTransactional, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load,
+  }, [wizardKind, wizName, wizSchema, wizColumns, wizAlterTarget, wizSource, wizQuery, wizArgs, wizBackfill, wizIngestFile, wizIngestFormat, wizIngestMapping, wizFn, wizTransactional, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load,
       wizDcEhGate, wizDcHub, wizDcConsumerGroup, wizDcTargetTable, wizDcMappingRule, wizDcFormat, wizDcCompression]);
 
   // Detach the follower configuration — restores read/write on the item.
@@ -3013,6 +3044,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           { label: 'Materialized view', onClick: () => openWizard('mv'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Function', onClick: () => openWizard('function'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Update policy', onClick: () => openWizard('update-policy'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Ingestion mapping', onClick: () => setMappingWizOpen(true), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Shortcut (follower DB)',
             onClick: () => openWizard('follower'),
             disabled: isFollower,
@@ -3298,7 +3330,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'mv' && 'New materialized view (.create materialized-view)'}
                   {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
-                  {wizardKind === 'ingest' && 'Get data — inline ingest (.ingest inline into table)'}
+                  {wizardKind === 'ingest' && 'Get data — ingest a file (.ingest with format + mapping)'}
                   {wizardKind === 'data-connection' && 'New Event Hub data connection'}
                   {wizardKind === 'follower' && 'Database shortcut — attach follower (read-only)'}
                 </DialogTitle>
@@ -3454,14 +3486,29 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                       <>
                         <Caption1>Target table</Caption1>
                         <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events" />
-                        <Caption1>CSV file (≤5 MB)</Caption1>
+                        <Caption1>Format</Caption1>
+                        <Select value={wizIngestFormat} onChange={(_: unknown, d: any) => setWizIngestFormat(d.value)}>
+                          {['csv', 'tsv', 'psv', 'json', 'parquet', 'avro', 'orc'].map((fmt) => (
+                            <option key={fmt} value={fmt}>{fmt.toUpperCase()}</option>
+                          ))}
+                        </Select>
+                        <Caption1>Ingestion mapping name (optional — blank uses the table&apos;s identity mapping)</Caption1>
+                        <Input value={wizIngestMapping} onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)} placeholder="EventMapping" />
+                        <Caption1>
+                          File ({['parquet', 'avro', 'orc'].includes(wizIngestFormat)
+                            ? 'binary — generates a blob ingest command'
+                            : '≤5 MB — inline ingest'})
+                        </Caption1>
                         <input
                           type="file"
-                          accept=".csv,text/csv"
-                          aria-label="CSV file to ingest inline"
+                          accept=".csv,.tsv,.psv,.json,.jsonl,.txt,.parquet,.avro,.orc"
+                          aria-label="File to ingest"
                           onChange={(e) => setWizIngestFile(e.target.files?.[0] || null)}
                         />
-                        <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
+                        <Caption1>
+                          Create a named mapping first via Home → New → Ingestion mapping, then reference it here.
+                          For continuous ingest use Eventhouse → Get data (Event Hub data-connection).
+                        </Caption1>
                       </>
                     )}
                     {wizardKind === 'data-connection' && (
@@ -3586,6 +3633,21 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Ingestion mapping wizard — format selector + sample-file auto-detect grid */}
+          <IngestionMappingWizardDialog
+            itemId={id}
+            tables={info?.tables ?? []}
+            open={mappingWizOpen}
+            onOpenChange={setMappingWizOpen}
+            onCreated={(_name, _kind, _table, kqlSnippet) => {
+              setMappingWizOpen(false);
+              setTreeRefreshKey((k) => k + 1);
+              setKql(kqlSnippet);
+              const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+              el?.focus();
+            }}
+          />
         </div>
       }
     />

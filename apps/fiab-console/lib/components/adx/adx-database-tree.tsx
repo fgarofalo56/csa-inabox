@@ -48,6 +48,7 @@ import {
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
   DataHistogram16Regular, Code16Regular, ChartMultiple16Regular,
 } from '@fluentui/react-icons';
+import { IngestionMappingWizardDialog } from './ingestion-mapping-wizard';
 import {
   ColumnGridDesigner, toKustoSchema, parseKustoSchema,
 } from './column-grid-designer';
@@ -74,7 +75,7 @@ interface MapRow { name: string; kind: string; table?: string; mapping?: string 
 interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string }
 interface PolicyRow { kind: string; policy?: unknown; raw?: string }
 
-type CreatableGroup = 'table' | 'function' | 'mv' | 'mapping';
+type CreatableGroup = 'table' | 'function' | 'mv';
 
 export interface AdxDatabaseTreeProps {
   /** The bound kql-database item id (so routes resolve the right database). */
@@ -172,9 +173,10 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
   const [cQuery, setCQuery] = useState('');
   const [cBackfill, setCBackfill] = useState(false);
   const [cArgs, setCArgs] = useState('');
-  const [cKind, setCKind] = useState('json');
-  const [cMapping, setCMapping] = useState('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   const [createError, setCreateError] = useState<string | null>(null);
+  // Ingestion mapping is authored by its own two-step wizard (auto-detect grid),
+  // not the generic create dialog above.
+  const [mappingWizOpen, setMappingWizOpen] = useState(false);
 
   // ---- inline drop-confirm dialog (used when the parent doesn't own drop) ----
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -220,7 +222,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCSchema('ts:datetime, tenant:string, value:long');
     setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs(''); setCBackfill(false);
-    setCKind('json'); setCMapping('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   }, [tables]);
 
   const submitCreate = useCallback(async () => {
@@ -232,7 +233,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
       if (createGroup === 'table') { route = TABLES; payload = { name, schema: cSchema }; }
       else if (createGroup === 'function') { route = FUNCTIONS; payload = { name, args: cArgs, body: cQuery }; }
       else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery, backfill: cBackfill }; }
-      else if (createGroup === 'mapping') { route = MAPPINGS; payload = { name, kind: cKind, table: cSource, mapping: cMapping }; }
       const res = await fetch(route, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
@@ -246,7 +246,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cBackfill, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
+  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cBackfill, TABLES, FUNCTIONS, MVIEWS, loadAll]);
 
   const del = useCallback(async (route: string, query: string) => {
     setBusy(true); setError(null);
@@ -328,7 +328,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
                 <MenuItem icon={<DocumentTable20Regular />} onClick={() => openCreate('table')}>Table</MenuItem>
                 <MenuItem icon={<MathFormula20Regular />} onClick={() => openCreate('function')}>Function</MenuItem>
                 <MenuItem icon={<Table20Regular />} onClick={() => openCreate('mv')}>Materialized view</MenuItem>
-                <MenuItem icon={<ArrowImport20Regular />} onClick={() => openCreate('mapping')}>Ingestion mapping</MenuItem>
+                <MenuItem icon={<ArrowImport20Regular />} onClick={() => setMappingWizOpen(true)}>Ingestion mapping</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -443,7 +443,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
 
           {/* Ingestion mappings */}
           <TreeItem itemType="branch" value="g-mappings">
-            {groupHeader('Ingestion mappings', <ArrowImport20Regular />, mappings.length, () => openCreate('mapping'), 'New ingestion mapping')}
+            {groupHeader('Ingestion mappings', <ArrowImport20Regular />, mappings.length, () => setMappingWizOpen(true), 'New ingestion mapping')}
             <Tree>
               {fMaps.length === 0 && <TreeItem itemType="leaf" value="map-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No ingestion mappings'}</Caption1></TreeItemLayout></TreeItem>}
               {fMaps.map((m) => (
@@ -605,13 +605,12 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
             <DialogTitle>
               New {createGroup === 'table' ? 'table (.create table)'
                 : createGroup === 'function' ? 'function (.create-or-alter function)'
-                : createGroup === 'mv' ? 'materialized view (.create materialized-view)'
-                : 'ingestion mapping (.create-or-alter … mapping)'}
+                : 'materialized view (.create materialized-view)'}
             </DialogTitle>
             <DialogContent>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Field label="Name" required>
-                  <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder={createGroup === 'mapping' ? 'EventMapping' : 'events'} />
+                  <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="events" />
                 </Field>
 
                 {createGroup === 'table' && (
@@ -665,29 +664,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
                   </>
                 )}
 
-                {createGroup === 'mapping' && (
-                  <>
-                    <Field label="Target table" required>
-                      <Dropdown
-                        placeholder={tables.length ? 'Select a table' : 'No tables — create one first'}
-                        value={cSource} selectedOptions={cSource ? [cSource] : []}
-                        onOptionSelect={(_, d) => setCSource(d.optionValue || '')}
-                        disabled={!tables.length}
-                      >
-                        {tables.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.name}</Option>)}
-                      </Dropdown>
-                    </Field>
-                    <Field label="Kind">
-                      <Dropdown value={cKind} selectedOptions={[cKind]} onOptionSelect={(_, d) => setCKind(d.optionValue || 'json')}>
-                        {['csv', 'json', 'avro', 'parquet', 'orc', 'w3clogfile'].map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
-                      </Dropdown>
-                    </Field>
-                    <Field label="Mapping (JSON: array of { column, datatype?, Properties })">
-                      <Textarea value={cMapping} onChange={(_, d) => setCMapping(d.value)} rows={6} style={{ fontFamily: 'Consolas, monospace' }} />
-                    </Field>
-                  </>
-                )}
-
                 {createError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
               </div>
             </DialogContent>
@@ -698,6 +674,19 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Ingestion mapping wizard (format selector + auto-detect grid) */}
+      <IngestionMappingWizardDialog
+        itemId={itemId}
+        tables={tables.map((t) => ({ name: t.name }))}
+        open={mappingWizOpen}
+        onOpenChange={setMappingWizOpen}
+        onCreated={(_name, _kind, _table, kql) => {
+          setMappingWizOpen(false);
+          onOpenQuery?.(kql);
+          loadAll();
+        }}
+      />
     </div>
   );
 }
