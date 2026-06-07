@@ -30,8 +30,23 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM endpoint is sovereign-cloud aware (mirrors adf-client.ts). Default =
+// Commercial (unchanged behavior). GCC-High / IL5 deployments set LOOM_ARM_ENDPOINT
+// (or AZURE_CLOUD) so every Monitor ARM call — inventory, health, metrics,
+// activity log, metric/alert-management — targets the correct ARM host instead
+// of management.azure.com. The Log-Analytics QUERY host is selected separately
+// via LOOM_LOG_ANALYTICS_ENDPOINT (api.loganalytics.us in Gov).
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM = armBase();
+const ARM_SCOPE = `${ARM}/.default`;
 const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
 const LA_SCOPE = `${LA_ENDPOINT}/.default`;
 
@@ -485,6 +500,130 @@ export async function listAlertRules(): Promise<AlertRule[]> {
     });
   }
   return rules;
+}
+
+// ----------------------------------------------------------------------------
+// 6b) Alert history — Microsoft.AlertsManagement/alerts (fired/resolved events)
+//
+// The run history / trigger log behind the Loom Activator. Every Loom activator
+// rule maps to a Microsoft.Insights/scheduledQueryRule; each time that rule
+// fires (or auto-resolves), Azure Monitor records an alert INSTANCE under
+// Microsoft.AlertsManagement/alerts. This lists those instances so the editor
+// can show a real fired/resolved log with timestamps, state, severity, and the
+// firing payload (rows matched, threshold, search query, drill-in link).
+//   https://learn.microsoft.com/rest/api/monitor/alertsmanagement/alerts/get-all
+// Permission: Microsoft.AlertsManagement/alerts/read (included in the
+// "Monitoring Reader" built-in role at subscription scope). Instances are
+// retained for 30 days, so timeRange caps at 30d.
+// ----------------------------------------------------------------------------
+
+const ALERTS_MGMT_API = '2019-03-01';
+
+export interface AlertHistoryEvent {
+  id: string;
+  /** scheduledQueryRule NAME (essentials.alertRule), used to join to a Loom rule. */
+  alertRule: string;
+  /** ARM resource id of the alert rule, when present. */
+  alertRuleId?: string;
+  monitorCondition: 'Fired' | 'Resolved' | string;
+  alertState: string;        // New | Acknowledged | Closed
+  severity?: string;         // Sev0…Sev4
+  startDateTime: string;     // ISO 8601 — when the instance fired
+  lastModifiedDateTime?: string;
+  monitorConditionResolvedDateTime?: string;
+  targetResourceName?: string;
+  targetResourceGroup?: string;
+  /** Firing payload from properties.context (includeContext=true). */
+  payload?: {
+    matchingRowsCount?: number;
+    operator?: string;
+    threshold?: string;
+    timeAggregation?: string;
+    searchQuery?: string;
+    dimensions?: unknown[];
+    windowStartTime?: string;
+    windowEndTime?: string;
+    linkToSearchResultsUI?: string;
+    /** Raw context.condition.allOf[0] for full-fidelity drill-in. */
+    raw?: unknown;
+  };
+}
+
+/** Pull the log-alert firing context out of the (possibly double-nested) alert
+ *  context blob. Log search alerts expose condition.allOf[0] with the search
+ *  query, the evaluated metricValue (rows matched), operator, and threshold. */
+function extractAlertPayload(properties: any): AlertHistoryEvent['payload'] | undefined {
+  // includeContext nests the monitor-service context; for Log Analytics it is
+  // either properties.context.context.condition or properties.context.condition.
+  const ctxRoot = properties?.context?.context ?? properties?.context;
+  const condition = ctxRoot?.condition;
+  const allOf = condition?.allOf?.[0];
+  if (!allOf && !condition) return undefined;
+  const rowsRaw = allOf?.metricValue ?? allOf?.matchingRowsCount;
+  return {
+    matchingRowsCount: typeof rowsRaw === 'number' ? rowsRaw : (rowsRaw != null ? Number(rowsRaw) : undefined),
+    operator: allOf?.operator,
+    threshold: allOf?.threshold != null ? String(allOf.threshold) : undefined,
+    timeAggregation: allOf?.timeAggregation,
+    searchQuery: allOf?.searchQuery,
+    dimensions: Array.isArray(allOf?.dimensions) ? allOf.dimensions : undefined,
+    windowStartTime: condition?.windowStartTime,
+    windowEndTime: condition?.windowEndTime,
+    linkToSearchResultsUI: allOf?.linkToSearchResultsUI,
+    raw: allOf ?? condition,
+  };
+}
+
+/**
+ * List fired/resolved alert instances from Microsoft.AlertsManagement. Filters
+ * to a specific scheduledQueryRule by name (essentials.alertRule) when given.
+ * Follows nextLink up to a small guard. Uses the same ARM credential/scope as
+ * listAlertRules (Monitoring Reader at subscription scope).
+ */
+export async function listAlertHistory(opts?: {
+  alertRule?: string;
+  days?: number;
+}): Promise<AlertHistoryEvent[]> {
+  const cfg = readMonitorConfig();
+  const timeRange = `${Math.min(30, Math.max(1, opts?.days ?? 30))}d`;
+  const qs = new URLSearchParams({
+    'api-version': ALERTS_MGMT_API,
+    timeRange,
+    includeContext: 'true',
+    sortBy: 'startDateTime',
+    sortOrder: 'desc',
+  });
+  // alertRule filters by the rule name (essentials.alertRule is the name).
+  if (opts?.alertRule) qs.set('alertRule', opts.alertRule);
+  let next: string | null =
+    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.AlertsManagement/alerts?${qs.toString()}`;
+  const out: AlertHistoryEvent[] = [];
+  let guard = 0;
+  while (next && guard < 5) {
+    guard++;
+    const j: any = await armGet(next);
+    for (const a of j?.value || []) {
+      const ess = a?.properties?.essentials || {};
+      // Belt-and-suspenders: if a rule filter was requested, keep only matching
+      // instances (in case the service ignores an unknown filter format).
+      if (opts?.alertRule && ess.alertRule && ess.alertRule !== opts.alertRule) continue;
+      out.push({
+        id: a.name || a.id,
+        alertRule: ess.alertRule || '',
+        monitorCondition: ess.monitorCondition || '',
+        alertState: ess.alertState || '',
+        severity: ess.severity,
+        startDateTime: ess.startDateTime || '',
+        lastModifiedDateTime: ess.lastModifiedDateTime,
+        monitorConditionResolvedDateTime: ess.monitorConditionResolvedDateTime,
+        targetResourceName: ess.targetResourceName,
+        targetResourceGroup: ess.targetResourceGroup,
+        payload: extractAlertPayload(a?.properties),
+      });
+    }
+    next = j?.nextLink || null;
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------

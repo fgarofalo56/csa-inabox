@@ -2943,6 +2943,31 @@ interface RuleLite {
   action?: { kind?: string; config?: Record<string, unknown> };
   state?: string; lastTriggered?: string;
 }
+/** Shape of one /api/items/activator/[id]/history event (AlertHistoryEvent). */
+interface HistoryEventLite {
+  id: string;
+  alertRule: string;
+  monitorCondition: string;       // Fired | Resolved
+  alertState: string;             // New | Acknowledged | Closed
+  severity?: string;
+  startDateTime: string;
+  lastModifiedDateTime?: string;
+  monitorConditionResolvedDateTime?: string;
+  targetResourceName?: string;
+  targetResourceGroup?: string;
+  payload?: {
+    matchingRowsCount?: number;
+    operator?: string;
+    threshold?: string;
+    timeAggregation?: string;
+    searchQuery?: string;
+    dimensions?: unknown[];
+    windowStartTime?: string;
+    windowEndTime?: string;
+    linkToSearchResultsUI?: string;
+    raw?: unknown;
+  };
+}
 
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2974,6 +2999,14 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
+
+  // Run history / trigger log (Azure Monitor alert instances for this reflex).
+  const [activeView, setActiveView] = useState<'rules' | 'history'>('rules');
+  const [historyEvents, setHistoryEvents] = useState<HistoryEventLite[] | null>(null);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
+  const [historyNote, setHistoryNote] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [payloadEvent, setPayloadEvent] = useState<HistoryEventLite | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setLoading(true); setListErr(null);
@@ -3071,6 +3104,29 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     if (!j.ok) setRulesErr(j.error || 'trigger failed');
     else loadRules(workspaceId, selectedId);
   }, [workspaceId, selectedId, loadRules]);
+
+  // Run history — fired/resolved Azure Monitor alert instances for this reflex.
+  const loadHistory = useCallback(async () => {
+    if (!workspaceId || !selectedId) return;
+    setHistoryLoading(true); setHistoryErr(null); setHistoryNote(null);
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/history?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok) { setHistoryEvents([]); setHistoryErr(j.error || j.gate?.remediation || 'history failed'); return; }
+      setHistoryEvents(j.events || []);
+      if (j.note) setHistoryNote(j.note);
+    } catch (e: any) {
+      setHistoryEvents([]); setHistoryErr(e?.message || String(e));
+    } finally { setHistoryLoading(false); }
+  }, [workspaceId, selectedId]);
+
+  // Reset (and re-fetch when viewing) history whenever the selected reflex changes.
+  useEffect(() => {
+    setHistoryEvents(null); setHistoryErr(null); setHistoryNote(null);
+  }, [selectedId, workspaceId]);
+  useEffect(() => {
+    if (activeView === 'history' && historyEvents === null && workspaceId && selectedId) loadHistory();
+  }, [activeView, historyEvents, workspaceId, selectedId, loadHistory]);
 
   const canNewRule = !!selectedId && !!workspaceId;
 
@@ -3186,6 +3242,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
           {selectedId && (
             <>
+              <TabList selectedValue={activeView} onTabSelect={(_: unknown, d: any) => setActiveView(d.value as 'rules' | 'history')}>
+                <Tab value="rules">Rules{rules.length ? ` (${rules.length})` : ''}</Tab>
+                <Tab value="history">Run history</Tab>
+              </TabList>
+
+              {activeView === 'rules' && (
+              <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Rules</Subtitle2>
                 <Dialog open={ruleOpen} onOpenChange={(_: unknown, d: any) => setRuleOpen(d.open)}>
@@ -3290,6 +3353,89 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                   </Table>
                 </div>
               )}
+              </>
+              )}
+
+              {activeView === 'history' && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Subtitle2>Run history</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>fired &amp; resolved events · last 30 days · Azure Monitor</Caption1>
+                  <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={loadHistory} disabled={historyLoading} style={{ marginLeft: 'auto' }}>
+                    {historyLoading ? 'Loading…' : 'Refresh'}
+                  </Button>
+                </div>
+                {historyErr && <MessageBar intent="warning"><MessageBarBody>{historyErr}</MessageBarBody></MessageBar>}
+                {historyNote && !historyErr && <MessageBar intent="info"><MessageBarBody>{historyNote}</MessageBarBody></MessageBar>}
+                {historyLoading && <Spinner size="tiny" label="Loading run history…" />}
+                {!historyLoading && historyEvents && historyEvents.length === 0 && !historyNote && !historyErr && (
+                  <Caption1>No fired or resolved alerts in the last 30 days for this reflex&apos;s rules. Trigger a rule, or wait for a scheduled evaluation, then refresh.</Caption1>
+                )}
+                {!historyLoading && historyEvents && historyEvents.length > 0 && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Run history" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Timestamp</TableHeaderCell>
+                        <TableHeaderCell>Rule</TableHeaderCell>
+                        <TableHeaderCell>State</TableHeaderCell>
+                        <TableHeaderCell>Severity</TableHeaderCell>
+                        <TableHeaderCell>Target</TableHeaderCell>
+                        <TableHeaderCell>Rows matched</TableHeaderCell>
+                        <TableHeaderCell>Payload</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {historyEvents.map((ev) => (
+                          <TableRow key={ev.id}>
+                            <TableCell className={s.cell}>{ev.startDateTime ? new Date(ev.startDateTime).toLocaleString() : '—'}</TableCell>
+                            <TableCell className={s.cell}>{ev.alertRule || '—'}</TableCell>
+                            <TableCell>
+                              <Badge appearance="filled" color={ev.monitorCondition === 'Fired' ? 'danger' : ev.monitorCondition === 'Resolved' ? 'success' : 'informative'}>
+                                {ev.monitorCondition || ev.alertState || '—'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{ev.severity || '—'}</TableCell>
+                            <TableCell className={s.cell}>{ev.targetResourceName || '—'}</TableCell>
+                            <TableCell>{ev.payload?.matchingRowsCount ?? '—'}</TableCell>
+                            <TableCell>
+                              <Button size="small" appearance="subtle" onClick={() => setPayloadEvent(ev)} disabled={!ev.payload}>View</Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </>
+              )}
+
+              <Dialog open={!!payloadEvent} onOpenChange={(_: unknown, d: any) => { if (!d.open) setPayloadEvent(null); }}>
+                <DialogSurface>
+                  <DialogBody>
+                    <DialogTitle>Alert payload — {payloadEvent?.alertRule}</DialogTitle>
+                    <DialogContent>
+                      {payloadEvent && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <Caption1><strong>Condition</strong>: {payloadEvent.monitorCondition} · {payloadEvent.alertState}{payloadEvent.severity ? ` · ${payloadEvent.severity}` : ''}</Caption1>
+                          <Caption1><strong>Fired</strong>: {payloadEvent.startDateTime ? new Date(payloadEvent.startDateTime).toLocaleString() : '—'}{payloadEvent.monitorConditionResolvedDateTime ? ` · resolved ${new Date(payloadEvent.monitorConditionResolvedDateTime).toLocaleString()}` : ''}</Caption1>
+                          <Caption1><strong>Rows matched</strong>: {payloadEvent.payload?.matchingRowsCount ?? '—'} ({payloadEvent.payload?.operator || '—'} {payloadEvent.payload?.threshold ?? '—'})</Caption1>
+                          {payloadEvent.payload?.windowStartTime && (
+                            <Caption1><strong>Window</strong>: {new Date(payloadEvent.payload.windowStartTime).toLocaleString()} → {payloadEvent.payload.windowEndTime ? new Date(payloadEvent.payload.windowEndTime).toLocaleString() : '—'}</Caption1>
+                          )}
+                          {payloadEvent.payload?.searchQuery && (
+                            <Textarea readOnly value={payloadEvent.payload.searchQuery} rows={4} style={{ fontFamily: 'Consolas, monospace', width: '100%' }} />
+                          )}
+                          {payloadEvent.payload?.linkToSearchResultsUI && (
+                            <a href={payloadEvent.payload.linkToSearchResultsUI} target="_blank" rel="noreferrer">Open matching rows in Azure Monitor →</a>
+                          )}
+                        </div>
+                      )}
+                    </DialogContent>
+                    <DialogActions>
+                      <Button appearance="primary" onClick={() => setPayloadEvent(null)}>Close</Button>
+                    </DialogActions>
+                  </DialogBody>
+                </DialogSurface>
+              </Dialog>
             </>
           )}
         </div>
