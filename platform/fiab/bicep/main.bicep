@@ -787,6 +787,30 @@ module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (deploymen
   scope: subscription()
 }
 
+// =====================================================================
+// RTI hub cross-subscription discovery — Reader at SUBSCRIPTION scope.
+//
+// The Real-Time Intelligence hub catalog (/rti-hub -> GET /api/rti-hub) lists
+// every Event Hub namespace, IoT Hub, and ADX cluster the Console UAMI can see
+// via Azure Resource Graph. Resource Graph honors RBAC: rows are returned only
+// for scopes where the principal has at least Reader. The UAMI's other grants
+// are resource-group-scoped, so without a subscription-scoped Reader the graph
+// query returns [] and the hub appears empty. Reader is read-only — the
+// least-privilege grant that makes cross-RG discovery work.
+//
+// Split into its own subscription-scoped module so consolePrincipalId arrives
+// as a plain start-time param (avoids BCP177/BCP120 on the roleAssignment
+// name/if — same pattern as admin-plane/scaling-rbac.bicep).
+// =====================================================================
+module rtiHubRbac 'modules/admin-plane/rti-hub-rbac.bicep' = {
+  name: 'rti-hub-rbac'
+  scope: subscription()
+  params: {
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
 output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''
 output dlzResourceGroupName string = deploymentMode == 'single-sub' ? singleDlz.outputs.dlzResourceGroupName : ''

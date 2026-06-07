@@ -520,3 +520,125 @@ export async function listDisasterRecoveryConfigs(): Promise<DisasterRecoveryCon
     provisioningState: d?.properties?.provisioningState,
   }));
 }
+
+// ============================================================
+// Cross-subscription stream discovery via Azure Resource Graph (2022-10-01)
+//
+// POST https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01
+//   body { subscriptions: [...], query: "<KQL>", options: { $skipToken } }
+// Docs: https://learn.microsoft.com/azure/governance/resource-graph/first-query-rest-api
+//       https://learn.microsoft.com/azure/governance/resource-graph/concepts/paging-results
+//
+// Used by GET /api/rti-hub to enumerate ALL Event Hub namespaces, IoT Hubs,
+// and ADX (Kusto) clusters across the configured subscriptions without
+// knowing every resource group name. Pagination follows the `$skipToken`
+// returned at the TOP LEVEL of the response — the continuation token is sent
+// back in the request body's `options.$skipToken` (NOT a URL query param).
+//
+// RBAC: The Console UAMI needs at least "Reader" at the SUBSCRIPTION scope
+// for each subscription queried. The existing EH "Contributor" grant is
+// resource-group-scoped and is NOT sufficient for cross-RG Resource Graph
+// queries. The subscription-scoped Reader is granted in
+// platform/fiab/bicep/modules/admin-plane/scaling-rbac.bicep.
+//
+// Sovereign cloud: the ARM/Resource Graph endpoint defaults to Commercial.
+// Override per cloud with LOOM_ARG_URL (the full …/Microsoft.ResourceGraph/
+// resources URL) and LOOM_ARM_SCOPE (the matching ARM token scope):
+//   GCC      LOOM_ARG_URL=https://management.usgovcloudapi.net/providers/Microsoft.ResourceGraph/resources
+//            LOOM_ARM_SCOPE=https://management.usgovcloudapi.net/.default
+//   GCC-High/IL5
+//            LOOM_ARG_URL=https://management.azure.us/providers/Microsoft.ResourceGraph/resources
+//            LOOM_ARM_SCOPE=https://management.azure.us/.default
+// The credential chain (UAMI + DefaultAzureCredential) works identically in
+// sovereign clouds when configured with the correct tenant/environment.
+// ============================================================
+
+const ARG_API = '2022-10-01';
+const ARG_URL = process.env.LOOM_ARG_URL
+  || 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources';
+const ARG_SCOPE = process.env.LOOM_ARM_SCOPE || ARM_SCOPE;
+
+export type RtiStreamKind = 'eventhub-namespace' | 'iothub' | 'adx-cluster';
+
+export interface RtiStreamResource {
+  id: string;
+  name: string;
+  /** Normalized resource type slug for the RTI Hub catalog tabs. */
+  resourceKind: RtiStreamKind;
+  location: string;
+  resourceGroup: string;
+  subscriptionId: string;
+  properties?: Record<string, unknown>;
+}
+
+/**
+ * Resolve the set of subscriptions the RTI Hub should query. The primary
+ * subscription is LOOM_SUBSCRIPTION_ID (or LOOM_EVENTHUB_SUB / LOOM_KUSTO_SUB
+ * as fallbacks); additional subscriptions can be added via
+ * LOOM_EXTRA_SUBSCRIPTIONS (comma-separated). De-duplicated, order preserved.
+ */
+export function rtiSubscriptionScope(): string[] {
+  const primary = process.env.LOOM_SUBSCRIPTION_ID
+    || process.env.LOOM_EVENTHUB_SUB
+    || process.env.LOOM_KUSTO_SUB
+    || '';
+  const extra = (process.env.LOOM_EXTRA_SUBSCRIPTIONS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const all = [primary, ...extra].filter(Boolean);
+  return Array.from(new Set(all));
+}
+
+/**
+ * Query Azure Resource Graph for every Event Hub namespace, IoT Hub, and ADX
+ * (Kusto) cluster the Console UAMI can see across the given subscriptions.
+ *
+ * Returns [] (not an error) when `subscriptions` is empty so the route can
+ * surface an honest MessageBar gate instead of a 5xx. Throws
+ * EventHubsArmError on a real ARM failure (auth / throttling) so the route can
+ * record it in `warnings[]` and still return partial data.
+ */
+export async function listStreamingResourcesViaGraph(
+  subscriptions: string[],
+): Promise<RtiStreamResource[]> {
+  if (!subscriptions.length) return [];
+  const t = await credential.getToken(ARG_SCOPE);
+  if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token for Resource Graph');
+  const kql = [
+    'Resources',
+    "| where type in~ ('microsoft.eventhub/namespaces','microsoft.devices/iothubs','microsoft.kusto/clusters')",
+    '| project id, name, type, location, resourceGroup, subscriptionId, properties',
+    '| order by type asc, name asc',
+  ].join('\n');
+  const out: RtiStreamResource[] = [];
+  let skipToken: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const body: Record<string, unknown> = { subscriptions, query: kql };
+    if (skipToken) body.options = { $skipToken: skipToken };
+    const r = await fetch(`${ARG_URL}?api-version=${ARG_API}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `Resource Graph query failed ${r.status}`);
+    const j: any = await r.json();
+    const rows: any[] = Array.isArray(j?.data) ? j.data : (Array.isArray(j?.data?.rows) ? j.data.rows : []);
+    for (const row of rows) {
+      const rawType = String(row?.type || '').toLowerCase();
+      let resourceKind: RtiStreamKind;
+      if (rawType === 'microsoft.eventhub/namespaces') resourceKind = 'eventhub-namespace';
+      else if (rawType === 'microsoft.devices/iothubs') resourceKind = 'iothub';
+      else if (rawType === 'microsoft.kusto/clusters') resourceKind = 'adx-cluster';
+      else continue;
+      out.push({
+        id: row.id, name: row.name, resourceKind,
+        location: row.location, resourceGroup: row.resourceGroup,
+        subscriptionId: row.subscriptionId,
+        properties: (row.properties && typeof row.properties === 'object') ? row.properties : undefined,
+      });
+    }
+    skipToken = j?.$skipToken ?? j?.['$skipToken'];
+  } while (skipToken && guard < 20);
+  return out;
+}

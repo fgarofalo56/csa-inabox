@@ -234,6 +234,9 @@ param loomEventHubRg string = ''
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
 
+@description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
+param loomExtraSubscriptions string = ''
+
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
 
@@ -907,6 +910,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // RTI hub catalog (/rti-hub -> GET /api/rti-hub) - additional
+            // subscription ids (comma-separated) to include in the Azure
+            // Resource Graph stream discovery alongside LOOM_SUBSCRIPTION_ID.
+            // Empty = discover the deployment subscription only. The Console
+            // UAMI needs Reader at each subscription's scope (granted at sub
+            // scope in platform/fiab/bicep/main.bicep).
+            { name: 'LOOM_EXTRA_SUBSCRIPTIONS', value: loomExtraSubscriptions }
             { name: 'LOOM_IOT_HUB_RESOURCE_ID', value: loomIotHubResourceId }
             // Full ARM resource id of the Event Hubs namespace — consumed by the
             // eventhouse ingest route (ADX → Event Hub data connection, Get-Data
