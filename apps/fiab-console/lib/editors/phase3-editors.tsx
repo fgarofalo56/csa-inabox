@@ -181,7 +181,7 @@ function StatCard({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
 }
 
 /** Pie chart (ADX `piechart`). First category col + first numeric col. */
-function PieChart({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+function PieChart({ columns, rows, onValueClick }: { columns: string[]; rows: unknown[][]; onValueClick?: (label: string) => void }) {
   const numericColIdx = pickNumericCol(columns, rows);
   if (numericColIdx < 0) return <Caption1>No numeric column to chart.</Caption1>;
   const labelColIdx = columns.findIndex((_, c) => c !== numericColIdx);
@@ -204,7 +204,9 @@ function PieChart({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
       <svg width={240} height={240} viewBox="0 0 240 240" role="img" aria-label="pie chart">
-        {arcs.map((a, i) => <path key={i} d={a.path} fill={a.color} stroke={tokens.colorNeutralBackground1} strokeWidth={1}><title>{`${a.label}: ${a.value.toLocaleString()}`}</title></path>)}
+        {arcs.map((a, i) => <path key={i} d={a.path} fill={a.color} stroke={tokens.colorNeutralBackground1} strokeWidth={1}
+          style={onValueClick ? { cursor: 'pointer' } : undefined}
+          onClick={onValueClick ? () => onValueClick(a.label) : undefined}><title>{`${a.label}: ${a.value.toLocaleString()}${onValueClick ? ' (click to drill through)' : ''}`}</title></path>)}
       </svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {arcs.map((a, i) => (
@@ -249,7 +251,7 @@ function MapVisual({ columns, rows }: { columns: string[]; rows: unknown[][] }) 
  * numeric column as the Y series — same default ADX "Render" applies.
  * `kind`: 'bar' = horizontal bars, 'column' = vertical bars, 'line'/'timechart' = line.
  */
-function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown[][]; kind: 'bar' | 'column' | 'line' | 'timechart' }) {
+function ResultChart({ columns, rows, kind, onValueClick }: { columns: string[]; rows: unknown[][]; kind: 'bar' | 'column' | 'line' | 'timechart'; onValueClick?: (label: string) => void }) {
   const numericColIdx = useMemo(() => pickNumericCol(columns, rows), [columns, rows]);
   const labelColIdx = useMemo(() => {
     for (let c = 0; c < columns.length; c++) { if (c !== numericColIdx) return c; }
@@ -284,8 +286,10 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
         style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
         {data.map((d, i) => (
           <g key={i}>
-            <rect x={padL} y={padT + i * rowH + 2} width={Math.max(0, xVal(d.value) - padL)} height={rowH - 4} fill={tokens.colorBrandBackground}>
-              <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+            <rect x={padL} y={padT + i * rowH + 2} width={Math.max(0, xVal(d.value) - padL)} height={rowH - 4} fill={tokens.colorBrandBackground}
+              style={onValueClick ? { cursor: 'pointer' } : undefined}
+              onClick={onValueClick ? () => onValueClick(d.label) : undefined}>
+              <title>{`${d.label}: ${d.value.toLocaleString()}${onValueClick ? ' (click to drill through)' : ''}`}</title>
             </rect>
             <text x={padL - 6} y={padT + i * rowH + rowH / 2 + 3} fontSize="9" textAnchor="end" fill={tokens.colorNeutralForeground3}>
               {d.label.length > 12 ? d.label.slice(0, 12) + '…' : d.label}
@@ -305,8 +309,10 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
       {isVerticalBars
         ? data.map((d, i) => (
             <rect key={i} x={xBar(i) + (plotW / data.length - barW) / 2} y={y(d.value)} width={barW}
-              height={Math.max(0, padT + plotH - y(d.value))} fill={tokens.colorBrandBackground}>
-              <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+              height={Math.max(0, padT + plotH - y(d.value))} fill={tokens.colorBrandBackground}
+              style={onValueClick ? { cursor: 'pointer' } : undefined}
+              onClick={onValueClick ? () => onValueClick(d.label) : undefined}>
+              <title>{`${d.label}: ${d.value.toLocaleString()}${onValueClick ? ' (click to drill through)' : ''}`}</title>
             </rect>
           ))
         : (
@@ -314,8 +320,10 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
             points={data.map((d, i) => `${x(i)},${y(d.value)}`).join(' ')} />
         )}
       {isLine && data.map((d, i) => (
-        <circle key={i} cx={x(i)} cy={y(d.value)} r="3" fill={tokens.colorBrandBackground}>
-          <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+        <circle key={i} cx={x(i)} cy={y(d.value)} r="3" fill={tokens.colorBrandBackground}
+          style={onValueClick ? { cursor: 'pointer' } : undefined}
+          onClick={onValueClick ? () => onValueClick(d.label) : undefined}>
+          <title>{`${d.label}: ${d.value.toLocaleString()}${onValueClick ? ' (click to drill through)' : ''}`}</title>
         </circle>
       ))}
       {data.map((d, i) => (
@@ -331,36 +339,69 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
 }
 
 /** Render any tile result by its visual type — table / charts / stat / pie / map. */
-function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
+function TileVisual({
+  viz, result, drillthrough, onDrillthrough,
+}: {
+  viz: TileViz;
+  result: KqlResult;
+  /** When set + the named column exists, data values become click targets. */
+  drillthrough?: { column: string; paramName: string };
+  /** Fired with (paramName, clickedValue) when a value is clicked. */
+  onDrillthrough?: (paramName: string, value: string) => void;
+}) {
   const columns = result.columns || [];
   const rows = result.rows || [];
   if (rows.length === 0) return <Caption1>No rows.</Caption1>;
+  const dtActive = !!(drillthrough?.column && drillthrough?.paramName && onDrillthrough);
+  const fire = (value: string) => { if (dtActive) onDrillthrough!(drillthrough!.paramName, value); };
+  // Chart visuals key off the X-axis label (the first non-numeric column),
+  // which is the natural drill-through dimension; the table keys off the
+  // configured column explicitly.
+  const chartClick = dtActive ? (label: string) => fire(label) : undefined;
   switch (viz) {
-    case 'stat':
-      return <StatCard columns={columns} rows={rows} />;
+    case 'stat': {
+      const cellIdx = pickNumericCol(columns, rows);
+      const statVal = fmtCell(rows[0]?.[cellIdx >= 0 ? cellIdx : 0]);
+      return (
+        <div
+          style={dtActive ? { cursor: 'pointer' } : undefined}
+          onClick={dtActive ? () => fire(statVal) : undefined}
+          title={dtActive ? `Drill through: ${drillthrough!.column} → ${drillthrough!.paramName}` : undefined}
+        >
+          <StatCard columns={columns} rows={rows} />
+        </div>
+      );
+    }
     case 'pie':
-      return <PieChart columns={columns} rows={rows} />;
+      return <PieChart columns={columns} rows={rows} onValueClick={chartClick} />;
     case 'map':
       return <MapVisual columns={columns} rows={rows} />;
     case 'bar':
     case 'column':
     case 'line':
     case 'timechart':
-      return <ResultChart columns={columns} rows={rows} kind={viz} />;
+      return <ResultChart columns={columns} rows={rows} kind={viz} onValueClick={chartClick} />;
     case 'table':
-    default:
+    default: {
+      const dtColIdx = dtActive ? columns.findIndex((c) => c === drillthrough!.column) : -1;
       return (
         <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
           <Table aria-label="tile result" size="small">
             <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
             <TableBody>
               {rows.slice(0, 100).map((row, i) => (
-                <TableRow key={i}>{columns.map((_, j) => <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtCell(row[j])}</TableCell>)}</TableRow>
+                <TableRow
+                  key={i}
+                  style={dtColIdx >= 0 ? { cursor: 'pointer' } : undefined}
+                  onClick={dtColIdx >= 0 ? () => fire(fmtCell(row[dtColIdx])) : undefined}
+                  title={dtColIdx >= 0 ? `Drill through: ${fmtCell(row[dtColIdx])} → ${drillthrough!.paramName}` : undefined}
+                >{columns.map((_, j) => <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtCell(row[j])}</TableCell>)}</TableRow>
               ))}
             </TableBody>
           </Table>
         </div>
       );
+    }
   }
 }
 
@@ -1713,6 +1754,8 @@ interface DashTile {
   database?: string;
   w?: number; // grid column span 1..12
   h?: number; // grid row units 1..8
+  /** Drill-through: clicking a result value sets a dashboard parameter. */
+  drillthrough?: { column: string; paramName: string };
   result?: KqlResult;
   error?: string;
 }
@@ -1749,6 +1792,25 @@ type TimeRangeKey = 'last-15m' | 'last-1h' | 'last-4h' | 'last-24h' | 'last-7d' 
 const TIME_ORDER: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-4h', 'last-24h', 'last-7d', 'last-30d', 'all'];
 
 const TILE_VIZ_OPTIONS: TileViz[] = ['table', 'timechart', 'line', 'column', 'bar', 'pie', 'stat', 'map'];
+
+// Auto-refresh interval choices (Fabric "Manage > Auto refresh" exposes an
+// explicit minimum interval + default rate). Minimum is 30s — the ADX
+// /v1/rest/query round-trip is 2–10s, so a tighter cadence risks query
+// pile-up. Matches the Fabric provisioner's minInterval: '30s'.
+const REFRESH_INTERVALS: { ms: number; label: string }[] = [
+  { ms: 0,         label: 'Off' },
+  { ms: 30_000,    label: '30 seconds' },
+  { ms: 60_000,    label: '1 minute' },
+  { ms: 300_000,   label: '5 minutes' },
+  { ms: 1_800_000, label: '30 minutes' },
+  { ms: 3_600_000, label: '1 hour' },
+];
+
+function refreshLabel(ms: number): string {
+  const hit = REFRESH_INTERVALS.find((r) => r.ms === ms);
+  if (!ms) return 'Auto-refresh: off';
+  return `Auto-refresh: ${hit ? hit.label : `${ms / 1000}s`}`;
+}
 
 function genId(): string {
   try {
@@ -2046,11 +2108,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       ]},
       { label: 'View', actions: [
         { label: running ? 'Refreshing…' : 'Refresh all', onClick: running ? undefined : runAll, disabled: running },
-        { label: autoRefreshMs ? `Auto-refresh: ${autoRefreshMs / 1000}s` : 'Auto-refresh: off', onClick: () => {
-          const cycle = [0, 15000, 30000, 60000, 300000];
-          const idx = cycle.indexOf(autoRefreshMs);
-          setAutoRefreshMs(cycle[(idx + 1) % cycle.length]); setDirty(true);
-        } },
+        // The interval is authored via the toolbar <Select>; the ribbon shows
+        // current state (a one-state cycle button was undiscoverable).
+        { label: refreshLabel(autoRefreshMs), onClick: undefined, disabled: true },
         { label: `Time: ${timeRange}`, onClick: cycleTime },
       ]},
       { label: 'Manage', actions: [
@@ -2071,6 +2131,19 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setParamsOpen(true)}>Parameters</Button>
         <Button size="small" appearance="outline" onClick={openJson}>Edit JSON</Button>
         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={runAll} disabled={running}>{running ? 'Refreshing…' : 'Refresh all'}</Button>
+        <Select
+          size="small"
+          aria-label="Auto-refresh interval"
+          value={String(autoRefreshMs)}
+          onChange={(_: unknown, d: any) => { setAutoRefreshMs(Number(d.value) || 0); setDirty(true); }}
+          style={{ minWidth: 150 }}
+        >
+          {REFRESH_INTERVALS.map(({ ms, label }) => (
+            <option key={ms} value={String(ms)}>
+              {ms === 0 ? 'Auto-refresh: off' : `Auto-refresh: every ${label}`}
+            </option>
+          ))}
+        </Select>
         <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
         </Button>
@@ -2147,7 +2220,18 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               {t.error && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
               {t.result && t.result.ok && (
                 <div style={{ marginTop: 8, flex: 1, minHeight: 0 }}>
-                  <TileVisual viz={t.viz} result={t.result} />
+                  <TileVisual
+                    viz={t.viz}
+                    result={t.result}
+                    drillthrough={t.drillthrough}
+                    onDrillthrough={t.drillthrough ? (paramName, value) => {
+                      // Inject the clicked value into the target parameter, then
+                      // re-run every tile so the dashboard cross-filters — the
+                      // single-page Loom equivalent of Fabric drill-through.
+                      setParams((prev) => prev.map((p) => p.variableName === paramName ? { ...p, value } : p));
+                      setTimeout(() => runAll(), 0);
+                    } : undefined}
+                  />
                 </div>
               )}
               {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
@@ -2190,6 +2274,65 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     ariaLabel={`Tile ${i + 1} KQL`}
                   />
                   <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
+
+                  {/* Drill-through (Fabric: visual Interactions > Drillthrough).
+                      Clicking a result value sets a dashboard parameter and
+                      re-runs every tile (single-page cross-filter). */}
+                  <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: 4 }}>
+                    <Caption1 style={{ fontWeight: 600 }}>Drill-through</Caption1>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 4 }}>
+                      Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles.
+                    </Caption1>
+                    {params.length === 0 ? (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          Add at least one dashboard <strong>Parameter</strong> first — drill-through targets a parameter.
+                        </MessageBarBody>
+                      </MessageBar>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <Caption1>Column (from query result)</Caption1>
+                          <Input
+                            value={t.drillthrough?.column || ''}
+                            placeholder="e.g. State"
+                            aria-label="Drillthrough column"
+                            onChange={(_: unknown, d: any) => {
+                              const column = d.value;
+                              const paramName = t.drillthrough?.paramName || '';
+                              updateTile(i, {
+                                drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                              });
+                            }}
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <Caption1>Target parameter</Caption1>
+                          <Select
+                            value={t.drillthrough?.paramName || ''}
+                            aria-label="Drillthrough target parameter"
+                            onChange={(_: unknown, d: any) => {
+                              const paramName = d.value;
+                              const column = t.drillthrough?.column || '';
+                              updateTile(i, {
+                                drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                              });
+                            }}
+                          >
+                            <option value="">(none — disable drill-through)</option>
+                            {params.map((p) => (
+                              <option key={p.variableName} value={p.variableName}>{p.label || p.variableName}</option>
+                            ))}
+                          </Select>
+                        </div>
+                      </div>
+                    )}
+                    {t.drillthrough?.column && t.drillthrough?.paramName && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                        Click a value in this tile → sets <code>{t.drillthrough.paramName}</code> to the value in column <code>{t.drillthrough.column}</code> and re-runs all tiles.
+                      </Caption1>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
