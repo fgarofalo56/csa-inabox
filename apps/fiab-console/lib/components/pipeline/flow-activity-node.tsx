@@ -26,7 +26,7 @@ import { Edit16Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
 import { activityIcon } from './activity-icons';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
-import { isContainerType, totalInnerCount } from './drill-path';
+import { isContainerType, totalInnerCount, miniPreviewSections } from './drill-path';
 import type { PipelineActivity } from './types';
 
 export const FLOW_NODE_W = 200;
@@ -54,6 +54,13 @@ export interface ActivityNodeData {
    * present (and rendered) for control-flow container activities.
    */
   onDrill?: (name: string) => void;
+  /**
+   * Show the inline mini-preview of inner activities inside container nodes —
+   * Fabric's "updated canvas experience" (Learn:
+   * data-factory/pipeline-canvas-experience). Toggled by the N keyboard
+   * shortcut / the "Nested" toolbar button on the canvas.
+   */
+  showNestedPreview?: boolean;
   [key: string]: unknown;
 }
 
@@ -188,6 +195,66 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
           )}
         </div>
       </div>
+
+      {/* Inline nested-activity mini-preview — Fabric "updated canvas
+          experience": a container summarises its inner activities right on the
+          parent canvas. Toggled by the N shortcut / "Nested" toolbar button.
+          Non-interactive (pointerEvents:none) — drilling still uses the pencil
+          or double-click so the node stays draggable. */}
+      {isContainer && nodeData.showNestedPreview && (
+        <div
+          data-nested-preview={activity.name}
+          aria-label={`Inner activities preview for ${activity.name}`}
+          style={{
+            marginTop: 6,
+            borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+            paddingTop: 6,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            pointerEvents: 'none',
+          }}
+        >
+          {miniPreviewSections(activity, 3).map((sec) => (
+            <div key={sec.label}>
+              <div style={{
+                fontSize: 10, fontWeight: 600, color: tokens.colorNeutralForeground3, marginBottom: 2,
+              }}>
+                {sec.label} ({sec.totalCount})
+              </div>
+              {sec.activities.length === 0 ? (
+                <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
+                  empty
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {sec.activities.map((inner) => {
+                    const iDef = findByType(inner.type);
+                    return (
+                      <div key={inner.name} style={{
+                        display: 'flex', gap: 4, alignItems: 'center',
+                        fontSize: 11, color: tokens.colorNeutralForeground2,
+                      }}>
+                        <span style={{ color: iDef?.color ?? tokens.colorBrandBackground, flexShrink: 0, display: 'inline-flex' }} aria-hidden="true">
+                          {activityIcon(inner.type)}
+                        </span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {inner.name}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {sec.totalCount > sec.activities.length && (
+                    <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3 }}>
+                      +{sec.totalCount - sec.activities.length} more
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

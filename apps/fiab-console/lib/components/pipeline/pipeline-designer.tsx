@@ -479,6 +479,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             snapToGrid={snapToGrid}
             showGrid={showGrid}
             onDrillInto={drillInto}
+            onDrillBack={() => { if (drillPath.length > 0) popTo(drillPath.length - 1); }}
             onDropPaletteKey={(key) => {
               const def = findByKey(key);
               if (!def) return;
