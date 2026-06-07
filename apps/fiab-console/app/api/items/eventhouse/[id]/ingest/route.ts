@@ -45,6 +45,14 @@ const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
+// Cloud-aware ARM base/scope come from cloud-endpoints (armBase / armScope),
+// which honor LOOM_ARM_ENDPOINT / AZURE_CLOUD for Gov (GCC-High / IL5).
+
+// .ingest formats accepted from the Get-Data wizard's Format dropdown. 'auto'
+// lets ADX infer from the extension; anything else is passed through verbatim
+// in a `with (format=...)` clause.
+const INGEST_FORMATS = new Set(['csv', 'tsv', 'json', 'multijson', 'parquet', 'orc', 'avro', 'psv', 'scsv']);
+
 function sanitizeId(s: string, max = 200): string {
   return String(s || '').trim().slice(0, max);
 }
@@ -244,10 +252,15 @@ async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
   if (!/^(abfss|https):\/\//i.test(path)) {
     return NextResponse.json({ ok: false, error: 'oneLakePath must be abfss:// or https:// URL' }, { status: 400 });
   }
+  // Optional explicit format from the wizard's Format dropdown. 'auto' (or
+  // unset) lets ADX infer from the URL extension; a recognized format is
+  // emitted as a `with (format=...)` clause.
+  const fmt = String(body?.format || 'auto').toLowerCase();
+  const formatClause = fmt !== 'auto' && INGEST_FORMATS.has(fmt) ? ` with (format='${fmt}')` : '';
   // .ingest into table T (h'<url>') ; storage authn is via the cluster's
   // managed identity. If the cluster's MI doesn't have RBAC on the path,
   // ADX will return a clear error which we surface.
-  const command = `.ingest into table ["${table}"] (h'${path.replace(/'/g, "\\'")}')`;
+  const command = `.ingest into table ["${table}"] (h'${path.replace(/'/g, "\\'")}')${formatClause}`;
   try {
     const result = await executeMgmtCommand(database, command);
     return NextResponse.json({

@@ -44,6 +44,7 @@ import { synapsePipelineProvisioner } from './provisioners/synapse-pipeline';
 import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
 import { databricksJobProvisioner } from './provisioners/databricks-job';
 import { synapseSqlPoolProvisioner } from './provisioners/synapse-serverless-sql-pool';
+import { workspaceMonitorProvisioner } from './provisioners/workspace-monitor';
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
@@ -57,6 +58,7 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'kql-database': kqlDatabaseProvisioner,
   'kql-queryset': kqlDatabaseProvisioner, // queryset rides on top of the parent DB
   'eventhouse': kqlDatabaseProvisioner,   // eventhouse = kql cluster, same surface for install
+  'workspace-monitor': workspaceMonitorProvisioner, // read-only ADX usage/perf DB fed by Azure Monitor diag-settings export (no Fabric)
   'kql-dashboard': kqlDashboardProvisioner, // Real-Time Dashboard item (Fabric kqlDashboards)
   'ai-search-index': aiSearchProvisioner,
   'semantic-model': semanticModelProvisioner,

@@ -158,6 +158,83 @@ describe('GET /api/monitor/alerts', () => {
   });
 });
 
+describe('GET /api/items/activator/[id]/history', () => {
+  function ctx(id: string) { return { params: Promise.resolve({ id }) }; }
+
+  it('returns fired/resolved alert instances for the reflex rules', async () => {
+    vi.doMock('@/app/api/items/_lib/ai-content-fallback', () => ({
+      loadContentBackedItem: vi.fn(async () => ({
+        id: 'act-1', workspaceId: 'ws-1', displayName: 'My Reflex',
+        state: { rules: [{ id: 'r1', azureRuleName: 'my-rule-loom' }] },
+      })),
+    }));
+    vi.resetModules();
+    stubFetch(() => ({
+      body: {
+        value: [{
+          name: 'alert-1',
+          properties: {
+            essentials: { alertRule: 'my-rule-loom', monitorCondition: 'Fired', alertState: 'New', severity: 'Sev3', startDateTime: '2026-06-06T10:00:00Z' },
+            context: { context: { condition: { allOf: [{ metricValue: 5, operator: 'GreaterThan', threshold: '0' }] } } },
+          },
+        }],
+      },
+    }));
+    const { GET } = await import('@/app/api/items/activator/[id]/history/route');
+    const r = await GET(req('GET', 'https://loom.test/api/items/activator/act-1/history?workspaceId=ws-1'), ctx('act-1'));
+    expect(r.status).toBe(200);
+    expectJson(r);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.backend).toBe('azure-monitor');
+    expect(j.events[0].monitorCondition).toBe('Fired');
+    expect(j.events[0].payload.matchingRowsCount).toBe(5);
+  });
+
+  it('returns empty events with a note when no Azure Monitor rules are provisioned', async () => {
+    vi.doMock('@/app/api/items/_lib/ai-content-fallback', () => ({
+      loadContentBackedItem: vi.fn(async () => ({ id: 'act-1', workspaceId: 'ws-1', displayName: 'My Reflex', state: { rules: [] } })),
+    }));
+    vi.resetModules();
+    const { GET } = await import('@/app/api/items/activator/[id]/history/route');
+    const r = await GET(req('GET', 'https://loom.test/api/items/activator/act-1/history?workspaceId=ws-1'), ctx('act-1'));
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.events).toEqual([]);
+    expect(j.note).toContain('No Azure Monitor rules');
+  });
+
+  it('requires workspaceId', async () => {
+    const { GET } = await import('@/app/api/items/activator/[id]/history/route');
+    const r = await GET(req('GET', 'https://loom.test/api/items/activator/act-1/history'), ctx('act-1'));
+    expect(r.status).toBe(400);
+  });
+
+  it('honest-gates (503) when LOOM_SUBSCRIPTION_ID unset', async () => {
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    vi.doMock('@/app/api/items/_lib/ai-content-fallback', () => ({
+      loadContentBackedItem: vi.fn(async () => ({ id: 'act-1', workspaceId: 'ws-1', displayName: 'My Reflex', state: { rules: [{ id: 'r1', azureRuleName: 'my-rule-loom' }] } })),
+    }));
+    vi.resetModules();
+    const { GET } = await import('@/app/api/items/activator/[id]/history/route');
+    const r = await GET(req('GET', 'https://loom.test/api/items/activator/act-1/history?workspaceId=ws-1'), ctx('act-1'));
+    expect(r.status).toBe(503);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.gate).toBeTruthy();
+  });
+
+  // Last in this block: this re-mocks the session module to null, which would
+  // leak into a subsequent test in the same file if placed earlier.
+  it('returns 401 when session missing', async () => {
+    vi.doMock('@/lib/auth/session', () => ({ getSession: vi.fn(() => null) }));
+    vi.resetModules();
+    const { GET } = await import('@/app/api/items/activator/[id]/history/route');
+    const r = await GET(req('GET', 'https://loom.test/api/items/activator/act-1/history?workspaceId=ws-1'), ctx('act-1'));
+    expect(r.status).toBe(401);
+  });
+});
+
 describe('unauthenticated', () => {
   it('every monitor route returns 401 when session missing', async () => {
     vi.doMock('@/lib/auth/session', () => ({ getSession: vi.fn(() => null) }));

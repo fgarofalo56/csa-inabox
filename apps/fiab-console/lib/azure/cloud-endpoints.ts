@@ -171,3 +171,29 @@ export function kustoClusterUri(clusterName: string, region: string): string {
  */
 export const LOGIC_APP_WORKFLOW_SCHEMA =
   'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#';
+
+// ---------------------------------------------------------------------------
+// Legacy / alias accessors (kept for call sites that adopted the shorter
+// `get*` names from the parallel sovereign-cloud work). These delegate to the
+// canonical helpers above so there is still ONE source of truth per suffix.
+// ---------------------------------------------------------------------------
+
+/** True when running in an Azure US Government boundary. Alias of isGovCloud(). */
+export function isUsGov(): boolean {
+  return isGovCloud();
+}
+
+/** ADLS Gen2 DFS endpoint suffix for the active cloud. Alias of dfsSuffix(). */
+export function getDfsSuffix(): string {
+  return dfsSuffix();
+}
+
+/** ARM management endpoint for the active cloud. Alias of armBase(). */
+export function getArmEndpoint(): string {
+  return armBase();
+}
+
+/** Kusto (ADX) cluster URI host suffix for the active cloud. Alias of kustoSuffix(). */
+export function getKustoSuffix(): string {
+  return kustoSuffix();
+}

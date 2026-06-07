@@ -32,12 +32,18 @@ import {
   Button,
   Badge,
   Caption1,
+  Body1,
   Input,
   Dropdown,
   Option,
-  Textarea,
   Label,
   Field,
+  SpinButton,
+  Divider,
+  Spinner,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
   tokens,
   makeStyles,
   shorthands,
@@ -45,53 +51,52 @@ import {
 import {
   Add20Regular,
   Delete20Regular,
+  Copy16Regular,
+  Send20Regular,
+  Eye20Regular,
+  Settings20Regular,
 } from '@fluentui/react-icons';
 import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import {
+  compileToSaql,
+  type SourceKind,
+  type TransformKind,
+  type SinkKind,
+  type AggregateSpec,
+  type AsaAggregateFunc,
+  type AsaWindowType,
+  type AsaWindowUnit,
+  type AsaJoinType,
+  type SourceNode,
+  type ProvisionedEndpoint,
+  type TransformNode,
+  type SinkNode,
+  type PipelineConfig,
+} from '@/lib/azure/asa-query-compiler';
 
 // ============================================================
-// Types
+// Types — node shapes live in the SAQL compiler module (re-exported here so
+// existing importers of '@/lib/components/eventstream/visual-designer' keep
+// working). The compiler is the single source of truth for the transform
+// model so the guided builder and the generated SAQL never drift.
 // ============================================================
 
-export type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka';
-export type TransformKind = 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join';
-export type SinkKind = 'kusto' | 'lakehouse' | 'eventhub' | 'reflex' | 'derivedStream';
-
-export interface SourceNode {
-  kind: SourceKind;
-  name: string;
-  namespace?: string;
-  consumerGroup?: string;
-  iotHub?: string;
-  connectionString?: string;
-  topic?: string;
-}
-
-export interface TransformNode {
-  kind: TransformKind;
-  name: string;
-  expression?: string;
-  columns?: string[];
-  groupBy?: string[];
-  window?: string;
-}
-
-export interface SinkNode {
-  kind: SinkKind;
-  name: string;
-  database?: string;
-  table?: string;
-  lakehouseId?: string;
-  workspaceId?: string;
-  reflexId?: string;
-}
-
-export interface PipelineConfig {
-  sources?: SourceNode[];
-  source?: SourceNode; // legacy single-source
-  transforms?: TransformNode[];
-  sink?: SinkNode;
-  sinks?: SinkNode[];
-}
+export type {
+  SourceKind,
+  TransformKind,
+  SinkKind,
+  AggregateSpec,
+  AsaAggregateFunc,
+  AsaWindowType,
+  AsaWindowUnit,
+  AsaJoinType,
+  SourceNode,
+  ProvisionedEndpoint,
+  TransformNode,
+  SinkNode,
+  PipelineConfig,
+};
 
 export type SelectedNode =
   | { type: 'source'; idx: number }
@@ -155,6 +160,38 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     marginBottom: tokens.spacingVerticalM,
   },
+  endpointCard: {
+    backgroundColor: tokens.colorNeutralBackground2,
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  endpointRow: {
+    display: 'grid',
+    gridTemplateColumns: '92px 1fr auto',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  endpointValue: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    wordBreak: 'break-all',
+    color: tokens.colorNeutralForeground1,
+  },
+  wizardActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
+  },
+  eventTable: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: tokens.fontSizeBase200,
+  },
 });
 
 // ============================================================
@@ -164,6 +201,12 @@ const useStyles = makeStyles({
 export interface VisualDesignerProps {
   config: PipelineConfig;
   onChange: (next: PipelineConfig) => void;
+  /**
+   * The Cosmos eventstream item id. Required for source-node provisioning +
+   * live-event preview (the wizard POSTs to /api/items/eventstream/[itemId]/…).
+   * Absent on the pre-save `/new` surface, where provisioning is hidden.
+   */
+  itemId?: string;
 }
 
 function normalizeSources(c: PipelineConfig): SourceNode[] {
@@ -178,7 +221,7 @@ function normalizeSinks(c: PipelineConfig): SinkNode[] {
   return [];
 }
 
-export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
+export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps) {
   const s = useStyles();
   const [selected, setSelected] = useState<SelectedNode>(null);
 
@@ -304,14 +347,17 @@ export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
         {selected?.type === 'source' && sources[selected.idx] && (
           <SourceInspector
             value={sources[selected.idx]}
+            nodeIdx={selected.idx}
+            itemId={itemId}
             onChange={(patch) => updateSource(selected.idx, patch)}
             onDelete={deleteSelected}
           />
         )}
 
         {selected?.type === 'transform' && transforms[selected.idx] && (
-          <TransformInspector
+          <AsaTransformInspector
             value={transforms[selected.idx]}
+            sources={sources}
             onChange={(patch) => updateTransform(selected.idx, patch)}
             onDelete={deleteSelected}
           />
@@ -478,13 +524,96 @@ function EventstreamCanvas(props: EventstreamCanvasProps) {
 
 function SourceInspector({
   value,
+  nodeIdx,
+  itemId,
   onChange,
   onDelete,
 }: {
   value: SourceNode;
+  nodeIdx: number;
+  itemId?: string;
   onChange: (p: Partial<SourceNode>) => void;
   onDelete: () => void;
 }) {
+  const s = useStyles();
+  const endpoint = value.provisionedEndpoint;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [sendMsg, setSendMsg] = useState<string | null>(null);
+  // Live preview state.
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewEvents, setPreviewEvents] = useState<ReceivedEventRow[] | null>(null);
+  const [previewGate, setPreviewGate] = useState<string | null>(null);
+
+  const noProvision = value.kind === 'sample';
+
+  const copy = useCallback((text?: string) => {
+    if (text && typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(text).catch(() => { /* clipboard may be blocked */ });
+    }
+  }, []);
+
+  const provision = useCallback(async () => {
+    if (!itemId) { setErr('Save the eventstream first — provisioning needs a persisted item id.'); return; }
+    setBusy(true); setErr(null); setHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${itemId}/source`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeIdx, kind: value.kind, config: value }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setErr(j.error || (j.missing ? `Not configured: ${j.missing}` : 'provision failed'));
+        setHint(j.hint || null);
+        return;
+      }
+      setHint(j.hint || null);
+      onChange({ provisionedEndpoint: j.endpoint, ...(j.adf?.pipelineName ? { cdcAdfPipelineName: j.adf.pipelineName } : {}) });
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [itemId, nodeIdx, value, onChange]);
+
+  const sendTest = useCallback(async () => {
+    if (!itemId) return;
+    setSendMsg('Sending test event…'); setErr(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${itemId}/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeIdx }),
+      });
+      const j = await r.json();
+      setSendMsg(j.ok ? `Sent ${j.sent} test event (HTTP ${j.status}).` : `Send failed: ${j.error || 'unknown'}`);
+    } catch (e: any) {
+      setSendMsg(`Send failed: ${e?.message || e}`);
+    }
+  }, [itemId, nodeIdx]);
+
+  const previewEventsFetch = useCallback(async () => {
+    if (!itemId) return;
+    setPreviewBusy(true); setPreviewGate(null); setPreviewEvents(null); setErr(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${itemId}/events?nodeIdx=${nodeIdx}&maxEvents=20`);
+      const j = await r.json();
+      if (j.ok) {
+        setPreviewEvents(Array.isArray(j.events) ? j.events : []);
+      } else if (j.code === 'receive_unavailable') {
+        setPreviewGate(j.hint || j.error || 'Live receive is not enabled in this deployment.');
+      } else {
+        setErr(j.error || 'preview failed');
+      }
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [itemId, nodeIdx]);
+
   return (
     <>
       <Label weight="semibold">Source</Label>
@@ -493,44 +622,222 @@ function SourceInspector({
       </Field>
       <Field label="Kind">
         <Dropdown
-          value={value.kind}
+          value={kindLabel(value.kind)}
           selectedOptions={[value.kind]}
-          onOptionSelect={(_: unknown, d: any) => onChange({ kind: (d.optionValue as SourceKind) || 'eventhub' })}
+          onOptionSelect={(_: unknown, d: any) => onChange({ kind: (d.optionValue as SourceKind) || 'eventhub', provisionedEndpoint: undefined })}
         >
           <Option value="eventhub">Event Hubs</Option>
           <Option value="iothub">IoT Hub</Option>
           <Option value="kafka">Kafka</Option>
-          <Option value="cdc-mirror">CDC Mirror</Option>
+          <Option value="cdc-mirror">CDC (database change feed)</Option>
+          <Option value="custom-app">Custom app (provision Event Hub)</Option>
           <Option value="sample">Sample data</Option>
         </Dropdown>
       </Field>
-      {(value.kind === 'eventhub' || value.kind === 'kafka') && (
+
+      {/* ── kind-specific configuration ─────────────────────────────── */}
+      {value.kind === 'eventhub' && (
         <>
-          <Field label="Namespace">
-            <Input
-              value={value.namespace || ''}
-              placeholder="my-eventhub-ns"
-              onChange={(_: unknown, d: any) => onChange({ namespace: d.value })}
-            />
+          <Field label="Namespace" hint="Bare name or FQDN; resolves to the Event Hubs data-plane host.">
+            <Input value={value.namespace || ''} placeholder="my-eventhub-ns"
+              onChange={(_: unknown, d: any) => onChange({ namespace: d.value })} />
+          </Field>
+          <Field label="Event Hub name" required>
+            <Input value={value.eventHubName || ''} placeholder="orders-hub"
+              onChange={(_: unknown, d: any) => onChange({ eventHubName: d.value })} />
           </Field>
           <Field label="Consumer group">
-            <Input
-              value={value.consumerGroup || '$Default'}
-              onChange={(_: unknown, d: any) => onChange({ consumerGroup: d.value })}
-            />
+            <Input value={value.consumerGroup || '$Default'}
+              onChange={(_: unknown, d: any) => onChange({ consumerGroup: d.value })} />
           </Field>
         </>
       )}
       {value.kind === 'iothub' && (
-        <Field label="IoT Hub name">
-          <Input value={value.iotHub || ''} onChange={(_: unknown, d: any) => onChange({ iotHub: d.value })} />
-        </Field>
+        <>
+          <Field label="IoT Hub name" required>
+            <Input value={value.iotHub || ''} placeholder="my-iot-hub"
+              onChange={(_: unknown, d: any) => onChange({ iotHub: d.value })} />
+          </Field>
+          <Field label="Resource group" hint="Optional — defaults to the Loom landing-zone RG.">
+            <Input value={value.iotHubResourceGroup || ''}
+              onChange={(_: unknown, d: any) => onChange({ iotHubResourceGroup: d.value })} />
+          </Field>
+          <Field label="Consumer group">
+            <Input value={value.consumerGroup || '$Default'}
+              onChange={(_: unknown, d: any) => onChange({ consumerGroup: d.value })} />
+          </Field>
+        </>
       )}
       {value.kind === 'kafka' && (
-        <Field label="Topic">
-          <Input value={value.topic || ''} onChange={(_: unknown, d: any) => onChange({ topic: d.value })} />
+        <>
+          <Field label="Topic" required hint="Maps to an Event Hub entity on the Kafka endpoint (port 9093).">
+            <Input value={value.topic || ''} placeholder="telemetry"
+              onChange={(_: unknown, d: any) => onChange({ topic: d.value })} />
+          </Field>
+          <Field label="Consumer group">
+            <Input value={value.consumerGroup || '$Default'}
+              onChange={(_: unknown, d: any) => onChange({ consumerGroup: d.value })} />
+          </Field>
+        </>
+      )}
+      {value.kind === 'cdc-mirror' && (
+        <>
+          <Field label="Database type">
+            <Dropdown
+              value={cdcLabel(value.cdcDatabaseType)}
+              selectedOptions={[value.cdcDatabaseType || 'sqlserver']}
+              onOptionSelect={(_: unknown, d: any) => onChange({ cdcDatabaseType: (d.optionValue as any) || 'sqlserver' })}
+            >
+              <Option value="sqlserver">SQL Server</Option>
+              <Option value="postgresql">PostgreSQL</Option>
+              <Option value="mysql">MySQL</Option>
+              <Option value="cosmosdb">Cosmos DB</Option>
+            </Dropdown>
+          </Field>
+          <Field label="Server host" required>
+            <Input value={value.cdcServerHost || ''} placeholder="sql.contoso.com"
+              onChange={(_: unknown, d: any) => onChange({ cdcServerHost: d.value })} />
+          </Field>
+          <Field label="Database" required>
+            <Input value={value.cdcDatabase || ''} placeholder="sales"
+              onChange={(_: unknown, d: any) => onChange({ cdcDatabase: d.value })} />
+          </Field>
+          <Field label="Table" required>
+            <Input value={value.cdcTable || ''} placeholder="dbo.Orders"
+              onChange={(_: unknown, d: any) => onChange({ cdcTable: d.value })} />
+          </Field>
+          <Field label="Username">
+            <Input value={value.cdcUsername || ''}
+              onChange={(_: unknown, d: any) => onChange({ cdcUsername: d.value })} />
+          </Field>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            The source password is stored as a Key Vault secret on the ADF factory (set it once after the pipeline is created). CDC decodes change events into an Event Hub the stream reads.
+          </Caption1>
+        </>
+      )}
+      {value.kind === 'custom-app' && (
+        <Field label="Event Hub name" required hint="A dedicated Event Hub is provisioned for your app to push events into.">
+          <Input value={value.eventHubName || ''} placeholder={`custom-${value.name}`}
+            onChange={(_: unknown, d: any) => onChange({ eventHubName: d.value })} />
         </Field>
       )}
+      {value.kind === 'sample' && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Sample data needs no ingest endpoint — the stream runtime generates events for testing.
+        </Caption1>
+      )}
+
+      {/* ── provision action ────────────────────────────────────────── */}
+      {!noProvision && (
+        <div className={s.wizardActions}>
+          <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Settings20Regular />}
+            disabled={busy || !itemId} onClick={provision}>
+            {busy ? 'Provisioning…' : (endpoint ? 'Reconfigure' : 'Provision endpoint')}
+          </Button>
+        </div>
+      )}
+      {!itemId && !noProvision && (
+        <MessageBar intent="warning">
+          <MessageBarBody>Save the eventstream to enable source provisioning.</MessageBarBody>
+        </MessageBar>
+      )}
+      {err && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Could not provision</MessageBarTitle>
+            {err}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* ── provisioned endpoint card ───────────────────────────────── */}
+      {endpoint && (
+        <div className={s.endpointCard} data-testid="source-endpoint">
+          <Body1>Ingest endpoint</Body1>
+          {endpoint.fqdn && (
+            <div className={s.endpointRow}>
+              <Caption1>FQDN</Caption1>
+              <span className={s.endpointValue}>{endpoint.fqdn}</span>
+              <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label="Copy FQDN" onClick={() => copy(endpoint.fqdn)} />
+            </div>
+          )}
+          {endpoint.entityPath && (
+            <div className={s.endpointRow}>
+              <Caption1>Entity</Caption1>
+              <span className={s.endpointValue}>{endpoint.entityPath}</span>
+              <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label="Copy entity path" onClick={() => copy(endpoint.entityPath)} />
+            </div>
+          )}
+          {endpoint.kafkaBootstrap && (
+            <div className={s.endpointRow}>
+              <Caption1>Kafka</Caption1>
+              <span className={s.endpointValue}>{endpoint.kafkaBootstrap}</span>
+              <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label="Copy Kafka bootstrap" onClick={() => copy(endpoint.kafkaBootstrap)} />
+            </div>
+          )}
+          <div className={s.endpointRow}>
+            <Caption1>Auth</Caption1>
+            <span className={s.endpointValue}>
+              {endpoint.auth === 'sas' ? 'SAS connection string' : 'Microsoft Entra (bearer token)'}
+            </span>
+            <span />
+          </div>
+          {endpoint.connectionString && (
+            <div className={s.endpointRow}>
+              <Caption1>Conn string</Caption1>
+              <span className={s.endpointValue}>{maskConn(endpoint.connectionString)}</span>
+              <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label="Copy connection string" onClick={() => copy(endpoint.connectionString || '')} />
+            </div>
+          )}
+          {endpoint.localAuthDisabled && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Connection strings are disabled (disableLocalAuth: true). Push events over the HTTPS REST data plane with an Entra token, or Kafka OAUTHBEARER.
+            </Caption1>
+          )}
+
+          <div className={s.wizardActions}>
+            <Button size="small" appearance="outline" icon={<Send20Regular />} onClick={sendTest} disabled={!itemId}>Send test event</Button>
+            <Button size="small" appearance="outline" icon={previewBusy ? <Spinner size="tiny" /> : <Eye20Regular />} onClick={previewEventsFetch} disabled={!itemId || previewBusy}>
+              {previewBusy ? 'Previewing…' : 'Preview events'}
+            </Button>
+          </div>
+          {sendMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{sendMsg}</Caption1>}
+          {hint && !err && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{hint}</Caption1>}
+
+          {previewGate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Live preview not enabled</MessageBarTitle>
+                {previewGate} Sending test events works today.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {previewEvents && previewEvents.length === 0 && !previewGate && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No recent events on this partition.</Caption1>
+          )}
+          {previewEvents && previewEvents.length > 0 && (
+            <table className={s.eventTable} aria-label="Live event preview">
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Partition</th>
+                  <th style={{ textAlign: 'left' }}>Enqueued</th>
+                  <th style={{ textAlign: 'left' }}>Body</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewEvents.map((ev, i) => (
+                  <tr key={i}>
+                    <td>{ev.partitionId ?? '—'}</td>
+                    <td>{ev.enqueuedTime ?? '—'}</td>
+                    <td className={s.endpointValue}>{previewBody(ev.body)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       <Button
         icon={<Delete20Regular />}
         appearance="subtle"
@@ -543,68 +850,373 @@ function SourceInspector({
   );
 }
 
-function TransformInspector({
+// ---- small helpers shared by the guided transform builder ----
+const TRANSFORM_KINDS: { value: TransformKind; label: string }[] = [
+  { value: 'filter', label: 'Filter' },
+  { value: 'aggregate', label: 'Aggregate' },
+  { value: 'group-by', label: 'Group by' },
+  { value: 'window', label: 'Window' },
+  { value: 'project', label: 'Project' },
+  { value: 'join', label: 'Join' },
+  { value: 'union', label: 'Union' },
+];
+const AGG_FUNCS: AsaAggregateFunc[] = ['AVG', 'SUM', 'COUNT', 'MIN', 'MAX'];
+const WINDOW_TYPES: AsaWindowType[] = ['Tumbling', 'Hopping', 'Sliding', 'Session', 'Snapshot'];
+const WINDOW_UNITS: AsaWindowUnit[] = ['second', 'minute', 'hour', 'day'];
+
+function csvToArr(s: string): string[] {
+  return s.split(',').map((x) => x.trim()).filter(Boolean);
+}
+function arrToCsv(a?: string[]): string {
+  return (a || []).join(', ');
+}
+
+// ---- source-inspector helpers (live event preview) ----
+interface ReceivedEventRow {
+  partitionId?: string;
+  enqueuedTime?: string;
+  body?: unknown;
+}
+
+function kindLabel(k: SourceKind): string {
+  switch (k) {
+    case 'eventhub': return 'Event Hubs';
+    case 'iothub': return 'IoT Hub';
+    case 'kafka': return 'Kafka';
+    case 'cdc-mirror': return 'CDC (database change feed)';
+    case 'custom-app': return 'Custom app (provision Event Hub)';
+    case 'sample': return 'Sample data';
+    default: return k;
+  }
+}
+
+function cdcLabel(t?: string): string {
+  switch (t) {
+    case 'postgresql': return 'PostgreSQL';
+    case 'mysql': return 'MySQL';
+    case 'cosmosdb': return 'Cosmos DB';
+    case 'sqlserver':
+    default: return 'SQL Server';
+  }
+}
+
+function maskConn(c: string): string {
+  // Hide the SharedAccessKey value; show endpoint + entity only.
+  return c.replace(/SharedAccessKey=[^;]+/i, 'SharedAccessKey=••••••');
+}
+
+function previewBody(b: unknown): string {
+  const s = typeof b === 'string' ? b : JSON.stringify(b);
+  return s && s.length > 200 ? s.slice(0, 200) + '…' : (s || '');
+}
+
+/** Repeating aggregate-spec editor (func / field / alias rows). */
+function AggregateRows({
   value,
+  onChange,
+}: {
+  value: AggregateSpec[];
+  onChange: (next: AggregateSpec[]) => void;
+}) {
+  const rows = value || [];
+  const update = (i: number, patch: Partial<AggregateSpec>) =>
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const add = () => onChange([...rows, { func: 'AVG', field: '', alias: '' }]);
+  const remove = (i: number) => onChange(rows.filter((_, j) => j !== i));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Label size="small">Aggregations</Label>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <Dropdown
+            style={{ minWidth: 84 }}
+            value={r.func}
+            selectedOptions={[r.func]}
+            onOptionSelect={(_: unknown, d: any) => update(i, { func: (d.optionValue as AsaAggregateFunc) || 'AVG' })}
+            aria-label={`Aggregation ${i + 1} function`}
+          >
+            {AGG_FUNCS.map((f) => (
+              <Option key={f} value={f}>{f}</Option>
+            ))}
+          </Dropdown>
+          <Input
+            style={{ minWidth: 0, flex: 1 }}
+            placeholder={r.func === 'COUNT' ? '* (or field)' : 'field'}
+            value={r.field}
+            onChange={(_: unknown, d: any) => update(i, { field: d.value })}
+            aria-label={`Aggregation ${i + 1} field`}
+          />
+          <Input
+            style={{ minWidth: 0, flex: 1 }}
+            placeholder="alias"
+            value={r.alias}
+            onChange={(_: unknown, d: any) => update(i, { alias: d.value })}
+            aria-label={`Aggregation ${i + 1} alias`}
+          />
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(i)} aria-label={`Remove aggregation ${i + 1}`} />
+        </div>
+      ))}
+      <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={add}>
+        Add aggregation
+      </Button>
+    </div>
+  );
+}
+
+/** Windowing sub-panel (type / size / unit / hop). */
+function WindowPanel({
+  value,
+  onChange,
+}: {
+  value: TransformNode;
+  onChange: (p: Partial<TransformNode>) => void;
+}) {
+  return (
+    <>
+      <Field label="Window type">
+        <Dropdown
+          value={value.windowType || ''}
+          selectedOptions={value.windowType ? [value.windowType] : []}
+          placeholder="None"
+          onOptionSelect={(_: unknown, d: any) =>
+            onChange({ windowType: (d.optionValue as AsaWindowType) || undefined })
+          }
+        >
+          <Option value="">None</Option>
+          {WINDOW_TYPES.map((w) => (
+            <Option key={w} value={w}>{w}</Option>
+          ))}
+        </Dropdown>
+      </Field>
+      {value.windowType && value.windowType !== 'Snapshot' && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Field label="Size" style={{ flex: 1 }}>
+            <SpinButton
+              min={1}
+              value={value.windowSize ?? 30}
+              onChange={(_: unknown, d: any) =>
+                onChange({ windowSize: d.value ?? Number(d.displayValue) ?? 30 })
+              }
+              aria-label="Window size"
+            />
+          </Field>
+          <Field label="Unit" style={{ flex: 1 }}>
+            <Dropdown
+              value={value.windowUnit || 'second'}
+              selectedOptions={[value.windowUnit || 'second']}
+              onOptionSelect={(_: unknown, d: any) =>
+                onChange({ windowUnit: (d.optionValue as AsaWindowUnit) || 'second' })
+              }
+            >
+              {WINDOW_UNITS.map((u) => (
+                <Option key={u} value={u}>{u}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+        </div>
+      )}
+      {(value.windowType === 'Hopping' || value.windowType === 'Session') && (
+        <Field
+          label={value.windowType === 'Hopping' ? 'Hop size' : 'Max duration'}
+          hint={value.windowType === 'Hopping' ? 'How far each window advances' : 'Session max duration'}
+        >
+          <SpinButton
+            min={1}
+            value={value.hopSize ?? value.windowSize ?? 10}
+            onChange={(_: unknown, d: any) => onChange({ hopSize: d.value ?? Number(d.displayValue) ?? 10 })}
+            aria-label="Hop size"
+          />
+        </Field>
+      )}
+    </>
+  );
+}
+
+/**
+ * AsaTransformInspector — guided builder for one Eventstream transform node.
+ *
+ * Every operation (filter / aggregate / group-by / window / join / union) is
+ * configured through dropdowns, number spinners and field lists. The ONLY
+ * freeform inputs are the single-expression Monaco slots (WHERE / HAVING /
+ * JOIN ON) — the allowed 1:1 builder exception per no-freeform-config.md.
+ * The whole SAQL is generated by compileToSaql() and previewed live; it is
+ * never hand-edited here.
+ */
+export function AsaTransformInspector({
+  value,
+  sources,
   onChange,
   onDelete,
 }: {
   value: TransformNode;
+  sources: SourceNode[];
   onChange: (p: Partial<TransformNode>) => void;
   onDelete: () => void;
 }) {
+  const previewSaql = useMemo(() => {
+    const src: SourceNode = sources[0] || { kind: 'eventhub', name: 'input' };
+    const allSrc = sources.length ? sources : [src];
+    return compileToSaql(allSrc, [value], [{ kind: 'kusto', name: 'output' }]);
+  }, [value, sources]);
+
+  const isAgg = value.kind === 'aggregate' || value.kind === 'group-by' || value.kind === 'window';
+
   return (
-    <>
-      <Label weight="semibold">Transform</Label>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
+      <Label weight="semibold">Transform · {value.kind}</Label>
       <Field label="Name">
         <Input value={value.name} onChange={(_: unknown, d: any) => onChange({ name: d.value })} />
       </Field>
-      <Field label="Kind">
+      <Field label="Operation">
         <Dropdown
-          value={value.kind}
+          value={TRANSFORM_KINDS.find((k) => k.value === value.kind)?.label || value.kind}
           selectedOptions={[value.kind]}
-          onOptionSelect={(_: unknown, d: any) =>
-            onChange({ kind: (d.optionValue as TransformKind) || 'filter' })
-          }
+          onOptionSelect={(_: unknown, d: any) => onChange({ kind: (d.optionValue as TransformKind) || 'filter' })}
         >
-          <Option value="filter">Filter</Option>
-          <Option value="aggregate">Aggregate</Option>
-          <Option value="group-by">Group by</Option>
-          <Option value="project">Project</Option>
-          <Option value="union">Union</Option>
-          <Option value="join">Join</Option>
+          {TRANSFORM_KINDS.map((k) => (
+            <Option key={k.value} value={k.value}>{k.label}</Option>
+          ))}
         </Dropdown>
       </Field>
-      <Field
-        label={
-          value.kind === 'filter'
-            ? 'Filter expression (KQL where clause)'
-            : value.kind === 'aggregate'
-              ? 'Aggregate (KQL summarize)'
-              : 'Expression'
-        }
-        hint={
-          value.kind === 'filter'
-            ? 'e.g. event_type == "click"'
-            : value.kind === 'aggregate'
-              ? 'e.g. count() by tenant'
-              : ''
-        }
-      >
-        <Textarea
-          value={value.expression || ''}
-          onChange={(_: unknown, d: any) => onChange({ expression: d.value })}
-          rows={3}
-        />
-      </Field>
+
+      {/* ---- FILTER ---- */}
+      {value.kind === 'filter' && (
+        <Field label="WHERE condition" hint="e.g. temperature > 30 AND deviceId = 'sensor-A'">
+          <MonacoTextarea
+            value={value.expression || ''}
+            onChange={(v) => onChange({ expression: v })}
+            language="sql"
+            height={72}
+            lineNumbers={false}
+            ariaLabel="WHERE condition"
+          />
+        </Field>
+      )}
+
+      {/* ---- AGGREGATE / GROUP-BY / WINDOW ---- */}
+      {isAgg && (
+        <>
+          <Field label="Timestamp column (TIMESTAMP BY)" hint="Event-time column used for windowing">
+            <Input
+              value={value.timestampBy || ''}
+              placeholder="eventTime"
+              onChange={(_: unknown, d: any) => onChange({ timestampBy: d.value })}
+            />
+          </Field>
+          <Field label="GROUP BY columns" hint="Comma-separated">
+            <Input
+              value={arrToCsv(value.groupBy)}
+              placeholder="deviceId, region"
+              onChange={(_: unknown, d: any) => onChange({ groupBy: csvToArr(d.value) })}
+            />
+          </Field>
+          <AggregateRows value={value.aggregates || []} onChange={(next) => onChange({ aggregates: next })} />
+          <Field label="Also project columns" hint="Comma-separated (optional)">
+            <Input
+              value={arrToCsv(value.selectFields)}
+              onChange={(_: unknown, d: any) => onChange({ selectFields: csvToArr(d.value) })}
+            />
+          </Field>
+          <Divider />
+          <WindowPanel value={value} onChange={onChange} />
+          <Field label="HAVING (optional)" hint="Filter on aggregates, e.g. AVG(temperature) > 30">
+            <MonacoTextarea
+              value={value.havingExpression || ''}
+              onChange={(v) => onChange({ havingExpression: v })}
+              language="sql"
+              height={56}
+              lineNumbers={false}
+              ariaLabel="HAVING expression"
+            />
+          </Field>
+        </>
+      )}
+
+      {/* ---- PROJECT ---- */}
+      {value.kind === 'project' && (
+        <Field label="Columns to keep" hint="Comma-separated; blank = all (*)">
+          <Input
+            value={arrToCsv(value.selectFields)}
+            placeholder="deviceId, temperature, eventTime"
+            onChange={(_: unknown, d: any) => onChange({ selectFields: csvToArr(d.value) })}
+          />
+        </Field>
+      )}
+
+      {/* ---- JOIN ---- */}
+      {value.kind === 'join' && (
+        <>
+          <Field label="Join with stream">
+            <Dropdown
+              value={value.joinSource || ''}
+              selectedOptions={value.joinSource ? [value.joinSource] : []}
+              placeholder={sources.length > 1 ? 'Select a stream' : 'Add a second source first'}
+              onOptionSelect={(_: unknown, d: any) => onChange({ joinSource: d.optionValue as string })}
+            >
+              {sources.map((srcOpt) => (
+                <Option key={srcOpt.name} value={srcOpt.name}>{srcOpt.name}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+          <Field label="Join type">
+            <Dropdown
+              value={value.joinType || 'INNER'}
+              selectedOptions={[value.joinType || 'INNER']}
+              onOptionSelect={(_: unknown, d: any) => onChange({ joinType: (d.optionValue as AsaJoinType) || 'INNER' })}
+            >
+              <Option value="INNER">INNER</Option>
+              <Option value="LEFT OUTER">LEFT OUTER</Option>
+            </Dropdown>
+          </Field>
+          <Field label="ON condition" hint="e.g. L.deviceId = R.deviceId (L = left, R = right)">
+            <MonacoTextarea
+              value={value.joinOn || ''}
+              onChange={(v) => onChange({ joinOn: v })}
+              language="sql"
+              height={56}
+              lineNumbers={false}
+              ariaLabel="JOIN ON condition"
+            />
+          </Field>
+          <Field label="Within (seconds)" hint="DATEDIFF temporal bound (max 604800 = 7 days)">
+            <SpinButton
+              min={0}
+              max={604800}
+              value={value.joinDurationSeconds ?? 60}
+              onChange={(_: unknown, d: any) =>
+                onChange({ joinDurationSeconds: d.value ?? Number(d.displayValue) ?? 60 })
+              }
+              aria-label="Join duration seconds"
+            />
+          </Field>
+        </>
+      )}
+
+      {/* ---- UNION ---- */}
+      {value.kind === 'union' && (
+        <Caption1>UNION merges all upstream sources into one stream. No extra configuration is required.</Caption1>
+      )}
+
+      <Divider />
+      <Label size="small">Generated SAQL (preview)</Label>
+      <MonacoTextarea
+        value={previewSaql}
+        onChange={() => {}}
+        language="sql"
+        height={120}
+        readOnly
+        ariaLabel="Generated SAQL preview"
+      />
+
       <Button
         icon={<Delete20Regular />}
         appearance="subtle"
         onClick={onDelete}
-        style={{ marginTop: 'auto' }}
+        style={{ marginTop: 4 }}
       >
         Remove transform
       </Button>
-    </>
+    </div>
   );
 }
 
@@ -638,13 +1250,24 @@ function SinkInspector({
       </Field>
       {value.kind === 'kusto' && (
         <>
+          <Field
+            label="Cluster URL"
+            hint="ADX / Eventhouse cluster query URL. Leave blank to use the deployment default (LOOM_KUSTO_CLUSTER_URI)."
+          >
+            <Input
+              value={value.kustoClusterUrl || ''}
+              placeholder="https://adx-csa-loom-shared.eastus2.kusto.windows.net"
+              onChange={(_: unknown, d: any) => onChange({ kustoClusterUrl: d.value })}
+            />
+          </Field>
           <Field label="Database">
             <Input
               value={value.database || ''}
+              placeholder="loomdb-default"
               onChange={(_: unknown, d: any) => onChange({ database: d.value })}
             />
           </Field>
-          <Field label="Table">
+          <Field label="Table" hint="Table must already exist; its schema must match the query output columns.">
             <Input
               value={value.table || ''}
               placeholder="raw_events"
@@ -655,27 +1278,97 @@ function SinkInspector({
       )}
       {value.kind === 'lakehouse' && (
         <>
-          <Field label="Workspace ID">
+          <Field
+            label="Storage account (ADLS Gen2)"
+            hint="Azure-native default for a Fabric Lakehouse — ASA writes files to this ADLS Gen2 account."
+          >
             <Input
-              value={value.workspaceId || ''}
-              onChange={(_: unknown, d: any) => onChange({ workspaceId: d.value })}
+              value={value.storageAccount || ''}
+              placeholder="loomdatalake01"
+              onChange={(_: unknown, d: any) => onChange({ storageAccount: d.value })}
             />
           </Field>
-          <Field label="Lakehouse ID">
+          <Field label="Container / filesystem">
             <Input
-              value={value.lakehouseId || ''}
-              onChange={(_: unknown, d: any) => onChange({ lakehouseId: d.value })}
+              value={value.container || ''}
+              placeholder="bronze"
+              onChange={(_: unknown, d: any) => onChange({ container: d.value })}
+            />
+          </Field>
+          <Field label="Path pattern" hint="Files land under account/container/pathPattern. Use a Delta path for Lakehouse parity.">
+            <Input
+              value={value.pathPattern || ''}
+              placeholder="events/{date}/{time}"
+              onChange={(_: unknown, d: any) => onChange({ pathPattern: d.value })}
+            />
+          </Field>
+          <Field label="Date format">
+            <Input
+              value={value.dateFormat || ''}
+              placeholder="yyyy/MM/dd"
+              onChange={(_: unknown, d: any) => onChange({ dateFormat: d.value })}
+            />
+          </Field>
+          <Field label="Time format">
+            <Input
+              value={value.timeFormat || ''}
+              placeholder="HH"
+              onChange={(_: unknown, d: any) => onChange({ timeFormat: d.value })}
             />
           </Field>
         </>
       )}
-      {value.kind === 'reflex' && (
-        <Field label="Reflex ID">
-          <Input
-            value={value.reflexId || ''}
-            onChange={(_: unknown, d: any) => onChange({ reflexId: d.value })}
-          />
-        </Field>
+      {(value.kind === 'eventhub' || value.kind === 'reflex') && (
+        <>
+          {value.kind === 'reflex' && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Activator reads from an Event Hub. Loom creates an Event Hub ASA output here;
+                connect Activator to it from the Fabric portal (Settings &rarr; Trigger &rarr;
+                Azure Event Hubs), or wire an Azure Monitor scheduled-query alert against the
+                downstream KQL Database for a fully Azure-native trigger.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <Field label="Namespace" hint="Event Hubs namespace (without the .servicebus suffix).">
+            <Input
+              value={value.namespace || ''}
+              placeholder="loom-eventhub-ns"
+              onChange={(_: unknown, d: any) => onChange({ namespace: d.value })}
+            />
+          </Field>
+          <Field label="Event Hub name">
+            <Input
+              value={value.eventHubName || ''}
+              placeholder="transformed-events"
+              onChange={(_: unknown, d: any) => onChange({ eventHubName: d.value })}
+            />
+          </Field>
+          <Field label="Shared access policy name" hint="Leave blank to authenticate with the ASA job's managed identity (MSI).">
+            <Input
+              value={value.sharedAccessPolicyName || ''}
+              placeholder="RootManageSharedAccessKey"
+              onChange={(_: unknown, d: any) => onChange({ sharedAccessPolicyName: d.value })}
+            />
+          </Field>
+          <Field label="Shared access key">
+            <Input
+              type="password"
+              value={value.sharedAccessPolicyKey || ''}
+              placeholder="(blank = use managed identity)"
+              onChange={(_: unknown, d: any) => onChange({ sharedAccessPolicyKey: d.value })}
+            />
+          </Field>
+        </>
+      )}
+      {value.kind === 'derivedStream' && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            A derived stream fans this stream out to another Eventstream in the same workspace.
+            It has no external Azure output — add a KQL Database, Lakehouse, or Event Hub
+            destination to land transformed events.
+          </MessageBarBody>
+        </MessageBar>
       )}
       <Button
         icon={<Delete20Regular />}

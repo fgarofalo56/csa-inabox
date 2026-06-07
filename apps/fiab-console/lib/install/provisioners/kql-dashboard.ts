@@ -127,7 +127,7 @@ function buildDashboardJson(
   const tileDefs = tiles.map((t, i) => {
     const col = (i % 2) * 12;        // 2 tiles per row on a 24-col grid
     const row = Math.floor(i / 2) * 6;
-    return {
+    const tile: any = {
       id: stableId(`${title}::tile${i}::${t.title}`),
       title: t.title,
       visualType: vizToVisualType(t.viz),
@@ -136,6 +136,24 @@ function buildDashboardJson(
       layout: { x: col, y: row, width: 12, height: 6 },
       visualOptions: {},
     };
+    // Drill-through interaction (Fabric: visual Interactions > Drillthrough).
+    // Maps a result column → a dashboard parameter. Loom is single-page, so
+    // the target page is the same page. Grounded in Learn: dashboard-parameters
+    // #use-drillthroughs-as-dashboard-parameters.
+    const dt = (t as any).drillthrough;
+    if (dt?.column && dt?.paramName) {
+      tile.interactions = {
+        drillthroughEnabled: true,
+        drillthroughTargets: [{
+          pageId,
+          columnParameterMappings: [{
+            column: String(dt.column),
+            parameterId: stableId(`${title}::param::${dt.paramName}`),
+          }],
+        }],
+      };
+    }
+    return tile;
   });
 
   return {

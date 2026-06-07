@@ -252,8 +252,44 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
 
-## Cost Management + Diagnostics (Console UAMI subscription grants)
+## ADX Event Hub data connections — cluster MI grant {#adx-eventhub-data-connection}
 
+The KQL-database **Event Hub data connection** wizard (KqlDatabaseEditor →
+**Data → Data connections**) creates a streaming `Microsoft.Kusto/.../dataConnections`
+(kind `EventHub`). ADX authenticates to Event Hubs using the **cluster's
+system-assigned managed identity**, which must hold **Azure Event Hubs Data
+Receiver** on the namespace. The Azure portal auto-grants this when you create a
+connection in the portal; the ARM REST API (what the Loom wizard calls) does
+**not**, so the grant must exist first or the `PUT .../dataConnections` returns
+`Forbidden`.
+
+**Default deploy (greenfield ADX):** fully automated. `admin-plane/main.bicep`
+outputs `adxClusterPrincipalId`; the top-level `main.bicep` threads it into the
+DLZ `landing-zone/main.bicep`, which passes it to `eventhubs.bicep`. There the
+`adxEhDataReceiverRole` role assignment grants the cluster MI Azure Event Hubs
+Data Receiver (role `a638d3c7-ab3a-418d-83e6-5f17a39d4fde`) on the namespace.
+**No manual step.**
+
+**BYO / existing ADX cluster (`existingAdxClusterName` set):** the admin-plane
+output is empty (it can't read a pre-existing cluster's MI principal id at
+deploy time), so the grant is skipped. Grant it once manually:
+
+```bash
+ADX_MI=$(az kusto cluster show \
+  -g <adx-cluster-rg> -n <adx-cluster-name> \
+  --query identity.principalId -o tsv)
+EHNS=$(az eventhubs namespace show \
+  -g <dlz-rg> -n evhns-loom-<domain>-<location> --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$ADX_MI" --assignee-principal-type ServicePrincipal \
+  --role "Azure Event Hubs Data Receiver" --scope "$EHNS"
+```
+
+**Verify:** create a connection in the wizard, send events to the hub, and run
+`.show data connections` in the KQL editor — the connection lists with
+`State = Running` and rows appear in the target table within seconds.
+
+## Cost Management + Diagnostics (Console UAMI subscription grants)
 Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
 bicep can't express them):
 
@@ -272,6 +308,35 @@ scripts/csa-loom/grant-cost-monitoring-rbac.sh [subscriptionId ...]   # default:
 
 Idempotent; requires az logged in as Owner / User Access Administrator on the sub.
 (Granted live on 363ef5d1-…-bf8c 2026-06-06.)
+
+## Stream Analytics Query Builder — Query Tester grant {#asa-query-tester}
+
+The Eventstream **transform-node builder** (`stream-analytics-job` editor →
+**Query Builder** / **Test** tabs) compiles guided filter/aggregate/window/join
+operations to SAQL and validates / runs them through the ASA control plane. The
+Compile and Test Query operations are **subscription/location-scoped** RP actions
+(`Microsoft.StreamAnalytics/locations/{CompileQuery,TestQuery,SampleInput}/action`),
+which sit ABOVE the DLZ resource group — so the RG-scoped *Stream Analytics
+Contributor* grant from `landing-zone/stream-analytics.bicep` does **not**
+authorize them. Grant the Console UAMI the built-in **Stream Analytics Query
+Tester** role at subscription scope (one-time):
+
+```bash
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Stream Analytics Query Tester" \
+  --scope /subscriptions/<sub>
+# role id: 1ec5b3c1-b17e-4e25-8312-2acb3c3c5abf
+```
+
+Until granted, the editor's **Compile**/**Run** actions surface an honest error
+naming this role — the rest of the builder (guided config + live SAQL preview)
+stays fully functional.
+
+**Run test (sample output rows)** additionally needs a place for ASA to write
+the test output: set `loomAsaTestWriteUri` (admin-plane param →
+`LOOM_ASA_TEST_WRITE_URI`) to a blob **container SAS URL** with write+read.
+Without it, **Run test** honest-gates while **Compile** (validation) still works.
 
 ## Loom Connections (Key Vault-backed source credentials)
 

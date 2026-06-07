@@ -207,10 +207,190 @@ describe('listAlertRules', () => {
 });
 
 describe('metricsForType', () => {
+
   it('returns catalog entries case-insensitively', async () => {
     const { metricsForType } = await import('../monitor-client');
     expect(metricsForType('Microsoft.App/containerApps').length).toBeGreaterThan(0);
     expect(metricsForType('microsoft.search/searchservices')[0]).toHaveProperty('metric');
     expect(metricsForType('unknown/type')).toEqual([]);
+  });
+});
+
+describe('listAlertHistory', () => {
+  it('GETs Microsoft.AlertsManagement/alerts with alertRule + timeRange + includeContext and extracts payload', async () => {
+    const calls = captureFetch(() => ({
+      body: {
+        value: [{
+          name: 'alert-guid-1',
+          id: '/subscriptions/sub-1/providers/Microsoft.AlertsManagement/alerts/alert-guid-1',
+          properties: {
+            essentials: {
+              alertRule: 'my-rule-loom',
+              monitorCondition: 'Fired',
+              alertState: 'New',
+              severity: 'Sev3',
+              startDateTime: '2026-06-06T10:00:00Z',
+              lastModifiedDateTime: '2026-06-06T10:01:00Z',
+              targetResourceName: 'law-loom-eastus',
+              targetResourceGroup: 'rg-admin',
+            },
+            context: {
+              context: {
+                condition: {
+                  windowStartTime: '2026-06-06T09:55:00Z',
+                  windowEndTime: '2026-06-06T10:00:00Z',
+                  allOf: [{
+                    searchQuery: 'AppEvents_CL | where v > 20',
+                    metricValue: 5,
+                    operator: 'GreaterThan',
+                    threshold: '0',
+                    timeAggregation: 'Count',
+                    linkToSearchResultsUI: 'https://portal.azure.com/...',
+                  }],
+                },
+              },
+            },
+          },
+        }],
+      },
+    }));
+    const { listAlertHistory } = await import('../monitor-client');
+    const events = await listAlertHistory({ alertRule: 'my-rule-loom', days: 7 });
+    const url = calls[0].url;
+    expect(url).toContain('/providers/Microsoft.AlertsManagement/alerts?');
+    expect(url).toContain('api-version=2019-03-01');
+    expect(url).toContain('alertRule=my-rule-loom');
+    expect(url).toContain('includeContext=true');
+    expect(url).toContain('timeRange=7d');
+    expect(url).toContain('sortBy=startDateTime');
+    expect(events[0]).toMatchObject({
+      alertRule: 'my-rule-loom', monitorCondition: 'Fired', alertState: 'New', severity: 'Sev3',
+    });
+    expect(events[0].payload?.matchingRowsCount).toBe(5);
+    expect(events[0].payload?.operator).toBe('GreaterThan');
+    expect(events[0].payload?.searchQuery).toContain('AppEvents_CL');
+  });
+
+  it('caps timeRange at 30 days and tolerates single-nested context', async () => {
+    const calls = captureFetch(() => ({
+      body: {
+        value: [{
+          name: 'g2',
+          properties: {
+            essentials: { alertRule: 'r2', monitorCondition: 'Resolved', alertState: 'Closed', startDateTime: '2026-06-01T00:00:00Z' },
+            context: { condition: { allOf: [{ matchingRowsCount: 2, operator: 'GreaterThan', threshold: '0' }] } },
+          },
+        }],
+      },
+    }));
+    const { listAlertHistory } = await import('../monitor-client');
+    const events = await listAlertHistory({ alertRule: 'r2', days: 90 });
+    expect(calls[0].url).toContain('timeRange=30d');
+    expect(events[0].monitorCondition).toBe('Resolved');
+    expect(events[0].payload?.matchingRowsCount).toBe(2);
+  });
+
+  it('honest-gates when LOOM_SUBSCRIPTION_ID unset', async () => {
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    const { listAlertHistory, MonitorNotConfiguredError } = await import('../monitor-client');
+    await expect(listAlertHistory()).rejects.toBeInstanceOf(MonitorNotConfiguredError);
+  });
+});
+
+describe('upsertActionGroup', () => {
+  it('PUTs emailReceivers + smsReceivers + webhookReceivers + logicAppReceivers', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    const calls = captureFetch(() => ({
+      body: { id: '/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1' },
+    }));
+    const { upsertActionGroup } = await import('../monitor-client');
+    const id = await upsertActionGroup({
+      name: 'ag1', shortName: 'ag1short',
+      emails: ['a@b.com'],
+      smsReceivers: [{ countryCode: '1', phoneNumber: '555-123-4567' }],
+      webhookReceivers: [{ serviceUri: 'https://webhook.site/test' }],
+      logicAppReceivers: [{ resourceId: '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf1', callbackUrl: 'https://prod-x.logic.azure.com/cb' }],
+    });
+    expect(calls[0].init?.method).toBe('PUT');
+    expect(calls[0].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1?api-version=2023-01-01');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.properties.groupShortName).toBe('ag1short'.slice(0, 12));
+    expect(body.properties.emailReceivers).toHaveLength(1);
+    expect(body.properties.smsReceivers[0]).toMatchObject({ countryCode: '1', phoneNumber: '5551234567' });
+    expect(body.properties.webhookReceivers[0]).toMatchObject({ serviceUri: 'https://webhook.site/test', useCommonAlertSchema: true });
+    expect(body.properties.logicAppReceivers[0]).toMatchObject({ resourceId: expect.stringContaining('Microsoft.Logic'), useCommonAlertSchema: true });
+    expect(id).toContain('/actionGroups/ag1');
+  });
+
+  it('PUTs empty receiver arrays when none supplied (still creates the group)', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    const calls = captureFetch(() => ({ body: { id: '/x/ag2' } }));
+    const { upsertActionGroup } = await import('../monitor-client');
+    await upsertActionGroup({ name: 'ag2', shortName: 'ag2' });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.properties.emailReceivers).toEqual([]);
+    expect(body.properties.smsReceivers).toEqual([]);
+    expect(body.properties.webhookReceivers).toEqual([]);
+    expect(body.properties.logicAppReceivers).toEqual([]);
+  });
+});
+
+describe('listActionGroups', () => {
+  it('GETs actionGroups in the alert RG and summarizes receivers', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    const calls = captureFetch(() => ({
+      body: { value: [{
+        id: '/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1',
+        name: 'ag1',
+        properties: { groupShortName: 'ag1', enabled: true, emailReceivers: [{}], webhookReceivers: [{}, {}], smsReceivers: [], logicAppReceivers: [{}] },
+      }] },
+    }));
+    const { listActionGroups } = await import('../monitor-client');
+    const ags = await listActionGroups();
+    expect(calls[0].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups?api-version=2023-01-01');
+    expect(ags[0]).toMatchObject({ name: 'ag1', shortName: 'ag1', enabled: true, emailCount: 1, webhookCount: 2, smsCount: 0, logicAppCount: 1 });
+  });
+});
+
+describe('getLogicAppCallbackUrl', () => {
+  it('POSTs listCallbackUrl and returns the URL', async () => {
+    const calls = captureFetch(() => ({ body: { value: 'https://prod-x.logic.azure.com/workflows/abc/triggers/manual/run?sig=xyz' } }));
+    const { getLogicAppCallbackUrl } = await import('../monitor-client');
+    const url = await getLogicAppCallbackUrl('/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf1');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(calls[0].url).toContain('/triggers/manual/listCallbackUrl?api-version=2016-06-01');
+    expect(url).toContain('logic.azure.com');
+  });
+
+  it('rejects a non-Logic-App resource id', async () => {
+    const { getLogicAppCallbackUrl } = await import('../monitor-client');
+    await expect(getLogicAppCallbackUrl('/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Web/sites/foo')).rejects.toThrow(/Logic App/);
+  });
+});
+
+describe('sendActionGroupTestNotification', () => {
+  it('reads the action group then POSTs createNotifications mirroring its receivers', async () => {
+    const calls = captureFetch((url) => {
+      if (url.includes('/createNotifications')) return { status: 202, body: {} };
+      // GET the action group
+      return { body: { properties: { webhookReceivers: [{ name: 'webhook0', serviceUri: 'https://webhook.site/test' }], emailReceivers: [{ name: 'email0', emailAddress: 'a@b.com' }], smsReceivers: [], logicAppReceivers: [] } } };
+    });
+    const { sendActionGroupTestNotification } = await import('../monitor-client');
+    const res = await sendActionGroupTestNotification(
+      '/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1',
+    );
+    // GET first, then POST createNotifications.
+    expect(calls[0].url).toContain('/actionGroups/ag1?api-version=2023-01-01');
+    const post = calls.find((c) => c.url.includes('/createNotifications'))!;
+    expect(post.init?.method).toBe('POST');
+    const body = JSON.parse(String(post.init?.body));
+    expect(body.alertType).toBe('logalertv2');
+    expect(body.webhookReceivers[0]).toMatchObject({ serviceUri: 'https://webhook.site/test' });
+    expect(res.receivers).toMatchObject({ emails: 1, webhooks: 1, sms: 0, logicApps: 0 });
+  });
+
+  it('rejects an invalid action group id', async () => {
+    const { sendActionGroupTestNotification } = await import('../monitor-client');
+    await expect(sendActionGroupTestNotification('not-an-arm-id')).rejects.toThrow(/action group/i);
   });
 });
