@@ -163,8 +163,6 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   // When switching jobs, force-load (user expects buffer to reset to that
   // job's persisted query). On other refreshes we respect dirty edits.
   useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
-  // Auto-load live metrics when the Monitoring tab is opened for a job.
-  useEffect(() => { if (tab === 'monitoring' && selected) loadMetrics(selected); }, [tab, selected, loadMetrics]);
 
   const save = useCallback(async () => {
     if (!selected) return;
@@ -198,6 +196,10 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setMetricsError(e?.message || String(e)); setMetrics(null); }
     finally { setMetricsLoading(false); }
   }, []);
+
+  // Auto-load live metrics when the Monitoring tab is opened for a job.
+  // Declared after loadMetrics so the dependency reference is initialized.
+  useEffect(() => { if (tab === 'monitoring' && selected) loadMetrics(selected); }, [tab, selected, loadMetrics]);
 
   // ASA start/stop is async on the ARM side — the POST returns 202 immediately
   // but the job state transitions over 60–180s. Poll getJob until it reaches
