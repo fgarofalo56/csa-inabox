@@ -227,15 +227,17 @@ export async function listTables(db: string): Promise<Array<{ name: string; fold
 }
 
 /** `.show functions` — stored KQL functions (ADX schema-tree parity). */
-export async function listFunctions(db: string): Promise<Array<{ name: string; parameters?: string; folder?: string; docString?: string }>> {
+export async function listFunctions(db: string): Promise<Array<{ name: string; parameters?: string; body?: string; folder?: string; docString?: string }>> {
   const r = await executeMgmtCommand(db, '.show functions');
   const nameIdx = r.columns.indexOf('Name');
   const paramIdx = r.columns.indexOf('Parameters');
+  const bodyIdx = r.columns.indexOf('Body');
   const folderIdx = r.columns.indexOf('Folder');
   const docIdx = r.columns.indexOf('DocString');
   return r.rows.map((row) => ({
     name: String(row[nameIdx >= 0 ? nameIdx : 0]),
     parameters: paramIdx >= 0 ? (row[paramIdx] as string) : undefined,
+    body: bodyIdx >= 0 ? ((row[bodyIdx] as string) || undefined) : undefined,
     folder: folderIdx >= 0 ? (row[folderIdx] as string) : undefined,
     docString: docIdx >= 0 ? (row[docIdx] as string) : undefined,
   }));

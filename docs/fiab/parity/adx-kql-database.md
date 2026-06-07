@@ -57,7 +57,7 @@ For the ADX web UI / Fabric KQL database schema tree, each object type exposes a
 | # | ADX/Fabric object | Capabilities in the real UI |
 |---|-------------------|------------------------------|
 | 1 | **Tables** | list w/ count + row count + size, New (column schema builder / `.create table`), open (take 100), drop, table schema |
-| 2 | **Functions** | list w/ count, New (args + body / `.create-or-alter function`), open (invoke), drop |
+| 2 | **Functions** | list w/ count, New + **Edit** (params grid `name:type` + KQL body / `.create-or-alter function`), open (invoke), drop |
 | 3 | **Materialized views** | list w/ count, New (source table + aggregation query / `.create materialized-view`), open, drop |
 | 4 | **Ingestion mappings** | list w/ count (csv/json/avro/parquet/orc/w3clogfile), New (`.create-or-alter … mapping`), drop |
 | 5 | **Database schema** | view the flat schema (`.show database schema [as json]`) |
@@ -85,7 +85,7 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Tables** — New (schema builder textarea) | ✅ | `POST /api/adx/tables` → `.create table T (col:type, …)` |
 | **Tables** — open (take 100) | ✅ | row click loads `["T"] \| take 100` into the editor |
 | **Tables** — drop | ✅ | `DELETE /api/adx/tables?name=` → `.drop table T ifexists` |
-| **Functions** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/functions` → `.show functions` / `.create-or-alter function NAME(args){body}` / `.drop function` |
+| **Functions** — list / count / open / **create + edit + drop** | ✅ | structured stored-function editor (name field, **params grid** `name:type` with a typed dropdown, **Monaco KQL body**, save + delete, success receipt) owned by `KqlDatabaseEditor`, opened from the ribbon (New → Function) and the navigator's per-row **Edit** action. `GET/POST/DELETE /api/adx/functions` → `.show functions` (Body surfaced for edit) / `.create-or-alter function NAME(args){body}` / `.drop function` |
 | **Materialized views** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/materialized-views` → `.show materialized-views` / `.create materialized-view NAME on table SRC {query}` / `.drop materialized-view` |
 | **Ingestion mappings** — list / count / create / drop | ✅ | `GET/POST/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.create-or-alter table T ingestion <kind> mapping "N" 'json'` / `.drop <table\|database> … ingestion <kind> mapping "N"` |
 | **Database schema** — show full schema | ✅ | branch row loads `.show database schema` into the editor; `GET /api/adx/overview` also returns `.show database schema as json` |

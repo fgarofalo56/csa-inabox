@@ -42,7 +42,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, ArrowSync16Regular, Delete16Regular,
+  Add20Regular, ArrowSync16Regular, Delete16Regular, Edit16Regular,
   DocumentTable20Regular, Table20Regular, MathFormula20Regular,
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
@@ -64,25 +64,33 @@ async function readJson(res: Response): Promise<any> {
 }
 
 interface TableRow { name: string; totalRowCount?: number; totalExtentSizeMb?: number; folder?: string }
-interface FnRow { name: string; parameters?: string; folder?: string }
+interface FnRow { name: string; parameters?: string; body?: string; folder?: string }
 interface MvRow { name: string; sourceTable?: string }
 interface MapRow { name: string; kind: string; table?: string; mapping?: string }
 interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string }
 interface PolicyRow { kind: string; policy?: unknown; raw?: string }
 
-type CreatableGroup = 'table' | 'function' | 'mv' | 'mapping';
+type CreatableGroup = 'table' | 'mv' | 'mapping';
 
 export interface AdxDatabaseTreeProps {
   /** The bound kql-database item id (so routes resolve the right database). */
   itemId: string;
   /** Load a query into the editor when a leaf is opened (e.g. `["T"] | take 100`). */
   onOpenQuery?: (kql: string) => void;
+  /**
+   * Open the structured stored-function editor (params grid + KQL body) owned by
+   * the parent KQL database editor. Called with no argument for a fresh create,
+   * or with the selected function (name/parameters/body) to edit-in-place.
+   * Function create/edit/delete is funnelled through this single editor so the
+   * navigator never carries a divergent raw-args function form.
+   */
+  onEditFunction?: (fn?: { name: string; parameters?: string; body?: string }) => void;
   /** Increment to force a refresh from the parent (e.g. after an external create). */
   refreshKey?: number;
 }
 
 /** A typed, ADX/Fabric-faithful KQL database object navigator. */
-export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxDatabaseTreeProps) {
+export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, refreshKey = 0 }: AdxDatabaseTreeProps) {
   const s = useStyles();
 
   const idq = `id=${encodeURIComponent(itemId)}`;
@@ -113,7 +121,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const [cSchema, setCSchema] = useState('ts:datetime, tenant:string, value:long');
   const [cSource, setCSource] = useState('');
   const [cQuery, setCQuery] = useState('');
-  const [cArgs, setCArgs] = useState('');
   const [cKind, setCKind] = useState('json');
   const [cMapping, setCMapping] = useState('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   const [createError, setCreateError] = useState<string | null>(null);
@@ -158,7 +165,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const openCreate = useCallback((g: CreatableGroup) => {
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCSchema('ts:datetime, tenant:string, value:long');
-    setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs('');
+    setCSource(tables[0]?.name || ''); setCQuery('');
     setCKind('json'); setCMapping('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   }, [tables]);
 
@@ -169,7 +176,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
     try {
       let route = TABLES; let payload: any = {};
       if (createGroup === 'table') { route = TABLES; payload = { name, schema: cSchema }; }
-      else if (createGroup === 'function') { route = FUNCTIONS; payload = { name, args: cArgs, body: cQuery }; }
       else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery }; }
       else if (createGroup === 'mapping') { route = MAPPINGS; payload = { name, kind: cKind, table: cSource, mapping: cMapping }; }
       const res = await fetch(route, {
@@ -185,7 +191,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
+  }, [createGroup, cName, cSchema, cSource, cQuery, cKind, cMapping, TABLES, MVIEWS, MAPPINGS, loadAll]);
 
   const del = useCallback(async (route: string, query: string) => {
     setBusy(true); setError(null);
@@ -265,7 +271,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             <MenuPopover>
               <MenuList>
                 <MenuItem icon={<DocumentTable20Regular />} onClick={() => openCreate('table')}>Table</MenuItem>
-                <MenuItem icon={<MathFormula20Regular />} onClick={() => openCreate('function')}>Function</MenuItem>
+                <MenuItem icon={<MathFormula20Regular />} onClick={() => onEditFunction?.()}>Function</MenuItem>
                 <MenuItem icon={<Table20Regular />} onClick={() => openCreate('mv')}>Materialized view</MenuItem>
                 <MenuItem icon={<ArrowImport20Regular />} onClick={() => openCreate('mapping')}>Ingestion mapping</MenuItem>
               </MenuList>
@@ -322,7 +328,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
 
           {/* Functions */}
           <TreeItem itemType="branch" value="g-functions">
-            {groupHeader('Functions', <MathFormula20Regular />, functions.length, () => openCreate('function'), 'New function')}
+            {groupHeader('Functions', <MathFormula20Regular />, functions.length, () => onEditFunction?.(), 'New function')}
             <Tree>
               {fFns.length === 0 && <TreeItem itemType="leaf" value="fn-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No functions'}</Caption1></TreeItemLayout></TreeItem>}
               {fFns.map((fn) => (
@@ -334,6 +340,9 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`${fn.name}(${(fn.parameters || '').trim()})`); } }}
                       >{fn.name}{fn.parameters ? <Caption1> ({fn.parameters})</Caption1> : null}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                        {onEditFunction && (
+                          <Tooltip content="Edit function" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={() => onEditFunction(fn)} aria-label={`Edit ${fn.name}`} /></Tooltip>
+                        )}
                         <Tooltip content="Drop function" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(FUNCTIONS, `name=${encodeURIComponent(fn.name)}`)} aria-label={`Drop ${fn.name}`} /></Tooltip>
                       </span>
                     </span>
@@ -497,7 +506,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
           <DialogBody>
             <DialogTitle>
               New {createGroup === 'table' ? 'table (.create table)'
-                : createGroup === 'function' ? 'function (.create-or-alter function)'
                 : createGroup === 'mv' ? 'materialized view (.create materialized-view)'
                 : 'ingestion mapping (.create-or-alter … mapping)'}
             </DialogTitle>
@@ -511,17 +519,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                   <Field label="Schema (col:type, col:type, …)">
                     <Textarea value={cSchema} onChange={(_, d) => setCSchema(d.value)} rows={3} style={{ fontFamily: 'Consolas, monospace' }} />
                   </Field>
-                )}
-
-                {createGroup === 'function' && (
-                  <>
-                    <Field label="Argument list (e.g. days:int)">
-                      <Input value={cArgs} onChange={(_, d) => setCArgs(d.value)} placeholder="days:int" />
-                    </Field>
-                    <Field label="Body (KQL)">
-                      <Textarea value={cQuery} onChange={(_, d) => setCQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | where ts > ago(days*1d)" />
-                    </Field>
-                  </>
                 )}
 
                 {createGroup === 'mv' && (
