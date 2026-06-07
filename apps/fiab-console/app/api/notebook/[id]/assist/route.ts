@@ -52,7 +52,12 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
+  // Boundary-aware AOAI audience: cogScope() returns .us for Gov (GCC-High /
+  // DoD), .com for Commercial / GCC. LOOM_AOAI_AUDIENCE (set per-cloud by
+  // admin-plane/main.bicep) overrides when present.
+  const audience = process.env.LOOM_AOAI_AUDIENCE;
+  const scope = audience ? `${audience.replace(/\/+$/, '')}/.default` : cogScope();
+  const t = await credential.getToken(scope);
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }

@@ -1,14 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, Caption1, Select, Spinner, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Badge, Button, Caption1, Input, MessageBar, MessageBarBody, Popover,
+  PopoverSurface, PopoverTrigger, Select, Spinner, makeStyles, mergeClasses, tokens,
+} from '@fluentui/react-components';
 import {
   Play16Regular, Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
   LockClosed16Regular, LockClosed16Filled, Copy16Regular,
   ArrowMaximize16Regular, ArrowMinimize16Regular,
+  Sparkle16Regular, Sparkle16Filled,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
+import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
+import { CopilotPane } from './copilot-pane';
 
 const useStyles = makeStyles({
   shell: {
@@ -112,12 +120,57 @@ export interface CodeCellProps {
   onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Sources of up to 3 preceding cells (oldest first) for ghost-text grounding. */
+  priorCells?: string[];
+  /** Lakehouse / notebook schema hint forwarded to inline completion. */
+  schemaContext?: string;
+  /** Notebook item id — when present (with onInsertBelow) the in-cell Copilot
+   *  button is shown. Absent in the legacy scratchpad pane, where it stays hidden. */
+  notebookId?: string;
+  /** Parent splices the Copilot-generated cell directly below this one. */
+  onInsertBelow?: (cell: NotebookCell) => void;
 }
 
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: CodeCellProps) {
+/**
+ * In-cell Copilot (Fabric-parity): a per-cell Copilot button opens a prompt
+ * popover with slash commands; the result is inserted as a new cell below.
+ * Slash parsing + result-cell construction live in ./copilot-commands.
+ */
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, priorCells, schemaContext, notebookId, onInsertBelow }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [completionEnabled, toggleCompletion] = useInlineCompleteToggle();
+  const [copilotOpen, setCopilotOpen] = useState(false);
+
+  // In-cell Copilot popover state (distinct from the full CopilotPane above).
+  const [inCellOpen, setInCellOpen] = useState(false);
+  const [copilotDraft, setCopilotDraft] = useState('');
+  const [copilotBusy, setCopilotBusy] = useState(false);
+  const [copilotError, setCopilotError] = useState<string | null>(null);
+  const [copilotHint, setCopilotHint] = useState<string | null>(null);
+  const copilotEnabled = !!notebookId && !!onInsertBelow;
+
+  const locked = !!cell.locked;
+
+  // Live context for the inline-completion provider (read on each invocation).
+  const ctxRef = useRef<InlineCompletionContext>({
+    enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
+    priorCells: priorCells || [], schemaContext,
+  });
+  useEffect(() => {
+    ctxRef.current = {
+      enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
+      priorCells: priorCells || [], schemaContext,
+    };
+  }, [completionEnabled, locked, cell.lang, priorCells, schemaContext]);
+
+  const disposeRef = useRef<{ dispose(): void } | null>(null);
+  const handleEditorReady = useCallback((editor: any, monaco: any) => {
+    disposeRef.current?.dispose();
+    disposeRef.current = registerInlineCompletion(editor, monaco, () => ctxRef.current);
+  }, []);
+  useEffect(() => () => disposeRef.current?.dispose(), []);
 
   // ESC dismisses the maximized state.
   useEffect(() => {
@@ -134,12 +187,62 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
     finally { setRunning(false); }
   }, [cell, onRun]);
 
+  const handleCopilot = useCallback(async () => {
+    if (!onInsertBelow || !notebookId) return;
+    const { mode, prompt } = parseCopilotCommand(copilotDraft);
+    setCopilotError(null);
+    setCopilotHint(null);
+
+    if (mode === 'generate' && !prompt) {
+      setCopilotError('Add a description after /generate, or type a free-text prompt.');
+      return;
+    }
+    if (mode === 'explain' && !cell.source.trim()) {
+      setCopilotError('/explain requires cell source code.');
+      return;
+    }
+    if (mode === 'fix' && !cell.source.trim()) {
+      setCopilotError('/fix requires cell source code.');
+      return;
+    }
+
+    setCopilotBusy(true);
+    try {
+      const errorText = mode === 'fix'
+        ? [cell.output?.ename, cell.output?.evalue, ...(cell.output?.traceback ?? [])].filter(Boolean).join('\n')
+        : '';
+      if (mode === 'fix' && !errorText.trim()) {
+        setCopilotError('/fix needs an error in the cell output — run the cell first.');
+        setCopilotBusy(false);
+        return;
+      }
+      const res = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/assist`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode, lang: cell.lang || 'pyspark', source: cell.source, prompt, errorText }),
+      });
+      const j = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+      if (!j.ok) {
+        if (j.code === 'no_aoai') setCopilotHint(j.hint || j.error || 'AOAI not configured.');
+        else setCopilotError(j.error || `HTTP ${res.status}`);
+        return;
+      }
+      const newCell: NotebookCell = copilotResultCell(mode, cell.lang || 'pyspark', j.result);
+      onInsertBelow(newCell);
+      setInCellOpen(false);
+      setCopilotDraft('');
+    } catch (e: any) {
+      setCopilotError(e?.message || String(e));
+    } finally {
+      setCopilotBusy(false);
+    }
+  }, [notebookId, cell, copilotDraft, onInsertBelow]);
+
   const setLang = (lang: NotebookCellLang) => onChange({ ...cell, lang });
   const setSource = (source: string) => onChange({ ...cell, source });
   const toggleLock = () => onChange({ ...cell, locked: !cell.locked });
 
   const exec = cell.executionCount ? `[${cell.executionCount}]` : '[ ]';
-  const locked = !!cell.locked;
 
   const shell = (
     <div
@@ -159,7 +262,86 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
           {LANG_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
+        {copilotEnabled && (
+          <Popover
+            open={inCellOpen}
+            onOpenChange={(_, d) => { if (!copilotBusy) setInCellOpen(d.open); }}
+            positioning="below-start"
+            trapFocus
+          >
+            <PopoverTrigger disableButtonEnhancement>
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={<Sparkle16Regular style={{ color: tokens.colorBrandForeground1 }} />}
+                onClick={(e) => { e.stopPropagation(); setInCellOpen(o => !o); }}
+                aria-label="In-cell Copilot"
+                title="In-cell Copilot"
+              >
+                Copilot
+              </Button>
+            </PopoverTrigger>
+            <PopoverSurface
+              onClick={(e) => e.stopPropagation()}
+              style={{ padding: 12, width: 380, display: 'flex', flexDirection: 'column', gap: 8 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Sparkle16Regular style={{ color: tokens.colorBrandForeground1 }} />
+                <Caption1 style={{ fontWeight: 600 }}>In-cell Copilot</Caption1>
+              </div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                /explain · /fix · /generate &lt;description&gt; · or type a free-form prompt
+              </Caption1>
+              <Input
+                value={copilotDraft}
+                onChange={(_, d) => setCopilotDraft(d.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !copilotBusy) { e.preventDefault(); handleCopilot(); } }}
+                placeholder="e.g. /explain"
+                disabled={copilotBusy}
+                contentBefore={copilotBusy ? <Spinner size="tiny" /> : undefined}
+                style={{ width: '100%' }}
+                aria-label="Copilot prompt"
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Button size="small" appearance="subtle" disabled={copilotBusy}
+                  onClick={() => setCopilotDraft('/explain')}>/explain</Button>
+                <Button size="small" appearance="subtle" disabled={copilotBusy || cell.output?.status !== 'error'}
+                  onClick={() => setCopilotDraft('/fix')}>/fix</Button>
+                <Button size="small" appearance="subtle" disabled={copilotBusy}
+                  onClick={() => setCopilotDraft('/generate ')}>/generate</Button>
+                <div style={{ flex: 1 }} />
+                <Button size="small" appearance="primary"
+                  disabled={copilotBusy || !copilotDraft.trim()}
+                  onClick={handleCopilot}>
+                  {copilotBusy ? 'Working…' : 'Run'}
+                </Button>
+              </div>
+              {copilotHint && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    AOAI not configured — {copilotHint} Deploy the AI Foundry project
+                    (platform/fiab/bicep/modules/ai/foundry-project.bicep, agentFoundryEnabled=true).
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {copilotError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{copilotError}</MessageBarBody>
+                </MessageBar>
+              )}
+            </PopoverSurface>
+          </Popover>
+        )}
         <div className={s.spacer} />
+        <Button
+          size="small"
+          appearance={completionEnabled ? 'primary' : 'subtle'}
+          icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
+          onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
+          aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'}
+          title={completionEnabled ? 'AI inline completion: on — pause typing for a ghost suggestion, Tab to accept' : 'AI inline completion: off'}
+        />
         <Button
           size="small"
           appearance={locked ? 'primary' : 'subtle'}
@@ -190,27 +372,53 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         minHeight={80}
         ariaLabel={`Code cell ${cell.id}`}
         className={mergeClasses(locked && s.editorLocked)}
+        onReady={handleEditorReady}
       />
       {cell.output && (
-        <div className={mergeClasses(
-          s.outputBox,
-          maximized && s.outputBoxMaximized,
-          cell.output.status === 'error' && s.outputError,
-        )}>
-          {cell.output.status === 'error' && (
-            <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
-              {cell.output.ename || 'Error'}
-            </Badge>
-          )}
-          {cell.output.status === 'error' ? (
+        <>
+          <div className={mergeClasses(
+            s.outputBox,
+            maximized && s.outputBoxMaximized,
+            cell.output.status === 'error' && s.outputError,
+          )}>
+            {cell.output.status === 'error' && (
+              <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
+                {cell.output.ename || 'Error'}
+              </Badge>
+            )}
+            {cell.output.status === 'error' ? (
+              <>
+                {cell.output.evalue}
+                {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
+              </>
+            ) : (
+              cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
+            )}
+          </div>
+          {cell.output.status === 'error' && !locked && (
             <>
-              {cell.output.evalue}
-              {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
+              <Button
+                size="small"
+                appearance="outline"
+                icon={<Sparkle16Regular />}
+                style={{ margin: '4px 8px 8px', alignSelf: 'flex-start' }}
+                onClick={(e) => { e.stopPropagation(); setCopilotOpen(true); }}
+              >
+                Fix with Copilot
+              </Button>
+              <CopilotPane
+                open={copilotOpen}
+                cell={cell}
+                output={cell.output}
+                onAccept={(proposedCode) => {
+                  onChange({ ...cell, source: proposedCode, output: undefined, executionCount: undefined });
+                  setCopilotOpen(false);
+                }}
+                onClose={() => setCopilotOpen(false)}
+              />
             </>
-          ) : (
-            cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
           )}
-        </div>
+        </>
       )}
     </div>
   );
