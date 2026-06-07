@@ -40,6 +40,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 
   // Phase 3
   'eventhouse':           reg(() => import('./phase3-editors'),           'EventhouseEditor'),
+  // Workspace-monitoring DB — read-only ADX usage/perf store; reuses the
+  // Eventhouse cluster/database surface (lists databases incl. the monitor DB).
+  'workspace-monitor':    reg(() => import('./phase3-editors'),           'EventhouseEditor'),
   'kql-database':         reg(() => import('./phase3-editors'),           'KqlDatabaseEditor'),
   'kql-queryset':         reg(() => import('./phase3-editors'),           'KqlQuerysetEditor'),
   'kql-dashboard':        reg(() => import('./phase3-editors'),           'KqlDashboardEditor'),

@@ -53,6 +53,9 @@ param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
 @description('Admin Plane ADX cluster RG')
 param adminPlaneAdxClusterRgName string
 
+@description('ADX cluster system-assigned MI principal ID (from admin-plane adx-cluster.bicep output clusterPrincipalId). Threaded to eventhubs.bicep to grant Azure Event Hubs Data Receiver on the namespace so KQL-database Event Hub data connections work without SAS. Empty skips the grant (BYO/existing cluster: bootstrap the grant manually — see docs/fiab/v3-tenant-bootstrap.md).')
+param adxClusterPrincipalId string = ''
+
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
@@ -165,6 +168,7 @@ module synapse 'synapse.bicep' = {
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
+    adxClusterPrincipalId: adxClusterPrincipalId
   }
 }
 
@@ -200,6 +204,7 @@ module eventhubs 'eventhubs.bicep' = {
     // ADF factory MI gets Azure Event Hubs Data Sender so Eventstream "CDC"
     // source pipelines can write change events to namespace Event Hubs.
     adfPrincipalId: (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+    adxClusterPrincipalId: adxClusterPrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
@@ -266,6 +271,12 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // ASA Lakehouse/Blob output writes to the DLZ ADLS Gen2 account via MSI
+    // (Storage Blob Data Contributor granted in the module).
+    adlsAccountName: storage.outputs.storageAccountName
+    // ADX cluster backing KQL Database outputs (ingestor grant is a Kusto
+    // control-plane step surfaced via module output for the bootstrap).
+    adxClusterName: adminPlaneAdxClusterName
   }
 }
 

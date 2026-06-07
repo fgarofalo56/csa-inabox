@@ -2,7 +2,7 @@
  * Materialized views on the ADX/KQL database bound to a kql-database item.
  *
  *   GET    /api/adx/materialized-views?id=ITEM            → { ok, materializedViews: [{name, sourceTable}] }
- *   POST   /api/adx/materialized-views?id=ITEM            body { name, sourceTable, query } → .create materialized-view
+ *   POST   /api/adx/materialized-views?id=ITEM            body { name, sourceTable, query, backfill? } → .create [async] materialized-view [with(backfill=true)]
  *   DELETE /api/adx/materialized-views?id=ITEM&name=NAME  → .drop materialized-view NAME ifexists
  *
  * Real Kusto control commands to /v1/rest/mgmt. Honest 503 gate. No mocks.
@@ -33,12 +33,13 @@ export async function POST(req: NextRequest) {
   const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
   const sourceTable: string = typeof body?.sourceTable === 'string' ? body.sourceTable.trim() : '';
   const query: string = typeof body?.query === 'string' ? body.query.trim() : '';
+  const backfill: boolean = body?.backfill === true;
   if (!validName(name)) return NextResponse.json({ ok: false, error: 'name must start with a letter/underscore' }, { status: 400 });
   if (!sourceTable) return NextResponse.json({ ok: false, error: 'sourceTable is required' }, { status: 400 });
   if (!query) return NextResponse.json({ ok: false, error: 'query is required, e.g. "T | summarize count() by bin(ts,1d)"' }, { status: 400 });
   try {
-    const r = await createMaterializedView(g.ctx.database, name, sourceTable, query);
-    return NextResponse.json({ ok: true, name, rowCount: r.rowCount });
+    const r = await createMaterializedView(g.ctx.database, name, sourceTable, query, { backfill });
+    return NextResponse.json({ ok: true, name, backfill, rowCount: r.rowCount });
   } catch (e: any) {
     return adxError(e);
   }

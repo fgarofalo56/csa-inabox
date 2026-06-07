@@ -112,8 +112,23 @@ export interface TransformNode {
 export interface SinkNode {
   kind: SinkKind;
   name: string;
+  // kusto / KQL Database (ADX)
+  kustoClusterUrl?: string;
   database?: string;
   table?: string;
+  // lakehouse / ADLS Gen2 (Azure-native default)
+  storageAccount?: string;
+  storageAccountKey?: string;
+  container?: string;
+  pathPattern?: string;
+  dateFormat?: string;
+  timeFormat?: string;
+  // eventhub + activator-via-eventhub
+  eventHubName?: string;
+  namespace?: string;
+  sharedAccessPolicyName?: string;
+  sharedAccessPolicyKey?: string;
+  // legacy Fabric-only fields (preserved for backward compat; NOT sent to ASA)
   lakehouseId?: string;
   workspaceId?: string;
   reflexId?: string;
@@ -1011,13 +1026,24 @@ function SinkInspector({
       </Field>
       {value.kind === 'kusto' && (
         <>
+          <Field
+            label="Cluster URL"
+            hint="ADX / Eventhouse cluster query URL. Leave blank to use the deployment default (LOOM_KUSTO_CLUSTER_URI)."
+          >
+            <Input
+              value={value.kustoClusterUrl || ''}
+              placeholder="https://adx-csa-loom-shared.eastus2.kusto.windows.net"
+              onChange={(_: unknown, d: any) => onChange({ kustoClusterUrl: d.value })}
+            />
+          </Field>
           <Field label="Database">
             <Input
               value={value.database || ''}
+              placeholder="loomdb-default"
               onChange={(_: unknown, d: any) => onChange({ database: d.value })}
             />
           </Field>
-          <Field label="Table">
+          <Field label="Table" hint="Table must already exist; its schema must match the query output columns.">
             <Input
               value={value.table || ''}
               placeholder="raw_events"
@@ -1028,27 +1054,97 @@ function SinkInspector({
       )}
       {value.kind === 'lakehouse' && (
         <>
-          <Field label="Workspace ID">
+          <Field
+            label="Storage account (ADLS Gen2)"
+            hint="Azure-native default for a Fabric Lakehouse — ASA writes files to this ADLS Gen2 account."
+          >
             <Input
-              value={value.workspaceId || ''}
-              onChange={(_: unknown, d: any) => onChange({ workspaceId: d.value })}
+              value={value.storageAccount || ''}
+              placeholder="loomdatalake01"
+              onChange={(_: unknown, d: any) => onChange({ storageAccount: d.value })}
             />
           </Field>
-          <Field label="Lakehouse ID">
+          <Field label="Container / filesystem">
             <Input
-              value={value.lakehouseId || ''}
-              onChange={(_: unknown, d: any) => onChange({ lakehouseId: d.value })}
+              value={value.container || ''}
+              placeholder="bronze"
+              onChange={(_: unknown, d: any) => onChange({ container: d.value })}
+            />
+          </Field>
+          <Field label="Path pattern" hint="Files land under account/container/pathPattern. Use a Delta path for Lakehouse parity.">
+            <Input
+              value={value.pathPattern || ''}
+              placeholder="events/{date}/{time}"
+              onChange={(_: unknown, d: any) => onChange({ pathPattern: d.value })}
+            />
+          </Field>
+          <Field label="Date format">
+            <Input
+              value={value.dateFormat || ''}
+              placeholder="yyyy/MM/dd"
+              onChange={(_: unknown, d: any) => onChange({ dateFormat: d.value })}
+            />
+          </Field>
+          <Field label="Time format">
+            <Input
+              value={value.timeFormat || ''}
+              placeholder="HH"
+              onChange={(_: unknown, d: any) => onChange({ timeFormat: d.value })}
             />
           </Field>
         </>
       )}
-      {value.kind === 'reflex' && (
-        <Field label="Reflex ID">
-          <Input
-            value={value.reflexId || ''}
-            onChange={(_: unknown, d: any) => onChange({ reflexId: d.value })}
-          />
-        </Field>
+      {(value.kind === 'eventhub' || value.kind === 'reflex') && (
+        <>
+          {value.kind === 'reflex' && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Activator reads from an Event Hub. Loom creates an Event Hub ASA output here;
+                connect Activator to it from the Fabric portal (Settings &rarr; Trigger &rarr;
+                Azure Event Hubs), or wire an Azure Monitor scheduled-query alert against the
+                downstream KQL Database for a fully Azure-native trigger.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <Field label="Namespace" hint="Event Hubs namespace (without the .servicebus suffix).">
+            <Input
+              value={value.namespace || ''}
+              placeholder="loom-eventhub-ns"
+              onChange={(_: unknown, d: any) => onChange({ namespace: d.value })}
+            />
+          </Field>
+          <Field label="Event Hub name">
+            <Input
+              value={value.eventHubName || ''}
+              placeholder="transformed-events"
+              onChange={(_: unknown, d: any) => onChange({ eventHubName: d.value })}
+            />
+          </Field>
+          <Field label="Shared access policy name" hint="Leave blank to authenticate with the ASA job's managed identity (MSI).">
+            <Input
+              value={value.sharedAccessPolicyName || ''}
+              placeholder="RootManageSharedAccessKey"
+              onChange={(_: unknown, d: any) => onChange({ sharedAccessPolicyName: d.value })}
+            />
+          </Field>
+          <Field label="Shared access key">
+            <Input
+              type="password"
+              value={value.sharedAccessPolicyKey || ''}
+              placeholder="(blank = use managed identity)"
+              onChange={(_: unknown, d: any) => onChange({ sharedAccessPolicyKey: d.value })}
+            />
+          </Field>
+        </>
+      )}
+      {value.kind === 'derivedStream' && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            A derived stream fans this stream out to another Eventstream in the same workspace.
+            It has no external Azure output — add a KQL Database, Lakehouse, or Event Hub
+            destination to land transformed events.
+          </MessageBarBody>
+        </MessageBar>
       )}
       <Button
         icon={<Delete20Regular />}

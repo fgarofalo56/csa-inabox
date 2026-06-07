@@ -43,6 +43,9 @@ param adfPrincipalId string = ''
 @description('Disable local (SAS key) authentication on the namespace. Defaults true (Entra-only — the secure default and the only allowed posture at IL5/GCC-High). Set false ONLY in Commercial deployments where a custom-app Eventstream source must push events with a SAS connection string; Entra/HTTPS-REST ingest works regardless.')
 param disableLocalAuth bool = true
 
+@description('ADX cluster system-assigned MI principal ID (from admin-plane adx-cluster.bicep output clusterPrincipalId). When set, granted Azure Event Hubs Data Receiver on the namespace so a KQL-database Event Hub data connection can read events without SAS. REQUIRED before PUT .../dataConnections succeeds (the portal auto-grants this; the ARM REST API does not). Empty skips the grant.')
+param adxClusterPrincipalId string = ''
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -216,6 +219,24 @@ resource ehAdfDataSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01
     // Azure Event Hubs Data Sender
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
     principalId: adfPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Azure Event Hubs Data Receiver for the ADX cluster's system-assigned MI.
+// ADX uses this identity (managedIdentityResourceId = the cluster ARM id) to
+// pull events when a KQL-database Event Hub data connection is created. The
+// PUT .../dataConnections call FAILS until this grant exists — the Azure
+// portal auto-grants it, but the ARM REST API (what the Loom wizard calls)
+// does not, so we pre-grant here. Role GUID a638d3c7-... = Azure Event Hubs
+// Data Receiver.
+resource adxEhDataReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adxClusterPrincipalId) && !skipRoleGrants) {
+  scope: ns
+  name: guid(ns.id, adxClusterPrincipalId, 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
+  properties: {
+    // Azure Event Hubs Data Receiver
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
+    principalId: adxClusterPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
