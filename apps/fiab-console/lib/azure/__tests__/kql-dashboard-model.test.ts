@@ -5,8 +5,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  substituteTileKql, renderParamLiteral, resolveTimeFrom, resolveTileDatabase,
-  sanitizeModel, substituteBaseQueries, type DashboardParam, type BaseQuery,
+  substituteTileKql, buildTileKql, paramTypeToKustoType,
+  renderParamLiteral, resolveTimeFrom, resolveTileDatabase,
+  sanitizeModel, substituteBaseQueries,
+  type DashboardParam, type BaseQuery,
 } from '../kql-dashboard-model';
 
 describe('resolveTimeFrom', () => {
@@ -112,6 +114,93 @@ describe('substituteBaseQueries', () => {
   });
 });
 
+describe('paramTypeToKustoType', () => {
+  it('maps each data type to its KQL scalar type', () => {
+    expect(paramTypeToKustoType('long')).toBe('long');
+    expect(paramTypeToKustoType('int')).toBe('int');
+    expect(paramTypeToKustoType('real')).toBe('real');
+    expect(paramTypeToKustoType('datetime')).toBe('datetime');
+    expect(paramTypeToKustoType('bool')).toBe('bool');
+    expect(paramTypeToKustoType('string')).toBe('string');
+    expect(paramTypeToKustoType(undefined)).toBe('string');
+  });
+});
+
+describe('buildTileKql', () => {
+  it('prepends declare query_parameters for a string scalar param', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_state', type: 'freetext', dataType: 'string', value: 'Texas' },
+    ];
+    const out = buildTileKql('StormEvents | where State == _state', params, 'all');
+    expect(out).toMatch(/^declare query_parameters\(_state:string = "Texas"\);/);
+    // The KQL body stays literal — no in-body substitution of _state.
+    expect(out).toContain('State == _state');
+  });
+
+  it('declares a long-typed param with a bare numeric default', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_maxInjured', type: 'freetext', dataType: 'long', value: '90' },
+    ];
+    const out = buildTileKql('StormEvents | where InjuriesDirect > _maxInjured', params, 'all');
+    expect(out).toMatch(/declare query_parameters\(_maxInjured:long = 90\);/);
+  });
+
+  it('uses a let binding for multi-select (dynamic has no default in declare)', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_evt', type: 'multi', dataType: 'string', value: ['Hail', 'Flood'] },
+    ];
+    const out = buildTileKql('T | where EventType in (_evt)', params, 'all');
+    expect(out).toMatch(/^let _evt = dynamic\(\["Hail", "Flood"\]\);/);
+    expect(out).not.toContain('declare query_parameters');
+    expect(out).toContain('EventType in (_evt)');
+  });
+
+  it('only emits declarations for params referenced in the KQL body', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_state', type: 'freetext', dataType: 'string', value: 'Texas' },
+      { variableName: '_unrelated', type: 'freetext', dataType: 'long', value: '5' },
+    ];
+    const out = buildTileKql('StormEvents | where State == _state', params, 'all');
+    expect(out).toContain('_state:string');
+    expect(out).not.toContain('_unrelated');
+  });
+
+  it('still resolves synthetic time tokens in the body', () => {
+    const out = buildTileKql('T | where ts between (_startTime .. _endTime)', [], 'last-7d');
+    expect(out).toContain('ago(7d) .. now()');
+    expect(out).not.toContain('_startTime');
+    expect(out).not.toContain('_endTime');
+  });
+
+  it('skips params with no value (token left for Kusto to error on)', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_x', type: 'freetext', value: '' },
+    ];
+    const out = buildTileKql('T | where a == _x', params, 'all');
+    expect(out).not.toContain('declare query_parameters');
+    expect(out).toContain('a == _x');
+  });
+
+  it('does not declare a duration param (it drives _startTime/_endTime)', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_range', type: 'duration', value: 'last-7d' },
+    ];
+    const out = buildTileKql('T | where ts > _startTime', params, 'last-7d');
+    expect(out).not.toContain('declare query_parameters');
+    expect(out).toContain('ts > ago(7d)');
+  });
+
+  it('combines a scalar declare and a dynamic let across two referenced params', () => {
+    const params: DashboardParam[] = [
+      { variableName: '_state', type: 'freetext', dataType: 'string', value: 'Texas' },
+      { variableName: '_evt', type: 'multi', dataType: 'string', value: ['Hail'] },
+    ];
+    const out = buildTileKql('StormEvents | where State == _state and EventType in (_evt)', params, 'all');
+    expect(out).toContain('declare query_parameters(_state:string = "Texas");');
+    expect(out).toContain('let _evt = dynamic(["Hail"]);');
+  });
+});
+
 describe('resolveTileDatabase', () => {
   const sources = [{ id: 'a', name: 'A', database: 'db_a' }, { id: 'b', name: 'B', database: 'db_b' }];
   it('prefers explicit database override', () => {
@@ -170,5 +259,38 @@ describe('sanitizeModel', () => {
     const m = sanitizeModel({ tiles: [] });
     expect(Array.isArray(m.baseQueries)).toBe(true);
     expect(m.baseQueries).toHaveLength(0);
+  });
+});
+
+describe('sanitizeModel — drillthrough', () => {
+  it('preserves a valid drillthrough definition', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '_state' } }],
+    });
+    expect(m.tiles[0].drillthrough).toEqual({ column: 'State', paramName: '_state' });
+  });
+  it('drops drillthrough when column is empty', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: '', paramName: '_state' } }],
+    });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('drops drillthrough when paramName is empty', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '' } }],
+    });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('leaves drillthrough undefined when absent', () => {
+    const m = sanitizeModel({ tiles: [{ title: 'T', kql: 'print 1', viz: 'table' }] });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('truncates column and paramName to 80 chars', () => {
+    const long = 'x'.repeat(100);
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: long, paramName: long } }],
+    });
+    expect(m.tiles[0].drillthrough!.column).toHaveLength(80);
+    expect(m.tiles[0].drillthrough!.paramName).toHaveLength(80);
   });
 });

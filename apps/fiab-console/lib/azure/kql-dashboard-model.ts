@@ -69,6 +69,23 @@ export interface DashboardParam {
   value?: string | string[];
 }
 
+/**
+ * Per-tile drill-through wiring. Fabric Real-Time Dashboards expose
+ * "drillthroughs" under a visual's Interactions: selecting a value in a
+ * visual maps a result column to a dashboard parameter, which re-filters the
+ * (target) page. Loom is single-page, so the parameter injection stays on the
+ * current page — clicking a value sets `paramName` to the value in `column`
+ * and re-runs every tile (cross-filter), matching the documented behavior.
+ * Grounded in Microsoft Learn: dashboard-parameters#use-drillthroughs-as-
+ * dashboard-parameters.
+ */
+export interface DashTileDrillthrough {
+  /** Column name from the tile's query result to extract on click. */
+  column: string;
+  /** The dashboard parameter `variableName` to inject the clicked value into. */
+  paramName: string;
+}
+
 export interface DashboardTile {
   title: string;
   kql: string;
@@ -80,6 +97,8 @@ export interface DashboardTile {
   /** Grid geometry — column span 1..12, row height in grid units. */
   w?: number;
   h?: number;
+  /** Drill-through: clicking a result value sets a dashboard parameter. */
+  drillthrough?: DashTileDrillthrough;
 }
 
 /**
@@ -211,6 +230,95 @@ export function substituteTileKql(
   return out;
 }
 
+/** Map a DashboardParam dataType to the KQL scalar type used in declare query_parameters. */
+export function paramTypeToKustoType(dt: ParamDataType | undefined): string {
+  switch (dt) {
+    case 'long': return 'long';
+    case 'int': return 'int';
+    case 'real': return 'real';
+    case 'datetime': return 'datetime';
+    case 'bool': return 'bool';
+    case 'string':
+    default: return 'string';
+  }
+}
+
+/**
+ * Build the final, injection-safe KQL sent to ADX for a single tile, using a
+ * `declare query_parameters(...)` prefix for scalar params and `let` bindings
+ * for dynamic (multi-select) params, instead of splicing values into the body.
+ *
+ * Why this exists (vs. the older text-substitution `substituteTileKql`):
+ * splicing a user-typed value straight into a filter condition is not
+ * injection-safe — `", x)` could break the query structure. ADX's
+ * `declare query_parameters(name:type = default);` prefix lets Kusto bind the
+ * value through its own typed parser, so the body stays literal.
+ *
+ * Grounded in Microsoft Learn — Query parameters declaration statement
+ * (https://learn.microsoft.com/kusto/query/query-parameters-statement):
+ *   - scalar query parameters CAN carry a default value in the declaration,
+ *     e.g. `declare query_parameters(maxInjured:long = 90);`
+ *   - `dynamic` query parameters CANNOT carry default values, so multi-select
+ *     params are emitted as a `let _name = dynamic([...]);` binding instead
+ *     (valid KQL, evaluated before the body).
+ *
+ * Synthetic time tokens (`_startTime`, `_endTime`, `_loomTimeFrom`) are
+ * meta-variables resolved by text substitution (they are not user params).
+ *
+ * Only params whose `variableName` actually appears in the KQL body are
+ * emitted in the prefix, keeping the query minimal. A param with no value is
+ * skipped — its token is left in the body so Kusto surfaces the honest
+ * "parameter unset" error (matches Fabric's inactive-filter behaviour).
+ */
+export function buildTileKql(
+  kql: string,
+  params: DashboardParam[],
+  timeKey: string | undefined,
+  baseQueries?: BaseQuery[],
+): string {
+  const timeFrom = resolveTimeFrom(timeKey);
+
+  // Base queries first so `$baseQuery('name')` references are expanded before
+  // param binding — the expanded KQL still gets time/param treatment below.
+  const expanded = substituteBaseQueries(kql, baseQueries);
+
+  // Synthetic time tokens — text-substitute (not user params).
+  const body = expanded
+    .replace(/\b_loomTimeFrom\b/g, timeFrom)
+    .replace(/\b_startTime\b/g, timeFrom)
+    .replace(/\b_endTime\b/g, 'now()');
+
+  const declares: string[] = []; // declare query_parameters(...) entries
+  const lets: string[] = [];     // let _name = dynamic([...]);
+
+  for (const p of params || []) {
+    if (!p.variableName || !/^_?[a-zA-Z][a-zA-Z0-9_]*$/.test(p.variableName)) continue;
+    // `duration` params drive the global _startTime/_endTime resolution, not a
+    // named scalar declaration — skip them here.
+    if (p.type === 'duration') continue;
+    // Only emit if the variable is actually referenced in the body.
+    const esc = p.variableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`\\b${esc}\\b`).test(body)) continue;
+
+    if (p.type === 'multi' && Array.isArray(p.value) && p.value.length > 0) {
+      // dynamic cannot have a default in declare query_parameters — use a let.
+      const arr = p.value.map((v) => renderParamLiteral(v, p.dataType || 'string')).join(', ');
+      lets.push(`let ${p.variableName} = dynamic([${arr}]);`);
+    } else if (p.value !== undefined && p.value !== '' && !Array.isArray(p.value)) {
+      const dt = paramTypeToKustoType(p.dataType);
+      const defaultLit = renderParamLiteral(p.value, p.dataType);
+      declares.push(`${p.variableName}:${dt} = ${defaultLit}`);
+    }
+    // No value → skip; token stays in the body (honest "param unset").
+  }
+
+  const prefix: string[] = [];
+  if (declares.length) prefix.push(`declare query_parameters(${declares.join(', ')});`);
+  prefix.push(...lets);
+
+  return prefix.length ? prefix.join('\n') + '\n' + body : body;
+}
+
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
 
 /**
@@ -274,6 +382,14 @@ export function sanitizeModel(input: any): DashboardModel {
           database: t?.database ? String(t.database).slice(0, 200) : undefined,
           w: clampInt(t?.w, 1, 12),
           h: clampInt(t?.h, 1, 8),
+          drillthrough:
+            t?.drillthrough?.column != null && t?.drillthrough?.paramName != null &&
+            String(t.drillthrough.column).trim() && String(t.drillthrough.paramName).trim()
+              ? {
+                  column: String(t.drillthrough.column).slice(0, 80),
+                  paramName: String(t.drillthrough.paramName).slice(0, 80),
+                }
+              : undefined,
         }))
         .filter((t: DashboardTile) => t.kql.length > 0 && t.kql.length <= 65_536)
         .slice(0, 100)
