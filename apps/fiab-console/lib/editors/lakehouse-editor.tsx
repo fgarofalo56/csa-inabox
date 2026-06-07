@@ -27,7 +27,8 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Input, Field, Switch, Dropdown, Option, Textarea,
+  Input, Field, Switch, Dropdown, Option, Textarea, Checkbox, Tooltip,
+  Toaster, Toast, ToastTitle, useToastController, useId, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -39,9 +40,13 @@ import {
   History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
+import { LoadToTableWizard } from './components/load-to-table-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useJobsStore } from '@/lib/state/jobs-store';
+import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 
 const useStyles = makeStyles({
   treePad: { padding: 8 },
@@ -68,6 +73,30 @@ const useStyles = makeStyles({
 interface ContainerInfo { name: string; url: string }
 interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string }
 
+/**
+ * Reference-Lakehouse federation (F8) — another in-workspace lakehouse added to
+ * the explorer for side-by-side, READ-ONLY browsing. `account` is the resolved
+ * ADLS account (primary LOOM account unless the lakehouse declares its own);
+ * `reachable` reflects the pass-through RBAC probe (Console UAMI must hold
+ * Storage Blob Data Reader on the referenced containers).
+ */
+interface ReferenceLakehouse {
+  id: string;
+  displayName: string;
+  account: string;
+  containers: string[];
+  reachable: boolean;
+}
+
+/** A file selected inside a referenced lakehouse (drives the read-only preview). */
+interface RefSelection {
+  refId: string;
+  displayName: string;
+  account: string;
+  container: string;
+  entry: PathEntry;
+}
+
 interface PreviewResponse {
   ok: boolean;
   format?: string;
@@ -78,6 +107,8 @@ interface PreviewResponse {
   rowCount?: number;
   executionMs?: number;
   truncated?: boolean;
+  previewable?: boolean;
+  message?: string;
   error?: string;
   code?: string;
 }
@@ -193,6 +224,17 @@ export function LakehouseEditor({ item, id }: Props) {
   const [tab, setTab] = useState<string>('files');
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  // F3 — Fluent DataGrid preview: File/Table mode toggle + async column stats.
+  const [previewMode, setPreviewMode] = useState<'file' | 'table'>('file');
+  const [columnStats, setColumnStats] = useState<Record<string, ColStat> | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsJobId, setStatsJobId] = useState<string | null>(null);
+  // The container+path the stats job is for — passed on every poll so the BFF
+  // can (re)submit the Spark statement statelessly once the pool warms.
+  const statsTargetRef = useRef<{ container: string; path: string } | null>(null);
+  // Deep-link restore target captured on first mount (?tab=preview&container=&path=).
+  const deepLinkRef = useRef<{ container: string; path: string } | null>(null);
   const [sqlText, setSqlText] = useState<string>(
     `-- Select a file in the Files tab and click "Query this file"\n-- to populate this editor with a Synapse Serverless OPENROWSET.`,
   );
@@ -208,7 +250,17 @@ export function LakehouseEditor({ item, id }: Props) {
   const [historyPreviewVersion, setHistoryPreviewVersion] = useState<number | null>(null);
   const [historyPreviewResult, setHistoryPreviewResult] = useState<PreviewResponse | null>(null);
   const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  // F10 — upload jobs live in the module-scope jobs-store so they survive item
+  // tab switches (component unmount). `uploading` is DERIVED from the store's
+  // running jobs for the active container, not local state — subscribing to
+  // `jobs` keeps the ribbon/badge live across navigations.
+  const jobs = useJobsStore((st) => st.jobs);
+  const startUpload = useJobsStore((st) => st.startUpload);
+  const recordLoadToTable = useJobsStore((st) => st.recordLoadToTable);
+  const runningUploads = activeContainer
+    ? jobs.filter((j) => j.kind === 'upload' && j.status === 'running' && j.container === activeContainer)
+    : [];
+  const uploading = runningUploads.length > 0;
   const [actionError, setActionError] = useState<string | null>(null);
   // Phase 4.5 — positive feedback for upload / mkdir / delete so the user
   // can tell the operation actually hit ADLS. Mirrors the "Saved at HH:MM:SS"
@@ -216,8 +268,28 @@ export function LakehouseEditor({ item, id }: Props) {
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ---- Reference lakehouses (F8) --------------------------------------
+  // Other in-workspace lakehouses added to the explorer for side-by-side,
+  // READ-ONLY browsing. The set is persisted on this lakehouse's Cosmos doc
+  // (state.referencedLakehouseIds) via /api/lakehouse/references. File listings
+  // and previews for references go through the read-only references routes /
+  // the account-scoped preview route — write actions are never offered.
+  const [references, setReferences] = useState<ReferenceLakehouse[] | null>(null);
+  const [refsLoading, setRefsLoading] = useState(false);
+  const [refsError, setRefsError] = useState<string | null>(null);
+  const [workspaceLakehouses, setWorkspaceLakehouses] = useState<{ id: string; displayName: string }[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Tree-expansion cache for reference file/folder listings, keyed
+  // `ref::<refId>::<container>::<prefix>` so every reference browses its own
+  // namespace without colliding with the primary lakehouse's openPrefixes.
+  const [refOpenPrefixes, setRefOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
+  // The reference file currently selected for the read-only preview pane.
+  const [refSelection, setRefSelection] = useState<RefSelection | null>(null);
+  const [refPreview, setRefPreview] = useState<PreviewResponse | null>(null);
+  const [refPreviewLoading, setRefPreviewLoading] = useState(false);
+
   // Permissions dialog state — Azure RBAC role assignments at the container scope.
-  interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string }
+  interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string; upn?: string }
   interface PermRole { name: string; id: string }
   const [permsOpen, setPermsOpen] = useState(false);
   const [permsRows, setPermsRows] = useState<PermAssignment[]>([]);
@@ -228,6 +300,32 @@ export function LakehouseEditor({ item, id }: Props) {
   const [newPrincipalType, setNewPrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
   const [newRole, setNewRole] = useState('Storage Blob Data Reader');
 
+  // ---- SQL-plane permissions (Table / Column / Row tabs) ----
+  // Real Synapse Dedicated SQL pool GRANT SELECT + CREATE SECURITY POLICY —
+  // Azure-native, no Fabric dependency. Principals resolve to UPN (the SQL
+  // users are CREATE USER … FROM EXTERNAL PROVIDER).
+  type PermsTab = 'object' | 'table' | 'column' | 'row';
+  const [permsTab, setPermsTab] = useState<PermsTab>('object');
+  const [sqlGate, setSqlGate] = useState<{ missing: string; hint: string } | null>(null);
+  interface SqlGrant { principal: string; principalType: string; schema: string; table: string; column: string | null; permissionName: string }
+  const [sqlGrants, setSqlGrants] = useState<SqlGrant[]>([]);
+  interface SqlTableRef { objectId: number; schema: string; name: string; type: string }
+  const [sqlTables, setSqlTables] = useState<SqlTableRef[]>([]);
+  const [selTableId, setSelTableId] = useState<number | null>(null);
+  interface SqlColRef { columnId: number; name: string; dataType: string }
+  const [sqlCols, setSqlCols] = useState<SqlColRef[]>([]);
+  const [selColIds, setSelColIds] = useState<number[]>([]);
+  interface RlsPolicy { policyObjectId: number; policySchema: string; policyName: string; schema: string; table: string; isEnabled: boolean; functionSchema: string; functionName: string }
+  const [rlsPolicies, setRlsPolicies] = useState<RlsPolicy[]>([]);
+  const [rlsFilterColId, setRlsFilterColId] = useState<number | null>(null);
+  const [rlsSubject, setRlsSubject] = useState<'USER_NAME()' | 'SUSER_SNAME()'>('USER_NAME()');
+  // Principal picker (Entra user search → UPN) for the SQL-plane tabs.
+  interface ResolvedPrincipal { id: string; displayName: string; upn: string }
+  const [principalQuery, setPrincipalQuery] = useState('');
+  const [principalResults, setPrincipalResults] = useState<ResolvedPrincipal[]>([]);
+  const [selectedPrincipal, setSelectedPrincipal] = useState<ResolvedPrincipal | null>(null);
+  const [principalBusy, setPrincipalBusy] = useState(false);
+
   // Settings dialog state — Loom-side lakehouse defaults persisted in
   // Cosmos `tenant-settings`, consumed by Notebook + Preview editors.
   interface LakehouseSettings {
@@ -235,15 +333,97 @@ export function LakehouseEditor({ item, id }: Props) {
     sparkConfig?: Record<string, string>;
     timeTravelDays?: number;
     deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
+    schemasEnabled?: boolean;
+    liquidClustering?: { tableName: string; columns: string[] };
+    fabricToggles?: { vorder: boolean; autotune: boolean; nativeExecution: boolean };
   }
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LakehouseSettings>({});
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSparkConfText, setSettingsSparkConfText] = useState('');
+  // Liquid-clustering form state (Fabric F12 parity → real ALTER TABLE … CLUSTER BY)
+  const [lcTableName, setLcTableName] = useState('');
+  const [lcColumns, setLcColumns] = useState('');          // comma-separated input
+  const [lcApplied, setLcApplied] = useState<boolean | null>(null);
+  const [lcSql, setLcSql] = useState<string | null>(null);
+  const [lcGate, setLcGate] = useState<string | null>(null);
+  const [lcError, setLcError] = useState<string | null>(null);
+  // Cloud boundary (commercial | gcc | gcch | il5) — drives honest per-cloud
+  // disclosures for the Fabric-only acceleration gates.
+  const [cloud, setCloud] = useState<'commercial' | 'gcc' | 'gcch' | 'il5'>('commercial');
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
+
+  // F10 — human-readable lakehouse name for background-job toasts + a11y labels.
+  // Priority: WorkspaceItem.displayName (Cosmos) > LakehouseSettings.displayName
+  // (Settings dialog) > active medallion container key > item id. Computed every
+  // render so the toast names the lakehouse the user is actually looking at.
+  const lakehouseName: string =
+    (itemQ.data?.displayName)
+    || (settings.displayName)
+    || activeContainer
+    || id;
+
+  // Share dialog state — Azure RBAC role assignment at the container scope.
+  // Mirrors Fabric's "Share" affordance (Loom-native, no Fabric workspace).
+  // Reuses the existing /api/lakehouse/permissions POST route.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharePrincipal, setSharePrincipal] = useState('');
+  const [sharePrincipalType, setSharePrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
+  const [shareRole, setShareRole] = useState('Storage Blob Data Reader');
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
+
+  // Semantic model honest-gate dialog. DirectLake (Fabric) has no Azure-native
+  // 1:1 (it needs a Fabric/Power BI capacity); the dialog documents the
+  // Azure-native equivalent path instead of pretending to provision one.
+  const [semanticModelGateOpen, setSemanticModelGateOpen] = useState(false);
+
+  // Reference-lakehouse flag — when this lakehouse was attached as a secondary
+  // read-only source ("Add lakehouses" in the Explorer sidebar), write
+  // operations (Get data, Settings, Refresh) gray out, matching Fabric.
+  const isReferenceLakehouse = (itemQ.data?.state as any)?.isReference === true;
+
+  // ---- Live Delta catalog (Tables tab) ----------------------------------
+  // The Tables tree is the REAL physical Delta catalog: an ADLS Gen2 scan of
+  // the active container's Tables/ directory + a _delta_log read for status /
+  // version, with optional Serverless OPENROWSET COUNT(*) row counts. Azure-
+  // native, NO Fabric dependency. Source: GET /api/lakehouse/tables.
+  interface LiveCatalogTable {
+    schema: string; name: string; adlsPath: string; bulkUrl: string;
+    format: 'delta' | 'parquet' | 'unknown';
+    status: 'ok' | 'empty' | 'broken';
+    latestVersion: number | null;
+    rowCount: number | null; sizeBytes: number | null;
+    lastModified: string | null;
+  }
+  const [liveTables, setLiveTables] = useState<LiveCatalogTable[] | null>(null);
+  const [liveTablesLoading, setLiveTablesLoading] = useState(false);
+  const [liveTablesError, setLiveTablesError] = useState<string | null>(null);
+  const [liveTablesGate, setLiveTablesGate] = useState<string | null>(null);
+
+  const loadLiveTables = useCallback(async () => {
+    if (!activeContainer) return;
+    setLiveTablesLoading(true); setLiveTablesError(null); setLiveTablesGate(null);
+    try {
+      const r = await fetch(
+        `/api/lakehouse/tables?containers=${encodeURIComponent(activeContainer)}&rowCounts=true`,
+      );
+      const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setLiveTables(j.tables || []);
+      setLiveTablesGate(j.gate || null);
+    } catch (e: any) { setLiveTablesError(e?.message || String(e)); }
+    finally { setLiveTablesLoading(false); }
+  }, [activeContainer]);
+
+  useEffect(() => {
+    if (tab === 'tables' && activeContainer) loadLiveTables();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeContainer]);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -252,6 +432,13 @@ export function LakehouseEditor({ item, id }: Props) {
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ctxEntry, setCtxEntry] = useState<PathEntry | null>(null);
   const [ctxPos, setCtxPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Load to Table (F6) wizard state + toast.
+  const lttToasterId = useId('ltt-toaster');
+  const { dispatchToast } = useToastController(lttToasterId);
+  const [lttOpen, setLttOpen] = useState(false);
+  const [lttEntry, setLttEntry] = useState<PathEntry | null>(null);
+
   const openContextMenu = useCallback((e: React.MouseEvent, entry: PathEntry) => {
     e.preventDefault();
     e.stopPropagation();
@@ -267,7 +454,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // (Synapse Serverless preferred, Databricks UC otherwise). S3/GCS/Dataverse
   // render the create form and honest-gate on submit. Registry is the Cosmos
   // `lakehouse-shortcuts` container. See docs/fiab/design/lakehouse-shortcuts.md.
-  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse';
+  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
   type ShortcutKind = 'files' | 'tables';
   interface ShortcutRow {
     id: string; lakehouseId: string; name: string; kind: ShortcutKind;
@@ -282,6 +469,7 @@ export function LakehouseEditor({ item, id }: Props) {
     { type: 's3', label: 'Amazon S3', ready: true },
     { type: 'gcs', label: 'Google Cloud Storage', ready: true },
     { type: 'dataverse', label: 'Dataverse', ready: true },
+    { type: 'delta_sharing', label: 'Delta Sharing (cross-tenant)', ready: false },
   ];
   // In-tenant ADLS/Blob account picker (vs typing the abfss URI) + external SAS.
   const [scAdlsMode, setScAdlsMode] = useState<'picker' | 'external'>('picker');
@@ -292,6 +480,8 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scAdlsPath, setScAdlsPath] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
   const [shortcutsBusy, setShortcutsBusy] = useState(false);
+  // Selected row drives the F11 "Retry selected broken shortcut" keybinding.
+  const [selectedShortcut, setSelectedShortcut] = useState<ShortcutRow | null>(null);
   const [shortcutsError, setShortcutsError] = useState<string | null>(null);
   const [scWizardOpen, setScWizardOpen] = useState(false);
   const [scStep, setScStep] = useState<1 | 2 | 3>(1);
@@ -306,6 +496,39 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scFormat, setScFormat] = useState<'delta' | 'parquet' | 'csv' | 'json'>('delta');
   const [scSubmitting, setScSubmitting] = useState(false);
   const [scSubmitError, setScSubmitError] = useState<string | null>(null);
+  // Schema shortcut entry (F9) — when registering a Tables shortcut on a
+  // schema-enabled lakehouse, target a named schema (dropdown, never freeform).
+  const [scTargetSchema, setScTargetSchema] = useState<string>('dbo');
+
+  // ---- Schemas tab (F9 — multi-schema namespace, Azure-native, NO Fabric) ----
+  // A schema is a named namespace; tables live under Tables/<schema>/<table>/ and
+  // are queryable via the 4-part name workspace.lakehouse.schema.table. 'dbo' is
+  // the immutable default. CREATE/ALTER/DROP SCHEMA + ALTER TABLE … RENAME TO run
+  // on a Synapse Spark pool via Livy; the Cosmos `lakehouse-schemas` registry is
+  // the source of truth. See app/api/lakehouse/schemas/route.ts.
+  interface SchemaRow {
+    id: string; lakehouseId: string; name: string; description?: string;
+    isDefault: boolean; status: 'active' | 'pending' | 'error'; statusDetail?: string;
+    createdBy?: string; createdAt?: string;
+  }
+  const [schemasEnabled, setSchemasEnabled] = useState<boolean>(false);
+  const [schemas, setSchemas] = useState<SchemaRow[] | null>(null);
+  const [schemasBusy, setSchemasBusy] = useState(false);
+  const [schemasError, setSchemasError] = useState<string | null>(null);
+  // New schema dialog
+  const [newSchemaOpen, setNewSchemaOpen] = useState(false);
+  const [newSchemaName, setNewSchemaName] = useState('');
+  const [newSchemaDesc, setNewSchemaDesc] = useState('');
+  const [newSchemaBusy, setNewSchemaBusy] = useState(false);
+  const [newSchemaError, setNewSchemaError] = useState<string | null>(null);
+  // Move-table dialog
+  const [moveTableOpen, setMoveTableOpen] = useState(false);
+  const [moveTableName, setMoveTableName] = useState('');
+  const [moveTableFrom, setMoveTableFrom] = useState('dbo');
+  const [moveTableTo, setMoveTableTo] = useState('');
+  const [moveTableBusy, setMoveTableBusy] = useState(false);
+  const [moveTableError, setMoveTableError] = useState<string | null>(null);
+  const [moveTableStatus, setMoveTableStatus] = useState<string | null>(null);
 
   // Discover in-tenant storage accounts for the ADLS picker when the wizard is
   // on the ADLS source in picker mode.
@@ -421,7 +644,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setScStep(1); setScType('internal'); setScTargetUri('');
     setScInternalContainer(''); setScInternalPath(''); setScKvSecret('');
     setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
-    setScFormat('delta'); setScSubmitError(null);
+    setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
   }, []);
 
   const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
@@ -445,15 +668,28 @@ export function LakehouseEditor({ item, id }: Props) {
       targetUri = `abfss://${c}@${scAcctHost}/${p}`;
     }
     const credentialRef = scKvSecret.trim()
-      ? { kind: scType === 's3' ? 'awsKeys' : scType === 'gcs' ? 'gcsServiceAccount' : 'sas', keyVaultSecret: scKvSecret.trim() }
+      ? {
+          kind: scType === 's3' ? 'awsKeys'
+              : scType === 'gcs' ? 'gcsServiceAccount'
+              : scType === 'delta_sharing' ? 'deltaSharing'
+              : 'sas',
+          keyVaultSecret: scKvSecret.trim(),
+        }
       : undefined;
+    // F9 — on a schema-enabled lakehouse a Tables shortcut lands inside its
+    // target schema folder (Tables/<schema>/<name>), mirroring Fabric's schema
+    // shortcut. This is a real registry effect (fullPath includes the schema).
+    const effectiveParent = schemasEnabled && scKind === 'tables'
+      ? [scTargetSchema, scParentPath.trim()].filter(Boolean).join('/')
+      : scParentPath.trim();
     try {
       const r = await fetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           lakehouseId: shortcutLakehouseId, name: scName.trim(), kind: scKind,
-          parentPath: scParentPath.trim(), targetType: scType, targetUri,
+          parentPath: effectiveParent, targetType: scType, targetUri,
           format: scKind === 'tables' ? scFormat : undefined, credentialRef,
+          schemaName: schemasEnabled && scKind === 'tables' ? scTargetSchema : undefined,
         }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create shortcut');
@@ -462,7 +698,7 @@ export function LakehouseEditor({ item, id }: Props) {
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, loadShortcuts]);
 
   // Register a PLANNED bundle shortcut into the live registry (one click) — the
   // bundle only carries metadata, so this materializes it against the real
@@ -526,6 +762,90 @@ export function LakehouseEditor({ item, id }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, shortcutLakehouseId]);
 
+  // ---- Schemas (F9) ---------------------------------------------------
+  const loadSchemas = useCallback(async () => {
+    if (!shortcutLakehouseId) return;
+    setSchemasBusy(true); setSchemasError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; schemas?: SchemaRow[] }>(r, 'List schemas');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSchemas(j.schemas || []);
+    } catch (e: any) { setSchemasError(e?.message || String(e)); setSchemas([]); }
+    finally { setSchemasBusy(false); }
+  }, [shortcutLakehouseId]);
+
+  const createSchema = useCallback(async () => {
+    if (!shortcutLakehouseId || !newSchemaName.trim()) return;
+    setNewSchemaBusy(true); setNewSchemaError(null);
+    try {
+      const r = await fetch('/api/lakehouse/schemas', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create schema');
+      // The row persists even on an honest Spark gate (503) — close + refresh so
+      // the new (pending) schema appears in the catalog immediately.
+      if (!j.ok && r.status !== 503) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      setNewSchemaOpen(false); setNewSchemaName(''); setNewSchemaDesc('');
+      await loadSchemas();
+    } catch (e: any) { setNewSchemaError(e?.message || String(e)); }
+    finally { setNewSchemaBusy(false); }
+  }, [shortcutLakehouseId, newSchemaName, newSchemaDesc, loadSchemas]);
+
+  const deleteSchema = useCallback(async (name: string) => {
+    if (!shortcutLakehouseId) return;
+    // eslint-disable-next-line no-alert
+    const ok = typeof window !== 'undefined'
+      ? window.confirm(`Delete schema "${name}"? This runs DROP SCHEMA … CASCADE and removes the catalog entry.`)
+      : false;
+    if (!ok) return;
+    setSchemasBusy(true); setSchemasError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSchemas();
+    } catch (e: any) { setSchemasError(e?.message || String(e)); }
+    finally { setSchemasBusy(false); }
+  }, [shortcutLakehouseId, loadSchemas]);
+
+  const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
+    setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
+    setMoveTableTo(''); setMoveTableError(null); setMoveTableStatus(null);
+    setMoveTableOpen(true);
+    if (schemas === null) loadSchemas();
+  }, [schemas, loadSchemas]);
+
+  const submitMoveTable = useCallback(async () => {
+    if (!shortcutLakehouseId || !moveTableName.trim() || !moveTableTo.trim()) return;
+    setMoveTableBusy(true); setMoveTableError(null);
+    try {
+      const r = await fetch('/api/lakehouse/schemas', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
+      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${shortcutLakehouseId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
+      // Refresh the Tables listing so the table appears under its new schema.
+      if (activeContainer) loadPaths(activeContainer, 'Tables');
+    } catch (e: any) { setMoveTableError(e?.message || String(e)); }
+    finally { setMoveTableBusy(false); }
+  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, loadPaths]);
+
+  // Load schemas when the Schemas tab opens or the lakehouse changes.
+  useEffect(() => {
+    if (tab === 'schemas' && shortcutLakehouseId) loadSchemas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, shortcutLakehouseId]);
+
+  // Populate the schema dropdown for the shortcut wizard (schema-enabled lakehouse).
+  useEffect(() => {
+    if (scWizardOpen && schemasEnabled && schemas === null && shortcutLakehouseId) loadSchemas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scWizardOpen, schemasEnabled, schemas, shortcutLakehouseId]);
+
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null);
@@ -541,6 +861,8 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const openPerms = useCallback(() => {
     setPermsOpen(true);
+    setPermsTab('object');
+    setPermsError(null);
     loadPerms();
   }, [loadPerms]);
 
@@ -576,16 +898,238 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setPermsBusy(false); }
   }, [loadPerms]);
 
+  // ---- SQL-plane permission loaders / mutators (Table / Column / Row) ----
+  const loadSqlPerms = useCallback(async (t: PermsTab) => {
+    if (t === 'object') return;
+    setPermsBusy(true); setPermsError(null); setSqlGate(null);
+    try {
+      if (t === 'row') {
+        const r = await fetch(`/api/lakehouse/permissions?tab=row`);
+        const j = await r.json();
+        if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
+        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        setRlsPolicies(j.policies || []);
+      } else {
+        const r = await fetch(`/api/lakehouse/permissions?tab=${t}`);
+        const j = await r.json();
+        if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
+        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        setSqlGrants(j.grants || []);
+      }
+      // Shared table picker source.
+      const tr = await fetch(`/api/lakehouse/permissions?tab=${t}&list=tables`);
+      const tj = await tr.json();
+      if (tj.gate) { setSqlGate({ missing: tj.missing, hint: tj.hint }); return; }
+      if (tj.ok) setSqlTables(tj.tables || []);
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, []);
+
+  const loadSqlColumns = useCallback(async (objectId: number) => {
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${objectId}`);
+      const j = await r.json();
+      if (j.ok) setSqlCols(j.columns || []);
+    } catch { /* surfaced when the grant is attempted */ }
+  }, []);
+
+  // Debounced Entra user search → UPN for the SQL-plane principal picker.
+  useEffect(() => {
+    if (permsTab === 'object') return;
+    const q = principalQuery.trim();
+    if (q.length < 2) { setPrincipalResults([]); return; }
+    const h = setTimeout(async () => {
+      setPrincipalBusy(true);
+      try {
+        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=user`);
+        const j = await r.json();
+        setPrincipalResults(
+          (j.results || [])
+            .filter((p: any) => p.upn)
+            .map((p: any) => ({ id: p.id, displayName: p.displayName, upn: p.upn })),
+        );
+      } catch { setPrincipalResults([]); }
+      finally { setPrincipalBusy(false); }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [principalQuery, permsTab]);
+
+  const selectPermsTab = useCallback((t: PermsTab) => {
+    setPermsTab(t);
+    setPermsError(null);
+    setSelTableId(null); setSqlCols([]); setSelColIds([]); setRlsFilterColId(null);
+    setSelectedPrincipal(null); setPrincipalQuery(''); setPrincipalResults([]);
+    if (t === 'object') loadPerms(); else loadSqlPerms(t);
+  }, [loadPerms, loadSqlPerms]);
+
+  const onPickTable = useCallback((objectId: number | null) => {
+    setSelTableId(objectId);
+    setSelColIds([]); setSqlCols([]); setRlsFilterColId(null);
+    if (objectId != null) loadSqlColumns(objectId);
+  }, [loadSqlColumns]);
+
+  const grantSqlTable = useCallback(async () => {
+    if (!selectedPrincipal || selTableId == null) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'table', upn: selectedPrincipal.upn, objectId: selTableId }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('table');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selectedPrincipal, selTableId, loadSqlPerms]);
+
+  const grantSqlColumn = useCallback(async () => {
+    if (!selectedPrincipal || selTableId == null || selColIds.length === 0) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'column', upn: selectedPrincipal.upn, objectId: selTableId, columnIds: selColIds }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('column');
+      setSelColIds([]);
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selectedPrincipal, selTableId, selColIds, loadSqlPerms]);
+
+  const createRls = useCallback(async () => {
+    if (selTableId == null || rlsFilterColId == null) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'row', objectId: selTableId, filterColumnId: rlsFilterColId, subject: rlsSubject }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('row');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selTableId, rlsFilterColId, rlsSubject, loadSqlPerms]);
+
+  const revokeSqlGrant = useCallback(async (g: SqlGrant) => {
+    const tbl = sqlTables.find((t) => t.schema === g.schema && t.name === g.table);
+    if (!tbl) { setPermsError(`Could not resolve object_id for ${g.schema}.${g.table}`); return; }
+    setPermsBusy(true); setPermsError(null);
+    try {
+      let columnIds: number[] = [];
+      if (g.column) {
+        const cr = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${tbl.objectId}`);
+        const cj = await cr.json();
+        const hit = (cj.columns || []).find((c: any) => c.name === g.column);
+        if (hit) columnIds = [hit.columnId];
+      }
+      const r = await fetch(`/api/lakehouse/permissions?tab=${g.column ? 'column' : 'table'}`, {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ upn: g.principal, objectId: tbl.objectId, columnIds }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms(g.column ? 'column' : 'table');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [sqlTables, loadSqlPerms]);
+
+  const dropRls = useCallback(async (p: RlsPolicy) => {
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?tab=row&policyObjectId=${p.policyObjectId}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('row');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [loadSqlPerms]);
+
+  const toggleCol = useCallback((columnId: number, checked: boolean) => {
+    setSelColIds((prev) => (checked ? Array.from(new Set([...prev, columnId])) : prev.filter((c) => c !== columnId)));
+  }, []);
+
+  // Shared Entra user → UPN picker used by the Table / Column tabs.
+  const renderPrincipalPicker = useCallback(() => (
+    <Field label="Principal (Entra user)" required>
+      {selectedPrincipal ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Badge appearance="tint" color="brand">{selectedPrincipal.upn}</Badge>
+          <Button size="small" appearance="subtle" onClick={() => { setSelectedPrincipal(null); setPrincipalQuery(''); }}>Change</Button>
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <Input
+            value={principalQuery}
+            onChange={(_, d) => setPrincipalQuery(d.value)}
+            placeholder="Search by name or UPN…"
+            contentAfter={principalBusy ? <Spinner size="extra-tiny" /> : undefined}
+          />
+          {principalResults.length > 0 && (
+            <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, maxHeight: 200, overflow: 'auto', background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: 4, boxShadow: tokens.shadow8 }}>
+              {principalResults.map((p) => (
+                <div
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { setSelectedPrincipal(p); setPrincipalResults([]); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { setSelectedPrincipal(p); setPrincipalResults([]); } }}
+                  style={{ padding: '6px 10px', cursor: 'pointer' }}
+                  className={s.rowHover}
+                >
+                  <Body1>{p.displayName}</Body1>
+                  <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{p.upn}</Caption1>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Field>
+  ), [selectedPrincipal, principalQuery, principalBusy, principalResults, s.rowHover]);
+
+  // Share — grant a principal RBAC access to this container. Mirrors Fabric's
+  // "Share" affordance via Azure RBAC (the same /api/lakehouse/permissions POST
+  // backing the Permissions dialog). No Fabric workspace involved.
+  const grantShare = useCallback(async () => {
+    if (!activeContainer || !sharePrincipal.trim()) return;
+    setShareBusy(true); setShareError(null); setShareSuccess(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          container: activeContainer,
+          principalId: sharePrincipal.trim(),
+          principalType: sharePrincipalType,
+          role: shareRole,
+        }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Share');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setShareSuccess(`Granted ${shareRole} to ${sharePrincipal.trim()} at ${new Date().toLocaleTimeString()}.`);
+      setSharePrincipal('');
+    } catch (e: any) { setShareError(e?.message || String(e)); }
+    finally { setShareBusy(false); }
+  }, [activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
+
   const loadSettings = useCallback(async () => {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
     try {
       const r = await fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Load settings');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
+      setSchemasEnabled(j.settings?.schemasEnabled ?? false);
+      if (j.cloud) setCloud(j.cloud);
       const cfg = j.settings?.sparkConfig || {};
       setSettingsSparkConfText(Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join('\n'));
+      setLcTableName(j.settings?.liquidClustering?.tableName || '');
+      setLcColumns((j.settings?.liquidClustering?.columns || []).join(', '));
+      setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
@@ -612,9 +1156,24 @@ export function LakehouseEditor({ item, id }: Props) {
     if (sparkPools === null) loadSparkPools();
   }, [loadSettings, loadSparkPools, sparkPools]);
 
+  // Resolve schemasEnabled for the active container without opening Settings —
+  // the Tables/Schemas tabs need it. Bundle's schemasEnabled is the install-time
+  // default; the persisted settings doc (if any) is authoritative.
+  useEffect(() => {
+    if (!activeContainer) return;
+    let cancelled = false;
+    if (lhContent?.schemasEnabled) setSchemasEnabled(true);
+    fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`)
+      .then((r) => parseJsonOrError<{ ok: boolean; settings?: { schemasEnabled?: boolean } }>(r, 'Load settings'))
+      .then((j) => { if (!cancelled && j.ok && typeof j.settings?.schemasEnabled === 'boolean') setSchemasEnabled(j.settings.schemasEnabled); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeContainer, lhContent?.schemasEnabled]);
+
   const saveSettings = useCallback(async () => {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
+    setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
     try {
       const sparkConfig: Record<string, string> = {};
       for (const line of settingsSparkConfText.split(/\r?\n/)) {
@@ -622,6 +1181,10 @@ export function LakehouseEditor({ item, id }: Props) {
         const idx = t.indexOf('=');
         if (idx > 0) sparkConfig[t.slice(0, idx).trim()] = t.slice(idx + 1).trim();
       }
+      const trimmedTable = lcTableName.trim();
+      const liquidClustering = trimmedTable
+        ? { tableName: trimmedTable, columns: lcColumns.split(',').map((c) => c.trim()).filter(Boolean) }
+        : undefined;
       const r = await fetch(`/api/lakehouse/settings`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -632,16 +1195,117 @@ export function LakehouseEditor({ item, id }: Props) {
           sparkConfig,
           timeTravelDays: settings.timeTravelDays ?? 7,
           deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
+          schemasEnabled: settings.schemasEnabled ?? false,
+          liquidClustering,
+          fabricToggles: settings.fabricToggles,
         }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; settings?: LakehouseSettings }>(r, 'Save settings');
+      const j = await parseJsonOrError<{
+        ok: boolean; error?: string; settings?: LakehouseSettings;
+        clusteringApplied?: boolean; clusteringSql?: string;
+        clusteringGate?: string; clusteringError?: string;
+      }>(r, 'Save settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || settings);
+      setSchemasEnabled(j.settings?.schemasEnabled ?? settings.schemasEnabled ?? false);
+      setLcApplied(j.clusteringApplied ?? null);
+      setLcSql(j.clusteringSql || null);
+      setLcGate(j.clusteringGate || null);
+      setLcError(j.clusteringError || null);
       setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
-      setSettingsOpen(false);
+      // Keep the dialog open when clustering needs the user's attention (gate or
+      // error) so the MessageBar is visible; otherwise close as before.
+      if (!j.clusteringGate && !j.clusteringError) setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, settings, settingsSparkConfText]);
+  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns]);
+
+  // ---- reference lakehouses: load / mutate / browse / preview ---------
+  const loadReferences = useCallback(async () => {
+    if (isNewItem) return;
+    setRefsLoading(true); setRefsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/references?lakehouseId=${encodeURIComponent(id)}`);
+      const j = await parseJsonOrError<{
+        ok: boolean; error?: string;
+        references?: ReferenceLakehouse[];
+        workspaceLakehouses?: { id: string; displayName: string }[];
+      }>(r, 'Load references');
+      if (!j.ok) throw new Error(j.error);
+      setReferences(j.references ?? []);
+      setWorkspaceLakehouses(j.workspaceLakehouses ?? []);
+    } catch (e: any) { setRefsError(e?.message || String(e)); setReferences([]); }
+    finally { setRefsLoading(false); }
+  }, [id, isNewItem]);
+
+  const addReference = useCallback(async (refId: string) => {
+    setRefsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/references', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: id, addId: refId }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Add reference');
+      if (!j.ok) throw new Error(j.error);
+      await loadReferences();
+    } catch (e: any) { setRefsError(e?.message || String(e)); }
+  }, [id, loadReferences]);
+
+  const removeReference = useCallback(async (refId: string) => {
+    setRefsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/references', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: id, removeId: refId }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Remove reference');
+      if (!j.ok) throw new Error(j.error);
+      if (refSelection?.refId === refId) { setRefSelection(null); setRefPreview(null); }
+      await loadReferences();
+    } catch (e: any) { setRefsError(e?.message || String(e)); }
+  }, [id, loadReferences, refSelection]);
+
+  const refCacheKey = useCallback(
+    (refId: string, container: string, prefix: string) => `ref::${refId}::${container}::${prefix}`,
+    [],
+  );
+
+  const loadRefPaths = useCallback(async (refId: string, container: string, prefix: string) => {
+    const key = refCacheKey(refId, container, prefix);
+    setRefOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
+    try {
+      const qs = new URLSearchParams({ refId, container, prefix });
+      const r = await fetch(`/api/lakehouse/references/paths?${qs.toString()}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'Reference paths');
+      setRefOpenPrefixes((p) => ({
+        ...p,
+        [key]: j.ok ? (j.paths ?? []) : { error: j.error || `HTTP ${r.status}` },
+      }));
+    } catch (e: any) {
+      setRefOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
+    }
+  }, [refCacheKey]);
+
+  // Select a file inside a referenced lakehouse and run a READ-ONLY preview via
+  // the account-scoped OPENROWSET route (real Synapse Serverless; pass-through
+  // RBAC). Directories just expand in the tree.
+  const selectRefFile = useCallback(async (ref: ReferenceLakehouse, container: string, entry: PathEntry) => {
+    if (entry.isDirectory) { loadRefPaths(ref.id, container, entry.name); return; }
+    setRefSelection({ refId: ref.id, displayName: ref.displayName, account: ref.account, container, entry });
+    setRefPreview(null); setRefPreviewLoading(true);
+    try {
+      const qs = new URLSearchParams({ container, path: entry.name });
+      if (ref.account) qs.set('account', ref.account);
+      const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+      const j = await parseJsonOrError<PreviewResponse>(r, 'Reference preview');
+      setRefPreview(j);
+    } catch (e: any) {
+      setRefPreview({ ok: false, error: e?.message || String(e) });
+    } finally { setRefPreviewLoading(false); }
+  }, [loadRefPaths]);
+
+  // Load references once on mount (and whenever the item id changes).
+  useEffect(() => { loadReferences(); }, [loadReferences]);
 
   // ---- container load -------------------------------------------------
   useEffect(() => {
@@ -695,6 +1359,59 @@ export function LakehouseEditor({ item, id }: Props) {
     loadPaths(activeContainer, '');
   }, [activeContainer, activePath, loadPaths]);
 
+  // ---- column-stats polling ------------------------------------------
+  // Poll the async Spark summary job every 3s, following whatever jobId the
+  // route hands back (it changes once a warming pool becomes idle and the
+  // statement is submitted). Stops on available / error / unmount.
+  useEffect(() => {
+    if (!statsJobId) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      const target = statsTargetRef.current;
+      const qs = new URLSearchParams({ jobId: statsJobId });
+      if (target) { qs.set('container', target.container); qs.set('path', target.path); }
+      try {
+        const r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+        const j = await parseJsonOrError<{ ok: boolean; status?: string; error?: string; jobId?: string; stats?: Record<string, ColStat> }>(r, 'Column stats');
+        if (cancelled) return;
+        if (j.status === 'available' && j.stats) {
+          setColumnStats(j.stats);
+          setStatsLoading(false);
+          setStatsJobId(null);
+        } else if (!j.ok || j.status === 'error') {
+          setStatsError(j.error || 'Column statistics job failed.');
+          setStatsLoading(false);
+          setStatsJobId(null);
+        } else if (j.jobId && j.jobId !== statsJobId) {
+          // Pool warmed up — follow the new jobId (statement now running).
+          setStatsJobId(j.jobId);
+        }
+        // status 'running' / 'warming' with same jobId → keep polling.
+      } catch (e: any) {
+        if (cancelled) return;
+        setStatsError(e?.message || String(e));
+        setStatsLoading(false);
+        setStatsJobId(null);
+      }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [statsJobId]);
+
+  // ---- deep-link restore ---------------------------------------------
+  // On first mount, if ?tab=preview&container=&path= is present, capture it and
+  // jump to the Preview tab. The selection is restored once containers settle.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const dCont = sp.get('container');
+    const dPath = sp.get('path');
+    if (sp.get('tab') === 'preview' && dCont && dPath) {
+      deepLinkRef.current = { container: dCont, path: dPath };
+      setTab('preview');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- selection / preview -------------------------------------------
   const selectFile = useCallback(async (entry: PathEntry) => {
     setActivePath(entry);
@@ -713,6 +1430,19 @@ export function LakehouseEditor({ item, id }: Props) {
     // load preview
     setPreview(null);
     setPreviewLoading(true);
+    setColumnStats(null);
+    setStatsError(null);
+    setStatsLoading(false);
+    setStatsJobId(null);
+    // Deep-link: reflect the current selection in the URL so the table can be
+    // re-opened directly. history.replaceState avoids a Next navigation/refetch.
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      sp.set('tab', 'preview');
+      sp.set('container', activeContainer);
+      sp.set('path', entry.name);
+      window.history.replaceState(null, '', `${window.location.pathname}?${sp.toString()}`);
+    } catch { /* non-browser / no history — ignore */ }
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
       const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
@@ -721,12 +1451,44 @@ export function LakehouseEditor({ item, id }: Props) {
       if (j.sql) {
         setSqlText(j.sql);
       }
+      // Kick off the async column-summary Spark job (non-blocking). Only for
+      // tabular previews that actually returned columns.
+      if (j.ok && (j.columns?.length ?? 0) > 0) {
+        statsTargetRef.current = { container: activeContainer, path: entry.name };
+        setStatsLoading(true);
+        try {
+          const sQs = new URLSearchParams({ container: activeContainer, path: entry.name });
+          const sr = await fetch(`/api/lakehouse/table-stats?${sQs.toString()}`);
+          const sj = await parseJsonOrError<{ ok: boolean; error?: string; jobId?: string; code?: string }>(sr, 'Column stats');
+          if (sj.ok && sj.jobId) {
+            setStatsJobId(sj.jobId);
+          } else {
+            setStatsLoading(false);
+            setStatsError(sj.error || 'Stats job could not start.');
+          }
+        } catch (e: any) {
+          setStatsLoading(false);
+          setStatsError(e?.message || String(e));
+        }
+      }
     } catch (e: any) {
       setPreview({ ok: false, error: e?.message || String(e) });
     } finally {
       setPreviewLoading(false);
     }
   }, [activeContainer, loadPaths]);
+
+  // Once the deep-linked container is active, load its preview + stats.
+  useEffect(() => {
+    const dl = deepLinkRef.current;
+    if (!dl || containers === null) return;
+    if (activeContainer !== dl.container) {
+      if ((containers || []).some((c) => c.name === dl.container)) setActiveContainer(dl.container);
+      return;
+    }
+    deepLinkRef.current = null;
+    void selectFile({ name: dl.path, isDirectory: false, size: 0 });
+  }, [containers, activeContainer, selectFile]);
 
   // ---- file actions ---------------------------------------------------
   const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
@@ -754,26 +1516,26 @@ export function LakehouseEditor({ item, id }: Props) {
     router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&path=${encodeURIComponent(entry.name)}`);
   }, [activeContainer, router]);
 
-  /** Load a file as a Delta table — opens notebook with the conversion code prefilled. */
+  /** Load a file as a managed Delta table via the no-code Load to Table (F6) wizard. */
   const onLoadToTables = useCallback((entry: PathEntry) => {
-    if (!activeContainer) return;
-    const tableName = leafName(entry.name).replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-    const ext = entry.name.split('.').pop()?.toLowerCase();
-    const fmt = ext === 'parquet' ? 'parquet' : ext === 'csv' ? 'csv' : ext === 'json' ? 'json' : 'parquet';
-    const bulk = `abfss://${activeContainer}@__accountname__.dfs.core.windows.net/${entry.name}`;
-    const code = [
-      `# Load ${entry.name} into Tables/${tableName} as Delta`,
-      `df = spark.read.format("${fmt}")${fmt === 'csv' ? '.option("header", "true").option("inferSchema", "true")' : ''}.load("${bulk}")`,
-      `df.write.mode("overwrite").format("delta").saveAsTable("${tableName}")`,
-      `display(spark.table("${tableName}").limit(100))`,
-    ].join('\n');
-    try {
-      localStorage.setItem('loom.notebook.prefill', JSON.stringify({
-        source: 'lakehouse-load-to-tables', container: activeContainer, path: entry.name, tableName, code,
-      }));
-    } catch {}
-    router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&loadToTable=${encodeURIComponent(tableName)}`);
-  }, [activeContainer, router]);
+    if (!activeContainer || entry.isDirectory) return;
+    setLttEntry(entry);
+    setLttOpen(true);
+  }, [activeContainer]);
+
+  // F6 — Load the selected file to a Delta table (matches Fabric's keyboard affordance).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'F6') return;
+      if (lttOpen) return;
+      if (!activeContainer || !activePath || activePath.isDirectory) return;
+      e.preventDefault();
+      setLttEntry(activePath);
+      setLttOpen(true);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeContainer, activePath, lttOpen]);
 
   const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
@@ -781,48 +1543,26 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!file || !activeContainer) return;
     const prefix = activePath?.isDirectory ? activePath.name : '';
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
-    setUploading(true);
     setActionError(null);
-    setActionStatus(null);
-    try {
-      const fd = new FormData();
-      fd.set('container', activeContainer);
-      fd.set('path', targetPath);
-      fd.set('file', file);
-      const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
-      // Defensive JSON parse — if the gateway / Container App / WAF returns
-      // an HTML error page (5xx, 413, 502), JSON.parse blows up with
-      // "Unexpected token '<'". Sniff the Content-Type first and only call
-      // .json() when the response is actually JSON; otherwise surface the
-      // status + a trimmed text body to the user.
-      const ct = r.headers.get('content-type') || '';
-      let j: any = null;
-      let bodyText: string | null = null;
-      if (ct.includes('application/json')) {
-        try { j = await r.json(); } catch { /* fall through to text */ }
-      }
-      if (!j) {
-        try { bodyText = (await r.text()).slice(0, 240); } catch { /* ignore */ }
-      }
-      if (!r.ok || j?.ok === false) {
-        const msg = j?.error
-          || (r.status === 413 ? `File too large (${file.size.toLocaleString()} bytes). Max 4 GB.`
-          : r.status === 502 ? `Upstream storage error (502). Check ADLS network/role assignments.`
-          : r.status === 401 ? `Sign in expired. Reload and re-authenticate.`
-          : `Upload failed (HTTP ${r.status}).${bodyText ? ` Server said: ${bodyText}` : ''}`);
-        setActionError(msg);
-      } else {
-        const fmt = j.sparkFormat;
-        const fmtLabel = fmt?.label ? ` — detected ${fmt.label}` : '';
-        setActionStatus(`Uploaded ${file.name}${fmtLabel} at ${new Date().toLocaleTimeString()}`);
-      }
-    } catch (e: any) {
-      setActionError(e?.message || String(e));
-    } finally {
-      setUploading(false);
-      refreshActive();
-    }
-  }, [activeContainer, activePath, refreshActive]);
+
+    // F10 — hand the upload to the module-scope jobs-store. The fetch is owned
+    // there (not in this component), so switching item tabs mid-upload does NOT
+    // cancel it; the global toaster raises a lakehouse-named confirmation on
+    // completion regardless of which tab is active when it finishes.
+    startUpload({
+      lakehouseName,
+      container: activeContainer,
+      path: targetPath,
+      file,
+      onDone: ({ ok, error }) => {
+        if (ok) refreshActive();
+        else if (error) setActionError(error);
+      },
+    });
+    // Refresh the listing optimistically once the ADLS append+flush has likely
+    // propagated (P99 ~200ms) so the new file appears without a manual refresh.
+    setTimeout(refreshActive, 500);
+  }, [activeContainer, activePath, startUpload, lakehouseName, refreshActive]);
 
   const onNewFolder = useCallback(async () => {
     if (!activeContainer) return;
@@ -980,25 +1720,169 @@ export function LakehouseEditor({ item, id }: Props) {
     );
   }
 
+  // ---- reference tree renderer (read-only, mirrors renderTreeChildren) -
+  function renderRefTreeChildren(ref: ReferenceLakehouse, container: string, prefix: string): React.ReactElement {
+    const state = refOpenPrefixes[refCacheKey(ref.id, container, prefix)];
+    const base = `ref-${ref.id}-${container}-${prefix}`;
+    if (state === undefined) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-unloaded`} onClick={() => loadRefPaths(ref.id, container, prefix)}>
+          <TreeItemLayout>Click to load…</TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (state === 'loading') {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-loading`}>
+          <TreeItemLayout><Spinner size="tiny" /> Loading…</TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (!Array.isArray(state)) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-err`}>
+          <TreeItemLayout><Caption1>Error: {state.error}</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (state.length === 0) {
+      return (
+        <TreeItem itemType="leaf" value={`${base}-empty`}>
+          <TreeItemLayout><Caption1>(empty)</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    return (
+      <>
+        {state.map((entry) => entry.isDirectory ? (
+          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="branch" value={`ref-${ref.id}-${entry.name}`}
+            onClick={() => selectRefFile(ref, container, entry)}>
+            <TreeItemLayout iconBefore={<Folder20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <Tree>{renderRefTreeChildren(ref, container, entry.name)}</Tree>
+          </TreeItem>
+        ) : (
+          <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="leaf" value={`ref-${ref.id}-${entry.name}`}
+            onClick={() => selectRefFile(ref, container, entry)}>
+            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+          </TreeItem>
+        ))}
+      </>
+    );
+  }
+
   const canFileAction = !!activeContainer;
   const hasFile = !!activePath && !activePath.isDirectory;
+  // Pre-attached secondary (reference) lakehouses are read-only — write
+  // commands gray out, matching Fabric's behavior when you "Add lakehouses".
+  const writeBlocked = !canFileAction || isReferenceLakehouse;
+  const writeTitle = isReferenceLakehouse
+    ? 'Read-only — reference lakehouse (write operations disabled)'
+    : !canFileAction ? 'Select a container first' : undefined;
+  const notebookHref = activeContainer
+    ? `/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}`
+    : '/items/notebook/new';
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Files', actions: [
-        { label: uploading ? 'Uploading…' : 'Upload file', onClick: canFileAction && !uploading ? onUploadClick : undefined, disabled: !canFileAction || uploading },
-        { label: 'New folder', onClick: canFileAction ? onNewFolder : undefined, disabled: !canFileAction },
-        { label: 'Refresh', onClick: canFileAction ? refreshActive : undefined, disabled: !canFileAction },
+      { label: 'Refresh', actions: [
+        {
+          label: 'Refresh', icon: <ArrowSync20Regular />,
+          onClick: writeBlocked ? undefined : refreshActive,
+          disabled: writeBlocked, title: writeTitle,
+        },
+      ]},
+      { label: 'Get data', actions: [
+        {
+          label: 'Get data', disabled: writeBlocked, title: writeTitle,
+          dropdownItems: [
+            {
+              // F10 — Upload is NOT disabled while another upload is in flight:
+              // the jobs store supports concurrent uploads, so the user can queue
+              // more files. The label surfaces the running count.
+              label: uploading ? `Uploading (${runningUploads.length})…` : 'Upload', icon: <ArrowUpload20Regular />,
+              onClick: writeBlocked ? undefined : onUploadClick,
+              disabled: writeBlocked, title: writeTitle,
+            },
+            {
+              label: 'New shortcut', icon: <LinkMultiple20Regular />,
+              onClick: writeBlocked ? undefined : () => { setTab('shortcuts'); openShortcutWizard(); },
+              disabled: writeBlocked, title: writeTitle,
+            },
+            {
+              label: 'New dataflow', icon: <Database20Regular />,
+              onClick: () => router.push('/items/dataflow/new'),
+            },
+            {
+              label: 'New pipeline', icon: <Database20Regular />,
+              onClick: () => router.push('/items/data-pipeline/new'),
+            },
+            {
+              label: 'New notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push(notebookHref),
+            },
+            {
+              label: 'Copy activity', icon: <ArrowDownload20Regular />,
+              onClick: () => router.push('/items/copy-job/new'),
+            },
+          ],
+        },
+      ]},
+      { label: 'Analyze data', actions: [
+        {
+          label: 'Analyze data',
+          dropdownItems: [
+            {
+              label: 'SQL endpoint', icon: <Database20Regular />,
+              onClick: () => setTab('sql'),
+            },
+            {
+              label: 'New notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push(notebookHref),
+            },
+            {
+              label: 'Existing notebook', icon: <BookOpen20Regular />,
+              onClick: () => router.push('/items/notebook/new'),
+            },
+          ],
+        },
+      ]},
+      { label: 'Data model', actions: [
+        {
+          label: 'New semantic model', icon: <TableSimple20Regular />,
+          onClick: () => setSemanticModelGateOpen(true),
+          title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path',
+        },
       ]},
       { label: 'Query', actions: [
-        { label: 'Preview', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
-        { label: 'Query this file', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
+        { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
+        { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
+      ]},
+      { label: 'Tables', actions: [
+        { label: 'Load to table', onClick: hasFile ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-        { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
+        {
+          label: 'Settings', icon: <Info20Regular />,
+          onClick: writeBlocked ? undefined : openSettings,
+          disabled: writeBlocked, title: writeTitle,
+        },
+        {
+          label: 'Permissions', icon: <LinkMultiple20Regular />,
+          onClick: activeContainer ? openPerms : undefined,
+          disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined,
+        },
+        {
+          label: 'Share', icon: <Add20Regular />,
+          onClick: activeContainer ? () => { setShareError(null); setShareSuccess(null); setShareOpen(true); } : undefined,
+          disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined,
+        },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
+  ], [
+    writeBlocked, writeTitle, canFileAction, uploading, runningUploads.length,
+    onUploadClick, onNewFolder, refreshActive, openShortcutWizard, router,
+    notebookHref, hasFile, activePath, selectFile, onLoadToTables,
+    activeContainer, openPerms, openSettings,
+  ]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -1008,6 +1892,11 @@ export function LakehouseEditor({ item, id }: Props) {
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
+          {/* Primary lakehouse — always bold to distinguish it from references. */}
+          <Caption1 style={{ display: 'block', padding: '2px 0 6px', fontWeight: tokens.fontWeightBold }}>
+            <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+            {itemQ.data?.displayName ?? 'Primary lakehouse'}
+          </Caption1>
           {containers === null && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}
           {containerError && (
             <MessageBar intent="error">
@@ -1035,6 +1924,72 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Tree>{renderTreeChildren(c.name, '')}</Tree>
                 </TreeItem>
               ))}
+            </Tree>
+          )}
+          {/* Live Delta catalog tree — real ADLS scan of the active container's
+              Tables/ dir, grouped by schema, with Delta/non-Delta icons and
+              loading / broken / empty badges. Shown once a container is picked. */}
+          {activeContainer && (liveTables !== null || liveTablesLoading || liveTablesError) && (
+            <Tree aria-label="Live Delta catalog" defaultOpenItems={['live-tables', `live-schema-${activeContainer}`]} style={{ marginTop: 12 }}>
+              <TreeItem itemType="branch" value="live-tables">
+                <TreeItemLayout
+                  iconBefore={<TableSimple20Regular />}
+                  aside={liveTablesLoading ? <Spinner size="extra-tiny" /> : (
+                    <Button appearance="subtle" size="small" icon={<ArrowSync20Regular />}
+                      aria-label="Refresh live tables"
+                      onClick={(e) => { e.stopPropagation(); loadLiveTables(); }} />
+                  )}
+                >
+                  Tables (live)
+                </TreeItemLayout>
+                <Tree>
+                  {liveTablesError && (
+                    <TreeItem itemType="leaf" value="live-tables-error">
+                      <TreeItemLayout iconBefore={<ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />}>
+                        {liveTablesError}
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {!liveTablesError && liveTables !== null && liveTables.length === 0 && (
+                    <TreeItem itemType="leaf" value="live-tables-empty">
+                      <TreeItemLayout iconBefore={<Info20Regular />}>
+                        No Delta tables in /{activeContainer}/Tables/ yet
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {Object.entries(
+                    (liveTables || []).reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                      (acc[t.schema] ??= []).push(t); return acc;
+                    }, {}),
+                  ).map(([schema, schemaTables]) => (
+                    <TreeItem key={schema} itemType="branch" value={`live-schema-${schema}`}>
+                      <TreeItemLayout iconBefore={<Database20Regular />}>{schema} ({schemaTables.length})</TreeItemLayout>
+                      <Tree>
+                        {schemaTables.map((t) => (
+                          <TreeItem key={t.adlsPath} itemType="leaf" value={`live-tbl-${t.adlsPath}`}
+                            title={`${t.format} · ${t.status}${typeof t.latestVersion === 'number' ? ` · v${t.latestVersion}` : ''}`}
+                            onClick={() => setTab('tables')}>
+                            <TreeItemLayout
+                              iconBefore={t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}
+                              aside={
+                                t.status === 'broken'
+                                  ? <Badge appearance="tint" color="danger" size="small">broken</Badge>
+                                  : t.status === 'empty'
+                                  ? <Badge appearance="tint" color="warning" size="small">empty</Badge>
+                                  : t.format !== 'delta'
+                                  ? <Badge appearance="outline" size="small">{t.format}</Badge>
+                                  : null
+                              }
+                            >
+                              {t.name}
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
             </Tree>
           )}
           {hasBundle && (
@@ -1097,15 +2052,130 @@ export function LakehouseEditor({ item, id }: Props) {
               </TreeItem>
             </Tree>
           )}
+
+          {/* ── Reference lakehouses (F8) ─────────────────────────────── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 14, padding: '4px 0' }}>
+            <Caption1 style={{ flex: 1, fontWeight: tokens.fontWeightSemibold }}>
+              <LinkMultiple20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              References
+            </Caption1>
+            <Tooltip content={isNewItem ? 'Save the lakehouse first' : 'Add an in-workspace lakehouse to browse side-by-side'} relationship="label">
+              <Button appearance="subtle" size="small" icon={<Add20Regular />} disabled={isNewItem}
+                onClick={() => { loadReferences(); setPickerOpen(true); }} aria-label="Add reference lakehouse" />
+            </Tooltip>
+          </div>
+          {refsLoading && <Spinner size="tiny" label="Loading references…" labelPosition="after" />}
+          {refsError && (
+            <MessageBar intent="error"><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
+          )}
+          {references !== null && references.length === 0 && !refsLoading && (
+            <Caption1 style={{ display: 'block', padding: '0 4px', color: tokens.colorNeutralForeground3 }}>
+              No references. Click + to browse another lakehouse in this workspace side-by-side.
+            </Caption1>
+          )}
+          {references !== null && references.length > 0 && (
+            <Tree aria-label="Reference lakehouses">
+              {references.map((ref) => (
+                <TreeItem key={ref.id} itemType="branch" value={`refroot-${ref.id}`}>
+                  <TreeItemLayout
+                    iconBefore={<Database20Regular />}
+                    aside={
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <Badge appearance="outline" size="small" color="informative">ref</Badge>
+                        {!ref.reachable && (
+                          <Tooltip relationship="label" content="The Console UAMI cannot reach this lakehouse's containers. Grant it Storage Blob Data Reader on the referenced storage account.">
+                            <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
+                          </Tooltip>
+                        )}
+                        <Tooltip relationship="label" content="Remove reference">
+                          <Button appearance="subtle" size="small" aria-label={`Remove ${ref.displayName}`}
+                            onClick={(e) => { e.stopPropagation(); removeReference(ref.id); }}>×</Button>
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    {ref.displayName}
+                  </TreeItemLayout>
+                  <Tree>
+                    {ref.containers.map((c) => (
+                      <TreeItem key={`refc-${ref.id}-${c}`} itemType="branch" value={`refc-${ref.id}-${c}`}
+                        onClick={() => loadRefPaths(ref.id, c, '')}>
+                        <TreeItemLayout iconBefore={<Database20Regular />}>{c}</TreeItemLayout>
+                        <Tree>{renderRefTreeChildren(ref, c, '')}</Tree>
+                      </TreeItem>
+                    ))}
+                  </Tree>
+                </TreeItem>
+              ))}
+            </Tree>
+          )}
         </div>
       }
       main={
         <>
+          {/* Reference-Lakehouse read-only preview pane (F8). Appears above the
+              primary tabs when a file inside a referenced lakehouse is selected.
+              Write actions are rendered DISABLED with an explanatory tooltip —
+              references are read-only by construction (no write BFF route). */}
+          {refSelection && (
+            <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
+              <div className={s.toolbar}>
+                <Badge appearance="filled" color="informative" icon={<LinkMultiple20Regular />}>Reference · read-only</Badge>
+                <Subtitle2>{refSelection.displayName}</Subtitle2>
+                <Caption1>· {refSelection.container}/{leafName(refSelection.entry.name)}</Caption1>
+                <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to upload files.">
+                    <span><Button appearance="primary" icon={<ArrowUpload20Regular />} disabled>Upload</Button></span>
+                  </Tooltip>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to create folders.">
+                    <span><Button appearance="outline" icon={<FolderAdd20Regular />} disabled>New folder</Button></span>
+                  </Tooltip>
+                  <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to delete files.">
+                    <span><Button appearance="outline" icon={<Delete20Regular />} disabled>Delete</Button></span>
+                  </Tooltip>
+                  <Button appearance="subtle" onClick={() => { setRefSelection(null); setRefPreview(null); }}>Close</Button>
+                </div>
+              </div>
+              {refPreviewLoading && <Spinner size="small" label="Running OPENROWSET…" labelPosition="after" />}
+              {!refPreviewLoading && refPreview && !refPreview.ok && (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <MessageBarTitle>Preview failed</MessageBarTitle>
+                    {refPreview.error} {refPreview.code && <Caption1>· {refPreview.code}</Caption1>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {!refPreviewLoading && refPreview?.ok && (refPreview as any).previewable === false && (
+                <MessageBar intent="info"><MessageBarBody>{(refPreview as any).message || 'This file type is not previewable in-browser.'}</MessageBarBody></MessageBar>
+              )}
+              {!refPreviewLoading && refPreview?.ok && (refPreview.columns?.length ?? 0) > 0 && (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Reference preview rows" size="small">
+                    <TableHeader>
+                      <TableRow>
+                        {(refPreview.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(refPreview.rows || []).map((row, i) => (
+                        <TableRow key={i}>
+                          {(refPreview.columns || []).map((_, j) => (
+                            <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
               <Tab value="tables">Tables</Tab>
               <Tab value="history">History</Tab>
+              <Tab value="schemas">Schemas</Tab>
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
               <Tab value="shortcuts">Shortcuts</Tab>
@@ -1114,13 +2184,30 @@ export function LakehouseEditor({ item, id }: Props) {
           <div className={s.pad}>
             {tab === 'files' && (
               <>
+                {/* F10 — visually-hidden live region so screen readers announce
+                    background upload progress to the active lakehouse, polled
+                    independent of which tab the sighted user is on. */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', clipPath: 'inset(50%)' }}
+                >
+                  {uploading ? `Uploading ${runningUploads.length} file${runningUploads.length === 1 ? '' : 's'} to ${lakehouseName} lakehouse, please wait…` : ''}
+                </div>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
                   <Caption1>path: <strong>/{currentPrefix || ''}</strong></Caption1>
-                  <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer || uploading} onClick={onUploadClick}>
-                    {uploading ? 'Uploading…' : 'Upload file'}
+                  <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer} onClick={onUploadClick}>
+                    {uploading ? `Uploading (${runningUploads.length})…` : 'Upload file'}
                   </Button>
-                  <input ref={fileInputRef} type="file" hidden onChange={onUploadChange} />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    onChange={onUploadChange}
+                    aria-label={`Upload file to ${lakehouseName} lakehouse`}
+                  />
                   <Button appearance="outline" icon={<FolderAdd20Regular />} disabled={!activeContainer} onClick={onNewFolder}>
                     New folder
                   </Button>
@@ -1233,42 +2320,49 @@ export function LakehouseEditor({ item, id }: Props) {
               <>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>Delta tables under <code>/Tables/</code></Caption1>
+                  <Caption1>Live Delta catalog — real <code>_delta_log</code> scan of <code>/Tables/</code></Caption1>
                   <Button appearance="outline" icon={<ArrowSync20Regular />}
-                    disabled={!activeContainer}
-                    onClick={() => activeContainer && loadPaths(activeContainer, 'Tables')}>
+                    disabled={!activeContainer || liveTablesLoading}
+                    onClick={() => loadLiveTables()}>
                     Refresh
                   </Button>
                 </div>
                 {(() => {
                   if (!activeContainer) return <Caption1>Select a container.</Caption1>;
-                  const tableListing = openPrefixes[cacheKey(activeContainer, 'Tables')];
-                  if (tableListing === 'loading') return <Spinner size="small" label="Listing tables…" labelPosition="after" />;
-                  if (!tableListing) {
-                    return (
-                      <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
-                    );
+                  if (liveTablesLoading && liveTables === null) {
+                    return <Spinner size="small" label="Scanning Delta catalog…" labelPosition="after" />;
                   }
-                  // Tables/ directory may not exist yet (404 during first provision). Gracefully fall through to bundled content.
-                  const isTablesNotFound = 'error' in tableListing && tableListing.error.toLowerCase().includes('path does not exist');
-                  if ('error' in tableListing && !isTablesNotFound) {
+                  if (liveTablesError) {
                     return (
                       <MessageBar intent="error">
                         <MessageBarBody>
-                          <MessageBarTitle>Could not list tables</MessageBarTitle>
-                          {tableListing.error}
+                          <MessageBarTitle>Could not scan tables</MessageBarTitle>
+                          {liveTablesError}
                         </MessageBarBody>
                       </MessageBar>
                     );
                   }
-                  const tables = (tableListing && !('error' in tableListing) ? (tableListing as PathEntry[]).filter(e => e.isDirectory) : []);
+                  if (liveTablesGate) {
+                    return (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Lakehouse storage not configured</MessageBarTitle>
+                          {liveTablesGate}
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  const tables = liveTables ?? [];
                   if (tables.length === 0) {
+                    // Honest empty — no fabricated rows. Offer the bundle's planned
+                    // tables (if any) as a "what to materialize" reference only.
                     return (
                       <>
                         <MessageBar intent="info">
                           <MessageBarBody>
-                            No Delta tables materialized in ADLS yet. From the Files tab, right-click a
-                            Parquet / CSV / JSON file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                            No Delta tables found under <strong>/{activeContainer}/Tables/</strong>. From the
+                            Files tab, right-click a Parquet / CSV / JSON file and choose
+                            <strong> Load to Tables (Delta)</strong> to materialize one, then Refresh.
                           </MessageBarBody>
                         </MessageBar>
                         {bundleDeltaTables.length > 0 && (
@@ -1326,51 +2420,154 @@ export function LakehouseEditor({ item, id }: Props) {
                       </>
                     );
                   }
-                  return (
-                    <Table aria-label="Tables">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHeaderCell>Table</TableHeaderCell>
-                          <TableHeaderCell>Path</TableHeaderCell>
-                          <TableHeaderCell>Last modified</TableHeaderCell>
-                          <TableHeaderCell></TableHeaderCell>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {tables.map((t) => {
-                          const tableName = leafName(t.name);
+                  // F9 — schema-enabled lakehouse: the Tables/ children are
+                  // schema folders; tables live one level deeper under
+                  // Tables/<schema>/. Render schema groups, each lazily loading
+                  // its tables, with a "Move to schema…" action per table.
+                  if (schemasEnabled) {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <Caption1>
+                          Schema-enabled lakehouse — tables are grouped by schema. Manage schemas in the <strong>Schemas</strong> tab.
+                        </Caption1>
+                        {tables.map((schemaDir) => {
+                          const schemaName = leafName(schemaDir.name);
+                          const childKey = cacheKey(activeContainer, schemaDir.name);
+                          const childListing = openPrefixes[childKey];
+                          const childTables = childListing && childListing !== 'loading' && !('error' in (childListing as any))
+                            ? (childListing as PathEntry[]).filter((e) => e.isDirectory) : [];
                           return (
-                            <TableRow key={t.name}>
-                              <TableCell><strong>{tableName}</strong></TableCell>
-                              <TableCell><code style={{ fontSize: 11 }}>/{t.name}</code></TableCell>
-                              <TableCell>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
-                              <TableCell>
-                                <Menu>
-                                  <MenuTrigger disableButtonEnhancement>
-                                    <Button appearance="subtle" size="small">…</Button>
-                                  </MenuTrigger>
-                                  <MenuPopover>
-                                    <MenuList>
-                                      <MenuItem icon={<Play20Regular />}
-                                        onClick={() => {
-                                          setSqlText(`-- Read Delta table\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
-                                          setTab('sql');
-                                        }}>
-                                        Query (OPENROWSET)
-                                      </MenuItem>
-                                      <MenuItem icon={<History20Regular />}
-                                        onClick={() => openTableHistory(t.name)}>
-                                        History (time travel)
-                                      </MenuItem>
-                                    </MenuList>
-                                  </MenuPopover>
-                                </Menu>
-                              </TableCell>
-                            </TableRow>
+                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <Database20Regular />
+                                <Subtitle2>{schemaName}</Subtitle2>
+                                {schemaName === 'dbo' && <Badge appearance="tint" color="informative" size="small">default</Badge>}
+                                <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />}
+                                  onClick={() => loadPaths(activeContainer, schemaDir.name)} style={{ marginLeft: 'auto' }}>
+                                  {childListing ? 'Refresh' : 'Load tables'}
+                                </Button>
+                              </div>
+                              {childListing === 'loading' && <Spinner size="tiny" label="Listing tables…" labelPosition="after" />}
+                              {childListing && childListing !== 'loading' && 'error' in (childListing as any) && (
+                                <Caption1>{(childListing as { error: string }).error}</Caption1>
+                              )}
+                              {childListing && childListing !== 'loading' && !('error' in (childListing as any)) && (
+                                childTables.length === 0
+                                  ? <Caption1>No tables in this schema yet.</Caption1>
+                                  : (
+                                    <Table aria-label={`Tables in ${schemaName}`} size="small">
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHeaderCell>Table</TableHeaderCell>
+                                          <TableHeaderCell>4-part name</TableHeaderCell>
+                                          <TableHeaderCell></TableHeaderCell>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {childTables.map((t) => {
+                                          const tableName = leafName(t.name);
+                                          return (
+                                            <TableRow key={t.name}>
+                                              <TableCell><strong>{tableName}</strong></TableCell>
+                                              <TableCell><code style={{ fontSize: 11 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                              <TableCell>
+                                                <span style={{ display: 'inline-flex', gap: 6 }}>
+                                                  <Button size="small" appearance="primary"
+                                                    onClick={() => {
+                                                      setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                                      setTab('sql');
+                                                    }}>
+                                                    Query
+                                                  </Button>
+                                                  <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
+                                                    onClick={() => openMoveTable(tableName, schemaName)}>
+                                                    Move to schema…
+                                                  </Button>
+                                                  <Button size="small" appearance="outline" icon={<History20Regular />}
+                                                    onClick={() => openTableHistory(t.name)}>
+                                                    History
+                                                  </Button>
+                                                </span>
+                                              </TableCell>
+                                            </TableRow>
+                                          );
+                                        })}
+                                      </TableBody>
+                                    </Table>
+                                  )
+                              )}
+                            </div>
                           );
                         })}
-                      </TableBody>
-                    </Table>
+                      </div>
+                    );
+                  }
+                  // Group by schema (container) for a Fabric-explorer-style layout.
+                  const bySchema = tables.reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                    (acc[t.schema] ??= []).push(t); return acc;
+                  }, {});
+                  const statusIcon = (st: LiveCatalogTable['status']) =>
+                    st === 'ok' ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                    : st === 'broken' ? <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
+                    : <Clock20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />;
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {Object.entries(bySchema).map(([schema, schemaTables]) => (
+                        <div key={schema}>
+                          <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                            <Database20Regular /> {schema} <Caption1>({schemaTables.length})</Caption1>
+                          </Subtitle2>
+                          <div className={s.tableWrap}>
+                            <Table aria-label={`Tables in ${schema}`} size="small">
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHeaderCell>Table</TableHeaderCell>
+                                  <TableHeaderCell>Format</TableHeaderCell>
+                                  <TableHeaderCell>Status</TableHeaderCell>
+                                  <TableHeaderCell>Version</TableHeaderCell>
+                                  <TableHeaderCell>Rows</TableHeaderCell>
+                                  <TableHeaderCell>Size</TableHeaderCell>
+                                  <TableHeaderCell>Modified</TableHeaderCell>
+                                  <TableHeaderCell></TableHeaderCell>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {schemaTables.map((t) => (
+                                  <TableRow key={t.adlsPath}>
+                                    <TableCell>
+                                      {t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}{' '}
+                                      <strong>{t.name}</strong>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge appearance={t.format === 'delta' ? 'filled' : 'outline'}
+                                        color={t.format === 'delta' ? 'brand' : 'informative'} size="small">
+                                        {t.format}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell title={t.status}>{statusIcon(t.status)}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.latestVersion === 'number' ? `v${t.latestVersion}` : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.rowCount === 'number' ? t.rowCount.toLocaleString() : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.sizeBytes === 'number' ? formatBytes(t.sizeBytes) : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
+                                    <TableCell>
+                                      <Button size="small" appearance="primary"
+                                        disabled={t.format !== 'delta'}
+                                        title={t.format !== 'delta' ? 'OPENROWSET DELTA query available for Delta tables' : undefined}
+                                        onClick={() => {
+                                          setSqlText(`-- Read Delta table ${t.schema}.${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK '${t.bulkUrl}', FORMAT='DELTA') AS r;`);
+                                          setTab('sql');
+                                        }}>
+                                        Query
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   );
                 })()}
               </>
@@ -1510,8 +2707,94 @@ export function LakehouseEditor({ item, id }: Props) {
               </>
             )}
 
-            {tab === 'shortcuts' && (
+            {tab === 'schemas' && (
               <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+                  <Caption1>
+                    Multi-schema namespace — <code>workspace.lakehouse.schema.table</code>. <strong>dbo</strong> is the default (immutable).
+                  </Caption1>
+                  <Button appearance="primary" icon={<Add20Regular />}
+                    disabled={!schemasEnabled || !shortcutLakehouseId}
+                    onClick={() => { setNewSchemaName(''); setNewSchemaDesc(''); setNewSchemaError(null); setNewSchemaOpen(true); }}
+                    style={{ marginLeft: 'auto' }}>
+                    New schema
+                  </Button>
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={schemasBusy || !shortcutLakehouseId} onClick={loadSchemas}>
+                    Refresh
+                  </Button>
+                </div>
+                {!schemasEnabled && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Schemas are disabled for this lakehouse</MessageBarTitle>
+                      Enable <strong>Schemas enabled</strong> in the Settings dialog (gear icon) to use
+                      multi-schema namespaces. Schema DDL runs on a Synapse Spark pool via Livy — set
+                      <code> LOOM_SYNAPSE_WORKSPACE</code> (and grant the Console UAMI Synapse Administrator)
+                      to execute it. The catalog still records schemas without it.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {schemasError && (
+                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Schemas error</MessageBarTitle>{schemasError}</MessageBarBody></MessageBar>
+                )}
+                {schemasBusy && schemas === null && <Spinner size="small" label="Loading schemas…" labelPosition="after" />}
+                {schemas !== null && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Lakehouse schemas" size="small">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Schema</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Description</TableHeaderCell>
+                          <TableHeaderCell></TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {schemas.map((sc) => (
+                          <TableRow key={sc.name}>
+                            <TableCell>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <Database20Regular />
+                                <strong>{sc.name}</strong>
+                                {sc.isDefault && <Badge appearance="tint" color="informative" size="small">default</Badge>}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              {sc.status === 'active' && <Badge appearance="tint" color="success" size="small">active</Badge>}
+                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" size="small" title={sc.statusDetail}>pending</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" size="small" title={sc.statusDetail}>error</Badge>}
+                            </TableCell>
+                            <TableCell><Caption1>{sc.description || '—'}</Caption1></TableCell>
+                            <TableCell>
+                              {!sc.isDefault && (
+                                <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                                  disabled={schemasBusy} onClick={() => deleteSchema(sc.name)}>
+                                  Delete
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {tab === 'shortcuts' && (
+              <div
+                onKeyDown={(e) => {
+                  // F11 retries the selected broken shortcut (re-test/restore).
+                  if (e.key === 'F11' && selectedShortcut && selectedShortcut.status === 'error' && !shortcutsBusy) {
+                    e.preventDefault();
+                    testShortcut(selectedShortcut);
+                  }
+                }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}
+              >
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
                   <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
@@ -1608,7 +2891,13 @@ export function LakehouseEditor({ item, id }: Props) {
                       </TableHeader>
                       <TableBody>
                         {shortcuts.map((sc) => (
-                          <TableRow key={sc.id}>
+                          <TableRow
+                            key={sc.id}
+                            tabIndex={0}
+                            onClick={() => setSelectedShortcut(sc)}
+                            onFocus={() => setSelectedShortcut(sc)}
+                            style={selectedShortcut?.id === sc.id ? { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: -2 } : undefined}
+                          >
                             <TableCell>
                               <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                               <strong>{sc.name}</strong>
@@ -1621,28 +2910,37 @@ export function LakehouseEditor({ item, id }: Props) {
                             </TableCell>
                             <TableCell>{sc.engine && sc.engine !== 'none' ? sc.engine : '—'}</TableCell>
                             <TableCell>
-                              {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled />}>active</Badge>}
-                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular />} title={sc.statusDetail}>pending</Badge>}
-                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled />} title={sc.statusDetail}>error</Badge>}
+                              {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled aria-hidden="true" />}>active</Badge>}
+                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular aria-hidden="true" />} title={sc.statusDetail}>pending</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled aria-hidden="true" />} title={sc.statusDetail}>Broken</Badge>}
                             </TableCell>
                             <TableCell>
-                              <Menu>
-                                <MenuTrigger disableButtonEnhancement>
-                                  <Button appearance="subtle" size="small">…</Button>
-                                </MenuTrigger>
-                                <MenuPopover>
-                                  <MenuList>
-                                    {sc.kind === 'tables' && sc.engineObject && (
-                                      <MenuItem icon={<Play20Regular />} onClick={() => {
-                                        setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
-                                        setTab('sql');
-                                      }}>Query (SQL)</MenuItem>
-                                    )}
-                                    <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
-                                    <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
-                                  </MenuList>
-                                </MenuPopover>
-                              </Menu>
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                {sc.status === 'error' && (
+                                  <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
+                                    onClick={() => testShortcut(sc)} disabled={shortcutsBusy}
+                                    title={`Retry — re-test the shortcut after fixing ${sc.targetType === 'delta_sharing' ? 'the Key Vault credential file' : 'the underlying issue'} (F11 on the selected row)`}>
+                                    Retry
+                                  </Button>
+                                )}
+                                <Menu>
+                                  <MenuTrigger disableButtonEnhancement>
+                                    <Button appearance="subtle" size="small">…</Button>
+                                  </MenuTrigger>
+                                  <MenuPopover>
+                                    <MenuList>
+                                      {sc.kind === 'tables' && sc.engineObject && (
+                                        <MenuItem icon={<Play20Regular />} onClick={() => {
+                                          setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
+                                          setTab('sql');
+                                        }}>Query (SQL)</MenuItem>
+                                      )}
+                                      <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
+                                      <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
+                                    </MenuList>
+                                  </MenuPopover>
+                                </Menu>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1650,7 +2948,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     </Table>
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {tab === 'preview' && (
@@ -1677,28 +2975,34 @@ export function LakehouseEditor({ item, id }: Props) {
                         </MessageBarBody>
                       </MessageBar>
                     )}
-                    {!previewLoading && preview?.ok && (
+                    {!previewLoading && preview?.ok && preview.previewable === false && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>{preview.message || 'This file type is not tabular — use Download to view it.'}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {!previewLoading && preview?.ok && preview.previewable !== false && (
                       (preview.columns?.length ?? 0) === 0 ? (
                         <Caption1>Query returned no rows.</Caption1>
                       ) : (
-                        <div className={s.tableWrap}>
-                          <Table aria-label="Preview rows" size="small">
-                            <TableHeader>
-                              <TableRow>
-                                {(preview.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {(preview.rows || []).map((row, i) => (
-                                <TableRow key={i}>
-                                  {(preview.columns || []).map((_, j) => (
-                                    <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
-                                  ))}
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
+                        <DeltaPreviewGrid
+                          columns={preview.columns || []}
+                          rows={(preview.rows as unknown[][]) || []}
+                          rowCount={preview.rowCount ?? (preview.rows?.length ?? 0)}
+                          executionMs={preview.executionMs}
+                          truncated={preview.truncated}
+                          columnStats={columnStats}
+                          statsLoading={statsLoading}
+                          statsError={statsError}
+                          mode={previewMode}
+                          onModeChange={(m) => {
+                            // Fabric's File/Table preview toggle switches the
+                            // lakehouse explorer between its Files and Tables
+                            // sections — navigate there so the control is live,
+                            // not a cosmetic highlight.
+                            setPreviewMode(m);
+                            setTab(m === 'table' ? 'tables' : 'files');
+                          }}
+                        />
                       )
                     )}
                   </>
@@ -1930,6 +3234,33 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Field>
                         </>
                       )}
+                      {scType === 'delta_sharing' && (
+                        <>
+                          <MessageBar intent="warning">
+                            <MessageBarBody>
+                              <MessageBarTitle>Delta Sharing (cross-tenant)</MessageBarTitle>
+                              Authenticates with a credential file the share owner gives you via an
+                              activation link. Store the raw JSON (<code>shareCredentialsVersion</code>,
+                              <code> endpoint</code>, <code>bearerToken</code>, <code>expirationTime</code>) as a
+                              Key Vault secret and name it below. Bearer tokens expire after at most 1 year —
+                              if the share goes <strong>Broken</strong>, update the secret with a fresh file
+                              and use <strong>Retry</strong>. A <em>Tables</em> shortcut registers a Databricks
+                              Unity Catalog table over the <code>deltaSharing</code> provider (needs
+                              LOOM_DATABRICKS_HOSTNAME); a <em>Files</em> shortcut validates the share server only.
+                            </MessageBarBody>
+                          </MessageBar>
+                          <Field label="Share / table path" required
+                            hint="delta-sharing://<share>/<schema>/<table> — from the data provider">
+                            <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
+                              placeholder="delta-sharing://agency_a_perf/analytics/metrics_monthly" />
+                          </Field>
+                          <Field label="Key Vault secret name (credential file JSON)" required
+                            hint="Holds the full credential JSON: { shareCredentialsVersion, endpoint, bearerToken, expirationTime }">
+                            <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)}
+                              placeholder="delta-sharing-agency-a-cred" />
+                          </Field>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1962,6 +3293,20 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Dropdown>
                         </Field>
                       )}
+                      {scKind === 'tables' && schemasEnabled && (
+                        <Field label="Target schema"
+                          hint="The schema-enabled lakehouse places this Tables shortcut under the chosen schema (Tables/<schema>/). 'dbo' is the default.">
+                          <Dropdown
+                            selectedOptions={[scTargetSchema || 'dbo']}
+                            value={scTargetSchema || 'dbo'}
+                            onOptionSelect={(_, d) => setScTargetSchema(d.optionValue || 'dbo')}
+                          >
+                            {(schemas || [{ name: 'dbo', isDefault: true } as SchemaRow]).map((sch) => (
+                              <Option key={sch.name} value={sch.name}>{sch.name}{sch.isDefault ? ' (default)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      )}
                       <MessageBar intent="info">
                         <MessageBarBody>
                           Will create <strong>{scKind === 'tables' ? 'Tables' : 'Files'}/{[scParentPath.trim(), scName.trim()].filter(Boolean).join('/')}</strong>
@@ -1984,6 +3329,65 @@ export function LakehouseEditor({ item, id }: Props) {
                       {scSubmitting ? 'Creating…' : 'Create'}
                     </Button>
                   )}
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Add-reference picker (F8) — lists in-workspace lakehouses not yet referenced. */}
+          <Dialog open={pickerOpen} onOpenChange={(_, d) => setPickerOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 560 }}>
+              <DialogBody>
+                <DialogTitle>Add reference lakehouse</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Browse another lakehouse from this workspace side-by-side. Read actions use pass-through
+                    RBAC — the Console UAMI must hold <strong>Storage Blob Data Reader</strong> on the referenced
+                    containers. Write actions stay disabled on references.
+                  </Caption1>
+                  {refsError && (
+                    <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
+                  )}
+                  {(() => {
+                    const referenced = new Set((references ?? []).map((r) => r.id));
+                    const addable = workspaceLakehouses.filter((lh) => lh.id !== id && !referenced.has(lh.id));
+                    return (
+                      <Table size="small" style={{ marginTop: 12 }} aria-label="Workspace lakehouses">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell>Lakehouse</TableHeaderCell>
+                            <TableHeaderCell></TableHeaderCell>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {addable.map((lh) => (
+                            <TableRow key={lh.id}>
+                              <TableCell>
+                                <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                {lh.displayName}
+                              </TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="primary"
+                                  onClick={() => { addReference(lh.id); setPickerOpen(false); }}>
+                                  Add
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {addable.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2}>
+                                <Caption1>No other lakehouses in this workspace, or all are already referenced.</Caption1>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    );
+                  })()}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setPickerOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -2017,75 +3421,307 @@ export function LakehouseEditor({ item, id }: Props) {
           </Dialog>
 
           <Dialog open={permsOpen} onOpenChange={(_, d) => setPermsOpen(d.open)}>
-            <DialogSurface style={{ maxWidth: '880px', width: '90vw' }}>
+            <DialogSurface style={{ maxWidth: '1000px', width: '92vw' }}>
               <DialogBody>
                 <DialogTitle>Permissions — {activeContainer}</DialogTitle>
                 <DialogContent>
-                  <Caption1>
-                    Azure RBAC role assignments scoped to the container. Storage Blob Data
-                    Reader/Contributor/Owner govern data-plane access (read/write/manage).
-                  </Caption1>
-                  {permsBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
+                  <TabList
+                    selectedValue={permsTab}
+                    onTabSelect={(_, d) => selectPermsTab(d.value as PermsTab)}
+                    style={{ marginBottom: 12 }}
+                  >
+                    <Tab value="object">Object (RBAC)</Tab>
+                    <Tab value="table">Table</Tab>
+                    <Tab value="column">Column</Tab>
+                    <Tab value="row">Row</Tab>
+                  </TabList>
+
+                  {permsBusy && <Spinner size="tiny" label="Working…" labelPosition="after" />}
                   {permsError && (
-                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RBAC error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Permissions error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
                   )}
-                  <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
-                    <Table aria-label="Role assignments" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Principal id</TableHeaderCell>
-                        <TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Role</TableHeaderCell>
-                        <TableHeaderCell>Action</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {permsRows.length === 0 && (
-                          <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
-                        )}
-                        {permsRows.map((r) => (
-                          <TableRow key={r.id}>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code></TableCell>
-                            <TableCell>{r.principalType || '—'}</TableCell>
-                            <TableCell>{r.roleName || '—'}</TableCell>
-                            <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  <Subtitle2>Grant access</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
-                    <Field label="Principal object id" required>
-                      <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-                    </Field>
-                    <Field label="Principal type">
-                      <Dropdown
-                        selectedOptions={[newPrincipalType]}
-                        value={newPrincipalType}
-                        onOptionSelect={(_, d) => setNewPrincipalType((d.optionValue as 'User' | 'Group' | 'ServicePrincipal') || 'User')}
-                      >
-                        <Option value="User">User</Option>
-                        <Option value="Group">Group</Option>
-                        <Option value="ServicePrincipal">ServicePrincipal</Option>
-                      </Dropdown>
-                    </Field>
-                    <Field label="Role">
-                      <Dropdown
-                        selectedOptions={[newRole]}
-                        value={newRole}
-                        onOptionSelect={(_, d) => setNewRole(d.optionValue || newRole)}
-                      >
-                        {permsRoles.map((r) => (
-                          <Option key={r.name} value={r.name}>{r.name}</Option>
-                        ))}
-                      </Dropdown>
-                    </Field>
-                  </div>
+                  {permsTab !== 'object' && sqlGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Synapse Dedicated SQL pool not configured</MessageBarTitle>
+                        Set <code>{sqlGate.missing}</code>. {sqlGate.hint}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ── Object (container RBAC) ── */}
+                  {permsTab === 'object' && (
+                    <>
+                      <Caption1>
+                        Azure RBAC role assignments scoped to the container. Storage Blob Data
+                        Reader/Contributor/Owner govern data-plane access (read/write/manage).
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Role assignments" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal</TableHeaderCell>
+                            <TableHeaderCell>Type</TableHeaderCell>
+                            <TableHeaderCell>Role</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {permsRows.length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
+                            )}
+                            {permsRows.map((r) => (
+                              <TableRow key={r.id}>
+                                <TableCell>{r.upn ? <span>{r.upn}</span> : <code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code>}</TableCell>
+                                <TableCell>{r.principalType || '—'}</TableCell>
+                                <TableCell>{r.roleName || '—'}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant access</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
+                        <Field label="Principal object id" required>
+                          <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
+                        </Field>
+                        <Field label="Principal type">
+                          <Dropdown
+                            selectedOptions={[newPrincipalType]}
+                            value={newPrincipalType}
+                            onOptionSelect={(_, d) => setNewPrincipalType((d.optionValue as 'User' | 'Group' | 'ServicePrincipal') || 'User')}
+                          >
+                            <Option value="User">User</Option>
+                            <Option value="Group">Group</Option>
+                            <Option value="ServicePrincipal">ServicePrincipal</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Role">
+                          <Dropdown
+                            selectedOptions={[newRole]}
+                            value={newRole}
+                            onOptionSelect={(_, d) => setNewRole(d.optionValue || newRole)}
+                          >
+                            {permsRoles.map((r) => (
+                              <Option key={r.name} value={r.name}>{r.name}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
+                          {permsBusy ? 'Working…' : 'Grant role'}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Table-level SELECT ── */}
+                  {permsTab === 'table' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Object-level <code>GRANT SELECT</code> on a Synapse Dedicated SQL pool table/view.
+                        Principals are Entra users (UPN); the database user is created
+                        <code> FROM EXTERNAL PROVIDER</code> on first grant.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Table grants" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal (UPN)</TableHeaderCell>
+                            <TableHeaderCell>Schema.Table</TableHeaderCell>
+                            <TableHeaderCell>Permission</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {sqlGrants.filter((g) => g.column == null).length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No table-level SELECT grants.</Caption1></TableCell></TableRow>
+                            )}
+                            {sqlGrants.filter((g) => g.column == null).map((g, i) => (
+                              <TableRow key={`${g.principal}.${g.schema}.${g.table}.${i}`}>
+                                <TableCell>{g.principal}</TableCell>
+                                <TableCell>{g.schema}.{g.table}</TableCell>
+                                <TableCell>{g.permissionName}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokeSqlGrant(g)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant table SELECT</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                        {renderPrincipalPicker()}
+                        <Field label="Table / view" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null ? (sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : '') : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}{t.type === 'V' ? ' (view)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantSqlTable} disabled={permsBusy || !selectedPrincipal || selTableId == null}>
+                          Grant SELECT
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Column-level SELECT ── */}
+                  {permsTab === 'column' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Column-level <code>GRANT SELECT</code> restricts a principal to specific columns of a
+                        table/view. Pick a table, then check the columns to expose.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Column grants" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal (UPN)</TableHeaderCell>
+                            <TableHeaderCell>Schema.Table</TableHeaderCell>
+                            <TableHeaderCell>Column</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {sqlGrants.filter((g) => g.column != null).length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No column-level SELECT grants.</Caption1></TableCell></TableRow>
+                            )}
+                            {sqlGrants.filter((g) => g.column != null).map((g, i) => (
+                              <TableRow key={`${g.principal}.${g.schema}.${g.table}.${g.column}.${i}`}>
+                                <TableCell>{g.principal}</TableCell>
+                                <TableCell>{g.schema}.{g.table}</TableCell>
+                                <TableCell>{g.column}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokeSqlGrant(g)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant column SELECT</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                        {renderPrincipalPicker()}
+                        <Field label="Table / view" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null && sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}{t.type === 'V' ? ' (view)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      {selTableId != null && (
+                        <div style={{ marginTop: 12 }}>
+                          <Caption1>Columns to expose ({selColIds.length} selected)</Caption1>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8, marginTop: 4 }}>
+                            {sqlCols.length === 0 && <Caption1>No columns.</Caption1>}
+                            {sqlCols.map((c) => (
+                              <Checkbox
+                                key={c.columnId}
+                                label={`${c.name} (${c.dataType})`}
+                                checked={selColIds.includes(c.columnId)}
+                                onChange={(_, d) => toggleCol(c.columnId, !!d.checked)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantSqlColumn} disabled={permsBusy || !selectedPrincipal || selTableId == null || selColIds.length === 0}>
+                          Grant column SELECT
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Row-level security ── */}
+                  {permsTab === 'row' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Row-level security applies a <code>SECURITY POLICY</code> + inline filter predicate so a
+                        principal only sees rows whose filter column matches their identity. Dedicated SQL pool only.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Security policies" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Policy</TableHeaderCell>
+                            <TableHeaderCell>Target table</TableHeaderCell>
+                            <TableHeaderCell>Enabled</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {rlsPolicies.length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No row-level security policies.</Caption1></TableCell></TableRow>
+                            )}
+                            {rlsPolicies.map((p) => (
+                              <TableRow key={p.policyObjectId}>
+                                <TableCell>{p.policySchema}.{p.policyName}</TableCell>
+                                <TableCell>{p.schema}.{p.table}</TableCell>
+                                <TableCell>{p.isEnabled ? 'Yes' : 'No'}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => dropRls(p)}>Drop</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Create row-level security policy</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                        <Field label="Table" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null && sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.filter((t) => t.type === 'U').map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Filter column" required>
+                          <Dropdown
+                            placeholder="Select a column"
+                            selectedOptions={rlsFilterColId != null ? [String(rlsFilterColId)] : []}
+                            value={rlsFilterColId != null && sqlCols.find((c) => c.columnId === rlsFilterColId) ? sqlCols.find((c) => c.columnId === rlsFilterColId)!.name : ''}
+                            onOptionSelect={(_, d) => setRlsFilterColId(d.optionValue ? Number(d.optionValue) : null)}
+                            disabled={selTableId == null}
+                          >
+                            {sqlCols.map((c) => (
+                              <Option key={c.columnId} value={String(c.columnId)} text={c.name}>{c.name} ({c.dataType})</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Match against">
+                          <Dropdown
+                            selectedOptions={[rlsSubject]}
+                            value={rlsSubject}
+                            onOptionSelect={(_, d) => setRlsSubject((d.optionValue as 'USER_NAME()' | 'SUSER_SNAME()') || 'USER_NAME()')}
+                          >
+                            <Option value="USER_NAME()" text="USER_NAME()">USER_NAME() — DB user (UPN)</Option>
+                            <Option value="SUSER_SNAME()" text="SUSER_SNAME()">SUSER_SNAME() — login name</Option>
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <Caption1 style={{ display: 'block', marginTop: 8 }}>
+                        Predicate: rows are visible when the filter column equals <code>{rlsSubject}</code> or the
+                        caller is <code>db_owner</code>.
+                      </Caption1>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={createRls} disabled={permsBusy || selTableId == null || rlsFilterColId == null}>
+                          Create policy
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setPermsOpen(false)} disabled={permsBusy}>Close</Button>
-                  <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
-                    {permsBusy ? 'Working…' : 'Grant'}
-                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -2138,14 +3774,151 @@ export function LakehouseEditor({ item, id }: Props) {
                       label={settings.deltaDefaults?.autoOptimize ?? true ? 'Enabled' : 'Disabled'}
                     />
                   </Field>
-                  <Field label="Spark conf (one KEY=VALUE per line)">
+                  <Field
+                    label="Schemas enabled"
+                    hint="Multi-schema namespace (workspace.lakehouse.schema.table). Tables live under Tables/<schema>/. Schema DDL runs on a Synapse Spark pool via Livy (LOOM_SYNAPSE_WORKSPACE). 'dbo' is always the immutable default."
+                  >
+                    <Switch
+                      checked={settings.schemasEnabled ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, schemasEnabled: d.checked }))}
+                      label={settings.schemasEnabled ? 'Enabled' : 'Disabled'}
+                    />
+                  </Field>
+
+                  {/* ---- Liquid clustering (Fabric F12 parity → real ALTER TABLE … CLUSTER BY) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>Liquid clustering</Subtitle2>
+                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                    <MessageBarBody>
+                      Liquid clustering replaces static partitioning and ZORDER. On save, Loom runs a
+                      real <code>ALTER TABLE delta.`abfss://…` CLUSTER BY (&lt;columns&gt;)</code> on the
+                      named Delta table via a Databricks SQL Warehouse — no Fabric dependency. Run{' '}
+                      <code>OPTIMIZE</code> in a notebook afterward to re-cluster existing rows. Requires{' '}
+                      <strong>LOOM_DATABRICKS_HOSTNAME</strong> to be set.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Field label="Table to cluster" hint="Delta table under /Tables/ in this container.">
+                    {(() => {
+                      const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                      const liveNames = Array.isArray(listing)
+                        ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
+                        : [];
+                      const bundleNames = bundleDeltaTables.map((t) => t.name);
+                      const allNames = Array.from(new Set([...liveNames, ...bundleNames])).sort();
+                      if (allNames.length > 0) {
+                        return (
+                          <Dropdown
+                            selectedOptions={lcTableName ? [lcTableName] : []}
+                            value={lcTableName}
+                            placeholder="Select a Delta table"
+                            onOptionSelect={(_, d) => setLcTableName(d.optionValue || '')}
+                          >
+                            {allNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                          </Dropdown>
+                        );
+                      }
+                      return (
+                        <Input
+                          value={lcTableName}
+                          onChange={(_, d) => setLcTableName(d.value)}
+                          placeholder="bronze_player_profile"
+                        />
+                      );
+                    })()}
+                  </Field>
+                  <Field label="Clustering columns" hint="Comma-separated, e.g. player_id, filing_timestamp. Order does not matter.">
+                    <Input
+                      value={lcColumns}
+                      onChange={(_, d) => setLcColumns(d.value)}
+                      placeholder="player_id, filing_timestamp"
+                    />
+                  </Field>
+                  {lcGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody><MessageBarTitle>Liquid clustering gate</MessageBarTitle>{lcGate}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {lcError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>ALTER TABLE failed</MessageBarTitle>{lcError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {lcApplied && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>
+                        <MessageBarTitle>Clustering applied</MessageBarTitle>
+                        ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
+                        {lcSql ? <><br /><code style={{ fontSize: 11 }}>{lcSql}</code></> : null}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ---- Fabric-only acceleration (honest gate, F22) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>Fabric-only acceleration (honest gate)</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.vorder ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: d.checked, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
+                      label="V-Order (spark.sql.parquet.vorder.default)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        V-Order is a write-time Parquet layout optimization available exclusively on Fabric
+                        Spark runtimes. On the Azure-native path (Synapse Spark / Databricks), OPTIMIZE runs
+                        standard Delta compaction without V-Order encoding — this toggle is persisted but has
+                        no effect on Azure.{cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.autotune ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: d.checked, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
+                      label="Autotune (spark.ms.autotune.enabled)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        Autotune is a Fabric ML-based query optimizer compatible only with Fabric Runtime 1.2.
+                        The key <code>spark.ms.autotune.enabled</code> is silently ignored on Azure Synapse
+                        Spark pools and Databricks clusters.{cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Switch
+                      checked={settings.fabricToggles?.nativeExecution ?? false}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: d.checked } }))}
+                      label="Native execution engine (Velox / Apache Gluten)"
+                    />
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Fabric Spark only</MessageBarTitle>
+                        The native execution engine (Velox + Apache Gluten vectorized C++) is exclusive to
+                        Fabric Spark Runtime 1.3 and 2.0 — enabled at the Fabric capacity/runtime layer, not
+                        via a Spark config key. It has no effect on Azure Synapse Spark or Databricks. This
+                        toggle records intent for when the lakehouse is accessed from a Fabric Spark session.
+                        {cloudFabricNote(cloud)}
+                      </MessageBarBody>
+                    </MessageBar>
+                  </div>
+
+                  <Field
+                    label="Spark conf (one KEY=VALUE per line)"
+                    hint="Keys under spark.ms.* or spark.sql.parquet.vorder.* are Fabric-only and have no effect on the Azure-native Spark path."
+                  >
                     <Textarea
                       rows={6}
                       value={settingsSparkConfText}
                       onChange={(_, d) => setSettingsSparkConfText(d.value)}
-                      placeholder="spark.sql.shuffle.partitions=200"
+                      placeholder={'spark.sql.shuffle.partitions=200\nspark.executor.memory=4g'}
                     />
                   </Field>
+                  {sparkConfigWarnings(settingsSparkConfText).map((w, i) => (
+                    <MessageBar key={`${w.intent}-${i}`} intent={w.intent}>
+                      <MessageBarBody><MessageBarTitle>{w.title}</MessageBarTitle>{w.body}</MessageBarBody>
+                    </MessageBar>
+                  ))}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>
@@ -2156,6 +3929,236 @@ export function LakehouseEditor({ item, id }: Props) {
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* New schema dialog (F9) — name = letters/digits/underscores; 'dbo' reserved. */}
+          <Dialog open={newSchemaOpen} onOpenChange={(_, d) => setNewSchemaOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 480 }}>
+              <DialogBody>
+                <DialogTitle>New schema</DialogTitle>
+                <DialogContent>
+                  <Field label="Schema name" required
+                    hint="Letters, digits, and underscores only. 'dbo' is reserved (the immutable default).">
+                    <Input
+                      value={newSchemaName}
+                      onChange={(_, d) => setNewSchemaName(d.value)}
+                      placeholder="marketing"
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <Input value={newSchemaDesc} onChange={(_, d) => setNewSchemaDesc(d.value)} placeholder="Marketing-domain tables" />
+                  </Field>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Runs <code>CREATE SCHEMA IF NOT EXISTS</code> on the Synapse Spark pool via Livy and adds it to the catalog.
+                      Tables placed here are addressable as <code>{shortcutLakehouseId}.{newSchemaName || '<schema>'}.&lt;table&gt;</code>.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {newSchemaError && <MessageBar intent="error"><MessageBarBody>{newSchemaError}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNewSchemaOpen(false)} disabled={newSchemaBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={createSchema}
+                    disabled={newSchemaBusy || !newSchemaName.trim() || !/^[A-Za-z0-9_]+$/.test(newSchemaName) || newSchemaName === 'dbo'}>
+                    {newSchemaBusy ? 'Creating…' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Share dialog — Azure RBAC role assignment at the container scope.
+              Loom-native mirror of Fabric's "Share" affordance; reuses the
+              same /api/lakehouse/permissions POST as the Permissions dialog.
+              No Fabric workspace required. */}
+          <Dialog open={shareOpen} onOpenChange={(_, d) => {
+            setShareOpen(d.open);
+            if (!d.open) { setSharePrincipal(''); setShareError(null); setShareSuccess(null); }
+          }}>
+            <DialogSurface style={{ maxWidth: '560px' }}>
+              <DialogBody>
+                <DialogTitle>Share — {activeContainer || 'lakehouse'}</DialogTitle>
+                <DialogContent>
+                  <Caption1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
+                    Grant a user, group, or service principal access to this lakehouse
+                    container via Azure RBAC. Provide the Entra ID object id of the
+                    recipient. Sharing is applied directly on the storage scope — no
+                    Fabric or Power BI workspace is involved.
+                  </Caption1>
+                  {shareError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>Share failed</MessageBarTitle>{shareError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {shareSuccess && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>{shareSuccess}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  <Field label="Principal object id" required hint="Entra ID user, group, or service principal object id (GUID)">
+                    <Input
+                      value={sharePrincipal}
+                      onChange={(_, d) => setSharePrincipal(d.value)}
+                      placeholder="11111111-2222-3333-4444-555555555555"
+                    />
+                  </Field>
+                  <Field label="Principal type" style={{ marginTop: 8 }}>
+                    <Dropdown
+                      selectedOptions={[sharePrincipalType]}
+                      value={sharePrincipalType}
+                      onOptionSelect={(_, d) => setSharePrincipalType((d.optionValue as any) || 'User')}
+                    >
+                      <Option value="User">User</Option>
+                      <Option value="Group">Group</Option>
+                      <Option value="ServicePrincipal">Service principal</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Permission level" style={{ marginTop: 8 }}>
+                    <Dropdown
+                      selectedOptions={[shareRole]}
+                      value={shareRole}
+                      onOptionSelect={(_, d) => setShareRole(d.optionValue || shareRole)}
+                    >
+                      <Option value="Storage Blob Data Reader">Read (Storage Blob Data Reader)</Option>
+                      <Option value="Storage Blob Data Contributor">Read + Write (Storage Blob Data Contributor)</Option>
+                      <Option value="Storage Blob Data Owner">Full control (Storage Blob Data Owner)</Option>
+                    </Dropdown>
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" disabled={shareBusy} onClick={() => setShareOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={shareBusy || !sharePrincipal.trim()} onClick={grantShare}>
+                    {shareBusy ? 'Granting…' : 'Grant access'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Move table to schema dialog (F9) — ALTER TABLE … RENAME TO via Livy. */}
+          <Dialog open={moveTableOpen} onOpenChange={(_, d) => setMoveTableOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 480 }}>
+              <DialogBody>
+                <DialogTitle>Move table to schema</DialogTitle>
+                <DialogContent>
+                  <Field label="Table">
+                    <Input value={moveTableName} readOnly />
+                  </Field>
+                  <Field label="From schema">
+                    <Input value={moveTableFrom} readOnly />
+                  </Field>
+                  <Field label="To schema" required hint="Pick the destination schema. Create new schemas in the Schemas tab.">
+                    <Dropdown
+                      selectedOptions={moveTableTo ? [moveTableTo] : []}
+                      value={moveTableTo}
+                      placeholder="Select a schema"
+                      onOptionSelect={(_, d) => setMoveTableTo(d.optionValue || '')}
+                    >
+                      {(schemas || []).filter((sch) => sch.name !== moveTableFrom).map((sch) => (
+                        <Option key={sch.name} value={sch.name}>{sch.name}{sch.isDefault ? ' (default)' : ''}</Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Runs <code>ALTER TABLE {moveTableFrom}.{moveTableName} RENAME TO {moveTableTo || '<schema>'}.{moveTableName}</code> on the Spark pool.
+                      The table stays queryable via its new 4-part name.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {moveTableStatus && <MessageBar intent="success"><MessageBarBody>{moveTableStatus}</MessageBarBody></MessageBar>}
+                  {moveTableError && <MessageBar intent="error"><MessageBarBody>{moveTableError}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setMoveTableOpen(false)} disabled={moveTableBusy}>Close</Button>
+                  <Button appearance="primary" onClick={submitMoveTable}
+                    disabled={moveTableBusy || !moveTableTo.trim() || moveTableTo === moveTableFrom}>
+                    {moveTableBusy ? 'Moving…' : 'Move'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* New semantic model — honest gate. In Fabric this creates a
+              DirectLake Power BI model over the lakehouse Delta tables, which
+              requires a Fabric/Power BI capacity. There is no Azure-native 1:1
+              (per no-fabric-dependency.md the lakehouse itself is 100% Azure-
+              native, but DirectLake specifically needs a capacity). The dialog
+              documents the supported Azure-native reporting path instead. */}
+          <Dialog open={semanticModelGateOpen} onOpenChange={(_, d) => setSemanticModelGateOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '600px' }}>
+              <DialogBody>
+                <DialogTitle>New semantic model</DialogTitle>
+                <DialogContent>
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Requires Power BI / Fabric capacity</MessageBarTitle>
+                      In Microsoft Fabric, a Lakehouse semantic model uses{' '}
+                      <strong>DirectLake</strong> storage mode — the model reads Delta
+                      Parquet directly from OneLake without import. That path needs a
+                      Fabric capacity (F2+) and the Lakehouse SQL analytics endpoint, so
+                      it has no Azure-native 1:1 and is intentionally not provisioned here.
+                      <br /><br />
+                      <strong>Azure-native path (no Fabric capacity):</strong> connect
+                      Power BI Desktop to this lakehouse over the Synapse Serverless SQL
+                      endpoint (<code>&lt;workspace&gt;-ondemand.sql.azuresynapse.net</code>)
+                      using Import or DirectQuery, then publish. Or use{' '}
+                      <strong>Analyze data &rarr; SQL endpoint</strong> on this ribbon to
+                      query the Delta tables with T-SQL and build reports from there.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
+                    If your org runs a Fabric capacity alongside Loom, set{' '}
+                    <code>LOOM_LAKEHOUSE_BACKEND=fabric</code> with a bound workspace to
+                    enable the native "New semantic model" command — it stays strictly
+                    opt-in and never gates the default Azure-native lakehouse.
+                  </Caption1>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSemanticModelGateOpen(false)}>Close</Button>
+                  <Button
+                    appearance="primary"
+                    icon={<Database20Regular />}
+                    onClick={() => { setSemanticModelGateOpen(false); setTab('sql'); }}
+                  >
+                    Open SQL endpoint
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Load to Table (F6) wizard + job toast */}
+          <Toaster toasterId={lttToasterId} />
+          {lttEntry && (
+            <LoadToTableWizard
+              open={lttOpen}
+              onOpenChange={setLttOpen}
+              container={activeContainer || ''}
+              path={lttEntry.name}
+              onJobSubmitted={({ jobId, tableName, rowCount }) => {
+                const sessId = jobId.split('.')[0];
+                // F10 — record the load-to-table hand-off in the jobs store so the
+                // background-job registry + per-lakehouse toast continuity name the
+                // originating lakehouse (survives tab switch / component unmount).
+                if (activeContainer) {
+                  recordLoadToTable({ lakehouseName, container: activeContainer, tableName });
+                }
+                dispatchToast(
+                  <Toast>
+                    <ToastTitle
+                      action={<Link href="/monitor">View in Monitor</Link>}
+                    >
+                      Load to table started · job {sessId} — table “{tableName}”
+                      {typeof rowCount === 'number' ? ` (${rowCount} rows)` : ''} materializing as Delta.
+                    </ToastTitle>
+                  </Toast>,
+                  { intent: 'success', timeout: 12000 },
+                );
+                // Refresh the Tables tab so the new table shows up.
+                if (activeContainer) loadPaths(activeContainer, 'Tables');
+              }}
+            />
+          )}
         </>
       }
     />
