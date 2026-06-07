@@ -177,6 +177,12 @@ param loomDefaultSparkPool string = 'loompool'
 @description('Loom Synapse Spark (Big Data) pool name — backs the Lakehouse column-summary stats job + notebook/spark editors. Defaults to the loompool Spark pool the landing-zone Synapse module deploys.')
 param loomSynapseSparkPool string = 'loompool'
 
+@description('AML workspace name for Serverless Spark %%pyspark cell execution (Commercial / GCC only). Empty disables AML Spark; the editor falls back to the Synapse Spark Livy path. Gov boundaries force this empty (AML Serverless Spark is not offered in Azure Government).')
+param loomAmlSparkWorkspace string = ''
+
+@description('Synapse Spark pool used for notebook %%pyspark cell execution (Livy). Defaults to loomSynapseSparkPool so notebook cells run on the same pool unless a dedicated interactive pool is wanted.')
+param loomNotebookSparkPool string = loomSynapseSparkPool
+
 @description('Synapse SQL TDS host suffix override. Empty (default) = derived from AZURE_CLOUD in synapse-sql-client.ts (Commercial/GCC sql.azuresynapse.net; GCC-High/IL5 sql.azuresynapse.usgovcloudapi.net). Set explicitly only to force a specific sovereign endpoint.')
 param loomSynapseHostSuffix string = ''
 
@@ -858,6 +864,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_DEV_SUFFIX', value: loomSynapseDevSuffix }
             { name: 'LOOM_SYNAPSE_HOST_SUFFIX', value: loomSynapseHostSuffix }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
+            // %%pyspark cell routing (execute-spark). Commercial / GCC: AML
+            // Serverless Spark when loomAmlSparkWorkspace is set. Gov (GCC-High /
+            // IL5): forced empty so the route always uses Synapse Livy — AML
+            // Serverless Spark is not available in Azure Government.
+            { name: 'LOOM_AML_SPARK', value: boundary == 'GCC-High' || boundary == 'IL5' ? '' : loomAmlSparkWorkspace }
+            // Synapse Spark pool dedicated to notebook %%pyspark cells (Livy).
+            { name: 'LOOM_SYNAPSE_SPARK_POOL', value: loomNotebookSparkPool }
             // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
             // Commercial / GCC use database.windows.net; GCC-High / IL5 use the US-Gov audience.
             { name: 'LOOM_SYNAPSE_SQL_TOKEN_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'database.usgovcloudapi.net' : 'database.windows.net' }

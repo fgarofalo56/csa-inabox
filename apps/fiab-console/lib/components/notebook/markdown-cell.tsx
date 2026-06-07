@@ -7,6 +7,7 @@ import {
   ChevronUp16Regular, ChevronDown16Regular,
   LockClosed16Regular, LockClosed16Filled, Copy16Regular,
   ArrowMaximize16Regular, ArrowMinimize16Regular,
+  ArrowSwap16Regular, ReOrderDotsVertical16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 
@@ -43,6 +44,14 @@ const useStyles = makeStyles({
     borderRadius: '4px 4px 0 0',
   },
   spacer: { flex: 1 },
+  dragHandle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    cursor: 'grab',
+    color: tokens.colorNeutralForeground3,
+    padding: '2px',
+    ':active': { cursor: 'grabbing' },
+  },
   editor: {
     width: '100%', minHeight: 80,
     fontFamily: 'Consolas, monospace', fontSize: 13, padding: 8,
@@ -109,11 +118,17 @@ export interface MarkdownCellProps {
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onDuplicate?: () => void;
+  onConvertToCode?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  dragHandleProps?: {
+    draggable: boolean;
+    onDragStart: (e: React.DragEvent) => void;
+    onDragEnd: (e: React.DragEvent) => void;
+  };
 }
 
-export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: MarkdownCellProps) {
+export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMoveUp, onMoveDown, onDuplicate, onConvertToCode, canMoveUp, canMoveDown, dragHandleProps }: MarkdownCellProps) {
   const s = useStyles();
   const [editing, setEditing] = useState(!cell.source);
   const [maximized, setMaximized] = useState(false);
@@ -140,6 +155,20 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
       onClick={onFocus}
     >
       <div className={s.header}>
+        {dragHandleProps && (
+          <span
+            className={s.dragHandle}
+            draggable={dragHandleProps.draggable}
+            onDragStart={dragHandleProps.onDragStart}
+            onDragEnd={dragHandleProps.onDragEnd}
+            onClick={(e) => e.stopPropagation()}
+            role="button"
+            aria-label="Drag to reorder cell"
+            title="Drag to reorder"
+          >
+            <ReOrderDotsVertical16Regular />
+          </span>
+        )}
         <Caption1 className={s.tag}># md</Caption1>
         <Button
           size="small"
@@ -152,6 +181,15 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
         </Button>
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         <div className={s.spacer} />
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={<ArrowSwap16Regular />}
+          disabled={!onConvertToCode}
+          onClick={(e) => { e.stopPropagation(); onConvertToCode?.(); }}
+          aria-label="Convert to code cell"
+          title="Convert to code cell"
+        />
         <Button
           size="small"
           appearance={locked ? 'primary' : 'subtle'}

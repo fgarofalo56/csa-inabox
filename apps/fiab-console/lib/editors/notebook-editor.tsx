@@ -88,6 +88,19 @@ function useWorkspaces() {
 
 const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run cell to queue execution.\ndf = spark.range(10)\ndf.show()\n`;
 
+/**
+ * Pure, client-safe detection of a leading Synapse language magic. Mirrors
+ * synapse-livy-client.parseMagicKind without importing it (that module pulls in
+ * the Azure SDK, which must not land in the browser bundle). %%pyspark and its
+ * aliases route the cell to the dedicated Spark backend (execute-spark).
+ */
+const SPARK_MAGICS = ['%%pyspark', '%%python', '%%spark', '%%scala', '%%sql', '%%sparksql', '%%sparkr', '%%r'];
+function cellRoutesToSpark(source: string): boolean {
+  const line = source.split('\n').find(l => l.trim() !== '');
+  if (!line) return false;
+  return SPARK_MAGICS.includes(line.trim().toLowerCase().split(/\s+/)[0]);
+}
+
 function starterCells(): NotebookCell[] {
   return [
     { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
@@ -644,6 +657,165 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
+  // ---- Drag-to-reorder (native HTML5 DnD on the cell drag handle) ----
+  // The handle in each cell header is the only draggable element, so dragging
+  // never fights Monaco text selection. Dropping persists through the normal
+  // Save path (dirty → PUT /api/items/notebook/[id] → Cosmos definition.cells),
+  // i.e. the reordered cells survive reload — they are the notebook's .ipynb.
+  const dragIndexRef = useRef<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const reorderCells = useCallback((from: number, to: number) => {
+    if (from === to || from < 0 || to < 0) return;
+    setCells(prev => {
+      if (from >= prev.length || to >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  const onCellDrop = useCallback((targetIdx: number) => {
+    const from = dragIndexRef.current;
+    dragIndexRef.current = null;
+    setDragOverId(null);
+    if (from == null) return;
+    reorderCells(from, targetIdx);
+  }, [reorderCells]);
+
+  // ---- Stop: client-side interrupt registry checked by the poll loops ----
+  const cancelRef = useRef<Set<string>>(new Set());
+  const stopCell = useCallback((id: string) => {
+    cancelRef.current.add(id);
+    patchCell(id, { output: { status: 'error', ename: 'Cancelled', evalue: 'Execution stopped by user.' } });
+    setRunMsg(`Cell ${id.slice(0, 6)} stopped.`);
+  }, [patchCell]);
+
+  // ---- Split / merge (Edit menu) ----
+  // Split a code cell into two at its midpoint (no Monaco cursor coupling):
+  // top keeps the source's first half, a new cell below gets the rest.
+  const splitCell = useCallback((id: string) => {
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const cell = prev[idx];
+      if (cell.type !== 'code') return prev;
+      const lines = cell.source.split('\n');
+      if (lines.length < 2) return prev; // nothing meaningful to split
+      const mid = Math.ceil(lines.length / 2);
+      const fresh = emptyCell('code', cell.lang || defaultLang);
+      const newCell: NotebookCell = { ...fresh, source: lines.slice(mid).join('\n') };
+      const next = [...prev];
+      next.splice(idx, 1,
+        { ...cell, source: lines.slice(0, mid).join('\n'), output: undefined, executionCount: undefined },
+        newCell,
+      );
+      return next;
+    });
+    setDirty(true);
+  }, [defaultLang]);
+
+  // Merge a cell with the one below it (same type only). Markdown joins with a
+  // blank line; code joins with a blank line too so statements stay separated.
+  const mergeCellDown = useCallback((id: string) => {
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0 || idx >= prev.length - 1) return prev;
+      const top = prev[idx];
+      const bot = prev[idx + 1];
+      if (top.type !== bot.type) return prev;
+      const merged: NotebookCell = {
+        ...top,
+        source: `${top.source}\n\n${bot.source}`,
+        output: undefined,
+        executionCount: undefined,
+      };
+      const next = [...prev];
+      next.splice(idx, 2, merged);
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  // ---- Convert cell type (code ⇄ markdown) ----
+  const convertCell = useCallback((id: string, to: 'code' | 'markdown') => {
+    setCells(prev => prev.map(c => {
+      if (c.id !== id || c.type === to) return c;
+      return {
+        ...c,
+        type: to,
+        lang: to === 'code' ? (c.lang || defaultLang) : undefined,
+        output: undefined,
+        executionCount: undefined,
+      };
+    }));
+    setDirty(true);
+  }, [defaultLang]);
+
+  // Route a %%pyspark cell to the dedicated Spark backend (AML Serverless Spark
+  // on Commercial/GCC, Synapse Livy on Gov). No compute target needed — backend
+  // is chosen server-side from env (LOOM_AML_SPARK / LOOM_SYNAPSE_SPARK_POOL).
+  const runSparkCell = useCallback(async (cell: NotebookCell) => {
+    if (!workspaceId || !notebookId) return;
+    cancelRef.current.delete(cell.id);
+    patchCell(cell.id, { output: { status: 'pending' } });
+    setRunMsg(`Running %%pyspark cell ${cell.id.slice(0, 6)} on Spark…`);
+    const prevExec = cell.executionCount || 0;
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: cell.source, cellId: cell.id }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        patchCell(cell.id, { output: { status: 'error', ename: 'DispatchError', evalue: `${j.error || 'dispatch failed'}${j.hint ? ' — ' + j.hint : ''}` } });
+        setRunMsg(`%%pyspark dispatch failed: ${j.error}`);
+        return;
+      }
+      let runId: string = j.runId;
+      const start = Date.now();
+      const MAX_MS = 15 * 60 * 1000;
+      let pollInterval = 2000;
+      while (Date.now() - start < MAX_MS) {
+        if (cancelRef.current.has(cell.id)) { cancelRef.current.delete(cell.id); return; }
+        await new Promise(res => setTimeout(res, pollInterval));
+        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
+        const p = await pollRes.json();
+        if (!p.ok) { patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } }); break; }
+        if (p.runId && p.runId !== runId) runId = p.runId;
+        const phaseHint = p.phase === 'session-starting' ? ' · Spark pool warming (~60-90s)' : p.phase ? ` · ${p.phase}` : '';
+        const elapsed = Math.floor((Date.now() - start) / 1000);
+        setRunMsg(`%%pyspark ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s · ${p.backend || ''}`);
+        if (p.phase === 'statement-running' || p.phase === 'job-running') pollInterval = 1500;
+        if (p.output) {
+          patchCell(cell.id, {
+            executionCount: prevExec + 1,
+            output: {
+              status: p.output.status === 'ok' ? 'ok' : 'error',
+              textPlain: p.output.textPlain,
+              data: p.output.data,
+              ename: p.output.ename,
+              evalue: p.output.evalue,
+              traceback: p.output.traceback,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+          setRunMsg(`%%pyspark cell ${cell.id.slice(0, 6)} complete (${p.backend || 'spark'})`);
+          break;
+        }
+        if (['error', 'dead', 'killed', 'Failed', 'Canceled'].includes(p.status)) {
+          patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: '' } });
+          break;
+        }
+      }
+    } catch (e: any) {
+      patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+    }
+  }, [workspaceId, notebookId, patchCell]);
+
   // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
   // CRITICAL: use patchCell (not updateCell) for output mutations so source
   // edits the user makes WHILE the cell is running don't get overwritten
@@ -651,8 +823,13 @@ export function NotebookEditor({ item, id }: Props) {
   // appear broken — clicking Save persisted the pre-Run cell source.
   const runCell = useCallback(async (cell: NotebookCell) => {
     if (!workspaceId || !notebookId) return;
-    if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     if (cell.type !== 'code') return;
+    // %%pyspark (and language-magic) cells route to the dedicated Spark backend
+    // regardless of the selected compute target — that is the explicit cell
+    // routing this editor provides.
+    if (cellRoutesToSpark(cell.source)) { await runSparkCell(cell); return; }
+    if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
+    cancelRef.current.delete(cell.id);
     patchCell(cell.id, { output: { status: 'pending' } });
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
@@ -673,6 +850,7 @@ export function NotebookEditor({ item, id }: Props) {
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       let pollInterval = 2000; // 2s during session-starting, 1s during statement
       while (Date.now() - start < MAX_MS) {
+        if (cancelRef.current.has(cell.id)) { cancelRef.current.delete(cell.id); return; }
         await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
@@ -713,7 +891,7 @@ export function NotebookEditor({ item, id }: Props) {
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
+  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs, runSparkCell]);
 
   // Build the Fabric-parity ribbon with real handlers. Previously these were
   // decorative labels with no onClick — the Ribbon component auto-disables
@@ -756,6 +934,16 @@ export function NotebookEditor({ item, id }: Props) {
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
         ]},
       ]},
+      { id: 'edit', label: 'Edit', groups: [
+        { label: 'Cell', actions: [
+          { label: 'Split cell', onClick: activeCellId ? () => splitCell(activeCellId) : undefined, disabled: !activeCellId },
+          { label: 'Merge with below', onClick: activeCellId ? () => mergeCellDown(activeCellId) : undefined, disabled: !activeCellId },
+        ]},
+        { label: 'Convert', actions: [
+          { label: 'To code cell', onClick: activeCellId ? () => convertCell(activeCellId, 'code') : undefined, disabled: !activeCellId },
+          { label: 'To markdown cell', onClick: activeCellId ? () => convertCell(activeCellId, 'markdown') : undefined, disabled: !activeCellId },
+        ]},
+      ]},
       { id: 'run', label: 'Run', groups: [
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
@@ -770,6 +958,7 @@ export function NotebookEditor({ item, id }: Props) {
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
     run, save, del, loadList, insertCell, openAttach,
+    splitCell, mergeCellDown, convertCell,
   ]);
 
   return (
@@ -1030,7 +1219,12 @@ export function NotebookEditor({ item, id }: Props) {
                   onAddMarkdown={() => insertCell(-1, 'markdown')}
                 />
                 {cells.map((c, idx) => (
-                  <div key={c.id}>
+                  <div
+                    key={c.id}
+                    onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
+                    onDrop={(e) => { e.preventDefault(); onCellDrop(idx); }}
+                    style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: 4 } : undefined}
+                  >
                     {c.type === 'code' ? (
                       <CodeCell
                         cell={c}
@@ -1038,12 +1232,19 @@ export function NotebookEditor({ item, id }: Props) {
                         onFocus={() => setActiveCellId(c.id)}
                         onChange={(next) => updateCell(c.id, next)}
                         onRun={runCell}
+                        onStop={() => stopCell(c.id)}
                         onDelete={() => deleteCell(c.id)}
                         onMoveUp={() => moveCell(c.id, -1)}
                         onMoveDown={() => moveCell(c.id, 1)}
                         onDuplicate={() => duplicateCell(c.id)}
+                        onConvertToMarkdown={() => convertCell(c.id, 'markdown')}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        dragHandleProps={{
+                          draggable: true,
+                          onDragStart: () => { dragIndexRef.current = idx; },
+                          onDragEnd: () => { dragIndexRef.current = null; setDragOverId(null); },
+                        }}
                       />
                     ) : (
                       <MarkdownCell
@@ -1055,8 +1256,14 @@ export function NotebookEditor({ item, id }: Props) {
                         onMoveUp={() => moveCell(c.id, -1)}
                         onMoveDown={() => moveCell(c.id, 1)}
                         onDuplicate={() => duplicateCell(c.id)}
+                        onConvertToCode={() => convertCell(c.id, 'code')}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        dragHandleProps={{
+                          draggable: true,
+                          onDragStart: () => { dragIndexRef.current = idx; },
+                          onDragEnd: () => { dragIndexRef.current = null; setDragOverId(null); },
+                        }}
                       />
                     )}
                     <CellAdder

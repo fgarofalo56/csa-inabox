@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, Caption1, Select, Spinner, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, Select, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import {
   Play16Regular, Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
-  LockClosed16Regular, LockClosed16Filled, Copy16Regular,
+  ChevronRight16Regular, LockClosed16Regular, LockClosed16Filled, Copy16Regular,
   ArrowMaximize16Regular, ArrowMinimize16Regular,
+  Stop16Filled, ArrowSwap16Regular, ReOrderDotsVertical16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
@@ -45,6 +46,14 @@ const useStyles = makeStyles({
     borderRadius: '4px 4px 0 0',
   },
   spacer: { flex: 1 },
+  dragHandle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    cursor: 'grab',
+    color: tokens.colorNeutralForeground3,
+    padding: '2px',
+    ':active': { cursor: 'grabbing' },
+  },
   editor: {
     width: '100%',
     minHeight: 80,
@@ -100,21 +109,48 @@ const LANG_OPTIONS: { value: NotebookCellLang; label: string }[] = [
   { value: 'tsql', label: 'T-SQL' },
 ];
 
+/**
+ * Pure, client-safe detection of a leading Synapse language magic on the first
+ * non-empty line (mirrors synapse-livy-client.parseMagicKind, re-implemented
+ * here so this 'use client' component never bundles the Azure SDK). Returns the
+ * resolved routing kind, or null when there's no magic.
+ */
+const MAGIC_ROUTING: Record<string, 'pyspark' | 'spark' | 'sql' | 'sparkr'> = {
+  '%%pyspark': 'pyspark', '%%python': 'pyspark',
+  '%%spark': 'spark', '%%scala': 'spark',
+  '%%sql': 'sql', '%%sparksql': 'sql',
+  '%%sparkr': 'sparkr', '%%r': 'sparkr',
+};
+function detectCellMagic(source: string): 'pyspark' | 'spark' | 'sql' | 'sparkr' | null {
+  const line = source.split('\n').find(l => l.trim() !== '');
+  if (!line) return null;
+  const token = line.trim().toLowerCase().split(/\s+/)[0];
+  return MAGIC_ROUTING[token] ?? null;
+}
+
 export interface CodeCellProps {
   cell: NotebookCell;
   active?: boolean;
   onFocus?: () => void;
   onChange: (next: NotebookCell) => void;
   onRun?: (cell: NotebookCell) => Promise<void>;
+  onStop?: () => void;
   onDelete?: () => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onDuplicate?: () => void;
+  onConvertToMarkdown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Native HTML5 drag handle wiring supplied by the editor for reorder. */
+  dragHandleProps?: {
+    draggable: boolean;
+    onDragStart: (e: React.DragEvent) => void;
+    onDragEnd: (e: React.DragEvent) => void;
+  };
 }
 
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: CodeCellProps) {
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDelete, onMoveUp, onMoveDown, onDuplicate, onConvertToMarkdown, canMoveUp, canMoveDown, dragHandleProps }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -137,9 +173,13 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
   const setLang = (lang: NotebookCellLang) => onChange({ ...cell, lang });
   const setSource = (source: string) => onChange({ ...cell, source });
   const toggleLock = () => onChange({ ...cell, locked: !cell.locked });
+  const toggleCollapsed = () => onChange({ ...cell, collapsed: !cell.collapsed });
 
   const exec = cell.executionCount ? `[${cell.executionCount}]` : '[ ]';
   const locked = !!cell.locked;
+  const collapsed = !!cell.collapsed;
+  const lineCount = cell.source ? cell.source.split('\n').length : 0;
+  const magic = detectCellMagic(cell.source);
 
   const shell = (
     <div
@@ -151,15 +191,58 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
       onClick={onFocus}
     >
       <div className={s.header}>
+        {dragHandleProps && (
+          <span
+            className={s.dragHandle}
+            draggable={dragHandleProps.draggable}
+            onDragStart={dragHandleProps.onDragStart}
+            onDragEnd={dragHandleProps.onDragEnd}
+            onClick={(e) => e.stopPropagation()}
+            role="button"
+            aria-label="Drag to reorder cell"
+            title="Drag to reorder"
+          >
+            <ReOrderDotsVertical16Regular />
+          </span>
+        )}
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={collapsed ? <ChevronRight16Regular /> : <ChevronDown16Regular />}
+          onClick={(e) => { e.stopPropagation(); toggleCollapsed(); }}
+          aria-label={collapsed ? 'Expand cell' : 'Collapse cell'}
+          title={collapsed ? 'Expand cell' : 'Collapse cell'}
+        />
         <Caption1 className={s.badgeCount}>{exec}</Caption1>
-        <Button size="small" appearance="subtle" icon={running ? <Spinner size="tiny" /> : <Play16Regular />} disabled={running || !onRun || locked} onClick={(e) => { e.stopPropagation(); handleRun(); }}>
-          {running ? 'Running…' : 'Run cell'}
-        </Button>
+        {running ? (
+          <Button size="small" appearance="subtle" icon={<Stop16Filled />} disabled={!onStop} onClick={(e) => { e.stopPropagation(); onStop?.(); }}>
+            Stop
+          </Button>
+        ) : (
+          <Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={!onRun || locked} onClick={(e) => { e.stopPropagation(); handleRun(); }}>
+            Run cell
+          </Button>
+        )}
         <Select size="small" value={cell.lang || 'pyspark'} onChange={(_, d) => setLang(d.value as NotebookCellLang)} onClick={(e) => e.stopPropagation()} disabled={locked}>
           {LANG_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
+        {magic && (
+          <Badge appearance="tint" color="brand" size="small" title={`%%${magic} routes this cell to the Spark backend`}>
+            %%{magic} → Spark
+          </Badge>
+        )}
+        {collapsed && <Badge appearance="outline" size="small">{lineCount} line{lineCount === 1 ? '' : 's'} hidden</Badge>}
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         <div className={s.spacer} />
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={<ArrowSwap16Regular />}
+          disabled={!onConvertToMarkdown}
+          onClick={(e) => { e.stopPropagation(); onConvertToMarkdown?.(); }}
+          aria-label="Convert to markdown cell"
+          title="Convert to markdown cell"
+        />
         <Button
           size="small"
           appearance={locked ? 'primary' : 'subtle'}
@@ -181,17 +264,19 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" />
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
-      <MonacoTextarea
-        value={cell.source}
-        onChange={setSource}
-        language={(cell.lang || 'pyspark') as MonacoLanguage}
-        readOnly={locked}
-        height={maximized ? 'calc(100% - 200px)' : 160}
-        minHeight={80}
-        ariaLabel={`Code cell ${cell.id}`}
-        className={mergeClasses(locked && s.editorLocked)}
-      />
-      {cell.output && (
+      {!collapsed && (
+        <MonacoTextarea
+          value={cell.source}
+          onChange={setSource}
+          language={(cell.lang || 'pyspark') as MonacoLanguage}
+          readOnly={locked}
+          height={maximized ? 'calc(100% - 200px)' : 160}
+          minHeight={80}
+          ariaLabel={`Code cell ${cell.id}`}
+          className={mergeClasses(locked && s.editorLocked)}
+        />
+      )}
+      {!collapsed && cell.output && (
         <div className={mergeClasses(
           s.outputBox,
           maximized && s.outputBoxMaximized,
