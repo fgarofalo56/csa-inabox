@@ -1156,6 +1156,18 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        notebookId={notebookId}
+                        onInsertBelow={(newCell) => {
+                          setCells(prev => {
+                            const spliceIdx = prev.findIndex(cell => cell.id === c.id);
+                            if (spliceIdx < 0) return [...prev, newCell];
+                            const next = [...prev];
+                            next.splice(spliceIdx + 1, 0, newCell);
+                            return next;
+                          });
+                          setActiveCellId(newCell.id);
+                          setDirty(true);
+                        }}
                       />
                     ) : (
                       <MarkdownCell
