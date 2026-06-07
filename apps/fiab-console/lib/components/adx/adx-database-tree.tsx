@@ -46,6 +46,7 @@ import {
   DocumentTable20Regular, Table20Regular, MathFormula20Regular,
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
+  DataHistogram16Regular, Code16Regular, ChartMultiple16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -79,10 +80,57 @@ export interface AdxDatabaseTreeProps {
   onOpenQuery?: (kql: string) => void;
   /** Increment to force a refresh from the parent (e.g. after an external create). */
   refreshKey?: number;
+  /** Called when the user clicks "Get data" on a table. Parent opens the ingest wizard pre-filled. */
+  onGetData?: (tableName: string) => void;
+  /** Called when the user clicks "Create dashboard" on a table. Parent creates + navigates. */
+  onCreateDashboard?: (tableName: string) => void;
+}
+
+/**
+ * KQL data-profile query for a table.
+ * Mirrors the ADX web UI "Data profile" action (hot-cache row/time statistics).
+ * Uses ingestion_time() — a built-in ADX scalar that returns the extent-level
+ * ingestion timestamp; zero network cost, runs on hot-cache extents only.
+ * Ref: https://learn.microsoft.com/azure/data-explorer/kusto/query/ingestiontimefunction
+ */
+function dataProfileKql(table: string): string {
+  const q = `["${table}"]`;
+  return [
+    `// ── Data profile: ${table} ────────────────────────────────────────`,
+    `// Based on ADX hot-cache data. Mirrors the "Data profile" side panel`,
+    `// in the Azure Data Explorer and Fabric Eventhouse web UIs.`,
+    `${q}`,
+    `| summarize`,
+    `    TotalRows       = count(),`,
+    `    OldestIngestion = tostring(min(ingestion_time())),`,
+    `    NewestIngestion = tostring(max(ingestion_time())),`,
+    `    Last24hRows     = countif(ingestion_time() >= ago(24h)),`,
+    `    Last7dRows      = countif(ingestion_time() >= ago(7d)),`,
+    `    Last30dRows     = countif(ingestion_time() >= ago(30d))`,
+    `| extend Table = "${table}", ProfiledAt = now()`,
+  ].join('\n');
+}
+
+/**
+ * KQL insert-script template for a table.
+ * Mirrors the ADX web UI "Insert script" context-menu item which emits a
+ * .ingest inline command template the user fills in.
+ * Ref: https://learn.microsoft.com/kusto/management/data-ingestion/ingest-inline
+ */
+function insertScriptKql(table: string): string {
+  return [
+    `// ── Insert script: ${table} ────────────────────────────────────────`,
+    `// Inline CSV ingest — for small payloads (≤1 MB) or ad-hoc rows.`,
+    `// For larger files or continuous ingest, use the "Get data" wizard.`,
+    `.ingest inline into table ["${table}"] <|`,
+    `// Replace with your CSV rows (no header, one row per line):`,
+    `// col1,col2,col3`,
+    `// val1,val2,val3`,
+  ].join('\n');
 }
 
 /** A typed, ADX/Fabric-faithful KQL database object navigator. */
-export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxDatabaseTreeProps) {
+export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0, onGetData, onCreateDashboard }: AdxDatabaseTreeProps) {
   const s = useStyles();
 
   const idq = `id=${encodeURIComponent(itemId)}`;
@@ -310,8 +358,18 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                       >{t.name}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         {typeof t.totalRowCount === 'number' && <Caption1>{t.totalRowCount.toLocaleString()} rows</Caption1>}
-                        <Tooltip content="Take 100" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`["${t.name}"]\n| take 100`)} aria-label={`Query ${t.name}`} /></Tooltip>
-                        <Tooltip content="Drop table" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(TABLES, `name=${encodeURIComponent(t.name)}`)} aria-label={`Drop ${t.name}`} /></Tooltip>
+                        {/* 1. Data profile — runs ADX hot-cache statistics query in the editor */}
+                        <Tooltip content="Data profile" relationship="label"><Button size="small" appearance="subtle" icon={<DataHistogram16Regular />} onClick={() => openQuery(dataProfileKql(t.name))} aria-label={`Data profile for ${t.name}`} /></Tooltip>
+                        {/* 2. Explore data — take 100, same as clicking the table name */}
+                        <Tooltip content="Explore data" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`["${t.name}"]\n| take 100`)} aria-label={`Explore ${t.name}`} /></Tooltip>
+                        {/* 3. Insert script — .ingest inline template loaded into the editor */}
+                        <Tooltip content="Insert script" relationship="label"><Button size="small" appearance="subtle" icon={<Code16Regular />} onClick={() => openQuery(insertScriptKql(t.name))} aria-label={`Insert script for ${t.name}`} /></Tooltip>
+                        {/* 4. Get data — opens the parent's ingest wizard pre-filled with this table */}
+                        <Tooltip content={onGetData ? 'Get data' : 'Get data (mount via KqlDatabaseEditor)'} relationship="label"><Button size="small" appearance="subtle" icon={<ArrowImport20Regular />} disabled={!onGetData} onClick={() => onGetData?.(t.name)} aria-label={`Get data into ${t.name}`} /></Tooltip>
+                        {/* 5. Create dashboard — creates a kql-dashboard with a starter tile for this table */}
+                        <Tooltip content={onCreateDashboard ? 'Create dashboard' : 'Create dashboard (mount via KqlDatabaseEditor)'} relationship="label"><Button size="small" appearance="subtle" icon={<ChartMultiple16Regular />} disabled={!onCreateDashboard} onClick={() => onCreateDashboard?.(t.name)} aria-label={`Create dashboard from ${t.name}`} /></Tooltip>
+                        {/* 6. Delete table — .drop table T ifexists via /api/adx/tables DELETE */}
+                        <Tooltip content="Delete table" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(TABLES, `name=${encodeURIComponent(t.name)}`)} aria-label={`Drop ${t.name}`} /></Tooltip>
                       </span>
                     </span>
                   </TreeItemLayout>

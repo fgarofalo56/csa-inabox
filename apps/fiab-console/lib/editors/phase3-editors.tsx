@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import { getItem, createItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { WarehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
@@ -925,6 +925,18 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
 
+  const router = useRouter();
+
+  // The workspace item record (for workspaceId, needed by "Create dashboard").
+  // Reads from the React Query cache page.tsx already populated (same key), so
+  // it does NOT fire an extra network request in normal use.
+  const { data: itemRecord } = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'kql-database', id],
+    queryFn: () => getItem('kql-database', id),
+    enabled: !!(id && id !== 'new'),
+    staleTime: 60_000,
+  });
+
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
     if (!id || id === 'new') return;
@@ -977,11 +989,50 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [loading, id, run]);
 
-  const openWizard = useCallback((k: KqlWizardKind) => {
+  const openWizard = useCallback((k: KqlWizardKind, preTable?: string) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
-    setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    // preTable: when called from a tree "Get data" hover, pre-fill the target table.
+    setWizSource(preTable || ''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
   }, []);
+
+  /**
+   * Create a kql-dashboard item in the same workspace as this kql-database,
+   * seed its first tile with a `| take 100` for the given table, then navigate
+   * to the new dashboard. Mirrors the ADX web UI / Fabric "Create dashboard"
+   * table context-menu action. Azure-native: uses Cosmos item creation via
+   * POST /api/workspaces/<id>/items + PUT /api/items/kql-dashboard/<id>.
+   * No Fabric REST involved.
+   */
+  const createDashboardFromTable = useCallback(async (tableName: string) => {
+    const wsId = itemRecord?.workspaceId;
+    const kqlTile = `["${tableName}"]\n| take 100`;
+    const displayName = `${tableName} — Dashboard`;
+    if (!wsId) {
+      // No workspace context yet (item not loaded). Fall back to empty new-item flow.
+      router.push(`/items/kql-dashboard/new`);
+      return;
+    }
+    try {
+      // Step 1: create the Cosmos item (POST /api/workspaces/<wsId>/items).
+      const created = await createItem(wsId, { itemType: 'kql-dashboard', displayName });
+      // Step 2: seed the first tile (PUT /api/items/kql-dashboard/<id>).
+      await fetch(`/api/items/kql-dashboard/${created.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tiles: [{ title: tableName, kql: kqlTile, viz: 'table' }],
+          dataSources: [],
+          parameters: [],
+        }),
+      });
+      // Step 3: navigate. Receipt = user arrives at the working dashboard editor.
+      router.push(`/items/kql-dashboard/${created.id}`);
+    } catch {
+      // Best-effort fallback: open new dashboard without pre-seeded tile.
+      router.push(`/items/kql-dashboard/new`);
+    }
+  }, [itemRecord, router]);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
   // same; mgmt commands starting with `.` are auto-routed to /v1/rest/mgmt).
@@ -1090,6 +1141,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
                 el?.focus();
               }}
+              onGetData={(tableName) => openWizard('ingest', tableName)}
+              onCreateDashboard={createDashboardFromTable}
             />
           )
           : (
