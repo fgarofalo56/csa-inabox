@@ -37,9 +37,12 @@ import {
   BookOpen20Regular, TableSimple20Regular,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
+  Wrench20Regular,
   History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
+import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
 import { LoadToTableWizard } from './components/load-to-table-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -355,6 +358,16 @@ export function LakehouseEditor({ item, id }: Props) {
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
+
+  // ---- Delta maintenance dialog (OPTIMIZE / VACUUM / ZORDER BY) ----
+  const [maintainOpen, setMaintainOpen] = useState(false);
+  const [maintainTable, setMaintainTable] = useState('');
+  // Resolve ZORDER candidate columns from the installed bundle's DDL (available
+  // even before the live ADLS schema is read). Falls back to [] when unknown.
+  const maintainColumns = useMemo(() => {
+    const def = bundleDeltaTables.find((t) => t.name === maintainTable || leafName(t.name) === maintainTable);
+    return def?.ddl ? parseDdlColumns(def.ddl) : [];
+  }, [bundleDeltaTables, maintainTable]);
 
   // F10 — human-readable lakehouse name for background-job toasts + a11y labels.
   // Priority: WorkspaceItem.displayName (Cosmos) > LakehouseSettings.displayName
@@ -1875,13 +1888,19 @@ export function LakehouseEditor({ item, id }: Props) {
           onClick: activeContainer ? () => { setShareError(null); setShareSuccess(null); setShareOpen(true); } : undefined,
           disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined,
         },
+        {
+          label: 'Maintain…', icon: <Wrench20Regular />,
+          onClick: (tab === 'tables' && maintainTable) ? () => setMaintainOpen(true) : undefined,
+          disabled: !(tab === 'tables' && maintainTable),
+          title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY',
+        },
       ]},
     ]},
   ], [
     writeBlocked, writeTitle, canFileAction, uploading, runningUploads.length,
     onUploadClick, onNewFolder, refreshActive, openShortcutWizard, router,
     notebookHref, hasFile, activePath, selectFile, onLoadToTables,
-    activeContainer, openPerms, openSettings,
+    activeContainer, openPerms, openSettings, tab, maintainTable,
   ]);
 
   // ---- render ---------------------------------------------------------
@@ -2406,6 +2425,12 @@ export function LakehouseEditor({ item, id }: Props) {
                                                 onClick={() => openTableHistory(`Tables/${t.name}`)}>
                                                 History (time travel)
                                               </MenuItem>
+                                              <MenuItem icon={<Wrench20Regular />}
+                                                disabled={!activeContainer}
+                                                title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                                onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                                Maintain…
+                                              </MenuItem>
                                             </MenuList>
                                           </MenuPopover>
                                         </Menu>
@@ -2486,6 +2511,12 @@ export function LakehouseEditor({ item, id }: Props) {
                                                   <Button size="small" appearance="outline" icon={<History20Regular />}
                                                     onClick={() => openTableHistory(t.name)}>
                                                     History
+                                                  </Button>
+                                                  <Button size="small" appearance="outline" icon={<Wrench20Regular />}
+                                                    disabled={!activeContainer}
+                                                    title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                                    onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                                    Maintain…
                                                   </Button>
                                                 </span>
                                               </TableCell>
@@ -3929,6 +3960,14 @@ export function LakehouseEditor({ item, id }: Props) {
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <DeltaMaintenanceDialog
+            open={maintainOpen}
+            onOpenChange={setMaintainOpen}
+            container={activeContainer || ''}
+            tableName={maintainTable}
+            columns={maintainColumns}
+          />
 
           {/* New schema dialog (F9) — name = letters/digits/underscores; 'dbo' reserved. */}
           <Dialog open={newSchemaOpen} onOpenChange={(_, d) => setNewSchemaOpen(d.open)}>

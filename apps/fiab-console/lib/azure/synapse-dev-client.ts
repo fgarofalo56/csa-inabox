@@ -21,8 +21,18 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
-const DEV_SCOPE = 'https://dev.azuresynapse.net/.default';
+// Cloud-aware endpoint hosts. Default to Azure Commercial; override per
+// sovereign cloud via env so the same code path works in GCC / GCC-High / IL5:
+//   AZURE_ARM_HOST=management.usgovcloudapi.net
+//   AZURE_SYNAPSE_DEV_HOST_SUFFIX=dev.azuresynapse.usgovcloudapi.net
+// The Livy/ARM API versions + paths are identical across clouds — only the host
+// (and therefore the token audience, handled automatically by the credential)
+// changes.
+const ARM_HOST = process.env.AZURE_ARM_HOST || 'management.azure.com';
+const DEV_HOST_SUFFIX = process.env.AZURE_SYNAPSE_DEV_HOST_SUFFIX || 'dev.azuresynapse.net';
+
+const ARM_SCOPE = `https://${ARM_HOST}/.default`;
+const DEV_SCOPE = `https://${DEV_HOST_SUFFIX}/.default`;
 const ARM_API = '2021-06-01';
 const DEV_API = '2020-12-01';
 const LIVY_API = '2019-11-01-preview';
@@ -46,15 +56,16 @@ function rg():  string { return required('LOOM_DLZ_RG'); }
 function ws():  string { return required('LOOM_SYNAPSE_WORKSPACE'); }
 
 function armBase(): string {
-  return `https://management.azure.com/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.Synapse/workspaces/${ws()}`;
+  return `https://${ARM_HOST}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.Synapse/workspaces/${ws()}`;
 }
 
 export function devBase(): string {
-  // Sovereign-cloud aware: GCC-High / DoD use `azuresynapse.us`. Defaults to
-  // the commercial `azuresynapse.net`. Set LOOM_SYNAPSE_DEV_SUFFIX in the
-  // Console env for sovereign deployments.
-  const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX || 'azuresynapse.net';
-  return `https://${ws()}.dev.${suffix}`;
+  // Sovereign-cloud aware. Prefer the explicit LOOM_SYNAPSE_DEV_SUFFIX
+  // (e.g. `azuresynapse.us` for GCC-High / DoD), otherwise use the
+  // AZURE_SYNAPSE_DEV_HOST_SUFFIX host (default `dev.azuresynapse.net`).
+  const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX;
+  if (suffix) return `https://${ws()}.dev.${suffix}`;
+  return `https://${ws()}.${DEV_HOST_SUFFIX}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
