@@ -146,6 +146,12 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Synapse dev-endpoint DNS suffix for sovereign clouds. Commercial = azuresynapse.net (default); GCC-High / DoD = azuresynapse.us. Empty resolves to azuresynapse.net in code.')
+param loomSynapseDevSuffix string = ''
+
+@description('Default Synapse Spark pool used for lakehouse schema DDL (CREATE/ALTER/DROP SCHEMA via Livy). Matches the synapse.bicep sparkPool default.')
+param loomDefaultSparkPool string = 'loompool'
+
 @description('Loom Synapse Spark (Big Data) pool name — backs the Lakehouse column-summary stats job + notebook/spark editors. Defaults to the loompool Spark pool the landing-zone Synapse module deploys.')
 param loomSynapseSparkPool string = 'loompool'
 
@@ -737,6 +743,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA
+            // DDL via Livy, and the sovereign-cloud dev-endpoint DNS suffix.
+            { name: 'LOOM_DEFAULT_SPARK_POOL', value: loomDefaultSparkPool }
+            { name: 'LOOM_SYNAPSE_DEV_SUFFIX', value: loomSynapseDevSuffix }
             { name: 'LOOM_SYNAPSE_HOST_SUFFIX', value: loomSynapseHostSuffix }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
             // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
