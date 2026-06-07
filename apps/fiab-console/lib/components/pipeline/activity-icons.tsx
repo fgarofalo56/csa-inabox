@@ -27,6 +27,7 @@ import type { JSX } from 'react';
 const ICONS: Record<string, JSX.Element> = {
   Copy: <DocumentArrowRight20Regular />,
   RefreshDataflow: <ArrowFlowUpRight20Regular />,
+  ExecuteWranglingDataflow: <ArrowFlowUpRight20Regular />,
   ExecuteDataFlow: <Flowchart20Regular />,
   Lookup: <SearchInfo20Regular />,
   GetMetadata: <DocumentText20Regular />,

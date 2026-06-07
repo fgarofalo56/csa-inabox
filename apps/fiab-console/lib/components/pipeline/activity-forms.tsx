@@ -268,6 +268,15 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
   ],
 };
 
+/**
+ * Copy (type: 'Copy') intentionally has NO flat ACTIVITY_FORMS schema. Its
+ * config surface is the four-tab editor in `lib/components/pipeline/copy/*`
+ * (Source / Sink / Mapping / Settings), routed by `properties-panel.tsx`.
+ * `hasActivityForm('Copy')` therefore stays false so the generic form never
+ * renders for Copy. Exported for documentation + tests.
+ */
+export const COPY_TABBED_TYPES = new Set(['Copy']);
+
 export function hasActivityForm(type: string | undefined): boolean {
   return !!type && Array.isArray(ACTIVITY_FORMS[type]) && ACTIVITY_FORMS[type].length > 0;
 }
@@ -312,10 +321,14 @@ export interface ActivityFormProps {
   parameters: PipelineParameter[];
   variables: PipelineVariable[];
   allActivities: PipelineActivity[];
+  /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
+  pipelineId?: string;
+  /** Workspace id — used by the Evaluate pre-fill API call. */
+  workspaceId?: string;
 }
 
 /** Renders the typed form for the activity's type, or null if none is defined. */
-export function ActivityForm({ activity, onPatch, parameters, variables, allActivities }: ActivityFormProps) {
+export function ActivityForm({ activity, onPatch, parameters, variables, allActivities, pipelineId, workspaceId }: ActivityFormProps) {
   const schema = activity.type ? ACTIVITY_FORMS[activity.type] : undefined;
   if (!schema) return null;
   const tp = (activity.typeProperties as any) || {};
@@ -428,6 +441,8 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
             variables={variables}
             activities={allActivities}
             selfName={activity.name}
+            pipelineId={pipelineId}
+            workspaceId={workspaceId}
             onChange={(v) => patch(fld, v)}
           />
         );
