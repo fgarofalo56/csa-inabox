@@ -14,6 +14,19 @@
 > anywhere), connector galleries + Test Connection, source control / Publish, and
 > the factory-wide Monitor hub. The ❌/⚠️ rows below are accurate.
 
+> **rev.3 (2026-06-06) — Mapping Data Flow designer now PARTIAL, not absent.**
+> Since rev.2, a real **visual Mapping Data Flow designer** shipped in the
+> Mounted-ADF editor (`mounted-adf-editor.tsx` → `MappingDataFlowDesigner`):
+> a React-Flow source → transform → sink graph with a transform palette and a
+> per-node config pane that round-trips real **Data Flow Script** to/from the ADF
+> data-flow REST on open and Save. It is graded **B−** in its own doc
+> ([`adf-mapping-data-flow.md`](./adf-mapping-data-flow.md)) — 7 of ~25
+> transforms, no visual expression builder, and live data-preview is an honest
+> config-gate. §9 below reflects this (the marquee designer is ⚠️ partial, no
+> longer ❌). The other rev.2 gaps (Copy Data Tool wizard, Expression Builder,
+> connector galleries + Test Connection, source control / Publish, factory-wide
+> Monitor hub) remain genuinely absent.
+
 > **Scope:** the ENTIRE Azure Data Factory Studio experience (Home, Author,
 > Monitor, Manage), not just one editor. Two finer-grained parity docs already
 > exist and stay authoritative for their slice:
@@ -147,8 +160,8 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 | ADF capability | Loom | Backend |
 | --- | --- | --- |
 | List / create / delete data flows | ✅ tree | `GET/PUT/DELETE .../dataflows/{name}` |
-| **Visual transformation designer** (Source → Select/Filter/DerivedColumn/Join/Aggregate/Pivot/Window/SurrogateKey/Sink graph; add-transformation `＋`; per-transform inspector; column mapping; expression builder) | ❌ MISSING — create makes an **empty** `MappingDataFlow`; the only way to define transforms is **raw JSON** (no visual designer at all) | empty shell saved in `typeProperties` |
-| **Data flow debug** (turn on debug cluster, **Data preview** tab per transform, column stats) | ❌ MISSING | — |
+| **Visual transformation designer** (Source → Select/Filter/DerivedColumn/Join/Aggregate/Pivot/Window/SurrogateKey/Sink graph; add-transformation `＋`; per-transform inspector; column mapping; expression builder) | ⚠️ partial — real React-Flow source→transform→sink **designer** in the Mounted-ADF editor (`MappingDataFlowDesigner`); 7 of ~25 transforms (source/select/filter/join/aggregate/derive/sink), round-trips Data Flow Script. Graded **B−** in [`adf-mapping-data-flow.md`](./adf-mapping-data-flow.md). No visual expression builder; remaining transforms still raw JSON | data-flow create-or-update (DFS) via `…/factories/{f}/dataflows` |
+| **Data flow debug** (turn on debug cluster, **Data preview** tab per transform, column stats) | ⚠️ honest-gate — "Data preview" names `createDataFlowDebugSession` / `executeDataFlowDebugCommand` (debug helper not wired); debug-session toggle MISSING | — |
 | Data flow Script / Settings / Optimize (partitioning) | ❌ MISSING | — |
 | ExecuteDataFlow activity *references* a data flow in a pipeline | ⚠️ partial — activity exists & saves; references a flow by name (no inline authoring) | `PUT .../pipelines/{name}` |
 
@@ -198,8 +211,10 @@ But "full ADF Studio parity" it is **not**. The following high-value surfaces ar
 experience:
 
 1. **Mapping Data Flow visual designer** — the marquee ADF transformation
-   surface. Loom can only create an empty flow and edit raw JSON. No designer,
-   no data preview, no debug.
+   surface. Now **partial (B−)**: a real source→transform→sink designer shipped
+   ([`adf-mapping-data-flow.md`](./adf-mapping-data-flow.md)) with 7 of ~25
+   transforms and DFS round-trip, but no visual expression builder and data
+   preview is a config-gate. Short of full parity, no longer absent.
 2. **Copy Data Tool wizard** — the #1 onboarding path in ADF. Absent.
 3. **Source control / CI-CD** (Git config, Publish, ARM templates) — absent;
    Loom is live-mode only.

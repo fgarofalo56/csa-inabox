@@ -142,6 +142,13 @@ export interface PipelineDesignerProps {
   /** Externally select an activity (e.g. after the host adds one). */
   selectedName?: string | null;
   onSelectedNameChange?: (name: string | null) => void;
+  /** Pipeline item id — enables live property-panel helpers (e.g. the Approval
+   *  activity's "Fetch trigger URL" call). Omit to hide them. */
+  itemId?: string;
+  /** Workspace id of the pipeline item. */
+  workspaceId?: string;
+  /** Editor host API slug (default 'data-pipeline'). */
+  apiSlug?: string;
 }
 
 export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesignerProps>(function PipelineDesigner({
@@ -152,6 +159,9 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   readOnly = false,
   selectedName: controlledSelected,
   onSelectedNameChange,
+  itemId,
+  workspaceId,
+  apiSlug,
 }, ref) {
   const s = useStyles();
   const canvasRef = useRef<CanvasHandle>(null);
@@ -479,6 +489,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             snapToGrid={snapToGrid}
             showGrid={showGrid}
             onDrillInto={drillInto}
+            onDrillBack={() => { if (drillPath.length > 0) popTo(drillPath.length - 1); }}
             onDropPaletteKey={(key) => {
               const def = findByKey(key);
               if (!def) return;
@@ -497,8 +508,12 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             allActivities={levelActivities}
             parameters={parameters}
             variables={variables}
+            parentActivity={currentContainer || null}
             onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
             onDelete={() => { if (selected) deleteActivity(selected.name); }}
+            itemId={itemId}
+            workspaceId={workspaceId}
+            apiSlug={apiSlug}
           />
         </div>
         <Caption1 className={s.status}>
