@@ -74,6 +74,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     const mergedTables = [...tables, ...contentTables];
     const mergedFunctions = [...functions, ...contentFunctions];
 
+    // Follower (database-shortcut) state — drives the read-only badge, the
+    // write-block messaging, and disabling of the mutation ribbon wizards.
+    const isFollower = !!item?.state?.isFollower;
+    const followerLeaderCluster = item?.state?.followerLeaderCluster || null;
+    const followerConfigName = item?.state?.followerConfigName || null;
+    const followerDatabaseName = item?.state?.followerDatabaseName || null;
+
     return NextResponse.json({
       ok: true,
       cluster: clusterUri(),
@@ -87,6 +94,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       materializedViews,
       materializedViewCount: materializedViews.length,
       displayName: item?.displayName,
+      // Follower / database-shortcut projection.
+      isFollower,
+      followerLeaderCluster,
+      followerConfigName,
+      followerDatabaseName,
       // Content-derived projections — surfaced when the live object is absent.
       schema,
       starterQueries,
