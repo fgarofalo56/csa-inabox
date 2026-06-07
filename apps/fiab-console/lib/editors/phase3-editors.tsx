@@ -34,7 +34,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Tooltip,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, Switch, ProgressBar, SpinButton,
+  Label, Select, Textarea, Switch, Checkbox, ProgressBar, SpinButton,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -7274,6 +7274,8 @@ interface RuleLite {
   condition?: { operator?: string; value?: unknown };
   action?: { kind?: string; config?: Record<string, unknown> };
   state?: string; lastTriggered?: string;
+  actionGroupId?: string;
+  actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
 }
 
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -7301,9 +7303,23 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [condProperty, setCondProperty] = useState('');
   const [condOperator, setCondOperator] = useState('GreaterThan');
   const [condValue, setCondValue] = useState('20');
-  const [actKind, setActKind] = useState<'TeamsMessage' | 'Email' | 'Webhook' | 'AdfPipelineRun' | 'NotebookRun' | 'PowerAutomateFlow'>('TeamsMessage');
+  const [actKind, setActKind] = useState<'TeamsMessage' | 'Email' | 'Webhook' | 'SMS' | 'LogicApp' | 'AdfPipelineRun' | 'NotebookRun' | 'PowerAutomateFlow'>('TeamsMessage');
   const [actTarget, setActTarget] = useState('');
   const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
+  // SMS + Logic App receiver fields (Azure Monitor action-group receivers).
+  const [actCountryCode, setActCountryCode] = useState('1');
+  const [actPhone, setActPhone] = useState('');
+  const [actLogicAppResourceId, setActLogicAppResourceId] = useState('');
+  const [actLogicAppCallbackUrl, setActLogicAppCallbackUrl] = useState('');
+  const [actLogicAppTrigger, setActLogicAppTrigger] = useState('manual');
+  const [fetchingCallback, setFetchingCallback] = useState(false);
+  const [callbackErr, setCallbackErr] = useState<string | null>(null);
+  // Pick-existing action group flow.
+  const [agList, setAgList] = useState<{ id: string; name: string; shortName: string; emailCount: number; smsCount: number; webhookCount: number; logicAppCount: number }[]>([]);
+  const [useExistingAg, setUseExistingAg] = useState(false);
+  const [existingAgId, setExistingAgId] = useState('');
+  const [agBusy, setAgBusy] = useState<string | null>(null);
+  const [agMsg, setAgMsg] = useState<string | null>(null);
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
 
@@ -7379,6 +7395,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       TeamsMessage: { webhookUrl: actTarget, message: actMessage },
       Email: { to: actTarget, subject: actMessage },
       Webhook: { url: actTarget },
+      SMS: { countryCode: actCountryCode, phoneNumber: actPhone },
+      LogicApp: { logicAppResourceId: actLogicAppResourceId, callbackUrl: actLogicAppCallbackUrl },
       AdfPipelineRun: { pipeline: actTarget },
       NotebookRun: { notebookId: actTarget },
       PowerAutomateFlow: { triggerUrl: actTarget },
@@ -7388,13 +7406,18 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: ruleName.trim(), condition, action }),
+        body: JSON.stringify({
+          name: ruleName.trim(),
+          condition,
+          action,
+          ...(useExistingAg && existingAgId ? { existingActionGroupId: existingAgId } : {}),
+        }),
       });
       const j = await r.json();
       if (!j.ok) { setRuleErr(j.error || 'add rule failed'); }
       else { setRuleOpen(false); setRuleName(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, useExistingAg, existingAgId, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -7405,6 +7428,57 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   }, [workspaceId, selectedId, loadRules]);
 
   const canNewRule = !!selectedId && !!workspaceId;
+
+  // Load existing action groups for the pick-existing flow (non-fatal on error
+  // — the create-new path still works without the list).
+  const loadActionGroups = useCallback(async () => {
+    try {
+      const r = await fetch('/api/monitor/action-groups');
+      const j = await r.json();
+      if (j.ok) setAgList(j.actionGroups || []);
+    } catch { /* non-fatal: pick-existing simply has no options */ }
+  }, []);
+  useEffect(() => { if (workspaceId) loadActionGroups(); }, [workspaceId, loadActionGroups]);
+
+  // Resolve a Logic App trigger's callback URL from ARM (so the receiver can be
+  // invoked when the alert fires) and populate the field.
+  const fetchCallbackUrl = useCallback(async () => {
+    if (!actLogicAppResourceId.trim()) { setCallbackErr('Enter the Logic App resource id first.'); return; }
+    setFetchingCallback(true); setCallbackErr(null);
+    try {
+      const r = await fetch('/api/monitor/logic-app-callback', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workflowResourceId: actLogicAppResourceId.trim(), triggerName: actLogicAppTrigger.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) setCallbackErr(j.gate?.remediation || j.error || 'failed to resolve callback URL');
+      else setActLogicAppCallbackUrl(j.callbackUrl || '');
+    } catch (e: any) {
+      setCallbackErr(e?.message || String(e));
+    } finally { setFetchingCallback(false); }
+  }, [actLogicAppResourceId, actLogicAppTrigger]);
+
+  // Fire a REAL test notification through an action group's receivers (the
+  // webhook receiver logs the Common Alert Schema payload — the acceptance test).
+  const testNotification = useCallback(async (actionGroupId: string) => {
+    setAgBusy(actionGroupId); setAgMsg(null); setRulesErr(null);
+    try {
+      const r = await fetch('/api/monitor/action-groups', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ _action: 'test', actionGroupId }),
+      });
+      const j = await r.json();
+      if (!j.ok) setAgMsg(`Test failed: ${j.gate?.remediation || j.error || 'unknown'}`);
+      else {
+        const rc = j.result?.receivers || {};
+        setAgMsg(`Test notification sent — ${rc.emails || 0} email · ${rc.sms || 0} SMS · ${rc.webhooks || 0} webhook · ${rc.logicApps || 0} Logic App receiver(s).`);
+      }
+    } catch (e: any) {
+      setAgMsg(`Test failed: ${e?.message || String(e)}`);
+    } finally { setAgBusy(null); }
+  }, []);
 
   // Start/Stop reflex — calls the new /start /stop routes which PATCH every
   // trigger on the reflex to Active/Stopped via Fabric REST.
@@ -7428,10 +7502,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
   // Action template — pre-select the action kind + a sensible target/message in
   // the wizard (no JSON). The user refines via the dropdowns/inputs.
-  const openTemplate = useCallback((kind: 'Email' | 'Teams' | 'Pipeline' | 'Notebook' | 'PowerAutomate') => {
+  const openTemplate = useCallback((kind: 'Email' | 'SMS' | 'Teams' | 'Webhook' | 'LogicApp' | 'Pipeline' | 'Notebook' | 'PowerAutomate') => {
     const map = {
       Email: { k: 'Email' as const, t: 'alerts@example.com', m: 'Loom alert' },
+      SMS: { k: 'SMS' as const, t: '', m: '' },
       Teams: { k: 'TeamsMessage' as const, t: 'https://outlook.office.com/webhook/...', m: 'Loom alert: {{eventValue}}' },
+      Webhook: { k: 'Webhook' as const, t: 'https://your-endpoint.example.com/hook', m: '' },
+      LogicApp: { k: 'LogicApp' as const, t: '', m: '' },
       Pipeline: { k: 'AdfPipelineRun' as const, t: 'pl_alert_handler', m: '' },
       Notebook: { k: 'NotebookRun' as const, t: '', m: '' },
       PowerAutomate: { k: 'PowerAutomateFlow' as const, t: 'https://prod-xx.logic.azure.com/workflows/.../triggers/...', m: '' },
@@ -7451,7 +7528,10 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       ]},
       { label: 'Actions', actions: [
         { label: 'Email', onClick: canNewRule ? () => openTemplate('Email') : undefined, disabled: !canNewRule },
+        { label: 'SMS', onClick: canNewRule ? () => openTemplate('SMS') : undefined, disabled: !canNewRule },
         { label: 'Teams', onClick: canNewRule ? () => openTemplate('Teams') : undefined, disabled: !canNewRule },
+        { label: 'Webhook', onClick: canNewRule ? () => openTemplate('Webhook') : undefined, disabled: !canNewRule },
+        { label: 'Logic App', onClick: canNewRule ? () => openTemplate('LogicApp') : undefined, disabled: !canNewRule },
         { label: 'Run pipeline', onClick: canNewRule ? () => openTemplate('Pipeline') : undefined, disabled: !canNewRule },
         { label: 'Run notebook', onClick: canNewRule ? () => openTemplate('Notebook') : undefined, disabled: !canNewRule },
         { label: 'Power Automate', onClick: canNewRule ? () => openTemplate('PowerAutomate') : undefined, disabled: !canNewRule },
@@ -7549,34 +7629,88 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           </div>
 
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>THEN — action</Caption1>
+                          <Checkbox
+                            label="Attach an existing action group (skip building a new one)"
+                            checked={useExistingAg}
+                            disabled={agList.length === 0}
+                            onChange={(_: unknown, d: any) => setUseExistingAg(!!d.checked)}
+                          />
+                          {useExistingAg ? (
+                            <Field label="Action group" hint="Pick a Microsoft.Insights/actionGroups resource in the Loom alert resource group.">
+                              <Select value={existingAgId} onChange={(_: unknown, d: any) => setExistingAgId(d.value)}>
+                                <option value="">— select an action group —</option>
+                                {agList.map((ag) => (
+                                  <option key={ag.id} value={ag.id}>
+                                    {ag.name} ({ag.emailCount}✉ {ag.smsCount}☎ {ag.webhookCount}🔗 {ag.logicAppCount}⚙)
+                                  </option>
+                                ))}
+                              </Select>
+                            </Field>
+                          ) : (
+                          <>
                           <div style={{ display: 'flex', gap: 8 }}>
                             <Field label="Do" style={{ width: 200 }}>
                               <Select value={actKind} onChange={(_: unknown, d: any) => setActKind(d.value)}>
                                 <option value="TeamsMessage">Post to Teams</option>
                                 <option value="Email">Send email</option>
+                                <option value="SMS">Send SMS</option>
                                 <option value="Webhook">Call webhook</option>
+                                <option value="LogicApp">Trigger Logic App</option>
                                 <option value="AdfPipelineRun">Run a pipeline</option>
                                 <option value="NotebookRun">Run a notebook</option>
                                 <option value="PowerAutomateFlow">Trigger Power Automate</option>
                               </Select>
                             </Field>
-                            <Field label={
-                              actKind === 'TeamsMessage' ? 'Teams webhook URL' :
-                              actKind === 'Email' ? 'To address' :
-                              actKind === 'Webhook' ? 'Webhook URL' :
-                              actKind === 'AdfPipelineRun' ? 'Pipeline name' :
-                              actKind === 'NotebookRun' ? 'Notebook id' : 'Flow trigger URL'
-                            } style={{ flex: 1 }}>
-                              <Input value={actTarget} onChange={(_: unknown, d: any) => setActTarget(d.value)} />
-                            </Field>
+                            {(actKind !== 'SMS' && actKind !== 'LogicApp') && (
+                              <Field label={
+                                actKind === 'TeamsMessage' ? 'Teams webhook URL' :
+                                actKind === 'Email' ? 'To address' :
+                                actKind === 'Webhook' ? 'Webhook URL' :
+                                actKind === 'AdfPipelineRun' ? 'Pipeline name' :
+                                actKind === 'NotebookRun' ? 'Notebook id' : 'Flow trigger URL'
+                              } style={{ flex: 1 }}>
+                                <Input value={actTarget} onChange={(_: unknown, d: any) => setActTarget(d.value)} />
+                              </Field>
+                            )}
                           </div>
                           {(actKind === 'TeamsMessage' || actKind === 'Email') && (
                             <Field label={actKind === 'Email' ? 'Subject' : 'Message'}>
                               <Input value={actMessage} onChange={(_: unknown, d: any) => setActMessage(d.value)} />
                             </Field>
                           )}
+                          {actKind === 'SMS' && (
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <Field label="Country code" style={{ width: 140 }} hint="e.g. 1 for US">
+                                <Input value={actCountryCode} onChange={(_: unknown, d: any) => setActCountryCode(d.value)} />
+                              </Field>
+                              <Field label="Phone number" style={{ flex: 1 }}>
+                                <Input placeholder="5551234567" value={actPhone} onChange={(_: unknown, d: any) => setActPhone(d.value)} />
+                              </Field>
+                            </div>
+                          )}
+                          {actKind === 'LogicApp' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              <Field label="Logic App resource id" hint="Microsoft.Logic/workflows resource id (Consumption workflow with an HTTP trigger).">
+                                <Input placeholder="/subscriptions/.../providers/Microsoft.Logic/workflows/wf-alert" value={actLogicAppResourceId} onChange={(_: unknown, d: any) => setActLogicAppResourceId(d.value)} />
+                              </Field>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                                <Field label="Trigger name" style={{ width: 160 }}>
+                                  <Input value={actLogicAppTrigger} onChange={(_: unknown, d: any) => setActLogicAppTrigger(d.value)} />
+                                </Field>
+                                <Button appearance="secondary" disabled={fetchingCallback || !actLogicAppResourceId.trim()} onClick={fetchCallbackUrl}>
+                                  {fetchingCallback ? 'Resolving…' : 'Fetch callback URL from ARM'}
+                                </Button>
+                              </div>
+                              <Field label="Trigger callback URL" hint="Auto-filled by 'Fetch callback URL', or paste a listCallbackUrl SAS URL.">
+                                <Input value={actLogicAppCallbackUrl} onChange={(_: unknown, d: any) => setActLogicAppCallbackUrl(d.value)} />
+                              </Field>
+                              {callbackErr && <MessageBar intent="warning"><MessageBarBody>{callbackErr}</MessageBarBody></MessageBar>}
+                            </div>
+                          )}
+                          </>
+                          )}
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
-                            when {condProperty || '<property>'} {condOperator} {condValue || '<value>'} → {actKind}
+                            when {condProperty || '<property>'} {condOperator} {condValue || '<value>'} → {useExistingAg ? 'existing action group' : actKind}
                           </Caption1>
                           {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
                         </div>
@@ -7600,6 +7734,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                       <TableHeaderCell>Object · Property</TableHeaderCell>
                       <TableHeaderCell>Condition</TableHeaderCell>
                       <TableHeaderCell>Action</TableHeaderCell>
+                      <TableHeaderCell>Action group</TableHeaderCell>
                       <TableHeaderCell>State</TableHeaderCell>
                       <TableHeaderCell>Last triggered</TableHeaderCell>
                       <TableHeaderCell></TableHeaderCell>
@@ -7611,6 +7746,9 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           <TableCell>{r.objectName || '—'} · {r.propertyName || '—'}</TableCell>
                           <TableCell className={s.cell}>{r.condition ? `${r.condition.operator} ${fmtCell(r.condition.value)}` : '—'}</TableCell>
                           <TableCell className={s.cell}>{r.action?.kind || '—'}</TableCell>
+                          <TableCell className={s.cell} title={r.actionGroupId || ''}>
+                            {r.actionGroupId ? (r.actionGroupId.split('/').pop() || r.actionGroupId) : '—'}
+                          </TableCell>
                           <TableCell>{r.state || '—'}</TableCell>
                           <TableCell className={s.cell}>{r.lastTriggered || '—'}</TableCell>
                           <TableCell>
@@ -7620,6 +7758,45 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                       ))}
                     </TableBody>
                   </Table>
+                </div>
+              )}
+
+              {/* Action groups — resolved Microsoft.Insights/actionGroups per rule,
+                  with a real "Test notification" button that fires the group's
+                  receivers (webhook receiver logs the Common Alert Schema payload). */}
+              {rules.some((r) => r.actionGroupId) && (
+                <div style={{ marginTop: 16 }}>
+                  <Subtitle2>Action groups</Subtitle2>
+                  {agMsg && <MessageBar intent={agMsg.startsWith('Test failed') ? 'error' : 'success'} style={{ marginTop: 8 }}><MessageBarBody>{agMsg}</MessageBarBody></MessageBar>}
+                  <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                    <Table aria-label="Action groups" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Rule</TableHeaderCell>
+                        <TableHeaderCell>Action group ARM id</TableHeaderCell>
+                        <TableHeaderCell>Receivers</TableHeaderCell>
+                        <TableHeaderCell></TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {rules.filter((r) => r.actionGroupId).map((r) => {
+                          const rc = r.actionGroupReceivers;
+                          return (
+                            <TableRow key={`ag-${r.id}`}>
+                              <TableCell>{r.name}</TableCell>
+                              <TableCell className={s.cell}>{r.actionGroupId}</TableCell>
+                              <TableCell className={s.cell}>
+                                {rc ? `${rc.emails}✉ ${rc.sms}☎ ${rc.webhooks}🔗 ${rc.logicApps}⚙` : '—'}
+                              </TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="subtle" disabled={agBusy === r.actionGroupId} onClick={() => testNotification(r.actionGroupId!)}>
+                                  {agBusy === r.actionGroupId ? 'Sending…' : 'Test notification'}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               )}
             </>

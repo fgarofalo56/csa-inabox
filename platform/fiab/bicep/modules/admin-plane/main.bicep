@@ -228,6 +228,12 @@ param loomIotHubResourceId string = ''
 @description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
 param loomAlertRg string = ''
 
+@description('ARM management endpoint. Empty defaults to https://management.azure.com (Commercial). Set to https://management.usgovcloudapi.net for GCC-High / IL5.')
+param loomArmEndpoint string = ''
+
+@description('ARM token scope. Empty defaults to <ARM endpoint>/.default. Override only for sovereign clouds where the audience differs.')
+param loomArmScope string = ''
+
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
 
@@ -834,6 +840,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
             { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
+            // ARM endpoint / scope overrides for sovereign clouds (GCC-High / IL5).
+            // Empty on Commercial → monitor-client.ts falls back to
+            // https://management.azure.com. Set both for Azure Government.
+            { name: 'LOOM_ARM_ENDPOINT', value: loomArmEndpoint }
+            { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override
             // when ASA lives in a different RG / sub than the DLZ.
