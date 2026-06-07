@@ -15,6 +15,19 @@
 import type { PipelineActivity } from './types';
 
 /**
+ * Pre-fill the AzureHDInsight linked-service reference for new HDInsight
+ * activities. NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE is set by the
+ * deployment (admin-plane bicep) and exposed client-side so the four
+ * HDInsight activity templates stamp the cluster reference automatically.
+ * When unset, the reference is left blank and activity-forms.tsx surfaces an
+ * honest MessageBar gate naming LOOM_HDINSIGHT_LINKED_SERVICE.
+ */
+function hdiCluster(): string {
+  return (typeof process !== 'undefined'
+    && process.env?.NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE) || '';
+}
+
+/**
  * Palette groups — match the Fabric / ADF "Activities" sidebar exactly:
  *   - Move & transform : Copy data, Dataflow Gen2, Mapping data flow, Lookup,
  *                        Get metadata, Delete
@@ -75,6 +88,10 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
         source: { type: 'BlobSource' },
         sink: { type: 'BlobSink' },
         enableStaging: false,
+        enableSkipIncompatibleRow: false,
+        validateDataConsistency: false,
+        // dataIntegrationUnits / parallelCopies omitted = Auto.
+        // translator omitted = default column-name mapping.
       },
       inputs: [],
       outputs: [],
@@ -82,13 +99,19 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   },
   {
     key: 'DataflowGen2', label: 'Dataflow Gen2',
-    description: 'Run a published Fabric Dataflow Gen2 (Power Query M).',
-    category: 'move-transform', type: 'RefreshDataflow', namePrefix: 'Dataflow',
-    color: '#7719aa', fg: '#fff', runnable: false,
-    remediation: 'Dataflow Gen2 refresh is a Fabric-native activity. ADF backing exposes ExecuteDataFlow (mapping data flow) instead — drag that.',
+    description:
+      'Run a Power Query (M) dataflow on ADF Spark via ExecuteWranglingDataflow. ' +
+      'On the Azure-native path Loom publishes a WranglingDataFlow resource and ' +
+      'runs it; set LOOM_DATAFLOW_BACKEND=fabric + bind a workspace for the Fabric path.',
+    category: 'move-transform', type: 'ExecuteWranglingDataflow', namePrefix: 'Dataflow',
+    color: '#7719aa', fg: '#fff', runnable: true,
     build: (name) => ({
-      name, type: 'RefreshDataflow', dependsOn: [],
-      typeProperties: { dataflow: { referenceName: '', type: 'DataflowReference' } },
+      name, type: 'ExecuteWranglingDataflow', dependsOn: [],
+      typeProperties: {
+        dataFlow: { referenceName: '', type: 'DataFlowReference' },
+        integrationRuntime: { referenceName: 'AutoResolveIntegrationRuntime', type: 'IntegrationRuntimeReference' },
+        compute: { computeType: 'General', coreCount: 8 },
+      },
     }),
   },
   {
@@ -213,6 +236,91 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     }),
   },
 
+  // ---------- HDInsight family (F17) ----------
+  // ADF natively supports all four HDInsight activity types at api-version
+  // 2018-06-01 (the version adf-client.ts targets), so they save, validate,
+  // and run end-to-end against the deployed factory. Each activity carries a
+  // top-level `linkedServiceName` referencing an AzureHDInsight linked
+  // service (the cluster). hdiCluster() pre-fills that reference from
+  // NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE; when it is unset
+  // activity-forms.tsx renders an honest MessageBar gate naming
+  // LOOM_HDINSIGHT_LINKED_SERVICE. No Fabric dependency — pure ADF + an
+  // operator-registered Azure HDInsight cluster.
+  {
+    key: 'HDInsightHive', label: 'HDInsight Hive',
+    description: 'Execute a Hive query (.hql) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightHive', namePrefix: 'HiveActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightHive', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        scriptLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        scriptPath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
+    }),
+  },
+  {
+    key: 'HDInsightSpark', label: 'HDInsight Spark',
+    description: 'Run a Spark program (.py or .jar) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightSpark', namePrefix: 'SparkActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightSpark', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        sparkJobLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        rootPath: '',
+        entryFilePath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+      },
+    }),
+  },
+  {
+    key: 'HDInsightMapReduce', label: 'HDInsight MapReduce',
+    description: 'Run a MapReduce JAR on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightMapReduce', namePrefix: 'MapReduceActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightMapReduce', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        className: '',
+        jarLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        jarFilePath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
+    }),
+  },
+  {
+    key: 'HDInsightStreaming', label: 'HDInsight Streaming',
+    description: 'Execute a Hadoop Streaming job (mapper + reducer) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightStreaming', namePrefix: 'StreamingActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightStreaming', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        mapper: '',
+        reducer: '',
+        combiner: '',
+        fileLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        filePaths: [],
+        input: '',
+        output: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
+    }),
+  },
+
   // ============ Control flow ============
   {
     key: 'Web', label: 'Web',
@@ -232,6 +340,44 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     build: (name) => ({
       name, type: 'WebHook', dependsOn: [],
       typeProperties: { url: 'https://example.com/hook', method: 'POST', timeout: '00:10:00', headers: {} },
+    }),
+  },
+  {
+    // Approval activity — Azure-native parity for Fabric's "Office 365 Outlook →
+    // Send approval email" + Power Automate approvals. Implemented as a native
+    // ADF/Synapse WebHook activity that POSTs to a Consumption Logic App trigger.
+    // ADF injects `callBackUri` into the POST body; the Logic App runs the O365
+    // "Send approval email" action (blocks until the approver clicks Approve /
+    // Reject) and POSTs {StatusCode, Output|Error} back to callBackUri. A 200
+    // status continues the pipeline; a 400 fails the branch. No Fabric / Power
+    // Automate dependency — see platform/fiab/bicep/modules/integration/
+    // approval-logicapp.bicep.
+    key: 'ApprovalWebhook', label: 'Approval (Logic App)',
+    description:
+      'Pause the pipeline and send an Office 365 approval email via a Consumption ' +
+      'Logic App. Resumes when the approver clicks Approve or Reject. Requires ' +
+      'approval-logicapp.bicep deployed and LOOM_APPROVAL_LOGIC_APP_NAME set; ' +
+      'fetch the trigger URL in the Settings tab.',
+    category: 'control-flow', type: 'WebHook', namePrefix: 'Approval',
+    color: '#0062ad', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'WebHook', dependsOn: [],
+      typeProperties: {
+        url: '',
+        method: 'POST',
+        timeout: '04:00:00', // 4 h approval SLA; Logic Apps Consumption allows up to 90 d.
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          value:
+            "@json(concat('{\"pipelineName\":\"', pipeline().Pipeline, '\",\"runId\":\"', " +
+            "pipeline().RunId, '\",\"approverEmail\":\"', pipeline().parameters.approverEmail, '\"}'))",
+          type: 'Expression',
+        },
+        reportStatusOnCallBack: true,
+      },
+      // Discriminator so activity-forms renders the Approval form (not the plain
+      // Webhook form) even though both share ADF wire type `WebHook`.
+      userProperties: [{ name: '_loomKind', value: 'ApprovalWebhook' }],
     }),
   },
   {
@@ -374,12 +520,35 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
 /** Lookup by ADF type string. */
 export function findByType(type?: string): ActivityTypeDef | undefined {
   if (!type) return undefined;
-  return ACTIVITY_CATALOG.find((a) => a.type === type);
+  // Migrate Fabric-era `RefreshDataflow` tiles (saved before the Azure-native
+  // Dataflow Gen2 backend landed) onto the real ADF `ExecuteWranglingDataflow`
+  // type so existing pipelines keep resolving + stay runnable.
+  const normalised = type === 'RefreshDataflow' ? 'ExecuteWranglingDataflow' : type;
+  return ACTIVITY_CATALOG.find((a) => a.type === normalised);
 }
 
 /** Lookup by palette key. */
 export function findByKey(key: string): ActivityTypeDef | undefined {
   return ACTIVITY_CATALOG.find((a) => a.key === key);
+}
+
+/**
+ * Resolve the catalog def for a concrete activity instance. Some Loom palette
+ * entries share an ADF wire `type` but differ by a `_loomKind` user property
+ * (e.g. plain Webhook vs Approval — both ADF type `WebHook`). Prefer the
+ * `_loomKind` match so the right label / colour / form is used; fall back to
+ * the first type match.
+ */
+export function findForActivity(activity: PipelineActivity | null | undefined): ActivityTypeDef | undefined {
+  if (!activity) return undefined;
+  const kind = Array.isArray(activity.userProperties)
+    ? (activity.userProperties.find((p) => p.name === '_loomKind')?.value as string | undefined)
+    : undefined;
+  if (kind) {
+    const byKind = ACTIVITY_CATALOG.find((a) => a.key === kind);
+    if (byKind) return byKind;
+  }
+  return findByType(activity.type);
 }
 
 /** All activities in a category, in palette order. */

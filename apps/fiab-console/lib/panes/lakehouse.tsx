@@ -29,10 +29,11 @@ interface LakehouseItem { id: string; displayName: string; workspaceId?: string 
 interface Table {
   schema: string;
   name: string;
-  rowCount: number;
-  sizeBytes: number;
+  rowCount: number | null;
+  sizeBytes: number | null;
   format: string;
-  latestVersion: number;
+  status?: string;
+  latestVersion: number | null;
   columns?: number;
   ddl?: string;
 }
@@ -45,7 +46,10 @@ async function listLakehouses(): Promise<LakehouseItem[]> {
 }
 
 async function listTables(id: string): Promise<Table[]> {
-  const res = await fetch(`/api/lakehouse/tables?id=${encodeURIComponent(id)}`);
+  // The live catalog scans the medallion containers directly (Azure-native,
+  // _delta_log read) — the id is retained for routing parity but the scan is
+  // tenant-wide. rowCounts=true runs the Serverless COUNT(*) per Delta table.
+  const res = await fetch(`/api/lakehouse/tables?id=${encodeURIComponent(id)}&rowCounts=true`);
   const j = await res.json().catch(() => ({}));
   if (!res.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${res.status}`);
   return (j.tables || []) as Table[];
@@ -161,9 +165,10 @@ export function LakehousePane() {
               <div className={styles.meta}>
                 <Body1Strong>Name</Body1Strong><Body1>{selected.schema}.{selected.name}</Body1>
                 <Body1Strong>Format</Body1Strong><Body1>{selected.format}</Body1>
-                <Body1Strong>Rows (sample)</Body1Strong><Body1>{selected.rowCount.toLocaleString()}</Body1>
+                {selected.status && (<><Body1Strong>Status</Body1Strong><Body1>{selected.status}</Body1></>)}
+                <Body1Strong>Rows</Body1Strong><Body1>{typeof selected.rowCount === 'number' ? selected.rowCount.toLocaleString() : '—'}</Body1>
                 {typeof selected.columns === 'number' && (<><Body1Strong>Columns</Body1Strong><Body1>{selected.columns}</Body1></>)}
-                <Body1Strong>Latest version</Body1Strong><Body1>{selected.latestVersion}</Body1>
+                <Body1Strong>Latest version</Body1Strong><Body1>{typeof selected.latestVersion === 'number' ? `v${selected.latestVersion}` : '—'}</Body1>
               </div>
               {selected.ddl && (
                 <pre style={{ marginTop: 16, fontSize: 12, whiteSpace: 'pre-wrap', fontFamily: 'Cascadia Code, Consolas, monospace' }}>{selected.ddl}</pre>
