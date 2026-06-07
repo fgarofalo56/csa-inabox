@@ -17,6 +17,8 @@ global **time range**, with **auto-refresh** and **save**.
 | Capability | Fabric behavior |
 | --- | --- |
 | Add / edit tile | Each tile authors a KQL query (query editor) and a visual; Run shows the live result |
+| Tile editing window | Clicking a tile's Edit opens a dedicated tile-editing panel (title, visual, source, geometry, KQL, Run) |
+| Base queries | Top-level `baseQueries[]` of shared KQL snippets referenced by tiles (queryRef); inlined at run |
 | Tile visual types | render-operator visuals: table, timechart (line), barchart, columnchart, piechart, **stat/card**, anomaly, scatter/**map**, area |
 | Resize / lay out tiles | Drag-resize on the canvas grid |
 | Data sources | Add one or more KQL DBs; tiles + params select a source |
@@ -38,7 +40,9 @@ global **time range**, with **auto-refresh** and **save**.
 
 | Inventory row | State | Notes |
 | --- | --- | --- |
-| Add / edit tile (KQL + Run) | ✅ built | inline tile editor: Monaco KQL + per-tile **Run** → real result via `POST /run` |
+| Add / edit tile (KQL + Run) | ✅ built | tile **edit flyout** (Dialog): Monaco KQL + per-tile **Run** → real result rendered inline via `POST /run` |
+| Tile editing window | ✅ built | a single `Dialog` (`tileFlyoutIdx`) edits the selected tile — title, visual, data source, width/height, KQL, Run + live result preview; Apply/Delete in the footer |
+| Base queries | ✅ built | Base queries dialog manages shared KQL snippets; tiles reference them as `$baseQuery('name')`, inlined as a parenthesised sub-query by `substituteBaseQueries` before param/time substitution; persisted in the model |
 | Tile visual types (table, timechart, line, bar, column, pie, stat, map) | ✅ built | `TileVisual` + `ResultChart`/`StatCard`/`PieChart`/`MapVisual` (dependency-free SVG) |
 | Resize / lay out tiles | ✅ built | 12-col CSS grid; per-tile width (1–12) + height (1–8) controls; spans persist |
 | Data sources | ✅ built | Data sources dialog binds tiles/params to KQL databases; `tile.dataSourceId` → DB |
@@ -78,6 +82,10 @@ honest infra/preview gates with the full UI still rendered (per
 
 ## Substitution semantics (Fabric-compatible)
 
+- Base queries: `$baseQuery('name')` / `$baseQuery("name")` (whitespace-tolerant)
+  is inlined as `(<snippet kql>)` first, so the shared snippet also receives
+  time + param substitution. Unknown names are left intact so the KQL errors
+  visibly ("unresolved base query") rather than silently dropping the ref.
 - Time range: `_startTime` → resolved `ago(...)`, `_endTime` → `now()`,
   `_loomTimeFrom` → resolved `ago(...)` (back-compat with v2.x tiles).
 - Param literal rendering by data type: `string` → `"quoted"`, `long/int/real`
@@ -91,11 +99,12 @@ honest infra/preview gates with the full UI still rendered (per
 
 - `pnpm build` — clean (the three routes compile: `/[id]`, `/[id]/run`, `/[id]/param-values`).
 - Backend Vitest contract tests:
-  - `lib/azure/__tests__/kql-dashboard-model.test.ts` (18) — substitution, literal rendering, db resolution, sanitize.
-  - `app/api/items/kql-dashboard/__tests__/routes.test.ts` (16) — auth gates, time/param substitution into executed KQL, tile→DB binding, transient `/new` run, per-tile error isolation, query-based param values, content/structured errors.
-- DOM render tests (`lib/editors/__tests__/kql-dashboard.test.tsx`) are
-  pre-existing-red on the repo-wide `node` vitest-env `document is not defined`
-  issue — covered here by backend contract tests per the no-scaffold rule.
+  - `lib/azure/__tests__/kql-dashboard-model.test.ts` (24) — substitution, base-query inlining, literal rendering, db resolution, sanitize (incl. baseQueries).
+  - `app/api/items/kql-dashboard/__tests__/routes.test.ts` (17) — auth gates, time/param/base-query substitution into executed KQL, tile→DB binding, baseQueries PUT round-trip, transient `/new` run, per-tile error isolation, query-based param values, content/structured errors.
+- DOM render tests (`lib/editors/__tests__/kql-dashboard.test.tsx`) cover the
+  tile edit flyout + base-queries dialog; they run under jsdom once the repo-wide
+  vitest setup (`@testing-library/jest-dom`) resolves in the install — the model +
+  route contract tests above exercise the same backend per the no-scaffold rule.
 - Live probe (minted-session browser walk against ADX) unavailable in the
   worktree; the run/param-values routes call the same `executeQuery` path the
   KQL Database / Queryset editors use live in the deployed Loom.
