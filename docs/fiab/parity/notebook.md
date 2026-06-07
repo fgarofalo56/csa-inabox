@@ -16,6 +16,7 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | New / open / delete notebook | Home ribbon |
 | 8 | Workspace notebook list | Item picker |
 | 9 | Help / docs | Help ribbon |
+| 10 | Variable explorer (Name/Type/Length/Value, sortable, Python-only) | View ribbon → Variables |
 
 ## Loom coverage
 
@@ -30,10 +31,15 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | ✅ | New (`createOpen`), Delete (`del`) |
 | 8 | ✅ | `/api/items/notebook?workspaceId=` list + Refresh |
 | 9 | ✅ | `Notebook docs` opens Learn |
+| 10 | ✅ | `VariablesPane` (`variablesOpen`, toolbar + View ribbon → Variables) — right OverlayDrawer with a sortable Name/Type/Length/Value table, `repr()` tooltip on Value, and a **Python** badge. `onInspect` submits a `globals()` introspection snippet to the **live Livy session** (the same warm session as cell runs) through the real run/poll path — `POST /api/items/notebook/[id]/run` (sentinel `cellId:'__loom_inspect__'`) then `GET /runs/[runId]`, parsing the `__LOOM_VARS__:` JSON line from stdout. Honest errors surface in a MessageBar when no Spark compute is selected; an info bar gates non-Python kernels. Sort logic unit-tested (`variables-sort.test.ts`). |
 
 ## Backend per control
 - Run / status → Fabric REST notebook job APIs (`/run`, `/runs/[runId]`, `/jobs`).
 - Lakehouse attach → Fabric REST lakehouse list.
 - CRUD → Fabric REST `/v1/workspaces/{ws}/notebooks`.
+- Variable explorer → real Synapse **Livy** statement on the active session via
+  `POST /api/items/notebook/[id]/run` + `GET /runs/[runId]` (Azure-native default;
+  no Fabric/Power BI dependency). Uses `globals()` introspection, not the IPython
+  `%whos` magic, because Synapse Spark runs plain PySpark over Livy.
 
-Grade: **A (all inventory rows built + real Fabric REST backend).**
+Grade: **A (all inventory rows built + real Azure/Fabric REST backend; variable explorer sort unit-tested).**

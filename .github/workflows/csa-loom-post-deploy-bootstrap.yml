@@ -394,6 +394,21 @@ jobs:
             echo "No Foundry workspace in $ADMIN_RG — skipping"
           fi
 
+      - name: Grant Console UAMI AzureML Compute Operator on Foundry workspace (unblocks CI list/start/status)
+        run: |
+          FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
+          if [ -n "$FOUNDRY_WS" ]; then
+            echo "Foundry workspace: $FOUNDRY_WS"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "AzureML Compute Operator" \
+              --scope "$FOUNDRY_WS" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No Foundry workspace in $ADMIN_RG — skipping"
+          fi
+
       - name: Grant Console UAMI Storage Blob Data Reader on Foundry storage (unblocks datastores)
         run: |
           STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
@@ -540,6 +555,7 @@ jobs:
           echo "APIM: Service Contributor granted (if APIM provisioned)"
           echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
           echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
+          echo "Foundry workspace: AzureML Compute Operator granted (unblocks /api/foundry/computes list/start/status)"
           echo "Foundry storage: Blob Data Reader granted"
           echo "Content Safety: Cognitive Services User granted"
           echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"

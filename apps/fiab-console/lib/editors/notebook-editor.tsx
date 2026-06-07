@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular,
+  History20Regular, ArrowUpload20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +31,7 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 // Ribbon is now built dynamically inside the component so each action can
@@ -168,6 +169,8 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Variable explorer (Synapse/Fabric "Variables" View-pane parity)
+  const [variablesOpen, setVariablesOpen] = useState(false);
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
@@ -726,6 +729,103 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
 
+  /**
+   * Variable explorer — submit a Python introspection snippet to the ACTIVE
+   * Livy session and return parsed VarRow[]. Reuses the same warm session as
+   * runCell (the run route reuses `state.sparkSession`), so it sees variables
+   * that earlier cells defined. Goes through the Task-3 execute path:
+   * POST /run (with a sentinel cellId) + poll /runs/[runId].
+   *
+   * We use `globals()` rather than the IPython `%whos` magic because Synapse
+   * Spark runs plain PySpark via Livy (no IPython kernel) — `%whos` would be a
+   * SyntaxError there. The snippet prints one JSON line behind a marker so the
+   * row data survives any Spark log noise in stdout, then deletes its temps so
+   * they don't show up in the next inspection.
+   *
+   * Honest gate: if no workspace/notebook/compute is selected we throw a
+   * human-readable error which the pane surfaces in a MessageBar — no silent
+   * failure, per no-vaporware.
+   */
+  const inspectVariables = useCallback(async (): Promise<VarRow[]> => {
+    if (!workspaceId || !notebookId) {
+      throw new Error('Open or create a notebook first.');
+    }
+    if (!computeId) {
+      throw new Error('Pick a Spark compute target on the toolbar before inspecting variables.');
+    }
+    if (!computeId.startsWith('spark:')) {
+      throw new Error('The variable explorer runs on a Synapse Spark (Livy) session. Select a Synapse Spark compute target.');
+    }
+    const INSPECT_SOURCE = [
+      'import json as __loom_j__',
+      '__loom_v__ = []',
+      "__loom_skip__ = ('In','Out','exit','quit','get_ipython','spark','sc','sqlContext','spark_session')",
+      'for __loom_k__ in list(globals().keys()):',
+      "    if __loom_k__.startswith('_') or __loom_k__ in __loom_skip__:",
+      '        continue',
+      '    __loom_val__ = globals()[__loom_k__]',
+      "    if type(__loom_val__).__name__ in ('module','function','type','builtin_function_or_method'):",
+      '        continue',
+      '    try:',
+      "        __loom_l__ = len(__loom_val__) if hasattr(__loom_val__, '__len__') else None",
+      '    except Exception:',
+      '        __loom_l__ = None',
+      '    try:',
+      '        __loom_r__ = repr(__loom_val__)[:300]',
+      '    except Exception:',
+      "        __loom_r__ = '<unrepresentable>'",
+      "    __loom_v__.append({'n': __loom_k__, 't': type(__loom_val__).__name__, 'l': __loom_l__, 'r': __loom_r__})",
+      "print('__LOOM_VARS__:' + __loom_j__.dumps(__loom_v__))",
+      'del __loom_j__, __loom_v__, __loom_skip__',
+    ].join('\n');
+
+    const r = await fetch(
+      `/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: computeId, cellId: '__loom_inspect__', source: INSPECT_SOURCE, lang: 'pyspark' }),
+      },
+    );
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'variable inspection dispatch failed');
+    let runId: string = j.runId;
+    const start = Date.now();
+    const MAX_MS = 12 * 60 * 1000;
+    let pollInterval = 600;
+    while (Date.now() - start < MAX_MS) {
+      await new Promise(res => setTimeout(res, pollInterval));
+      const pollRes = await fetch(
+        `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+      );
+      const p = await pollRes.json();
+      if (!p.ok) throw new Error(p.error || `poll failed (${pollRes.status})`);
+      if (p.runId && p.runId !== runId) runId = p.runId;
+      const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
+      pollInterval = cold ? 2000 : 600;
+      if (p.output) {
+        if (p.output.status === 'error') {
+          throw new Error(`${p.output.ename || 'Error'}: ${p.output.evalue || 'kernel raised an error'}`);
+        }
+        const text: string = p.output.textPlain || '';
+        const markerIdx = text.lastIndexOf('__LOOM_VARS__:');
+        if (markerIdx < 0) return [];
+        const jsonStr = text.slice(markerIdx + '__LOOM_VARS__:'.length).split('\n')[0].trim();
+        let raw: Array<{ n: string; t: string; l: number | null; r: string }>;
+        try {
+          raw = JSON.parse(jsonStr);
+        } catch {
+          throw new Error('Could not parse the kernel variable snapshot.');
+        }
+        return raw.map(x => ({ name: x.n, type: x.t, len: x.l, repr: x.r }));
+      }
+      if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+        throw new Error(`Spark session ended with status ${p.status}`);
+      }
+    }
+    throw new Error('Variable inspection timed out.');
+  }, [workspaceId, notebookId, computeId]);
+
   // Build the Fabric-parity ribbon with real handlers. Previously these were
   // decorative labels with no onClick — the Ribbon component auto-disables
   // un-wired actions, which gave the user two visually-identical Save buttons
@@ -765,6 +865,7 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'view', label: 'View', groups: [
         { label: 'Panes', actions: [
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+          { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
       { id: 'run', label: 'Run', groups: [
@@ -936,6 +1037,7 @@ export function NotebookEditor({ item, id }: Props) {
               onClick={run}
             >{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
+            <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
 
@@ -947,6 +1049,16 @@ export function NotebookEditor({ item, id }: Props) {
             workspaceId={workspaceId}
             computeId={computeId}
             onRerun={run}
+          />
+
+          {/* Variable explorer — right-side OverlayDrawer; inspects the live
+              Livy session via the Task-3 execute path. Python-only, like
+              Synapse Studio / Fabric. */}
+          <VariablesPane
+            open={variablesOpen}
+            onOpenChange={setVariablesOpen}
+            onInspect={inspectVariables}
+            defaultLang={defaultLang}
           />
 
           {/* Phase 2: Attach Lakehouse modal */}
@@ -1057,6 +1169,18 @@ export function NotebookEditor({ item, id }: Props) {
                         canMoveDown={idx < cells.length - 1}
                         priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
                         schemaContext={inlineSchemaContext}
+                        notebookId={notebookId}
+                        onInsertBelow={(newCell) => {
+                          setCells(prev => {
+                            const spliceIdx = prev.findIndex(cell => cell.id === c.id);
+                            if (spliceIdx < 0) return [...prev, newCell];
+                            const next = [...prev];
+                            next.splice(spliceIdx + 1, 0, newCell);
+                            return next;
+                          });
+                          setActiveCellId(newCell.id);
+                          setDirty(true);
+                        }}
                       />
                     ) : (
                       <MarkdownCell
