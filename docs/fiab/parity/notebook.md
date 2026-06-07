@@ -16,6 +16,7 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | New / open / delete notebook | Home ribbon |
 | 8 | Workspace notebook list | Item picker |
 | 9 | Help / docs | Help ribbon |
+| 10 | Configure session (executors, memory, timeout) + session status indicator | Run ribbon → "Configure session" / status bar |
 
 ## Loom coverage
 
@@ -30,10 +31,12 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | ✅ | New (`createOpen`), Delete (`del`) |
 | 8 | ✅ | `/api/items/notebook?workspaceId=` list + Refresh |
 | 9 | ✅ | `Notebook docs` opens Learn |
+| 10 | ✅ | **Configure session** dialog (`SessionConfigDialog`, Run ribbon + toolbar) — executors slider (1–100), executor-memory slider (1–8 GB), session-timeout field (1–1440 min), High-Concurrency note. NO JSON textarea. Persisted per-notebook in Cosmos (`PUT /api/items/notebook/[id]` → `state.sessionConfig`) and applied to the real Livy session-create body (`numExecutors` / `executorMemory` / `driverMemory` / `heartbeatTimeoutInSecond`) by the run route, which re-creates the Spark session when sizing changes. The run response carries a `session` receipt (the real session-create body) shown in a success MessageBar — confirming e.g. `numExecutors: 2`. A bottom-left status badge reflects session state (Idle / Running / Error). |
 
 ## Backend per control
-- Run / status → Fabric REST notebook job APIs (`/run`, `/runs/[runId]`, `/jobs`).
-- Lakehouse attach → Fabric REST lakehouse list.
-- CRUD → Fabric REST `/v1/workspaces/{ws}/notebooks`.
+- Run / status → Synapse Spark Livy session+statement APIs via `/run`, `/runs/[runId]` (Azure-native default; Databricks opt-in via `LOOM_NOTEBOOK_BACKEND`).
+- Configure session → structured sizing persisted to Cosmos (`state.sessionConfig`) and mapped to the Livy `POST .../sessions` body (`createLivySessionAsync(..., sizing)`); receipt is the verbatim request body. No Fabric/Power BI dependency.
+- Lakehouse attach → lakehouse list.
+- CRUD → Cosmos workspace-items.
 
-Grade: **A (all inventory rows built + real Fabric REST backend).**
+Grade: **A (all inventory rows built + real Spark Livy backend; session sizing unit-tested).**
