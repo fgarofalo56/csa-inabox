@@ -37,7 +37,7 @@ export function dedicatedTarget(): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
   return {
-    server: `${ws}.sql.azuresynapse.net`,
+    server: `${ws}.sql.${synapseSqlSuffix()}`,
     database: pool,
     cacheKey: `dedicated:${ws}:${pool}`,
   };
@@ -46,10 +46,17 @@ export function dedicatedTarget(): SynapseTarget {
 export function serverlessTarget(database = 'master'): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   return {
-    server: `${ws}-ondemand.sql.azuresynapse.net`,
+    server: `${ws}-ondemand.sql.${synapseSqlSuffix()}`,
     database,
     cacheKey: `serverless:${ws}:${database}`,
   };
+}
+
+// Synapse SQL endpoint suffix. Commercial = azuresynapse.net; Azure
+// Government (GCC / GCC-High / IL5) = azuresynapse.us. Set via env per cloud,
+// mirroring the LOOM_*_SUFFIX pattern used elsewhere (Event Hubs, Azure SQL).
+function synapseSqlSuffix(): string {
+  return process.env.LOOM_SYNAPSE_SQL_SUFFIX || 'azuresynapse.net';
 }
 
 function required(key: string): string {

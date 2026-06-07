@@ -348,3 +348,49 @@ continues the pipeline, **Reject** fails the branch.
 Contributor grant for the Console UAMI (so the BFF can call `listCallbackUrl`).
 `admin-plane/main.bicep` exposes `loomApprovalLogicAppName` /
 `loomApprovalLogicAppRg` as env vars. Only the OAuth consent above is manual.
+
+## Reference Lakehouse — cross-account RBAC {#reference-lakehouse-cross-account-rbac}
+
+Loom's **Reference Lakehouses** federation (lakehouse explorer → **References →
++**) lets a primary lakehouse browse other in-workspace lakehouses side-by-side,
+**read-only**. Reads use **pass-through RBAC**: the Console UAMI reads the
+referenced lakehouse's ADLS Gen2 containers with its own managed identity.
+
+- **Same-account references (default):** no action needed. In-workspace
+  lakehouses share the primary LOOM ADLS Gen2 account, on which the Console UAMI
+  already holds **Storage Blob Data Contributor** (a superset of Reader). Add a
+  reference, expand it, and browse/preview immediately.
+- **Cross-account references:** when a referenced lakehouse declares its own
+  storage account (`state.storageAccount`), grant the Console UAMI **Storage
+  Blob Data Reader** (`2a2b9908-6ea1-4ae2-8e65-a410df84e7d1`) on that account
+  (or a single container). Until granted, the reference shows an error icon +
+  the exact remediation tooltip in the explorer (honest gate, per
+  `.claude/rules/no-vaporware.md`):
+
+```bash
+# Grant the Console UAMI read on a referenced (cross-account) storage account:
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Reader" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<account>
+
+# (Optional) scope to a single container instead of the whole account:
+#   .../storageAccounts/<account>/blobServices/default/containers/<container>
+```
+
+No new bicep resource ships for this — the referenced account is a **runtime**
+choice (which lakehouse the user adds), not a deploy-time input, so the grant is
+an operator action exactly like cross-account Lakehouse **shortcuts**. The
+reference set itself is stored on the primary lakehouse's Cosmos `items` doc
+(`state.referencedLakehouseIds`) — no new Cosmos container, no new env var.
+
+For **previews** of a cross-account reference, the **Synapse Serverless** MI
+(used by OPENROWSET) must also hold Storage Blob Data Reader on the referenced
+account — same `az role assignment create` with the Synapse workspace MI's
+object id.
+
+**Sovereign clouds (GCC / GCC-High / IL5):** the ADLS DFS host is hard-coded to
+`*.dfs.core.windows.net` in `adls-client.ts` (a pre-existing, separately-tracked
+limitation). Until a `LOOM_STORAGE_ENDPOINT_SUFFIX` is introduced, only
+**same-account** references are supported in sovereign clouds; cross-account
+references there are blocked until the DFS host is parameterized.

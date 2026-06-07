@@ -24,6 +24,11 @@ import {
 import { Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { findForActivity } from './activity-catalog';
 import { ActivityForm, hasActivityForm } from './activity-forms';
+import { SourceTab } from './copy/source-tab';
+import { SinkTab } from './copy/sink-tab';
+import { MappingTab } from './copy/mapping-tab';
+import { CopySettingsTab } from './copy/copy-settings-tab';
+import { useCopyResources } from './copy/use-copy-resources';
 import type { PipelineActivity, PipelineParameter, PipelineParameterType, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
@@ -85,41 +90,52 @@ export interface PropertiesPanelProps {
   layout?: 'rail' | 'dock';
   /** Item id of the pipeline (enables live form helpers e.g. Approval URL fetch). */
   itemId?: string;
+  /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
+  pipelineId?: string;
   /** Workspace id of the pipeline. */
   workspaceId?: string;
   /** Editor host API slug (default 'data-pipeline'). */
   apiSlug?: string;
+  /**
+   * The container activity this activity is nested inside (ForEach, IfCondition,
+   * Switch, Until), or null/undefined at the top pipeline level. Used to warn
+   * when a SetVariable / AppendVariable sits inside a parallel (non-sequential)
+   * ForEach, where concurrent variable writes are not thread-safe.
+   */
+  parentActivity?: PipelineActivity | null;
 }
 
-type TabId = 'general' | 'source-sink' | 'settings' | 'parameters' | 'user-props';
+type TabId =
+  | 'general'
+  | 'source'         // Copy activity — Source tab
+  | 'sink'           // Copy activity — Sink tab
+  | 'mapping'        // Copy activity — Mapping tab
+  | 'copy-settings'  // Copy activity — Settings tab
+  | 'source-sink'    // non-Copy activities with source/sink (Lookup, GetMetadata, …)
+  | 'settings'
+  | 'parameters'
+  | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, workspaceId, apiSlug }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null }: PropertiesPanelProps) {
   const s = useStyles();
   const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
 
-  // Factory datasets — backs the Source/Sink input/output dataset pickers.
-  // Best-effort: on Synapse (or unconfigured factory) the route gates and the
-  // dropdowns simply render empty, never blocking the raw JSON editors below.
-  const [datasets, setDatasets] = useState<string[]>([]);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await fetch('/api/adf/datasets');
-        const body = await res.json().catch(() => ({}));
-        if (alive && body?.ok && Array.isArray(body.datasets)) {
-          setDatasets(body.datasets.map((d: any) => d.name).filter(Boolean));
-        }
-      } catch { /* leave empty — raw JSON editors still work */ }
-    })();
-    return () => { alive = false; };
-  }, []);
+  // Factory datasets + linked services — backs the Source/Sink dataset pickers,
+  // the Copy Mapping schema import, and the Settings staging/redirect linked-
+  // service pickers. One shared fetch (real ARM REST via the BFF routes); on an
+  // unconfigured factory the routes 503 and `gateError` names the missing env
+  // var so each tab shows an honest MessageBar instead of going blank.
+  const { datasets, linkedServices, gateError } = useCopyResources();
+  // Names-only list for the legacy (non-Copy) Source/Sink tab.
+  const datasetNames = datasets.map((d) => d.name).filter(Boolean);
 
   useEffect(() => {
     if (!activity) return;
+    // Land on the first ADF-parity tab for the activity (Source for Copy).
+    setTab(activity.type === 'Copy' ? 'source' : 'general');
     try {
       setTypePropsText(JSON.stringify(activity.typeProperties || {}, null, 2));
       setTypePropsErr(null);
@@ -139,6 +155,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   }
 
   const def = findForActivity(activity);
+  const isCopyActivity = activity.type === 'Copy';
   const hasSourceSink = !!(activity.typeProperties && ('source' in activity.typeProperties || 'sink' in activity.typeProperties));
 
   return (
@@ -162,13 +179,38 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
             </MessageBarBody>
           </MessageBar>
         )}
+        {/* Thread-safety warning: SetVariable / AppendVariable inside a parallel
+            (non-sequential) ForEach. ADF evaluates iterations concurrently when
+            isSequential is false — concurrent writes to a pipeline-scoped
+            variable are not atomic and the last write wins (non-deterministic). */}
+        {(activity.type === 'SetVariable' || activity.type === 'AppendVariable')
+          && parentActivity?.type === 'ForEach'
+          && (parentActivity.typeProperties as Record<string, unknown> | undefined)?.isSequential === false && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Thread-safety risk — parallel ForEach</MessageBarTitle>
+              {activity.type} inside the non-sequential ForEach{' '}
+              <strong>{parentActivity.name}</strong> may produce non-deterministic
+              results. ADF runs each ForEach iteration concurrently when{' '}
+              <strong>isSequential</strong> is <code>false</code> — concurrent writes
+              to the same pipeline-scoped variable are not atomic, so the last write
+              wins. To fix: turn the parent ForEach&apos;s <strong>Sequential</strong>{' '}
+              toggle on, or accumulate results in an external store (SQL table,
+              Cosmos container) instead of a pipeline variable.
+            </MessageBarBody>
+          </MessageBar>
+        )}
       </div>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} size="small"
         style={{ padding: '0 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
         <Tab value="general">General</Tab>
-        {hasSourceSink && <Tab value="source-sink">Source / Sink</Tab>}
-        <Tab value="settings">Settings</Tab>
+        {isCopyActivity && <Tab value="source">Source</Tab>}
+        {isCopyActivity && <Tab value="sink">Sink</Tab>}
+        {isCopyActivity && <Tab value="mapping">Mapping</Tab>}
+        {isCopyActivity && <Tab value="copy-settings">Settings</Tab>}
+        {!isCopyActivity && hasSourceSink && <Tab value="source-sink">Source / Sink</Tab>}
+        <Tab value="settings">{isCopyActivity ? 'Activity policy' : 'Settings'}</Tab>
         <Tab value="parameters">Parameters</Tab>
         <Tab value="user-props">User properties</Tab>
       </TabList>
@@ -227,6 +269,24 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
           </>
         )}
 
+        {tab === 'source' && isCopyActivity && (
+          <SourceTab activity={activity} datasets={datasets} gateError={gateError}
+            parameters={parameters} variables={variables} allActivities={allActivities}
+            onPatch={onPatch} />
+        )}
+        {tab === 'sink' && isCopyActivity && (
+          <SinkTab activity={activity} datasets={datasets} gateError={gateError}
+            parameters={parameters} variables={variables} allActivities={allActivities}
+            onPatch={onPatch} />
+        )}
+        {tab === 'mapping' && isCopyActivity && (
+          <MappingTab activity={activity} datasets={datasets} onPatch={onPatch} />
+        )}
+        {tab === 'copy-settings' && isCopyActivity && (
+          <CopySettingsTab activity={activity} linkedServices={linkedServices}
+            gateError={gateError} onPatch={onPatch} />
+        )}
+
         {tab === 'source-sink' && hasSourceSink && (
           <>
             {(() => {
@@ -240,30 +300,30 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                   <Caption1>
                     Bind a factory dataset to this activity. Selecting a source/sink dataset sets the
                     activity&apos;s <code>inputs</code>/<code>outputs</code> DatasetReference. Manage datasets
-                    in the ribbon&apos;s <strong>Manage</strong> hub. {datasets.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
+                    in the ribbon&apos;s <strong>Manage</strong> hub. {datasetNames.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
                   </Caption1>
                   <Field label="Source dataset (inputs[0])">
                     <Dropdown
-                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
                       value={inputName || ''}
                       selectedOptions={inputName ? [inputName] : []}
-                      disabled={!datasets.length}
+                      disabled={!datasetNames.length}
                       onOptionSelect={(_, d) => onPatch({ inputs: refOrEmpty(d.optionValue || '') })}
                     >
                       <Option value="" text="(none)">(none)</Option>
-                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                      {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
                   <Field label="Sink dataset (outputs[0])">
                     <Dropdown
-                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
                       value={outputName || ''}
                       selectedOptions={outputName ? [outputName] : []}
-                      disabled={!datasets.length}
+                      disabled={!datasetNames.length}
                       onOptionSelect={(_, d) => onPatch({ outputs: refOrEmpty(d.optionValue || '') })}
                     >
                       <Option value="" text="(none)">(none)</Option>
-                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                      {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
                 </>
@@ -344,6 +404,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                   variables={variables}
                   allActivities={allActivities}
                   itemId={itemId}
+                  pipelineId={pipelineId}
                   workspaceId={workspaceId}
                   apiSlug={apiSlug}
                 />
