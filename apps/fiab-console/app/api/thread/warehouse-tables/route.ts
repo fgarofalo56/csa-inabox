@@ -60,6 +60,17 @@ export async function GET(req: NextRequest) {
     }));
     return NextResponse.json({ ok: true, options });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    // The dedicated pool may be paused or have no catalog tables visible to the
+    // Console identity. Surface that honestly AND point at the escape hatch:
+    // both edges that use this route also accept a custom SQL query as source.
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          `${e?.message || String(e)} — the Azure-native warehouse (Synapse dedicated SQL pool) may be paused or have ` +
+          `no tables visible to the Console identity. Tip: switch the source to "A custom SQL query" to build directly from a SELECT.`,
+      },
+      { status: 500 },
+    );
   }
 }

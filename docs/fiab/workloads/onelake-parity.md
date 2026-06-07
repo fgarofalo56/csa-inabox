@@ -1,5 +1,13 @@
 # OneLake parity
 
+!!! warning "Shipped reality vs. design (2026-06-06)"
+    Shortcuts ship **in-Console** — `apps/fiab-console/lib/azure/shortcut-engines.ts`
+    + `lakehouse-shortcuts.ts` (Cosmos-backed shortcut definitions, bound by the
+    Databricks/Synapse engines). The standalone **`apps/fiab-shortcuts-service`
+    Container App + Azure Cache for Redis described below do NOT exist** — treat
+    that section as design. The lakehouse editor's Shortcuts surface is the real,
+    shipped capability.
+
 ## What Fabric does
 
 OneLake is Microsoft Fabric's single logical data lake — one

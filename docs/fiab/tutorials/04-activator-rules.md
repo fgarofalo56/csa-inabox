@@ -1,23 +1,31 @@
-# Tutorial 04 — Activator rules over IoT stream
+# Tutorial 04 — Activator rules over a KQL stream
 
-Author a Loom Activator rule that fires a Teams message when an IoT
-sensor reports high CPU sustained for 5 minutes. **30 minutes.**
+Author a Loom Activator (reflex) rule that fires a Teams message — and an
+email — when a VM reports high CPU. **30 minutes.**
 
 ## Prerequisites
 
 - Workspace from previous tutorials
-- ADX database in the shared cluster (provisioned at workspace
-  creation)
-- A Teams channel webhook URL (or use Test channel for the tutorial)
+- A Teams incoming-webhook URL (or any test webhook)
+- An SMTP/email target for the second action
+
+The KQL data lives in the shared Azure Data Explorer (ADX) cluster, which
+is provisioned for the workspace. No real Fabric eventhouse is required.
 
 ## Steps
 
-### 1. Set up synthetic IoT data in ADX
+### 1. Create a KQL database
 
-Open the **KQL** pane in your workspace. Run:
+Left nav → **Workspaces** → open your workspace → **New item** → category
+**Real-Time Intelligence** → **KQL Database** → **Create**. The KQL/
+Eventhouse editor opens at `/items/kql-database/<id>`, backed by the
+shared ADX cluster.
+
+### 2. Seed synthetic data
+
+In the editor's **KQL** tab, run these control commands (real ADX):
 
 ```kql
-// Create a sample table
 .create table VmMetrics (
   TimestampUtc: datetime,
   VmId: string,
@@ -25,20 +33,13 @@ Open the **KQL** pane in your workspace. Run:
   MemoryMb: int
 )
 
-// Add update policy to set bin'd CPU averages
-.create function CalcCpuAvg() {
-  VmMetrics
-  | summarize avg_cpu = avg(CpuPercent) by VmId, bin(TimestampUtc, 1m)
-}
-
-// Generate 30 min of synthetic data
 .create-or-alter function MockData() {
   range Idx from 1 to 1800 step 1
   | extend TimestampUtc = ago(30m) + Idx * 1s
   | extend VmId = "vm-001"
   | extend CpuPercent = case(
       Idx < 600, rand() * 30 + 10,   // first 10 min: 10-40%
-      Idx < 1500, rand() * 30 + 85,  // next 15 min: 85-115%  ← spike
+      Idx < 1500, rand() * 30 + 85,  // next 15 min: 85-115%  <- spike
       rand() * 30 + 20               // last 5 min: 20-50%
     )
   | extend MemoryMb = 4096
@@ -47,7 +48,7 @@ Open the **KQL** pane in your workspace. Run:
 .set-or-append VmMetrics <| MockData() | project TimestampUtc, VmId, CpuPercent=tofloat(CpuPercent), MemoryMb
 ```
 
-### 2. Verify the data
+### 3. Verify the data
 
 ```kql
 VmMetrics
@@ -56,84 +57,86 @@ VmMetrics
 | render timechart
 ```
 
-You should see CPU spike to ~100% for ~15 min, then drop.
+The results render as a timechart; CPU spikes to ~100% for ~15 min, then
+drops.
 
-### 3. Author the activator rule
+### 4. Create an Activator
 
-Open the **Activator** pane. Click **+ New Rule**.
+Return to the workspace item tree → **New item** → category **Real-Time
+Intelligence** → **Activator** → **Create**. The Activator editor opens at
+`/items/activator/<id>`. It auto-selects the first workspace and loads any
+existing reflexes from `/api/items/activator?workspaceId=…`.
 
-Visual rule designer:
-- **Data source**: ADX → `VmMetrics` → use query: `CalcCpuAvg`
-- **Object**: split by `VmId`
-- **Attribute**: `current_cpu = avg_cpu`
-- **Rule**: `current_cpu` **is above** `85` **and stays for** `5 min`
-- **Action**: Teams message
-  - Channel: `<your-test-channel>`
-  - Template: `VM {VmId} CPU is at {current_cpu}% sustained for >5 min`
+### 5. Create a reflex
 
-Cadence: `1 min`
+Click **New reflex**, name it (e.g. `vm-cpu-watch`), and confirm. This
+POSTs to `/api/items/activator?workspaceId=…`.
 
-Click **Save + Enable**.
+### 6. Add a Teams rule
 
-### 4. Watch it fire
+Click **+ New rule** (or the ribbon **Teams** template, which pre-fills the
+wizard). The rule wizard uses guided fields — no JSON:
 
-The rule scheduler runs every 1 min. After your synthetic data is
-~5 min into the spike, you should see:
-- Console "Activator → Firings" log: a new firing event
-- Teams channel: `VM vm-001 CPU is at 99.2% sustained for >5 min`
-  (or similar)
+- **Rule name**: `VM CPU high`
+- **Condition**: property `CpuPercent`, operator **GreaterThan**, value
+  `85`
+- **Action kind**: **TeamsMessage** (the available kinds are
+  **TeamsMessage, Email, Webhook, AdfPipelineRun, NotebookRun,
+  PowerAutomateFlow**)
+- **Target**: your Teams webhook URL
+- **Message**: `VM {{eventValue}} CPU alert`
 
-### 5. Verify state machine
+Save. The rule POSTs to
+`/api/items/activator/<id>/rules?workspaceId=…`.
 
-The `andStays` rule has per-object state in Redis. When CPU drops
-back below 85%, the rule de-arms. If it spikes again, it re-arms
-the 5-minute timer.
+### 7. Start the reflex
 
-Check rule firing log:
-- Console "Activator → Rule History"
-- Should show 1 firing event for `vm-001`
-- After CPU drops, no further firings (rule de-armed)
+Click **Start**. This POSTs to
+`/api/items/activator/<id>/start?workspaceId=…`, which sets every trigger
+Active.
 
-### 6. Extend with multiple actions
+### 8. Trigger and observe
 
-Edit the rule. Add a second action:
-- Type: Databricks Job
-- Job ID: `<auto-remediation-job-id>` (e.g., scale-up-job)
-- Parameters: `{"affected_vm": "{VmId}"}`
+Click **Trigger now** on the rule row for an immediate test fire. The rule
+row's `lastTriggered` timestamp updates, and the Teams webhook fires if the
+URL is valid.
 
-Now the rule fires both a Teams alert AND a Databricks job that
-auto-remediates the affected VM.
+### 9. Add a second action (Email)
 
-### 7. Export the rule definition (Git-friendly)
+Click **+ New rule** again (or the ribbon **Email** template) and add an
+Email action alongside the Teams one:
 
-Console "Activator → Export". Saves JSON:
+- **Rule name**: `VM CPU email`
+- **Condition**: property `CpuPercent`, operator **GreaterThan**, value
+  `85`
+- **Action kind**: **Email**
+- **Target**: `<your-email>`
+- **Message**: `VM {{eventValue}} CPU sustained high`
 
-```json
-{
-  "id": "rule-cpu-high-andstays",
-  "workspaceId": "<your-workspace>",
-  "name": "VM CPU sustained high",
-  ...
-}
-```
+Save. (For pipeline-driven remediation you would instead pick
+**AdfPipelineRun** or **NotebookRun** — those are the pipeline/compute
+action kinds.)
 
-Commit this to Git. Re-import in another workspace via Console
-"Activator → Import".
+### 10. Stop the reflex
+
+When you're done, click **Stop** (POSTs to
+`/api/items/activator/<id>/stop?workspaceId=…`).
 
 ## What's next
 
 - [Tutorial 06 — Mirroring from Cosmos DB](06-mirroring-cosmos.md) —
-  real-time CDC into Bronze + activator rules on the stream
+  bring an operational store into Bronze and alert on it
 - [Activator engine service docs](../services/activator-engine.md)
 - [Data Activator parity workload](../workloads/data-activator-parity.md)
 
 ## Cleanup
 
-- Console "Activator → Disable" then "Delete" the rule
-- ADX: `.drop table VmMetrics`
+- Activator editor: **Stop** the reflex, then delete it from the workspace
+  item tree (right-click → Delete)
+- KQL editor: `.drop table VmMetrics`
 
 ## Troubleshooting
 
 - Rule doesn't fire: see [Activator rules not firing runbook](../runbooks/activator-rules-not-firing.md)
-- Teams message doesn't arrive: verify webhook URL + Function App
-  egress
+- Teams/email doesn't arrive: verify the webhook URL / SMTP target and the
+  engine's egress

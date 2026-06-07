@@ -18,7 +18,7 @@ import type { McpToolsListResponse, McpToolsCallRequest, McpToolsCallResponse } 
 // Resolve Key Vault secrets over the KV REST API (no @azure/keyvault-secrets
 // dependency) using the same UAMI→DefaultAzureCredential chain every Loom
 // Azure client uses. KV secret scope is https://vault.azure.net/.default.
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const kvCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();

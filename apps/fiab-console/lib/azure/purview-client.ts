@@ -74,7 +74,7 @@ const SCAN_API_VERSION = '2022-07-01-preview';
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),
@@ -602,6 +602,38 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
   const guidAssignments = j?.guidAssignments || {};
   const primaryGuid = Object.values(guidAssignments)[0] as string | undefined;
   return { ...j, primaryGuid };
+}
+
+/**
+ * Ensure the given classification names exist as Atlas classification typedefs
+ * so they can be attached to entities. Idempotent: lists existing type headers
+ * and only POSTs the missing ones (POST /datamap/api/atlas/v2/types/typedefs
+ * with classificationDefs). Lets Loom's classification taxonomy flow into
+ * Purview without a manual type-creation step. Swallows 409 (already exists).
+ *
+ * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ */
+export async function ensureClassificationDefs(names: string[]): Promise<void> {
+  const want = [...new Set((names || []).map((n) => (n || '').trim()).filter(Boolean))];
+  if (!want.length) return;
+  let existing = new Set<string>();
+  try {
+    const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs/headers');
+    const headers = (await readJson<Array<{ name: string }>>(res)) || [];
+    existing = new Set(headers.map((h) => h.name));
+  } catch { /* if listing fails, attempt create + swallow conflicts below */ }
+  const missing = want.filter((n) => !existing.has(n));
+  if (!missing.length) return;
+  const body = {
+    classificationDefs: missing.map((n) => ({ category: 'CLASSIFICATION', name: n, typeVersion: '1.0', superTypes: [] as string[] })),
+  };
+  try {
+    const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs', { method: 'POST', body: JSON.stringify(body) });
+    await readJson(res);
+  } catch (e: any) {
+    if (e instanceof PurviewError && e.status === 409) return; // already exist
+    throw e;
+  }
 }
 
 // ------------------------------------------------------------

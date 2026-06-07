@@ -11,7 +11,8 @@
  * Purview lineage edges.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Spinner, Badge, Caption1, Subtitle2, Body1, Input, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -138,7 +139,7 @@ function layout(nodes: Node[], edges: Edge[]): { laid: LayoutNode[]; w: number; 
   return { laid, w: maxX + CANVAS_PAD_X, h: maxY + CANVAS_PAD_Y, ranks };
 }
 
-export default function GovernanceLineagePage() {
+function LineageInner() {
   const s = useStyles();
   const [workspaces, setWorkspaces] = useState<WorkspaceNode[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -148,6 +149,16 @@ export default function GovernanceLineagePage() {
   const [source, setSource] = useState<string>('');
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Focus: when arriving from an item (e.g. OneLake → "View lineage"), scope the
+  // graph to JUST that object + everything connected to it, instead of the whole
+  // tenant. `?focusId=<itemId>` (matches the lineage node id == Cosmos item id).
+  const searchParams = useSearchParams();
+  const [focusId, setFocusId] = useState<string | null>(null);
+  useEffect(() => {
+    const f = searchParams?.get('focusId') || null;
+    setFocusId(f);
+    if (f) setSelectedId(f);
+  }, [searchParams]);
 
   const load = async () => {
     setLoading(true); setError(null);
@@ -166,16 +177,36 @@ export default function GovernanceLineagePage() {
 
   useEffect(() => { load(); }, []);
 
-  // Filter — both node label/type and workspace name match the query
+  // Focus scope — the connected component (both directions, transitive) of the
+  // focused node, so "View lineage" on an item shows that object + its upstream
+  // and downstream lineage only. Null when no focus → whole tenant.
+  const focusSet = useMemo(() => {
+    if (!focusId || !nodes.some((n) => n.id === focusId)) return null;
+    const adj = new Map<string, Set<string>>();
+    const link = (a: string, b: string) => { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a)!.add(b); };
+    for (const e of edges) { link(e.from, e.to); link(e.to, e.from); }
+    const seen = new Set<string>([focusId]);
+    const queue = [focusId];
+    while (queue.length) {
+      const n = queue.shift()!;
+      for (const m of adj.get(n) || []) if (!seen.has(m)) { seen.add(m); queue.push(m); }
+    }
+    return seen;
+  }, [focusId, nodes, edges]);
+
+  const focusLabel = useMemo(() => (focusId ? nodes.find((n) => n.id === focusId)?.label : null), [focusId, nodes]);
+
+  // Filter — focus scope first, then the text query (name / type / workspace).
   const filteredNodes = useMemo(() => {
+    const base = focusSet ? nodes.filter((n) => focusSet.has(n.id)) : nodes;
     const f = q.toLowerCase().trim();
-    if (!f) return nodes;
-    return nodes.filter((n) =>
+    if (!f) return base;
+    return base.filter((n) =>
       n.label.toLowerCase().includes(f) ||
       n.type.toLowerCase().includes(f) ||
       n.workspaceId.includes(f)
     );
-  }, [nodes, q]);
+  }, [nodes, q, focusSet]);
 
   // When filtering, only keep edges where both endpoints are in the filtered set.
   const filteredEdges = useMemo(() => {
@@ -211,6 +242,12 @@ export default function GovernanceLineagePage() {
           onChange={(_, d) => setQ(d.value)}
           style={{ flex: 1, maxWidth: 480 }}
         />
+        {focusId && focusLabel && (
+          <Badge appearance="tint" color="brand" size="large">
+            Focused: {focusLabel}
+            <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: 4 }}>Show all</Button>
+          </Badge>
+        )}
         <div className={s.spacer} />
         <Caption1 className={s.pill}>{filteredNodes.length} items</Caption1>
         <Caption1 className={s.pill}>{filteredEdges.length} edges</Caption1>
@@ -358,5 +395,13 @@ export default function GovernanceLineagePage() {
         </>
       )}
     </GovernanceShell>
+  );
+}
+
+export default function GovernanceLineagePage() {
+  return (
+    <Suspense fallback={<Spinner label="Loading lineage…" />}>
+      <LineageInner />
+    </Suspense>
   );
 }

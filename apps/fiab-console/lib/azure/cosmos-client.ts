@@ -37,10 +37,13 @@ let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
+let _lakehouseSchemas: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
+let _connections: Container | null = null;
+let _maintenanceJobs: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -54,7 +57,7 @@ function databaseId(): string {
 }
 
 function credential() {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID;
+  const clientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   const chain: any[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());
@@ -115,6 +118,11 @@ async function ensure() {
   // hits a single physical partition. Created lazily so a fresh environment
   // needs no extra ARM/Bicep step beyond the account+database.
   _lakehouseShortcuts = await mk('lakehouse-shortcuts', '/lakehouseId');
+  // Lakehouse multi-schema registry (F9) — one row per schema per lakehouse.
+  // Azure-native parity with Fabric's schema-enabled lakehouse. Partitioned by
+  // the lakehouse id so every Tables-tree lookup hits a single physical
+  // partition. 'dbo' is synthetic (never stored) and always present.
+  _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
   // Copilot & Agents config — tenant-wide default Foundry account + model
   // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
   // and per-workspace data-agent config (PK /workspaceId) set by workspace
@@ -127,6 +135,13 @@ async function ensure() {
   // Loom Thread edge graph — one row per "Weave" integration (from → to),
   // partitioned by tenant so the lineage view hits a single physical partition.
   _threadEdges = await mk('thread-edges', '/tenantId');
+  // Loom Connections — reusable data-source connection metadata (secrets live in
+  // Key Vault; only the secretRef is stored here). PK /tenantId.
+  _connections = await mk('connections', '/tenantId');
+  // Delta maintenance jobs — one row per OPTIMIZE / VACUUM / ZORDER BY job
+  // submitted to a Synapse Spark Livy session, partitioned by tenant so the
+  // Monitor "Maintenance" view hits a single physical partition.
+  _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
   _ensured = true;
 }
 
@@ -134,9 +149,12 @@ export async function copilotConfigContainer(): Promise<Container> { await ensur
 export async function workspaceAgentConfigContainer(): Promise<Container> { await ensure(); return _workspaceAgentConfig!; }
 export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
+export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
+export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
+export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
@@ -194,7 +212,8 @@ const KNOWN_CONTAINER_IDS = [
   'shares', 'folders', 'downloads', 'search-history',
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
-  'feature-permissions', 'lakehouse-shortcuts', 'thread-edges',
+  'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
+  'maintenance-jobs',
 ];
 
 /** List all Loom containers with their current throughput shape. */

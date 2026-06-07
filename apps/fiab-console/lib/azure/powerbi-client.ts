@@ -41,7 +41,7 @@ const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsof
 const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
@@ -255,6 +255,58 @@ export const POWERBI_SP_HINT =
 export async function listWorkspaces(): Promise<PbiWorkspace[]> {
   const j = await call<{ value: PbiWorkspace[] }>('/groups');
   return j.value || [];
+}
+
+// ============================================================
+// Deployment pipelines (Dev / Test / Prod stage promotion)
+//
+//   GET  /v1.0/myorg/pipelines                      → list pipelines
+//   GET  /v1.0/myorg/pipelines/{id}/stages          → stages (order + workspace)
+//   POST /v1.0/myorg/pipelines/{id}/deployAll        → promote a stage forward
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/pipelines
+// ============================================================
+
+export interface PbiPipeline {
+  id: string;
+  displayName: string;
+  description?: string;
+}
+
+export interface PbiPipelineStage {
+  order: number;
+  workspaceId?: string;
+  workspaceName?: string;
+}
+
+export async function listPipelines(): Promise<PbiPipeline[]> {
+  const j = await call<{ value: PbiPipeline[] }>('/pipelines');
+  return j.value || [];
+}
+
+export async function getPipelineStages(pipelineId: string): Promise<PbiPipelineStage[]> {
+  const j = await call<{ value: PbiPipelineStage[] }>(
+    `/pipelines/${encodeURIComponent(pipelineId)}/stages`,
+  );
+  return (j.value || []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+/**
+ * POST /pipelines/{id}/deployAll — promote ALL artifacts from `sourceStageOrder`
+ * to the next stage (0→1 Dev→Test, 1→2 Test→Prod). Power BI runs the deployment
+ * async and returns 202 with an operation id. The caller surfaces 401/403
+ * (SP not a pipeline admin) verbatim.
+ */
+export async function deployPipelineAll(
+  pipelineId: string,
+  sourceStageOrder: number,
+  options?: { note?: string },
+): Promise<{ ok: true }> {
+  await call(
+    `/pipelines/${encodeURIComponent(pipelineId)}/deployAll`,
+    { method: 'POST', body: { sourceStageOrder, options: { allowOverwriteArtifact: true, allowCreateArtifact: true }, ...(options?.note ? { note: options.note } : {}) } },
+  );
+  return { ok: true };
 }
 
 // ============================================================

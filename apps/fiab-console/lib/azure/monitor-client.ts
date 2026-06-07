@@ -42,7 +42,7 @@ const ACTIVITY_LOG_API = '2015-04-01';
 const RESOURCE_HEALTH_API = '2023-10-01-preview';
 const METRIC_ALERTS_API = '2018-03-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),

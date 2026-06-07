@@ -32,7 +32,7 @@ function pgHostSuffix(): string {
   return process.env.LOOM_POSTGRES_HOST_SUFFIX || 'postgres.database.azure.com';
 }
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
@@ -244,21 +244,109 @@ export async function deleteFirewallRule(serverNameOrId: string, ruleName: strin
   await armRequest<void>(`${scope}/firewallRules/${encodeURIComponent(ruleName)}?api-version=${PG_API_VERSION}`, { method: 'DELETE' });
 }
 
-/**
- * Execute a query against a PostgreSQL flexible server. The `pg` wire-protocol
- * driver is not bundled with the console, so this is an HONEST infra-gate per
- * no-vaporware.md: the caller surfaces a MessageBar naming the requirement.
- */
-export function queryGateReason(): string {
-  return (
-    'PostgreSQL in-database query execution requires the `pg` wire-protocol driver and ' +
-    'a Microsoft Entra token mapped to a PG role. Add the `pg` dependency to apps/fiab-console ' +
-    'and set LOOM_POSTGRES_QUERY_LIVE=true once the console UAMI is created as a PG AAD principal ' +
-    '(SELECT * FROM pgaadauth_create_principal). Until then, ARM inventory, provisioning, ' +
-    'databases, and firewall are fully live; use psql or the Azure portal Query editor for ad-hoc SQL.'
-  );
+// ============================================================
+// In-database query execution (real `pg` wire-protocol + Entra token)
+//
+// PostgreSQL flexible server supports Microsoft Entra auth: connect with the
+// AAD principal *name* as the user and an access token (scope
+// https://ossrdbms-aad.database.azure.com/.default) as the password. The
+// console UAMI must first be created as a PG principal:
+//   SELECT * FROM pgaadauth_create_principal('<uami-name>', false, false);
+// and granted the needed table privileges. We name that one-time setup in the
+// honest gate when LOOM_POSTGRES_AAD_USER is unset (per no-vaporware.md).
+// ============================================================
+
+/** Entra token scope for Azure DB for PostgreSQL (Commercial default; Gov override via env). */
+function pgAadScope(): string {
+  return process.env.LOOM_POSTGRES_AAD_SCOPE || 'https://ossrdbms-aad.database.azure.com/.default';
 }
 
-export function isPostgresQueryLive(): boolean {
-  return process.env.LOOM_POSTGRES_QUERY_LIVE === 'true';
+export interface PgQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  command?: string;
+  executionMs: number;
+}
+
+/**
+ * Honest config gate: PG Entra query needs the AAD principal NAME the UAMI was
+ * registered under in PostgreSQL (its display name, not the client id). Returns
+ * `{ missing, detail }` when unset, else `null`.
+ */
+export function postgresQueryGate(): { missing: string; detail: string } | null {
+  if (!process.env.LOOM_POSTGRES_AAD_USER) {
+    return {
+      missing: 'LOOM_POSTGRES_AAD_USER',
+      detail:
+        'Set LOOM_POSTGRES_AAD_USER to the Entra principal name the console identity is registered ' +
+        'under in PostgreSQL. One-time setup: connect as the PG Entra admin and run ' +
+        "SELECT * FROM pgaadauth_create_principal('<console-uami-name>', false, false); then grant it " +
+        'the needed privileges. ARM inventory, provisioning, databases, and firewall are already live.',
+    };
+  }
+  return null;
+}
+
+/**
+ * List user tables in a PostgreSQL database (schema.table), excluding the
+ * system schemas — used by the mirror engine to enumerate what to snapshot.
+ */
+export async function listPostgresTables(fqdn: string, database: string): Promise<Array<{ schema: string; table: string }>> {
+  const res = await executePostgresQuery(
+    fqdn, database,
+    "SELECT table_schema, table_name FROM information_schema.tables " +
+    "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') " +
+    'ORDER BY table_schema, table_name',
+  );
+  const iS = res.columns.indexOf('table_schema');
+  const iT = res.columns.indexOf('table_name');
+  return res.rows.map((r) => ({ schema: String(r[iS]), table: String(r[iT]) })).filter((t) => t.schema && t.table);
+}
+
+/**
+ * Execute a SQL statement against a PostgreSQL flexible server over the real
+ * `pg` wire protocol, authenticating with a Microsoft Entra access token (no
+ * stored password). Returns columns + rows. Throws PostgresError on failure
+ * (surfaced verbatim by the route). Caller-authorized — the editor's Query tab
+ * runs arbitrary SQL the same way the T-SQL editor does.
+ */
+export async function executePostgresQuery(fqdn: string, database: string, sql: string): Promise<PgQueryResult> {
+  const user = process.env.LOOM_POSTGRES_AAD_USER;
+  if (!user) throw new PostgresError('LOOM_POSTGRES_AAD_USER is not set; cannot authenticate to PostgreSQL.', 503);
+  const tok = await credential.getToken(pgAadScope());
+  if (!tok?.token) throw new PostgresError('Failed to acquire an Entra token for PostgreSQL.', 401);
+
+  // Lazy import so the driver only loads on this path (Node runtime only).
+  const { Client } = await import('pg');
+  const client = new Client({
+    host: fqdn,
+    port: 5432,
+    database: database || 'postgres',
+    user,
+    password: tok.token,
+    ssl: { rejectUnauthorized: true },
+    statement_timeout: 30_000,
+    connectionTimeoutMillis: 20_000,
+    application_name: 'csa-loom-console',
+  });
+  const started = Date.now();
+  try {
+    await client.connect();
+    const res = await client.query(sql);
+    const fields = (res as any).fields || [];
+    const columns: string[] = fields.map((f: any) => f.name);
+    const rows: unknown[][] = (res.rows || []).map((r: any) => columns.map((c) => r[c]));
+    return {
+      columns,
+      rows,
+      rowCount: typeof res.rowCount === 'number' ? res.rowCount : rows.length,
+      command: (res as any).command,
+      executionMs: Date.now() - started,
+    };
+  } catch (e: any) {
+    throw new PostgresError(e?.message || String(e), e?.code === '28000' || e?.code === '28P01' ? 401 : 502, e?.code);
+  } finally {
+    await client.end().catch(() => { /* already closed */ });
+  }
 }

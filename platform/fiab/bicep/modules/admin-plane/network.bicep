@@ -405,4 +405,10 @@ output privateDnsZoneIds object = {
   kusto: privateDnsZones[16].id
   synapseSql: privateDnsZones[17].id
   synapseDev: privateDnsZones[18].id
+  // v2 — Azure Data Factory zone (index 19 in the dnsZones array above).
+  // Without this key the DLZ never receives a non-empty adfPrivateDnsZoneId, so
+  // the ADF factory + SHIR modules silently skip in a clean-sub deploy and the
+  // data-pipeline / copy-job / mapping-data-flow editors have no real factory to
+  // drive. Exposing it lets main.bicep thread the zone into the landing zone.
+  adf: privateDnsZones[19].id
 }

@@ -17,13 +17,13 @@
 
 import { lakehouseShortcutsContainer } from './cosmos-client';
 
-export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse';
+export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
 export type ShortcutKind = 'files' | 'tables';
 export type ShortcutEngine = 'databricks' | 'synapse' | 'none';
 export type ShortcutStatus = 'active' | 'pending' | 'error';
 
 export interface ShortcutCredentialRef {
-  kind: 'uami' | 'sas' | 'accountKey' | 'servicePrincipal' | 'awsKeys' | 'gcsServiceAccount';
+  kind: 'uami' | 'sas' | 'accountKey' | 'servicePrincipal' | 'awsKeys' | 'gcsServiceAccount' | 'deltaSharing';
   /** Key Vault secret name holding the secret payload (non-UAMI credentials). */
   keyVaultSecret?: string;
   /** Pre-provisioned UC STORAGE CREDENTIAL name, if any. */

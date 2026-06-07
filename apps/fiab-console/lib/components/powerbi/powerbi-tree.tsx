@@ -107,6 +107,31 @@ export function PowerBiTree({
   const [dashboards, setDashboards] = useState<DashboardRow[]>([]);
   const [dataflows, setDataflows] = useState<DataflowRow[]>([]);
 
+  // Deployment pipelines are TENANT-scoped (not per-workspace) — lazy-loaded
+  // when the user expands the "Deployment pipelines" node.
+  interface PipelineRow { id: string; displayName: string; stages?: Array<{ order: number; workspaceName?: string }> }
+  const [pipelines, setPipelines] = useState<PipelineRow[] | null>(null);
+  const [pipelinesErr, setPipelinesErr] = useState<string | null>(null);
+  const loadPipelines = useCallback(async () => {
+    if (pipelines !== null) return; // load once
+    try {
+      const j = await fetch('/api/powerbi/pipelines').then(readJson);
+      if (j.ok) { setPipelines(j.pipelines || []); setPipelinesErr(null); }
+      else { setPipelines([]); setPipelinesErr(j.error || j.hint || 'could not load pipelines'); }
+    } catch (e: any) { setPipelines([]); setPipelinesErr(e?.message || String(e)); }
+  }, [pipelines]);
+  const deployStage = useCallback(async (pipelineId: string, sourceStageOrder: number, label: string) => {
+    setBusy(true); setActionMsg(null);
+    try {
+      const j = await fetch('/api/powerbi/pipelines', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pipelineId, sourceStageOrder }),
+      }).then(readJson);
+      setActionMsg({ ok: !!j.ok, text: j.ok ? `${label}: ${j.message}` : (j.error || j.hint || 'deploy failed') });
+    } catch (e: any) { setActionMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  }, []);
+
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) {
       setGate({ missing: body.missing, detail: body.error || '' });
@@ -412,17 +437,59 @@ export function PowerBiTree({
             <TreeItemLayout iconBefore={<Warning20Regular />}>More in Power BI</TreeItemLayout>
             <Tree>
               {[
-                ['New report authoring', 'Authored in the Loom Report editor (real Power BI REST: Reports/Clone, ExportTo, embed). Use New ＋ on a semantic model or the catalog Report editor.', false],
-                ['New / edit semantic model', 'Authored in the Loom Semantic Model editor (real Power BI Push-Datasets REST: tables, typed columns, measures, relationships, scheduled refresh). Use New ＋ above.', false],
-                ['Deployment pipelines', '/v1.0/myorg/pipelines — Dev/Test/Prod stage promotion. Not yet wired; tracked for a follow-up navigator group.', true],
-              ].map(([label, why, gated]) => (
-                <TreeItem key={label as string} itemType="leaf" value={`nw-${label}`}>
-                  <Tooltip content={why as string} relationship="description">
+                ['New report authoring', 'Authored in the Loom Report editor (real Power BI REST: Reports/Clone, ExportTo, embed). Use New ＋ on a semantic model or the catalog Report editor.'],
+                ['New / edit semantic model', 'Authored in the Loom Semantic Model editor (real Power BI Push-Datasets REST: tables, typed columns, measures, relationships, scheduled refresh). Use New ＋ above.'],
+              ].map(([label, why]) => (
+                <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
+                  <Tooltip content={why} relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label as string}</span>{' '}
-                      <Badge size="small" appearance="tint" color={gated ? 'warning' : 'informative'}>{gated ? 'coming' : 'in editor'}</Badge>
+                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
+                      <Badge size="small" appearance="tint" color="informative">in editor</Badge>
                     </TreeItemLayout>
                   </Tooltip>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
+          {/* Deployment pipelines — Dev/Test/Prod stage promotion (tenant-scoped,
+              real Power BI REST). Lazy-loaded on expand. */}
+          <TreeItem itemType="branch" value="g-pipelines" onOpenChange={(_e, d) => { if (d.open) void loadPipelines(); }}>
+            <TreeItemLayout iconBefore={<Flow20Regular />}>Deployment pipelines</TreeItemLayout>
+            <Tree>
+              {pipelines === null ? (
+                <TreeItem itemType="leaf" value="pl-loading"><TreeItemLayout><Caption1>Expand to load…</Caption1></TreeItemLayout></TreeItem>
+              ) : pipelinesErr ? (
+                <TreeItem itemType="leaf" value="pl-err"><TreeItemLayout iconBefore={<Warning20Regular />}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{pipelinesErr}</Caption1></TreeItemLayout></TreeItem>
+              ) : pipelines.length === 0 ? (
+                <TreeItem itemType="leaf" value="pl-empty"><TreeItemLayout><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No deployment pipelines in this tenant.</Caption1></TreeItemLayout></TreeItem>
+              ) : pipelines.map((p) => (
+                <TreeItem key={p.id} itemType="branch" value={`pl-${p.id}`}>
+                  <TreeItemLayout iconBefore={<Flow20Regular />}>{p.displayName}</TreeItemLayout>
+                  <Tree>
+                    {(p.stages || []).map((st) => {
+                      const stageName = ['Development', 'Test', 'Production'][st.order] || `Stage ${st.order}`;
+                      const canDeploy = st.order < 2; // 0→1, 1→2
+                      return (
+                        <TreeItem key={st.order} itemType="leaf" value={`pl-${p.id}-${st.order}`}>
+                          <TreeItemLayout iconBefore={<Board20Regular />}>
+                            <span className={s.leafRow}>
+                              <span>{stageName}{st.workspaceName ? ` · ${st.workspaceName}` : ''}</span>
+                              {canDeploy && (
+                                <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                                  <Tooltip content={`Promote ${stageName} → ${['Development', 'Test', 'Production'][st.order + 1]}`} relationship="label">
+                                    <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} disabled={busy}
+                                      onClick={() => deployStage(p.id, st.order, `${p.displayName} ${stageName}→${['Development', 'Test', 'Production'][st.order + 1]}`)}
+                                      aria-label={`Promote ${stageName}`} />
+                                  </Tooltip>
+                                </span>
+                              )}
+                            </span>
+                          </TreeItemLayout>
+                        </TreeItem>
+                      );
+                    })}
+                  </Tree>
                 </TreeItem>
               ))}
             </Tree>

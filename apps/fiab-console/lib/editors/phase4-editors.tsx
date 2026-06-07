@@ -29,6 +29,7 @@ import {
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate, NewItemCreateGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
@@ -86,6 +87,37 @@ const useStyles = makeStyles({
   tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
+
+  /* ---- Data-agent build tab — sectioned, card-based, web-3.0 ---- */
+  daSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  daSectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  daSectionIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px',
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  daAddBar: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  daSrcCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow4 },
+  },
+  daSrcHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  daSrcIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorBrandForeground1,
+  },
+  daFieldLabel: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS },
 
   /* ---- Data-agent test chat: flex column with a scrollable thread that grows
      and a composer pinned at the bottom so Send is ALWAYS reachable. ---- */
@@ -3013,83 +3045,103 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
           {tab === 'build' && (
             <>
-              <Field label="Agent name / alias" hint="A friendly name for this data agent — shown in chat and used when publishing. Leave blank to use the item's name.">
-                <Input
-                  value={state.alias || ''}
-                  maxLength={128}
-                  onChange={(_, d) => setState((p) => ({ ...p, alias: d.value }))}
-                  placeholder={item.displayName || 'e.g. Casino Revenue Analyst'}
-                />
-              </Field>
-              <Subtitle2>Agent instructions ({instrLen}/15000)</Subtitle2>
-              <Textarea
-                value={state.instructions} maxLength={15000} rows={5}
-                onChange={(_, d) => setState((p) => ({ ...p, instructions: d.value }))}
-                placeholder="Declare which source handles which question type…"
-              />
-
-              <Subtitle2 style={{ marginTop: 8 }}>Data sources ({sources.length}/5)</Subtitle2>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <Field label="Type">
-                  <Dropdown value={DA_SOURCE_TYPES.find((t) => t.value === pickerType)?.label} selectedOptions={[pickerType]}
-                    onOptionSelect={(_, d) => { if (d.optionValue) { setPickerType(d.optionValue as DaSourceType); setPickSel(''); } }}>
-                    {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
-                  </Dropdown>
+              {/* Agent identity + routing instructions */}
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><Bot24Regular /></span>
+                  <Subtitle2>Agent</Subtitle2>
+                </div>
+                <Field label="Agent name / alias" hint="A friendly name for this data agent — shown in chat and used when publishing. Leave blank to use the item's name.">
+                  <Input
+                    value={state.alias || ''}
+                    maxLength={128}
+                    onChange={(_, d) => setState((p) => ({ ...p, alias: d.value }))}
+                    placeholder={item.displayName || 'e.g. Casino Revenue Analyst'}
+                  />
                 </Field>
-                <Field label="Item">
-                  <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
-                    placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
-                    onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
-                    {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
-                  </Dropdown>
+                <Field label={`Instructions (${instrLen}/15000)`} hint="Declare which source handles which kind of question — the agent uses this to route.">
+                  <Textarea
+                    value={state.instructions} maxLength={15000} rows={5}
+                    onChange={(_, d) => setState((p) => ({ ...p, instructions: d.value }))}
+                    placeholder="Route financial metrics to the semantic model; raw exploration to the lakehouse; log analysis to KQL…"
+                  />
                 </Field>
-                <Button appearance="primary" onClick={addSource} disabled={!pickSel || sources.length >= 5}>+ Add source</Button>
               </div>
 
-              {sources.map((src) => (
-                <div key={src.id} className={s.card}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Badge appearance="tint" color="brand">{DA_SOURCE_TYPES.find((t) => t.value === src.type)?.label || src.type}</Badge>
-                    <strong>{src.name}</strong>
-                    <div style={{ flex: 1 }} />
-                    <Button size="small" onClick={() => removeSource(src.id)}>Remove</Button>
-                  </div>
-                  <Caption1 style={{ marginTop: 6 }}>Data source description (helps the agent route questions to this source)</Caption1>
-                  <Input value={src.description || ''} onChange={(_, d) => updateSource(src.id, { description: d.value })} placeholder="Finance facts: revenue, margin, bookings by region & quarter." />
-                  <Caption1 style={{ marginTop: 6 }}>{DA_SCHEMA_LABEL[src.type]}</Caption1>
-                  {src.type === 'ontology' || src.type === 'graph' ? (
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      Fabric does not scope {src.type === 'graph' ? 'graphs to specific nodes/edges' : 'ontologies to subsets'}; the whole source is queried.
-                    </Caption1>
-                  ) : (
-                    <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
-                  )}
-                  <Caption1 style={{ marginTop: 6 }}>Data source instructions</Caption1>
-                  <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
-                  {daSupportsExampleQueries(src.type) ? (
-                    <>
-                      <Caption1 style={{ marginTop: 6 }}>Example question → query pairs (few-shot)</Caption1>
-                      {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
-                          <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
-                          <Input value={ex.query} placeholder="SQL / KQL / GQL" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
-                          <Button size="small" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
-                        </div>
-                      ))}
-                      <Button size="small" onClick={() => addExample(src.id)}>+ Example</Button>
-                    </>
-                  ) : (
-                    <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
-                      {src.type === 'semantic-model'
-                        ? 'Fabric does not support example queries for semantic models — author Verified Answers via Power BI “Prep for AI” instead.'
-                        : 'Fabric does not support example queries for ontologies.'}
-                    </Caption1>
-                  )}
+              {/* Grounded data sources */}
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><Database20Regular /></span>
+                  <Subtitle2>Data sources</Subtitle2>
+                  <Badge appearance="tint" color={sources.length >= 5 ? 'warning' : 'brand'}>{sources.length}/5</Badge>
                 </div>
-              ))}
-              {sources.length === 0 && (
-                <MessageBar intent="info"><MessageBarBody>Attach up to five typed sources. Each becomes a grounded tool for the agent. The test chat and Publish both require at least one.</MessageBarBody></MessageBar>
-              )}
+                <div className={s.daAddBar}>
+                  <Field label="Type">
+                    <Dropdown value={DA_SOURCE_TYPES.find((t) => t.value === pickerType)?.label} selectedOptions={[pickerType]}
+                      onOptionSelect={(_, d) => { if (d.optionValue) { setPickerType(d.optionValue as DaSourceType); setPickSel(''); } }}>
+                      {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Item" style={{ minWidth: 220 }}>
+                    <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
+                      placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                      onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
+                      {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Button appearance="primary" icon={<Add20Regular />} onClick={addSource} disabled={!pickSel || sources.length >= 5}>Add source</Button>
+                </div>
+
+                {sources.map((src) => (
+                  <div key={src.id} className={s.daSrcCard}>
+                    <div className={s.daSrcHead}>
+                      <span className={s.daSrcIcon}><Database20Regular /></span>
+                      <strong>{src.name}</strong>
+                      <Badge appearance="tint" color="brand">{DA_SOURCE_TYPES.find((t) => t.value === src.type)?.label || src.type}</Badge>
+                      <div style={{ flex: 1 }} />
+                      <Button size="small" appearance="subtle" onClick={() => removeSource(src.id)} style={{ color: tokens.colorPaletteRedForeground1 }}>Remove</Button>
+                    </div>
+                    <Field label="Description" hint="Helps the agent route questions to this source.">
+                      <Input value={src.description || ''} onChange={(_, d) => updateSource(src.id, { description: d.value })} placeholder="Finance facts: revenue, margin, bookings by region & quarter." />
+                    </Field>
+                    {src.type === 'ontology' || src.type === 'graph' ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        {src.type === 'graph' ? 'Graphs are queried whole — no node/edge scoping.' : 'Ontologies are queried whole — no subset scoping.'}
+                      </Caption1>
+                    ) : (
+                      <Field label={DA_SCHEMA_LABEL[src.type]}>
+                        <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
+                      </Field>
+                    )}
+                    <Field label="Source instructions">
+                      <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
+                    </Field>
+                    {daSupportsExampleQueries(src.type) ? (
+                      <Field label="Example question → query pairs (few-shot)">
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
+                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6 }}>
+                              <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
+                              <Input value={ex.query} placeholder="SQL / KQL / GQL" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
+                              <Button size="small" appearance="subtle" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
+                            </div>
+                          ))}
+                          <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addExample(src.id)} style={{ alignSelf: 'flex-start' }}>Example</Button>
+                        </div>
+                      </Field>
+                    ) : (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        {src.type === 'semantic-model'
+                          ? 'Semantic models use Power BI “Prep for AI” Verified Answers instead of example queries.'
+                          : 'Example queries are not supported for this source.'}
+                      </Caption1>
+                    )}
+                  </div>
+                ))}
+                {sources.length === 0 && (
+                  <MessageBar intent="info"><MessageBarBody><Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Attach up to five typed sources. Each becomes a grounded tool for the agent. Test chat and Publish both need at least one.</MessageBarBody></MessageBar>
+                )}
+              </div>
               <SaveBar
                 saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
                 extraRight={

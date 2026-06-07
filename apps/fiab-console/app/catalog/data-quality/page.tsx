@@ -20,11 +20,11 @@ import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import {
   Spinner, Button, Badge, MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Input, Field, Dropdown, Option, Textarea, Switch,
   Caption1, Body1, Subtitle2, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular } from '@fluentui/react-icons';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface DataQualityRule {
   id: string;
@@ -169,6 +169,23 @@ export default function DataQualityPage() {
     } catch (e: any) { setError(e?.message || String(e)); }
   }
 
+  const ruleColumns: LoomColumn<DataQualityRule>[] = [
+    { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (r) => r.name, render: (r) => <Body1><strong>{r.name}</strong></Body1> },
+    { key: 'scope', label: 'Scope', sortable: true, filterable: true, getValue: (r) => r.scope, render: (r) => <Caption1>{r.scope}</Caption1> },
+    { key: 'check', label: 'Check', sortable: true, filterable: true, width: 140, getValue: (r) => r.check, render: (r) => <Badge appearance="tint" size="small">{r.check}</Badge> },
+    { key: 'threshold', label: 'Threshold', sortable: true, filterable: false, width: 110, getValue: (r) => r.threshold, render: (r) => <Caption1>{r.threshold}{r.check === 'freshness' ? 'd' : '%'}</Caption1> },
+    { key: 'enabled', label: 'Status', sortable: true, filterable: false, width: 110, getValue: (r) => (r.enabled ? 1 : 0), render: (r) => <Badge appearance="tint" color={r.enabled ? 'success' : 'warning'} size="small">{r.enabled ? 'Enabled' : 'Disabled'}</Badge> },
+    {
+      key: 'actions', label: 'Actions', sortable: false, filterable: false, width: 100,
+      render: (r) => (
+        <span className={s.actionCell} onClick={(e) => e.stopPropagation()}>
+          <Button size="small" appearance="transparent" icon={<Edit20Regular />} onClick={() => editRule(r)} aria-label="Edit" />
+          <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => deleteRule(r.id)} aria-label="Delete" />
+        </span>
+      ),
+    },
+  ];
+
   return (
     <CatalogShell sectionTitle="Data quality" sectionBadge="Loom native">
       <Caption1 className={s.intro}>
@@ -197,49 +214,12 @@ export default function DataQualityPage() {
       {loading && !rules && <Spinner label="Loading data-quality rules…" />}
 
       {!loading && rules && (
-        <Table aria-label="Data quality rules" size="small">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Scope</TableHeaderCell>
-              <TableHeaderCell>Check</TableHeaderCell>
-              <TableHeaderCell>Threshold</TableHeaderCell>
-              <TableHeaderCell>Status</TableHeaderCell>
-              <TableHeaderCell>Actions</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rules.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6}>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, padding: '16px 0' }}>
-                    No rules yet. Create one to start monitoring data quality.
-                  </Caption1>
-                </TableCell>
-              </TableRow>
-            ) : (
-              rules.map((rule) => (
-                <TableRow key={rule.id}>
-                  <TableCell><Body1><strong>{rule.name}</strong></Body1></TableCell>
-                  <TableCell><Caption1>{rule.scope}</Caption1></TableCell>
-                  <TableCell><Badge appearance="tint" size="small">{rule.check}</Badge></TableCell>
-                  <TableCell><Caption1>{rule.threshold}{rule.check === 'freshness' ? 'd' : '%'}</Caption1></TableCell>
-                  <TableCell>
-                    <Badge appearance="tint" color={rule.enabled ? 'success' : 'warning'} size="small">
-                      {rule.enabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className={s.actionCell}>
-                      <Button size="small" appearance="transparent" icon={<Edit20Regular />} onClick={() => editRule(rule)} aria-label="Edit" />
-                      <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => deleteRule(rule.id)} aria-label="Delete" />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <LoomDataTable<DataQualityRule>
+          columns={ruleColumns}
+          rows={rules}
+          getRowId={(r) => r.id}
+          empty="No rules yet. Create one to start monitoring data quality."
+        />
       )}
 
       <Dialog open={dialogOpen} onOpenChange={(_, d) => { if (!d.open) { setDialogOpen(false); resetForm(); } }}>

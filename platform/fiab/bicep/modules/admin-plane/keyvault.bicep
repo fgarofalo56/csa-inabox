@@ -15,6 +15,9 @@ param tenantId string = subscription().tenantId
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
+@description('Console UAMI principalId — granted Key Vault Secrets Officer so Loom Connections can write source-credential secrets. Empty skips the grant.')
+param consolePrincipalId string = ''
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -67,6 +70,18 @@ resource adminKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', keyVaultAdministratorRoleId)
     principalId: adminEntraGroupId
     principalType: 'Group'
+  }
+}
+
+// Console UAMI gets Key Vault Secrets Officer (set/get/delete secrets) so Loom
+// Connections can store data-source credentials. Role: b86a8fe4-44ce-4948-aee5-eccb2c155cd7.
+resource consoleKvSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, consolePrincipalId, 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 

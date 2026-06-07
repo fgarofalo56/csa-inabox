@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button, Input, Dropdown, Option, Field,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Card,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular, Add24Regular, Delete16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Classification {
   name: string; count: number;
@@ -83,6 +83,26 @@ export default function ClassificationsPage() {
   };
   useEffect(() => { load(); loadTypes(); }, []);
 
+  const classColumns: LoomColumn<Classification>[] = [
+    { key: 'name', label: 'Classification', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <span className={s.chip}>{c.name}</span> },
+    { key: 'count', label: 'Hits', sortable: true, filterable: false, width: 90, getValue: (c) => c.count, render: (c) => <strong>{c.count}</strong> },
+    {
+      key: 'samples', label: 'Sample items', sortable: false, filterable: false,
+      getValue: (c) => c.samples.map((sm) => sm.displayName).join(' '),
+      render: (c) => (
+        <span>
+          {c.samples.slice(0, 3).map((sm) => (
+            <a key={sm.id} href={`/items/${sm.itemType}/${sm.id}`} onClick={(e) => e.stopPropagation()}
+               style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 12, fontSize: 12 }}>
+              {sm.displayName} <Open16Regular />
+            </a>
+          ))}
+          {c.samples.length > 3 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>+{c.samples.length - 3} more</Caption1>}
+        </span>
+      ),
+    },
+  ];
+
   return (
     <GovernanceShell sectionTitle="Classifications">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
@@ -137,39 +157,14 @@ export default function ClassificationsPage() {
           </MessageBarBody>
         </MessageBar>
       )}
-      {loading && !error && <Spinner label="Aggregating classifications…" />}
-      {!loading && !error && (data?.length ?? 0) === 0 && (
-        <div className={s.empty}>
-          No classifications tagged yet. Apply classifications via item editors (Lakehouse, Data Product, Semantic Model).
-        </div>
-      )}
-      {data && data.length > 0 && (
-        <Table aria-label="Classifications">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Classification</TableHeaderCell>
-              <TableHeaderCell>Hits</TableHeaderCell>
-              <TableHeaderCell>Sample items</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.map((c) => (
-              <TableRow key={c.name}>
-                <TableCell><span className={s.chip}>{c.name}</span></TableCell>
-                <TableCell><strong>{c.count}</strong></TableCell>
-                <TableCell>
-                  {c.samples.slice(0, 3).map((sm) => (
-                    <a key={sm.id} href={`/items/${sm.itemType}/${sm.id}`}
-                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 12, fontSize: 12 }}>
-                      {sm.displayName} <Open16Regular />
-                    </a>
-                  ))}
-                  {c.samples.length > 3 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>+{c.samples.length - 3} more</Caption1>}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      {!error && (
+        <LoomDataTable<Classification>
+          columns={classColumns}
+          rows={data || []}
+          getRowId={(c) => c.name}
+          loading={loading}
+          empty="No classifications tagged yet. Apply classifications via item editors (Lakehouse, Data Product, Semantic Model)."
+        />
       )}
     </GovernanceShell>
   );

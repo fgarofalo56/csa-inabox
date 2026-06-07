@@ -23,13 +23,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, loadOwnedItem } from '../../items/_lib/item-crud';
-import { dedicatedTarget } from '@/lib/azure/synapse-sql-client';
+import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { listColumns } from '@/lib/azure/sql-objects-client';
 import {
   emptyDabConfig, emitDabConfigJson, validateDabConfig,
   type DabConfig, type DabEntity, type DabField,
 } from '../../dab/_lib/dab-config-model';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { readOnlySelect } from '@/lib/thread/sql-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,9 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({} as any));
   const from = body?.from || {};
+  const sourceMode = String(body?.values?.sourceMode || 'table').trim();
   const tableValue = String(body?.values?.table || '').trim();
+  const queryText = String(body?.values?.query || '').trim();
   const apiName = String(body?.values?.apiName || '').trim();
   const requireAuth = body?.values?.requireAuth !== false; // secure by default
 
@@ -59,14 +62,7 @@ export async function POST(req: NextRequest) {
   if (!WAREHOUSE_TYPES.has(from.type)) {
     return NextResponse.json({ ok: false, error: `${from.type} can't be published as an API yet (warehouse only).` }, { status: 400 });
   }
-  if (!tableValue) return NextResponse.json({ ok: false, error: 'pick a table' }, { status: 400 });
   if (!apiName) return NextResponse.json({ ok: false, error: 'name the API' }, { status: 400 });
-
-  const [objIdStr, schema, name] = tableValue.split('|');
-  const objectId = Number(objIdStr);
-  if (!Number.isInteger(objectId) || !schema || !name) {
-    return NextResponse.json({ ok: false, error: 'invalid table selection' }, { status: 400 });
-  }
 
   // Owner-scoped: confirm the caller owns the source item.
   const src = await loadOwnedItem(from.id, from.type, oid);
@@ -82,15 +78,52 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Read the table's real columns → derive primary-key fields for the entity.
+  // Resolve the API's backing DB object (schema/name/type) + its key fields.
+  //  - table: the catalog table picked in the dropdown.
+  //  - query: wrap the user's SELECT as a real VIEW, then expose that view.
+  let schema: string;
+  let name: string;
+  let objectType: 'table' | 'view';
   let fields: DabField[];
-  try {
-    const cols = await listColumns(target.server, target.database, objectId);
-    if (!cols.length) return NextResponse.json({ ok: false, error: `Table ${schema}.${name} has no readable columns.` }, { status: 400 });
-    // DAB auto-discovers columns; we only need to declare the primary key(s).
-    fields = cols.filter((c) => c.isPrimaryKey).map((c) => ({ name: c.name, primaryKey: true }));
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: `Could not read schema for ${schema}.${name}: ${e?.message || String(e)}` }, { status: 500 });
+  let sourceDescr: string;
+
+  if (sourceMode === 'query') {
+    if (!queryText) return NextResponse.json({ ok: false, error: 'enter a SQL query' }, { status: 400 });
+    const guard = readOnlySelect(queryText);
+    if (!guard.ok) return NextResponse.json({ ok: false, error: guard.error }, { status: 400 });
+    schema = 'dbo';
+    // Deterministic, identifier-safe view name from the API name.
+    const base = apiName.replace(/[^_0-9A-Za-z]/g, '_').replace(/^([0-9])/, '_$1').slice(0, 80) || 'Api';
+    name = `loom_api_${base}`;
+    objectType = 'view';
+    // Create (or replace) the view from the user's query — real DDL on the
+    // Azure-native warehouse, the deliberate step that makes the query a stable
+    // API-addressable object.
+    try {
+      await executeQuery(target, `CREATE OR ALTER VIEW [${schema}].[${name.replace(/]/g, ']]')}] AS\n${guard.sql}`);
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: `Could not create the view from your query: ${e?.message || String(e)}` }, { status: 400 });
+    }
+    fields = []; // views have no declared PK; DAB exposes read over all columns
+    sourceDescr = `a custom SQL query (view ${schema}.${name})`;
+  } else {
+    if (!tableValue) return NextResponse.json({ ok: false, error: 'pick a table' }, { status: 400 });
+    const [objIdStr, sch, nm] = tableValue.split('|');
+    const objectId = Number(objIdStr);
+    if (!Number.isInteger(objectId) || !sch || !nm) {
+      return NextResponse.json({ ok: false, error: 'invalid table selection' }, { status: 400 });
+    }
+    schema = sch; name = nm; objectType = 'table';
+    // Read the table's real columns → derive primary-key fields for the entity.
+    try {
+      const cols = await listColumns(target.server, target.database, objectId);
+      if (!cols.length) return NextResponse.json({ ok: false, error: `Table ${schema}.${name} has no readable columns.` }, { status: 400 });
+      // DAB auto-discovers columns; we only need to declare the primary key(s).
+      fields = cols.filter((c) => c.isPrimaryKey).map((c) => ({ name: c.name, primaryKey: true }));
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: `Could not read schema for ${schema}.${name}: ${e?.message || String(e)}` }, { status: 500 });
+    }
+    sourceDescr = `${from.type} table ${schema}.${name}`;
   }
 
   // Build a real DAB config: dwsql source (Synapse dedicated) + one entity.
@@ -105,8 +138,8 @@ export async function POST(req: NextRequest) {
   const { singular, plural } = gqlNames(name);
   const entity: DabEntity = {
     name: entityName,
-    description: `Auto-exposed via Thread from ${from.type} table ${schema}.${name}.`,
-    source: { object: `${schema}.${name}`, type: 'table' },
+    description: `Auto-exposed via Thread from ${sourceDescr}.`,
+    source: { object: `${schema}.${name}`, type: objectType },
     rest: { enabled: true, path: `/${name.toLowerCase()}` },
     graphql: { enabled: true, singular, plural },
     fields,

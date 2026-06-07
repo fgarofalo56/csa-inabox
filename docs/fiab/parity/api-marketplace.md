@@ -42,6 +42,13 @@ reveal subscription keys.
 | Subscribe to a **single API** / all-APIs scope | ✅ built — "Subscribe to this API" on the detail header (API scope) | `createSubscription` (scope = `/apis/{id}`; all-APIs supported by client) |
 | View my subscriptions + their state | ✅ built — "My subscriptions" tab (name, scope, state badge, created) | `GET .../subscriptions` (`listSubscriptions`) |
 | Reveal subscription keys (primary/secondary) | ✅ built — "Show keys" + copy; keys resolved server-side (never on GET) | `POST .../subscriptions/{sid}/listSecrets` (`getSubscriptionKeys`) via `/api/marketplace/subscriptions/{sid}/keys` |
+| **Rename** a subscription | ✅ built — row menu → Rename dialog | `PATCH .../subscriptions/{sid}` (`updateSubscription`) via `/api/marketplace/subscriptions/{sid}` |
+| **Suspend / activate** a subscription | ✅ built — row menu → state toggle | `PATCH .../subscriptions/{sid}` (state) |
+| **Delete / cancel** a subscription | ✅ built — row menu → Delete (confirm) | `DELETE .../subscriptions/{sid}` (`deleteSubscription`) |
+| **Regenerate** primary / secondary key | ✅ built — row menu + Use-API drawer | `POST .../subscriptions/{sid}/regenerate{Primary,Secondary}Key` via `/api/marketplace/subscriptions/{sid}/keys/regenerate` |
+| **Use this API** (as a source for anything in Loom) | ✅ built — drawer with gateway base URL, key, copy-paste **cURL / Python / JavaScript** samples | client + `getSubscriptionKeys` |
+| **Build a mini-app** on an API | ✅ built — wizard scaffolds a real Loom Notebook (Python client + the API's operations + a starter analysis cell), owned in a chosen workspace | `POST /api/marketplace/mini-app` → `createOwnedItem('notebook')` + `listOperations` |
+| **Filter** APIs by access (open / subscription) | ✅ built — Access dropdown alongside search | client-side over the catalog payload |
 | Refresh inventory / subscriptions | ✅ built — Refresh buttons re-fetch from APIM | re-calls the routes above |
 | Infra-gate when APIM not provisioned | ⚠️ honest-gate — MessageBar `intent="warning"` names `LOOM_APIM_NAME` / `LOOM_SUBSCRIPTION_ID`, the RBAC role, and the bicep module; the full catalog UI shell still renders | `apimGate()` → 503 `{ gated:true, hint, bicepModule }` |
 

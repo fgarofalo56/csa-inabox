@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { SparkJobDefinitionEditor } from '../phase2-misc-editors';
+import { SparkJobDefinitionEditor } from '../spark-job-definition-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
 describe('SparkJobDefinitionEditor', () => {
@@ -15,6 +15,7 @@ describe('SparkJobDefinitionEditor', () => {
         ok: true,
         pools: [{ name: 'pool-fixture', nodeSize: 'Small', state: 'Online' }],
       }),
+      '/api/items/environment': () => ({ ok: true, items: [] }),
       '/api/items/spark-job-definition/sjd-1/runs': () => ({ ok: true, sessions: [] }),
       '/api/items/spark-job-definition/sjd-1': () => ({
         ok: true,

@@ -15,76 +15,59 @@
     documentation before making decisions.
 
 
-Create your first CSA Loom workspace via the Console. **15 minutes.**
+Create your first CSA Loom workspace via the Console. **~5 minutes.**
+
+!!! note "How navigation actually works"
+    Loom's left nav has **top-level surfaces** (Home, Workspaces, Browse, OneLake
+    catalog, Unified catalog, Lineage, API marketplace, Governance, Monitor,
+    Real-Time hub, Data agents, Copilot, Workload hub, Connections, Deployment,
+    Admin portal, Setup wizard). A **workspace** is a container of items shown as
+    a **flat tree**; you create items inside it with **“+ New item”**, and each
+    opens its editor at `/items/<type>/<id>`. There is **no per-workspace
+    left-rail of service panes** — pick the item type in the “+ New item” dialog.
 
 ## Prerequisites
 
 - Loom deployed (see [Quick Start](../deployment/quickstart.md))
-- You are a member of the `Loom Admins` Entra group OR have
-  `Workspace Creator` role
+- You can create workspaces (member of the Loom admins Entra group)
 - Console URL open in your browser
 
 ## Steps
 
-### 1. Navigate to Workspaces pane
+### 1. Open Workspaces
 
-Click **Workspaces** in the left rail. You should see the auto-created
-`default-workspace` from initial deploy.
+Click **Workspaces** in the left nav. You'll see any existing workspaces as
+tiles/rows.
 
-### 2. Create a new workspace
+### 2. Create a workspace
 
-Click **+ New Workspace** in the top-right.
+Click **+ New workspace** (top-right). The dialog captures:
 
-Fill the form:
 - **Name**: `tutorial-demo`
 - **Description**: `My first CSA Loom workspace`
-- **Domain**: Select an existing domain or `<unassigned>`
-- **Primary use case**: `Data Engineering` (drives default settings)
-- **Admin Entra group**: pick the group whose members should admin
-  this workspace (you can use `Loom Admins` for the tutorial)
-- **Capacity allocation**: `Small (F2-equivalent)` for the tutorial
+- **Capacity**: leave the default (Loom-native; no Fabric capacity required)
+- **Domain**: pick a domain or leave unassigned
 
-Click **Create**.
+Click **Create**. The workspace is a Cosmos-backed container that owns items —
+it's created immediately (no multi-minute resource provisioning; the Azure
+backends are already deployed by the DLZ and shared).
 
-### 3. Watch the deploy
+### 3. Open the workspace
 
-Console shows a progress modal:
-- ADLS Gen2 container provisioned (~30 s)
-- Databricks workspace permissions assigned (~60 s)
-- Power BI workspace created via REST (~60 s)
-- ADX database added to shared cluster (~30 s)
-- Synapse Serverless database created (~30 s)
-- UC catalog (or Hive schema in Gov) created (~30 s)
-- Purview collection registered (~60 s)
+Click the new workspace to open its item tree (empty to start) at
+`/workspaces/<id>`.
 
-Total: ~5 minutes.
+### 4. Add your first item
 
-### 4. Verify the workspace
+Click **+ New item**, choose a type (e.g. **Lakehouse**, **Notebook**,
+**Warehouse**, **KQL Database**, **Data agent**…), name it, and Create. It opens
+in its editor at `/items/<type>/<id>`. Repeat to add more — they appear in the
+workspace tree.
 
-Once green, click **Open** to navigate into the workspace home.
+### 5. (Optional) Delete the workspace
 
-You should see:
-- 0 lakehouses, 0 warehouses, 0 notebooks, 0 semantic models, 0 KQL
-  DBs, 0 activator rules, 0 data agents (you're about to create some)
-- Member list with you as Admin
-- Recent activity feed showing the creation event
-
-### 5. Explore the panes
-
-Click each pane in the workspace's left rail:
-- **Lakehouse** — should be empty (Files + Tables)
-- **Warehouse** — empty SQL editor; schema explorer shows the new
-  database
-- **Notebook** — empty (no notebooks yet)
-- **KQL** — empty database in the shared ADX cluster
-- **Catalog** — shows the workspace's catalog tags
-
-### 6. Cleanup (optional)
-
-To delete the workspace:
-- Workspace home → **Settings → Delete workspace**
-- Type the workspace name to confirm
-- Console removes the RG + all child resources
+From the Workspaces list, use the workspace's row action to delete it (removes
+the Cosmos record + its items; the shared Azure backends remain).
 
 ## What's next
 

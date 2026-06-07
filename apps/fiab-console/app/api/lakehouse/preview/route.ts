@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { KNOWN_CONTAINERS, pathToHttpsUrl } from '@/lib/azure/adls-client';
+import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
@@ -59,17 +59,29 @@ export async function GET(req: NextRequest) {
   const container = req.nextUrl.searchParams.get('container') || '';
   const path = req.nextUrl.searchParams.get('path') || '';
   const explicit = req.nextUrl.searchParams.get('format');
+  // Reference-Lakehouse federation (F8): an explicit `account` previews a file
+  // that lives in a REFERENCED lakehouse's storage account (any account the
+  // Console UAMI + Synapse Serverless MI hold Storage Blob Data Reader on). When
+  // omitted, the PRIMARY LOOM account is used and the standard medallion
+  // container allow-list applies.
+  const account = (req.nextUrl.searchParams.get('account') || '').trim();
 
   if (!container || !path) {
     return NextResponse.json({ ok: false, error: 'container and path are required' }, { status: 400 });
   }
-  if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
+  if (account) {
+    // Validate the account name (storage account naming: 3-24 lowercase
+    // alphanumerics) to prevent host injection into the OPENROWSET URL.
+    if (!/^[a-z0-9]{3,24}$/.test(account)) {
+      return NextResponse.json({ ok: false, error: `invalid storage account: ${account}` }, { status: 400 });
+    }
+  } else if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
     return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
   }
 
   const fmt = detectFormat(path, explicit);
   const bulkPath = normalizeBulkPath(path, fmt);
-  const url = pathToHttpsUrl(container, bulkPath);
+  const url = account ? pathToHttpsUrlFor(account, container, bulkPath) : pathToHttpsUrl(container, bulkPath);
   const safeUrl = escapeSingleQuotes(url);
 
   // v3.28: non-tabular formats return metadata-only — no Synapse Serverless

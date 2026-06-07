@@ -69,7 +69,9 @@ type SourceKey = (typeof SOURCES)[number];
 const SOURCE_LABEL: Record<SourceKey, string> = {
   purview: 'Purview',
   'unity-catalog': 'Unity Catalog',
-  onelake: 'OneLake',
+  // Azure-native default = the tenant's own Loom workspaces/items; real Fabric
+  // OneLake is opt-in (LOOM_LAKEHOUSE_BACKEND=fabric).
+  onelake: 'Loom workspaces',
 };
 
 const SOURCE_COLORS: Record<string, 'brand' | 'severe' | 'informative' | 'success' | 'warning'> = {

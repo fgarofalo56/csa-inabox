@@ -120,23 +120,39 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ---------- OneLake ----------
+  // ---------- Loom workspaces (Azure-native DEFAULT; Fabric OneLake opt-in) ----------
+  // Per no-fabric-dependency.md the catalog's primary inventory is the caller's
+  // OWN Loom workspace items (Cosmos) — NOT real Fabric workspaces. Real Fabric
+  // OneLake is used only when explicitly opted in via LOOM_LAKEHOUSE_BACKEND=fabric.
   if (!sourceFilter.length || sourceFilter.includes('onelake')) {
     const t0 = Date.now();
     try {
-      const rows = await searchOneLake(q, limit);
-      sources.onelake = { ok: true, count: rows.length, durationMs: Date.now() - t0 };
-      for (const r of rows) {
-        hits.push({
-          source: 'onelake',
-          id: r.item_id,
-          display_name: r.display_name,
-          type: r.type,
-          description: r.description,
-          workspace_name: r.workspace_name,
-          updated_at: r.updated_at,
-          detail_path: `/catalog/onelake/${encodeURIComponent(r.item_id)}?workspace=${encodeURIComponent(r.workspace_id)}`,
-        });
+      if (process.env.LOOM_LAKEHOUSE_BACKEND === 'fabric') {
+        const rows = await searchOneLake(q, limit);
+        sources.onelake = { ok: true, count: rows.length, durationMs: Date.now() - t0 };
+        for (const r of rows) {
+          hits.push({
+            source: 'onelake', id: r.item_id, display_name: r.display_name, type: r.type,
+            description: r.description, workspace_name: r.workspace_name, updated_at: r.updated_at,
+            detail_path: `/catalog/onelake/${encodeURIComponent(r.item_id)}?workspace=${encodeURIComponent(r.workspace_id)}`,
+          });
+        }
+      } else {
+        const { listAllOwnedItems, listOwnedWorkspaces } = await import('../../items/_lib/item-crud');
+        const [items, wss] = await Promise.all([listAllOwnedItems(s.claims.oid), listOwnedWorkspaces(s.claims.oid)]);
+        const wsName = new Map(wss.map((w) => [w.id, w.name]));
+        const ql = q.toLowerCase().trim();
+        const matched = items
+          .filter((it) => !ql || it.displayName.toLowerCase().includes(ql) || it.itemType.toLowerCase().includes(ql))
+          .slice(0, limit);
+        sources.onelake = { ok: true, count: matched.length, durationMs: Date.now() - t0 };
+        for (const it of matched) {
+          hits.push({
+            source: 'onelake', id: it.id, display_name: it.displayName, type: it.itemType,
+            description: it.description, workspace_name: wsName.get(it.workspaceId) || it.workspaceId,
+            updated_at: it.updatedAt, detail_path: `/items/${encodeURIComponent(it.itemType)}/${encodeURIComponent(it.id)}`,
+          });
+        }
       }
     } catch (e: any) {
       sources.onelake = {

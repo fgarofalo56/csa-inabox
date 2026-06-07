@@ -200,6 +200,34 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/environment-manage-customization"
     } },
+  { slug: 'spark-environment', displayName: 'Spark environment', restType: 'SparkEnvironment', category: 'Data Engineering',
+    description: 'Full lifecycle Spark environment: runtime version, compute config, public libraries (pip/conda), custom libraries (whl/jar), and Spark properties. Publish bakes the spec into a Synapse Spark pool; attach to notebooks and Spark job definitions.',
+    learnContent: {
+      "overview": "A Spark environment is a versioned, publishable bundle of runtime, compute, and library configuration. In Loom the spec persists to Cosmos; Publish bakes it into a Synapse Spark Big Data pool (sessionLevelPackagesEnabled + libraryRequirements + customLibraries + sparkConfigProperties) via ARM, and Attach wires it onto notebooks and Spark job definitions so they share the same runtime. No Microsoft Fabric capacity is required — the backend is Azure Synapse + ADLS Gen2.",
+      "steps": [
+        {
+          "title": "Pick the runtime",
+          "body": "Choose the Spark runtime version (3.5 GA recommended) and node family on the Runtime tab."
+        },
+        {
+          "title": "Size the compute",
+          "body": "Set node size, autoscale or a fixed node count, and auto-pause on the Compute tab — these are baked into the pool on publish."
+        },
+        {
+          "title": "Add libraries",
+          "body": "List pip/conda packages on Public libraries and upload .whl/.jar files (staged to ADLS) on Custom libraries."
+        },
+        {
+          "title": "Publish + validate",
+          "body": "Publish bakes the spec into the target Spark pool, then Validate import runs a live Spark session that installs the packages and imports them — the receipt proves importability."
+        },
+        {
+          "title": "Attach to items",
+          "body": "Attach the environment to notebooks and Spark job definitions so they default to the published pool and share the same libraries."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-azure-portal-add-libraries"
+    } },
 
   // Data Factory
   { slug: 'data-pipeline', displayName: 'Data pipeline', restType: 'DataPipeline', category: 'Data Factory',
@@ -1062,12 +1090,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics',
     description: 'Spark notebook designer — multi-cell PySpark/Scala/SQL on a Synapse Big Data pool.',
     learnContent: {
-      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
+      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR, .NET Spark C#) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
       "steps": [
         { "title": "Attach a Spark pool", "body": "Pick a Big Data pool from the attach picker; the first run cold-starts the session (about 2-3 minutes)." },
-        { "title": "Author cells", "body": "Add code or markdown cells, set the per-cell language, and reorder them in the designer." },
+        { "title": "Attach an environment (optional)", "body": "Pick a Spark configuration to apply library packages and Spark session settings to the pool — surfaced from the workspace's sparkconfigurations." },
+        { "title": "Author cells", "body": "Add code or markdown cells between any two cells, set the notebook default language and per-cell language, reorder, duplicate, and collapse cells in the designer." },
+        { "title": "Mark a parameters cell", "body": "Designate one code cell as the parameters cell so its variables can be overridden when the notebook runs from a pipeline (papermill/ADF)." },
+        { "title": "Navigate with the outline", "body": "The left-panel outline tracks headings from markdown cells; click an entry to scroll to that cell." },
         { "title": "Run and inspect", "body": "Run a cell or Run all; output and error tracebacks render inline from the Livy statement result." },
-        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact." }
+        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact and backs up the .ipynb to ADLS silver/loom/notebooks/." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks"
     } },

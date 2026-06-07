@@ -67,6 +67,31 @@ jobs:
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
 
+      - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
+        run: |
+          set -uo pipefail
+          # Security Reader (Defender reads), Resource Policy Contributor
+          # (Defender "Fix via Loom" remediations), Cost Management Reader
+          # (Monitor → Cost), Monitoring Contributor (diagnostics-on), Reader.
+          # Baked in here so a fresh deploy's Monitor surfaces work without the
+          # operator hunting for grants. Idempotent.
+          chmod +x scripts/csa-loom/grant-console-rbac.sh
+          CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" SUBS="$SUB" \
+            bash scripts/csa-loom/grant-console-rbac.sh \
+            || echo "::warning::Some Console UAMI RBAC grants failed — the deploy SP needs Owner / User Access Administrator on the subscription."
+
+      - name: Fix Synapse Spark storage access (Hive metastore abfss)
+        run: |
+          set -uo pipefail
+          # Grant the Synapse workspace MSI Storage Blob Data Contributor on the
+          # default ADLS account + create/approve the managed private endpoints
+          # so Spark notebooks can initialize the Hive metastore (otherwise
+          # SHOW NAMESPACES fails with InvalidAbfsRestOperationException -1).
+          chmod +x scripts/csa-loom/fix-synapse-spark-storage-access.sh
+          SYNAPSE_WS="$SYNAPSE_WS" SYNAPSE_RG="$DLZ_RG" SUBSCRIPTION="$SUB" \
+            bash scripts/csa-loom/fix-synapse-spark-storage-access.sh \
+            || echo "::warning::Synapse Spark storage fix incomplete — check the deploy SP's rights on the default storage account."
+
       - name: Enable Synapse public access (temp)
         run: |
           set -e
@@ -117,6 +142,29 @@ jobs:
             CREATE USER [uami-loom-console-eastus2] FROM LOGIN [uami-loom-console-eastus2];
           ALTER SERVER ROLE sysadmin ADD MEMBER [uami-loom-console-eastus2];
           " || echo "Some grants may have failed (already exist or other) — continuing"
+
+      - name: SQL-level grants via sqlcmd (Dedicated pool — F13 table/column/row security)
+        run: |
+          set -e
+          # The Permissions dialog's Table/Column/Row tabs run real
+          # GRANT SELECT / CREATE SECURITY POLICY against the Dedicated SQL
+          # pool. The Console UAMI must be a db_owner contained user there to
+          # CREATE USER … FROM EXTERNAL PROVIDER + manage object/RLS security.
+          # We also pre-create the LoomSecurity schema the RLS predicates live
+          # in (Dedicated pools reject the inline CREATE SCHEMA IF NOT EXISTS
+          # form, so the client guards it; pre-creating here is belt-and-braces).
+          POOL="${LOOM_SYNAPSE_DEDICATED_POOL:-loompool}"
+          TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          export PATH="$PATH:/opt/mssql-tools18/bin"
+          # The dedicated pool must be running (resumed) for this to connect.
+          sqlcmd -S "$SYNAPSE_WS.sql.azuresynapse.net" -d "$POOL" -G -P "$TOKEN" -I -b -Q "
+          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'uami-loom-console-eastus2')
+            CREATE USER [uami-loom-console-eastus2] FROM EXTERNAL PROVIDER;
+          IF IS_ROLEMEMBER('db_owner','uami-loom-console-eastus2') = 0
+            EXEC sp_addrolemember 'db_owner', 'uami-loom-console-eastus2';
+          IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'LoomSecurity')
+            EXEC('CREATE SCHEMA LoomSecurity');
+          " || echo "::warning::Dedicated-pool F13 grants incomplete — ensure the pool '$POOL' is resumed and the UAMI is Synapse SQL Administrator."
 
       - name: Restore Synapse public access disabled
         if: always()
@@ -357,6 +405,26 @@ jobs:
               -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
           else
             echo "No Foundry storage in $ADMIN_RG — skipping"
+          fi
+
+      - name: Grant Console UAMI Storage Blob Data Contributor on DLZ (lakehouse writes + notebook .ipynb backup)
+        # The Console UAMI writes Delta files (lakehouse provisioner) AND backs up
+        # published Synapse notebooks as .ipynb into ADLS silver/loom/notebooks/
+        # (synapse-notebook PUT route → adls-client.uploadFile). Both need Storage
+        # Blob Data Contributor on the DLZ data-lake account. Idempotent.
+        run: |
+          DLZ_STG=$(az storage account list -g $DLZ_RG --query "[?contains(name,'dls') || contains(name,'lake') || contains(name,'adls')].id" -o tsv | head -1)
+          [ -z "$DLZ_STG" ] && DLZ_STG=$(az storage account list -g $DLZ_RG --query "[0].id" -o tsv)
+          if [ -n "$DLZ_STG" ]; then
+            echo "DLZ data-lake storage: $DLZ_STG"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$DLZ_STG" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No data-lake storage in $DLZ_RG — skipping"
           fi
 
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)

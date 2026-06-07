@@ -69,6 +69,36 @@ export function bracket(ident: string): string {
 }
 
 /**
+ * Infer push-table columns from a REAL TDS result set (columns + sampled rows)
+ * when there is no catalog schema to read — e.g. the "Build a Power BI model
+ * from a custom SQL query" path. For each column we pick the Power BI type from
+ * the first non-null sampled value (number→Int64/Double, boolean→Boolean,
+ * Date→DateTime, else String). No fabrication: types come from the actual rows
+ * the query returned. Columns with no non-null sample default to String, which
+ * round-trips any value safely.
+ */
+export function inferPushColumnsFromResult(
+  columns: string[],
+  rows: unknown[][],
+): { pushColumns: PushColumn[]; selectNames: string[] } {
+  const pushColumns: PushColumn[] = columns.map((name, i) => {
+    let dataType: PushColumnType = 'String';
+    for (const row of rows) {
+      const v = row[i];
+      if (v == null) continue;
+      if (v instanceof Date) { dataType = 'DateTime'; }
+      else if (typeof v === 'boolean') { dataType = 'Boolean'; }
+      else if (typeof v === 'number') { dataType = Number.isInteger(v) ? 'Int64' : 'Double'; }
+      else if (typeof v === 'bigint') { dataType = 'Int64'; }
+      else { dataType = 'String'; }
+      break;
+    }
+    return { name, dataType };
+  });
+  return { pushColumns, selectNames: columns };
+}
+
+/**
  * Coerce one TDS result row (array aligned to `columns`) into the typed JSON
  * object Power BI push rows expect: Dates → ISO strings, Int64/Decimal/Double →
  * numbers, Boolean → bool, everything else → string|null.

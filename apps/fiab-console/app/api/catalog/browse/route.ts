@@ -169,10 +169,36 @@ export async function GET(req: NextRequest) {
     }
 
     if (source === 'onelake') {
-      // Real Fabric/OneLake catalog — the workspaces the Console UAMI can see
-      // (api.fabric.microsoft.com/v1/workspaces) and, on expand, every item in
-      // them (lakehouses, warehouses, semantic models, reports, KQL DBs,
-      // notebooks, pipelines, …). This is live tenant data, not a sample.
+      // Azure-native DEFAULT (no-fabric-dependency.md): the caller's OWN Loom
+      // workspaces (Cosmos) and, on expand, their items — NOT real Fabric
+      // workspaces. Real Fabric/OneLake is opt-in via LOOM_LAKEHOUSE_BACKEND=fabric.
+      if (process.env.LOOM_LAKEHOUSE_BACKEND !== 'fabric') {
+        const { listOwnedWorkspaces, listAllOwnedItems } = await import('../../items/_lib/item-crud');
+        if (path.length === 0) {
+          const wss = await listOwnedWorkspaces(s.claims.oid);
+          return NextResponse.json({
+            ok: true,
+            nodes: wss.map((w) => ({
+              id: w.id, label: w.name, kind: 'workspace', hasChildren: true,
+              meta: { description: w.description, source: 'loom' },
+            })),
+          });
+        }
+        if (path.length === 1) {
+          const items = await listAllOwnedItems(s.claims.oid, path[0]);
+          return NextResponse.json({
+            ok: true,
+            // node.kind = the Loom item-type slug → the tree icon + the
+            // /items/<slug>/<id> editor deep-link.
+            nodes: items.map((it) => ({
+              id: it.id, label: it.displayName, kind: it.itemType, hasChildren: false,
+              meta: { description: it.description, type: it.itemType, workspaceId: path[0], source: 'loom' },
+            })),
+          });
+        }
+        return NextResponse.json({ ok: true, nodes: [] });
+      }
+      // Opt-in: real Fabric/OneLake (api.fabric.microsoft.com).
       if (path.length === 0) {
         const ws = await listOneLakeWorkspaces();
         return NextResponse.json({
@@ -187,9 +213,6 @@ export async function GET(req: NextRequest) {
         const items = await listWorkspaceItems(path[0]);
         return NextResponse.json({
           ok: true,
-          // Normalize Fabric item types to a stable, lower-case node `kind` so
-          // the tree can pick a per-type icon; keep the original Fabric type in
-          // meta.type for the label suffix and the detail page.
           nodes: items.map((it) => ({
             id: it.id,
             label: it.displayName,

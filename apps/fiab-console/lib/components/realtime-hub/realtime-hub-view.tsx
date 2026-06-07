@@ -95,6 +95,7 @@ const useStyles = makeStyles({
 export function RealTimeHubView() {
   const styles = useStyles();
   const [data, setData] = useState<StreamsResponse | null>(null);
+  const [loomWorkspaces, setLoomWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
   const [unauth, setUnauth] = useState(false);
   const [loadErr, setLoadErr] = useState<{ error: string; hint?: string } | null>(null);
 
@@ -136,11 +137,21 @@ export function RealTimeHubView() {
 
   useEffect(load, []);
 
+  // Loom workspaces for the Connect-source dialog (Azure-native default) — so a
+  // source can be connected even before any eventstream exists.
+  useEffect(() => {
+    fetch('/api/loom/workspaces').then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setLoomWorkspaces((j.workspaces || []).map((w: any) => ({ id: w.id, name: w.name })));
+    }).catch(() => { /* dialog falls back to stream-derived workspaces */ });
+  }, []);
+
   const workspaceOptions = useMemo(() => {
+    if (loomWorkspaces.length) return loomWorkspaces;
     const set = new Map<string, string>();
     (data?.streams || []).forEach((s) => set.set(s.workspaceId, s.workspace));
     return Array.from(set.entries()).map(([id, name]) => ({ id, name }));
-  }, [data]);
+  }, [data, loomWorkspaces]);
 
   const filtered = useMemo(() => {
     const f = q.toLowerCase().trim();
@@ -178,7 +189,7 @@ export function RealTimeHubView() {
   async function openEndpoints(row: DataStreamRow) {
     setEndpointsRow(row); setEndpoints(null); setEndpointsErr(null); setEndpointsBusy(true);
     try {
-      const res = await fetch(`/api/realtime-hub/endpoints?fabricWorkspaceId=${encodeURIComponent(row.workspaceId)}&eventstreamId=${encodeURIComponent(row.id)}`);
+      const res = await fetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(row.workspaceId)}&eventstreamId=${encodeURIComponent(row.id)}`);
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setEndpointsErr(j.error || `Failed (HTTP ${res.status}).`); return; }
       setEndpoints(j.endpoints || []);
