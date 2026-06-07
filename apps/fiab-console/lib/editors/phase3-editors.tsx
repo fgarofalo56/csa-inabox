@@ -40,7 +40,8 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
-  MathFormula20Regular, Table20Regular, Flowchart20Regular,
+  MathFormula20Regular, Table20Regular, DatabaseLink20Regular,
+  Flowchart20Regular,
   Apps20Regular, List20Regular, Open20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
@@ -3378,13 +3379,18 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
 // Ribbon built inside the editor via useMemo so Run/Save bind to the
 // existing inline handlers; the rest stay disabled with reasons.
 
-interface SavedQuery { title: string; kql: string; database?: string; }
+type QuerySourceType = 'adx' | 'log-analytics' | 'app-insights';
+interface SavedQuery { title: string; kql: string; database?: string; sourceType?: QuerySourceType; }
 interface QuerysetState {
   ok: boolean;
   database?: string;
   defaultDatabase?: string;
   queries?: SavedQuery[];
   error?: string;
+  // Cross-service source binder — carried from the GET response.
+  laGate?: { missing: string } | null;
+  laProxyUri?: string | null;
+  laWorkspaceName?: string | null;
 }
 const SAMPLE_QS: SavedQuery = { title: 'Smoke test', kql: 'print smoke = "ok", server_time = now()' };
 
@@ -3420,6 +3426,10 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [alertActivators, setAlertActivators] = useState<Array<{ id: string; name: string }>>([]);
   const [alertErr, setAlertErr] = useState<string | null>(null);
   const [alertBusy, setAlertBusy] = useState(false);
+  // Cross-service source binder — bind a Log Analytics / App Insights workspace
+  // as the query source; federated queries run via the ADX cluster() proxy.
+  const [srcDlgOpen, setSrcDlgOpen] = useState(false);
+  const [draftSrcType, setDraftSrcType] = useState<QuerySourceType>('adx');
   // Share dialog — one-for-one with the ADX web UI / Fabric "Share" affordance:
   // copy the canonical item URL so a workspace member with view access can open
   // the same queryset. Loom RBAC governs who can actually open it.
@@ -3546,7 +3556,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setLoading(true); setResult(null);
     // Pin the kql/database we're sending at click-time so any subsequent
     // edits the user makes mid-run cannot influence what was executed.
-    const payload = { kql: draft.kql, database: draft.database };
+    const payload = { kql: draft.kql, database: draft.database, sourceType: draft.sourceType || 'adx' };
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
@@ -3733,6 +3743,14 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
           <div className={s.toolbar}>
             <Input value={draft.title} onChange={(_: unknown, d: any) => { setDraft({ ...draft, title: d.value }); setDirty(true); }} placeholder="Query title" style={{ minWidth: 220 }} />
             <Caption1>db: <strong>{draft.database || qs?.database || qs?.defaultDatabase || 'loomdb-default'}</strong></Caption1>
+            <Button
+              size="small"
+              appearance="outline"
+              icon={<DatabaseLink20Regular />}
+              onClick={() => { setDraftSrcType(draft.sourceType || 'adx'); setSrcDlgOpen(true); }}
+            >
+              Source{draft.sourceType && draft.sourceType !== 'adx' ? ` (${draft.sourceType})` : ''}
+            </Button>
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
             <Button appearance="outline" icon={<Save20Regular />} disabled={saving || queries.length === 0 || !dirty} onClick={saveAll}>
               {saving ? 'Saving…' : 'Save (Ctrl+S)'}
@@ -3870,6 +3888,95 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setAlertDlgOpen(false)} disabled={alertBusy}>Cancel</Button>
                   <Button appearance="primary" onClick={submitAlert} disabled={alertBusy}>{alertBusy ? 'Creating…' : 'Create rule'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* ── Cross-service source binding dialog ── */}
+          <Dialog open={srcDlgOpen} onOpenChange={(_: unknown, d: any) => setSrcDlgOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 560 }}>
+              <DialogBody>
+                <DialogTitle>Bind query source</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Select the data source for this query. Log Analytics and Application
+                      Insights sources run as federated cross-cluster queries from the ADX
+                      cluster using the KQL <code>cluster()</code> proxy — join them with ADX
+                      tables via <code>union</code> or an explicit join.
+                    </Caption1>
+
+                    <Field label="Source type">
+                      <Select
+                        value={draftSrcType}
+                        onChange={(_: unknown, d: any) => setDraftSrcType(d.value as QuerySourceType)}
+                      >
+                        <option value="adx">Azure Data Explorer (ADX) — default</option>
+                        <option value="log-analytics">Log Analytics workspace</option>
+                        <option value="app-insights">Application Insights</option>
+                      </Select>
+                    </Field>
+
+                    {/* Honest gate: no LA workspace configured */}
+                    {draftSrcType !== 'adx' && qs?.laGate && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>No workspace configured</MessageBarTitle>
+                          Set <code>{qs.laGate.missing}</code> in the container environment
+                          (wired automatically when <code>adxEnabled = true</code> in{' '}
+                          <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code>). The
+                          Console UAMI also needs Log Analytics Reader on the workspace
+                          (granted by <code>monitoring.bicep</code> <code>consoleLaReader</code>).
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    {/* Available: show the proxy URI and a copy-ready KQL snippet */}
+                    {draftSrcType === 'log-analytics' && !qs?.laGate && qs?.laProxyUri && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <Caption1>Workspace: <strong>{qs.laWorkspaceName}</strong></Caption1>
+                        <Caption1>Cross-cluster KQL snippet — paste into your query:</Caption1>
+                        <Textarea
+                          readOnly
+                          value={
+                            `// Join ADX + Log Analytics\n` +
+                            `let LA = cluster('${qs.laProxyUri}').database('${qs.laWorkspaceName}');\n` +
+                            `union MyAdxTable, LA.Heartbeat\n| take 10`
+                          }
+                          rows={5}
+                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                        />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          The UAMI holds Log Analytics Reader on this workspace. Queries run via
+                          ADX <code>/v1/rest/query</code> — no separate token needed.
+                        </Caption1>
+                      </div>
+                    )}
+
+                    {draftSrcType === 'app-insights' && !qs?.laGate && qs?.laProxyUri && (
+                      <Caption1>
+                        Application Insights components in the same subscription are referenced
+                        with{' '}
+                        <code>cluster('https://adx.monitor.azure.com/subscriptions/.../providers/microsoft.insights/components/&lt;name&gt;').database('&lt;name&gt;')</code>.
+                        Substitute the component resource ID, then <code>union</code> with ADX tables.
+                      </Caption1>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSrcDlgOpen(false)}>Cancel</Button>
+                  <Button
+                    appearance="primary"
+                    disabled={draftSrcType !== 'adx' && !!qs?.laGate}
+                    onClick={() => {
+                      setDraft({ ...draft, sourceType: draftSrcType === 'adx' ? undefined : draftSrcType });
+                      setDirty(true);
+                      setSrcDlgOpen(false);
+                    }}
+                  >
+                    Bind
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
