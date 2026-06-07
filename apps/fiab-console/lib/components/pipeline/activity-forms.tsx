@@ -221,10 +221,14 @@ export interface ActivityFormProps {
   parameters: PipelineParameter[];
   variables: PipelineVariable[];
   allActivities: PipelineActivity[];
+  /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
+  pipelineId?: string;
+  /** Workspace id — used by the Evaluate pre-fill API call. */
+  workspaceId?: string;
 }
 
 /** Renders the typed form for the activity's type, or null if none is defined. */
-export function ActivityForm({ activity, onPatch, parameters, variables, allActivities }: ActivityFormProps) {
+export function ActivityForm({ activity, onPatch, parameters, variables, allActivities, pipelineId, workspaceId }: ActivityFormProps) {
   const schema = activity.type ? ACTIVITY_FORMS[activity.type] : undefined;
   if (!schema) return null;
   const tp = (activity.typeProperties as any) || {};
@@ -309,6 +313,8 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
             variables={variables}
             activities={allActivities}
             selfName={activity.name}
+            pipelineId={pipelineId}
+            workspaceId={workspaceId}
             onChange={(v) => patchTp(fld.path, v)}
           />
         );

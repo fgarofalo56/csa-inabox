@@ -88,6 +88,10 @@ export interface PropertiesPanelProps {
   onDelete: () => void;
   /** 'rail' = right-side panel (legacy); 'dock' = bottom dock (ADF parity). */
   layout?: 'rail' | 'dock';
+  /** Pipeline item id — enables Evaluate (F9) last-run sample pre-fill. */
+  pipelineId?: string;
+  /** Workspace id — used by the Evaluate pre-fill API call. */
+  workspaceId?: string;
   /**
    * The container activity this activity is nested inside (ForEach, IfCondition,
    * Switch, Until), or null/undefined at the top pipeline level. Used to warn
@@ -108,7 +112,7 @@ type TabId =
   | 'parameters'
   | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', parentActivity = null }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', pipelineId, workspaceId, parentActivity = null }: PropertiesPanelProps) {
   const s = useStyles();
   const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
@@ -395,6 +399,8 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                   parameters={parameters}
                   variables={variables}
                   allActivities={allActivities}
+                  pipelineId={pipelineId}
+                  workspaceId={workspaceId}
                 />
                 <Accordion collapsible>
                   <AccordionItem value="raw-json">
