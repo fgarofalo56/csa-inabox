@@ -135,8 +135,8 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
   const [maximized, setMaximized] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
 
-  // In-cell Copilot popover state.
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  // In-cell Copilot popover state (distinct from the full CopilotPane above).
+  const [inCellOpen, setInCellOpen] = useState(false);
   const [copilotDraft, setCopilotDraft] = useState('');
   const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilotError, setCopilotError] = useState<string | null>(null);
@@ -200,7 +200,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
       }
       const newCell: NotebookCell = copilotResultCell(mode, cell.lang || 'pyspark', j.result);
       onInsertBelow(newCell);
-      setCopilotOpen(false);
+      setInCellOpen(false);
       setCopilotDraft('');
     } catch (e: any) {
       setCopilotError(e?.message || String(e));
@@ -236,8 +236,8 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         {copilotEnabled && (
           <Popover
-            open={copilotOpen}
-            onOpenChange={(_, d) => { if (!copilotBusy) setCopilotOpen(d.open); }}
+            open={inCellOpen}
+            onOpenChange={(_, d) => { if (!copilotBusy) setInCellOpen(d.open); }}
             positioning="below-start"
             trapFocus
           >
@@ -246,7 +246,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
                 size="small"
                 appearance="subtle"
                 icon={<Sparkle16Regular style={{ color: tokens.colorBrandForeground1 }} />}
-                onClick={(e) => { e.stopPropagation(); setCopilotOpen(o => !o); }}
+                onClick={(e) => { e.stopPropagation(); setInCellOpen(o => !o); }}
                 aria-label="In-cell Copilot"
                 title="In-cell Copilot"
               >
