@@ -53,6 +53,9 @@ export interface SynapseTarget {
  *   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
  */
 export function getSynapseSqlSuffix(): string {
+  // Explicit per-deployment override wins (single image can serve any cloud /
+  // sovereign endpoint without an AZURE_CLOUD mapping change).
+  if (process.env.LOOM_SYNAPSE_HOST_SUFFIX) return process.env.LOOM_SYNAPSE_HOST_SUFFIX;
   return process.env.AZURE_CLOUD === 'AzureUSGovernment'
     ? 'sql.azuresynapse.usgovcloudapi.net'
     : 'sql.azuresynapse.net';

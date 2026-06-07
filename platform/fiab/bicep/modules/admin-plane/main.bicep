@@ -149,6 +149,9 @@ param loomSynapseDedicatedPool string = 'loompool'
 @description('Loom Synapse Spark (Big Data) pool name — backs the Lakehouse column-summary stats job + notebook/spark editors. Defaults to the loompool Spark pool the landing-zone Synapse module deploys.')
 param loomSynapseSparkPool string = 'loompool'
 
+@description('Synapse SQL TDS host suffix override. Empty (default) = derived from AZURE_CLOUD in synapse-sql-client.ts (Commercial/GCC sql.azuresynapse.net; GCC-High/IL5 sql.azuresynapse.usgovcloudapi.net). Set explicitly only to force a specific sovereign endpoint.')
+param loomSynapseHostSuffix string = ''
+
 @description('Synapse SQL endpoint suffix for the live Tables catalog row-count path. Commercial = azuresynapse.net (default); Azure Government (GCC / GCC-High / IL5) = azuresynapse.us. Leave empty for Commercial.')
 param loomSynapseSqlSuffix string = ''
 
@@ -734,6 +737,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            { name: 'LOOM_SYNAPSE_HOST_SUFFIX', value: loomSynapseHostSuffix }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
             // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
             // Commercial / GCC use database.windows.net; GCC-High / IL5 use the US-Gov audience.

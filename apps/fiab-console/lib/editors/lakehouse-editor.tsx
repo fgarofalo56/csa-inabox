@@ -27,7 +27,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Input, Field, Switch, Dropdown, Option, Textarea, Tooltip,
+  Input, Field, Switch, Dropdown, Option, Textarea, Checkbox, Tooltip,
   Toaster, Toast, ToastTitle, useToastController, useId, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -252,7 +252,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const [refPreviewLoading, setRefPreviewLoading] = useState(false);
 
   // Permissions dialog state — Azure RBAC role assignments at the container scope.
-  interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string }
+  interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string; upn?: string }
   interface PermRole { name: string; id: string }
   const [permsOpen, setPermsOpen] = useState(false);
   const [permsRows, setPermsRows] = useState<PermAssignment[]>([]);
@@ -262,6 +262,32 @@ export function LakehouseEditor({ item, id }: Props) {
   const [newPrincipalId, setNewPrincipalId] = useState('');
   const [newPrincipalType, setNewPrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
   const [newRole, setNewRole] = useState('Storage Blob Data Reader');
+
+  // ---- SQL-plane permissions (Table / Column / Row tabs) ----
+  // Real Synapse Dedicated SQL pool GRANT SELECT + CREATE SECURITY POLICY —
+  // Azure-native, no Fabric dependency. Principals resolve to UPN (the SQL
+  // users are CREATE USER … FROM EXTERNAL PROVIDER).
+  type PermsTab = 'object' | 'table' | 'column' | 'row';
+  const [permsTab, setPermsTab] = useState<PermsTab>('object');
+  const [sqlGate, setSqlGate] = useState<{ missing: string; hint: string } | null>(null);
+  interface SqlGrant { principal: string; principalType: string; schema: string; table: string; column: string | null; permissionName: string }
+  const [sqlGrants, setSqlGrants] = useState<SqlGrant[]>([]);
+  interface SqlTableRef { objectId: number; schema: string; name: string; type: string }
+  const [sqlTables, setSqlTables] = useState<SqlTableRef[]>([]);
+  const [selTableId, setSelTableId] = useState<number | null>(null);
+  interface SqlColRef { columnId: number; name: string; dataType: string }
+  const [sqlCols, setSqlCols] = useState<SqlColRef[]>([]);
+  const [selColIds, setSelColIds] = useState<number[]>([]);
+  interface RlsPolicy { policyObjectId: number; policySchema: string; policyName: string; schema: string; table: string; isEnabled: boolean; functionSchema: string; functionName: string }
+  const [rlsPolicies, setRlsPolicies] = useState<RlsPolicy[]>([]);
+  const [rlsFilterColId, setRlsFilterColId] = useState<number | null>(null);
+  const [rlsSubject, setRlsSubject] = useState<'USER_NAME()' | 'SUSER_SNAME()'>('USER_NAME()');
+  // Principal picker (Entra user search → UPN) for the SQL-plane tabs.
+  interface ResolvedPrincipal { id: string; displayName: string; upn: string }
+  const [principalQuery, setPrincipalQuery] = useState('');
+  const [principalResults, setPrincipalResults] = useState<ResolvedPrincipal[]>([]);
+  const [selectedPrincipal, setSelectedPrincipal] = useState<ResolvedPrincipal | null>(null);
+  const [principalBusy, setPrincipalBusy] = useState(false);
 
   // Settings dialog state — Loom-side lakehouse defaults persisted in
   // Cosmos `tenant-settings`, consumed by Notebook + Preview editors.
@@ -579,6 +605,8 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const openPerms = useCallback(() => {
     setPermsOpen(true);
+    setPermsTab('object');
+    setPermsError(null);
     loadPerms();
   }, [loadPerms]);
 
@@ -613,6 +641,199 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
   }, [loadPerms]);
+
+  // ---- SQL-plane permission loaders / mutators (Table / Column / Row) ----
+  const loadSqlPerms = useCallback(async (t: PermsTab) => {
+    if (t === 'object') return;
+    setPermsBusy(true); setPermsError(null); setSqlGate(null);
+    try {
+      if (t === 'row') {
+        const r = await fetch(`/api/lakehouse/permissions?tab=row`);
+        const j = await r.json();
+        if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
+        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        setRlsPolicies(j.policies || []);
+      } else {
+        const r = await fetch(`/api/lakehouse/permissions?tab=${t}`);
+        const j = await r.json();
+        if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
+        if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        setSqlGrants(j.grants || []);
+      }
+      // Shared table picker source.
+      const tr = await fetch(`/api/lakehouse/permissions?tab=${t}&list=tables`);
+      const tj = await tr.json();
+      if (tj.gate) { setSqlGate({ missing: tj.missing, hint: tj.hint }); return; }
+      if (tj.ok) setSqlTables(tj.tables || []);
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, []);
+
+  const loadSqlColumns = useCallback(async (objectId: number) => {
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${objectId}`);
+      const j = await r.json();
+      if (j.ok) setSqlCols(j.columns || []);
+    } catch { /* surfaced when the grant is attempted */ }
+  }, []);
+
+  // Debounced Entra user search → UPN for the SQL-plane principal picker.
+  useEffect(() => {
+    if (permsTab === 'object') return;
+    const q = principalQuery.trim();
+    if (q.length < 2) { setPrincipalResults([]); return; }
+    const h = setTimeout(async () => {
+      setPrincipalBusy(true);
+      try {
+        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=user`);
+        const j = await r.json();
+        setPrincipalResults(
+          (j.results || [])
+            .filter((p: any) => p.upn)
+            .map((p: any) => ({ id: p.id, displayName: p.displayName, upn: p.upn })),
+        );
+      } catch { setPrincipalResults([]); }
+      finally { setPrincipalBusy(false); }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [principalQuery, permsTab]);
+
+  const selectPermsTab = useCallback((t: PermsTab) => {
+    setPermsTab(t);
+    setPermsError(null);
+    setSelTableId(null); setSqlCols([]); setSelColIds([]); setRlsFilterColId(null);
+    setSelectedPrincipal(null); setPrincipalQuery(''); setPrincipalResults([]);
+    if (t === 'object') loadPerms(); else loadSqlPerms(t);
+  }, [loadPerms, loadSqlPerms]);
+
+  const onPickTable = useCallback((objectId: number | null) => {
+    setSelTableId(objectId);
+    setSelColIds([]); setSqlCols([]); setRlsFilterColId(null);
+    if (objectId != null) loadSqlColumns(objectId);
+  }, [loadSqlColumns]);
+
+  const grantSqlTable = useCallback(async () => {
+    if (!selectedPrincipal || selTableId == null) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'table', upn: selectedPrincipal.upn, objectId: selTableId }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('table');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selectedPrincipal, selTableId, loadSqlPerms]);
+
+  const grantSqlColumn = useCallback(async () => {
+    if (!selectedPrincipal || selTableId == null || selColIds.length === 0) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'column', upn: selectedPrincipal.upn, objectId: selTableId, columnIds: selColIds }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('column');
+      setSelColIds([]);
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selectedPrincipal, selTableId, selColIds, loadSqlPerms]);
+
+  const createRls = useCallback(async () => {
+    if (selTableId == null || rlsFilterColId == null) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/permissions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tab: 'row', objectId: selTableId, filterColumnId: rlsFilterColId, subject: rlsSubject }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('row');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [selTableId, rlsFilterColId, rlsSubject, loadSqlPerms]);
+
+  const revokeSqlGrant = useCallback(async (g: SqlGrant) => {
+    const tbl = sqlTables.find((t) => t.schema === g.schema && t.name === g.table);
+    if (!tbl) { setPermsError(`Could not resolve object_id for ${g.schema}.${g.table}`); return; }
+    setPermsBusy(true); setPermsError(null);
+    try {
+      let columnIds: number[] = [];
+      if (g.column) {
+        const cr = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${tbl.objectId}`);
+        const cj = await cr.json();
+        const hit = (cj.columns || []).find((c: any) => c.name === g.column);
+        if (hit) columnIds = [hit.columnId];
+      }
+      const r = await fetch(`/api/lakehouse/permissions?tab=${g.column ? 'column' : 'table'}`, {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ upn: g.principal, objectId: tbl.objectId, columnIds }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms(g.column ? 'column' : 'table');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [sqlTables, loadSqlPerms]);
+
+  const dropRls = useCallback(async (p: RlsPolicy) => {
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?tab=row&policyObjectId=${p.policyObjectId}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadSqlPerms('row');
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [loadSqlPerms]);
+
+  const toggleCol = useCallback((columnId: number, checked: boolean) => {
+    setSelColIds((prev) => (checked ? Array.from(new Set([...prev, columnId])) : prev.filter((c) => c !== columnId)));
+  }, []);
+
+  // Shared Entra user → UPN picker used by the Table / Column tabs.
+  const renderPrincipalPicker = useCallback(() => (
+    <Field label="Principal (Entra user)" required>
+      {selectedPrincipal ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Badge appearance="tint" color="brand">{selectedPrincipal.upn}</Badge>
+          <Button size="small" appearance="subtle" onClick={() => { setSelectedPrincipal(null); setPrincipalQuery(''); }}>Change</Button>
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <Input
+            value={principalQuery}
+            onChange={(_, d) => setPrincipalQuery(d.value)}
+            placeholder="Search by name or UPN…"
+            contentAfter={principalBusy ? <Spinner size="extra-tiny" /> : undefined}
+          />
+          {principalResults.length > 0 && (
+            <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, maxHeight: 200, overflow: 'auto', background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: 4, boxShadow: tokens.shadow8 }}>
+              {principalResults.map((p) => (
+                <div
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { setSelectedPrincipal(p); setPrincipalResults([]); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { setSelectedPrincipal(p); setPrincipalResults([]); } }}
+                  style={{ padding: '6px 10px', cursor: 'pointer' }}
+                  className={s.rowHover}
+                >
+                  <Body1>{p.displayName}</Body1>
+                  <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{p.upn}</Caption1>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Field>
+  ), [selectedPrincipal, principalQuery, principalBusy, principalResults, s.rowHover]);
 
   // Share — grant a principal RBAC access to this container. Mirrors Fabric's
   // "Share" affordance via Azure RBAC (the same /api/lakehouse/permissions POST
@@ -2605,75 +2826,307 @@ export function LakehouseEditor({ item, id }: Props) {
           </Dialog>
 
           <Dialog open={permsOpen} onOpenChange={(_, d) => setPermsOpen(d.open)}>
-            <DialogSurface style={{ maxWidth: '880px', width: '90vw' }}>
+            <DialogSurface style={{ maxWidth: '1000px', width: '92vw' }}>
               <DialogBody>
                 <DialogTitle>Permissions — {activeContainer}</DialogTitle>
                 <DialogContent>
-                  <Caption1>
-                    Azure RBAC role assignments scoped to the container. Storage Blob Data
-                    Reader/Contributor/Owner govern data-plane access (read/write/manage).
-                  </Caption1>
-                  {permsBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
+                  <TabList
+                    selectedValue={permsTab}
+                    onTabSelect={(_, d) => selectPermsTab(d.value as PermsTab)}
+                    style={{ marginBottom: 12 }}
+                  >
+                    <Tab value="object">Object (RBAC)</Tab>
+                    <Tab value="table">Table</Tab>
+                    <Tab value="column">Column</Tab>
+                    <Tab value="row">Row</Tab>
+                  </TabList>
+
+                  {permsBusy && <Spinner size="tiny" label="Working…" labelPosition="after" />}
                   {permsError && (
-                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RBAC error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Permissions error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
                   )}
-                  <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
-                    <Table aria-label="Role assignments" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Principal id</TableHeaderCell>
-                        <TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Role</TableHeaderCell>
-                        <TableHeaderCell>Action</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {permsRows.length === 0 && (
-                          <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
-                        )}
-                        {permsRows.map((r) => (
-                          <TableRow key={r.id}>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code></TableCell>
-                            <TableCell>{r.principalType || '—'}</TableCell>
-                            <TableCell>{r.roleName || '—'}</TableCell>
-                            <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  <Subtitle2>Grant access</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
-                    <Field label="Principal object id" required>
-                      <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-                    </Field>
-                    <Field label="Principal type">
-                      <Dropdown
-                        selectedOptions={[newPrincipalType]}
-                        value={newPrincipalType}
-                        onOptionSelect={(_, d) => setNewPrincipalType((d.optionValue as 'User' | 'Group' | 'ServicePrincipal') || 'User')}
-                      >
-                        <Option value="User">User</Option>
-                        <Option value="Group">Group</Option>
-                        <Option value="ServicePrincipal">ServicePrincipal</Option>
-                      </Dropdown>
-                    </Field>
-                    <Field label="Role">
-                      <Dropdown
-                        selectedOptions={[newRole]}
-                        value={newRole}
-                        onOptionSelect={(_, d) => setNewRole(d.optionValue || newRole)}
-                      >
-                        {permsRoles.map((r) => (
-                          <Option key={r.name} value={r.name}>{r.name}</Option>
-                        ))}
-                      </Dropdown>
-                    </Field>
-                  </div>
+                  {permsTab !== 'object' && sqlGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Synapse Dedicated SQL pool not configured</MessageBarTitle>
+                        Set <code>{sqlGate.missing}</code>. {sqlGate.hint}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ── Object (container RBAC) ── */}
+                  {permsTab === 'object' && (
+                    <>
+                      <Caption1>
+                        Azure RBAC role assignments scoped to the container. Storage Blob Data
+                        Reader/Contributor/Owner govern data-plane access (read/write/manage).
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Role assignments" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal</TableHeaderCell>
+                            <TableHeaderCell>Type</TableHeaderCell>
+                            <TableHeaderCell>Role</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {permsRows.length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
+                            )}
+                            {permsRows.map((r) => (
+                              <TableRow key={r.id}>
+                                <TableCell>{r.upn ? <span>{r.upn}</span> : <code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code>}</TableCell>
+                                <TableCell>{r.principalType || '—'}</TableCell>
+                                <TableCell>{r.roleName || '—'}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant access</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
+                        <Field label="Principal object id" required>
+                          <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
+                        </Field>
+                        <Field label="Principal type">
+                          <Dropdown
+                            selectedOptions={[newPrincipalType]}
+                            value={newPrincipalType}
+                            onOptionSelect={(_, d) => setNewPrincipalType((d.optionValue as 'User' | 'Group' | 'ServicePrincipal') || 'User')}
+                          >
+                            <Option value="User">User</Option>
+                            <Option value="Group">Group</Option>
+                            <Option value="ServicePrincipal">ServicePrincipal</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Role">
+                          <Dropdown
+                            selectedOptions={[newRole]}
+                            value={newRole}
+                            onOptionSelect={(_, d) => setNewRole(d.optionValue || newRole)}
+                          >
+                            {permsRoles.map((r) => (
+                              <Option key={r.name} value={r.name}>{r.name}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
+                          {permsBusy ? 'Working…' : 'Grant role'}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Table-level SELECT ── */}
+                  {permsTab === 'table' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Object-level <code>GRANT SELECT</code> on a Synapse Dedicated SQL pool table/view.
+                        Principals are Entra users (UPN); the database user is created
+                        <code> FROM EXTERNAL PROVIDER</code> on first grant.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Table grants" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal (UPN)</TableHeaderCell>
+                            <TableHeaderCell>Schema.Table</TableHeaderCell>
+                            <TableHeaderCell>Permission</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {sqlGrants.filter((g) => g.column == null).length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No table-level SELECT grants.</Caption1></TableCell></TableRow>
+                            )}
+                            {sqlGrants.filter((g) => g.column == null).map((g, i) => (
+                              <TableRow key={`${g.principal}.${g.schema}.${g.table}.${i}`}>
+                                <TableCell>{g.principal}</TableCell>
+                                <TableCell>{g.schema}.{g.table}</TableCell>
+                                <TableCell>{g.permissionName}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokeSqlGrant(g)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant table SELECT</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                        {renderPrincipalPicker()}
+                        <Field label="Table / view" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null ? (sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : '') : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}{t.type === 'V' ? ' (view)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantSqlTable} disabled={permsBusy || !selectedPrincipal || selTableId == null}>
+                          Grant SELECT
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Column-level SELECT ── */}
+                  {permsTab === 'column' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Column-level <code>GRANT SELECT</code> restricts a principal to specific columns of a
+                        table/view. Pick a table, then check the columns to expose.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Column grants" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Principal (UPN)</TableHeaderCell>
+                            <TableHeaderCell>Schema.Table</TableHeaderCell>
+                            <TableHeaderCell>Column</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {sqlGrants.filter((g) => g.column != null).length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No column-level SELECT grants.</Caption1></TableCell></TableRow>
+                            )}
+                            {sqlGrants.filter((g) => g.column != null).map((g, i) => (
+                              <TableRow key={`${g.principal}.${g.schema}.${g.table}.${g.column}.${i}`}>
+                                <TableCell>{g.principal}</TableCell>
+                                <TableCell>{g.schema}.{g.table}</TableCell>
+                                <TableCell>{g.column}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokeSqlGrant(g)}>Revoke</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Grant column SELECT</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                        {renderPrincipalPicker()}
+                        <Field label="Table / view" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null && sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}{t.type === 'V' ? ' (view)' : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      {selTableId != null && (
+                        <div style={{ marginTop: 12 }}>
+                          <Caption1>Columns to expose ({selColIds.length} selected)</Caption1>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8, marginTop: 4 }}>
+                            {sqlCols.length === 0 && <Caption1>No columns.</Caption1>}
+                            {sqlCols.map((c) => (
+                              <Checkbox
+                                key={c.columnId}
+                                label={`${c.name} (${c.dataType})`}
+                                checked={selColIds.includes(c.columnId)}
+                                onChange={(_, d) => toggleCol(c.columnId, !!d.checked)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={grantSqlColumn} disabled={permsBusy || !selectedPrincipal || selTableId == null || selColIds.length === 0}>
+                          Grant column SELECT
+                        </Button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Row-level security ── */}
+                  {permsTab === 'row' && !sqlGate && (
+                    <>
+                      <Caption1>
+                        Row-level security applies a <code>SECURITY POLICY</code> + inline filter predicate so a
+                        principal only sees rows whose filter column matches their identity. Dedicated SQL pool only.
+                      </Caption1>
+                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                        <Table aria-label="Security policies" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Policy</TableHeaderCell>
+                            <TableHeaderCell>Target table</TableHeaderCell>
+                            <TableHeaderCell>Enabled</TableHeaderCell>
+                            <TableHeaderCell>Action</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {rlsPolicies.length === 0 && (
+                              <TableRow><TableCell colSpan={4}><Caption1>No row-level security policies.</Caption1></TableCell></TableRow>
+                            )}
+                            {rlsPolicies.map((p) => (
+                              <TableRow key={p.policyObjectId}>
+                                <TableCell>{p.policySchema}.{p.policyName}</TableCell>
+                                <TableCell>{p.schema}.{p.table}</TableCell>
+                                <TableCell>{p.isEnabled ? 'Yes' : 'No'}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => dropRls(p)}>Drop</Button></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <Subtitle2>Create row-level security policy</Subtitle2>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                        <Field label="Table" required>
+                          <Dropdown
+                            placeholder="Select a table"
+                            selectedOptions={selTableId != null ? [String(selTableId)] : []}
+                            value={selTableId != null && sqlTables.find((t) => t.objectId === selTableId) ? `${sqlTables.find((t) => t.objectId === selTableId)!.schema}.${sqlTables.find((t) => t.objectId === selTableId)!.name}` : ''}
+                            onOptionSelect={(_, d) => onPickTable(d.optionValue ? Number(d.optionValue) : null)}
+                          >
+                            {sqlTables.filter((t) => t.type === 'U').map((t) => (
+                              <Option key={t.objectId} value={String(t.objectId)} text={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Filter column" required>
+                          <Dropdown
+                            placeholder="Select a column"
+                            selectedOptions={rlsFilterColId != null ? [String(rlsFilterColId)] : []}
+                            value={rlsFilterColId != null && sqlCols.find((c) => c.columnId === rlsFilterColId) ? sqlCols.find((c) => c.columnId === rlsFilterColId)!.name : ''}
+                            onOptionSelect={(_, d) => setRlsFilterColId(d.optionValue ? Number(d.optionValue) : null)}
+                            disabled={selTableId == null}
+                          >
+                            {sqlCols.map((c) => (
+                              <Option key={c.columnId} value={String(c.columnId)} text={c.name}>{c.name} ({c.dataType})</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Match against">
+                          <Dropdown
+                            selectedOptions={[rlsSubject]}
+                            value={rlsSubject}
+                            onOptionSelect={(_, d) => setRlsSubject((d.optionValue as 'USER_NAME()' | 'SUSER_SNAME()') || 'USER_NAME()')}
+                          >
+                            <Option value="USER_NAME()" text="USER_NAME()">USER_NAME() — DB user (UPN)</Option>
+                            <Option value="SUSER_SNAME()" text="SUSER_SNAME()">SUSER_SNAME() — login name</Option>
+                          </Dropdown>
+                        </Field>
+                      </div>
+                      <Caption1 style={{ display: 'block', marginTop: 8 }}>
+                        Predicate: rows are visible when the filter column equals <code>{rlsSubject}</code> or the
+                        caller is <code>db_owner</code>.
+                      </Caption1>
+                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button appearance="primary" onClick={createRls} disabled={permsBusy || selTableId == null || rlsFilterColId == null}>
+                          Create policy
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setPermsOpen(false)} disabled={permsBusy}>Close</Button>
-                  <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
-                    {permsBusy ? 'Working…' : 'Grant'}
-                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
