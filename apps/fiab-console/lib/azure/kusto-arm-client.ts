@@ -29,7 +29,24 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM endpoint is sovereign-cloud aware — single source of truth, identical
+// pattern to adf-client.ts. Default = Commercial (unchanged behavior). GCC /
+// GCC-High / IL5 deployments set AZURE_CLOUD=AzureUSGovernment (or
+// LOOM_ARM_ENDPOINT) so every Kusto ARM call below — GET cluster, PATCH SKU,
+// PATCH enableStreamingIngest, follower-attach — targets the correct ARM host +
+// token scope instead of management.azure.com. Required because follower-attach
+// ships in Gov.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
+const ARM_SCOPE = `${ARM_BASE}/.default`;
 const KUSTO_API = '2023-08-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -79,7 +96,7 @@ export function readKustoArmConfig(): KustoClusterArmConfig {
 }
 
 function clusterUrl(cfg: KustoClusterArmConfig): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
+  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
@@ -102,6 +119,7 @@ export interface KustoClusterArm {
   sku: { name: string; tier: string; capacity?: number };
   state?: string;
   provisioningState?: string;
+  enableStreamingIngest?: boolean;
 }
 
 function shape(raw: any): KustoClusterArm {
@@ -116,6 +134,7 @@ function shape(raw: any): KustoClusterArm {
     },
     state: raw?.properties?.state,
     provisioningState: raw?.properties?.provisioningState,
+    enableStreamingIngest: raw?.properties?.enableStreamingIngest,
   };
 }
 
@@ -150,6 +169,152 @@ export async function updateKustoClusterSku(
   // ARM returns the full resource on PATCH (or 202 + Location for async).
   if (r.status === 202) {
     return shape({ id: cfg.clusterName, name: cfg.clusterName, sku: body.sku, properties: { provisioningState: 'Updating' } });
+  }
+  return shape(await r.json());
+}
+
+// ============================================================
+// Follower database attach (database shortcut) — T7.
+//
+// A follower database is an ATTACHED, read-only replica of a leader cluster's
+// database, surfaced live on THIS (follower) cluster via an
+// `attachedDatabaseConfigurations` ARM child resource. Grounded in Microsoft
+// Learn:
+//   https://learn.microsoft.com/azure/data-explorer/follower
+//   https://learn.microsoft.com/rest/api/azurerekusto/attached-database-configurations
+//
+// Constraints (enforced/surfaced by the API route + wizard):
+//   - Leader and follower clusters MUST be in the same Azure region.
+//   - The caller identity (Loom UAMI) needs Contributor / Azure Kusto
+//     Contributor on BOTH clusters; the follower side is already configured,
+//     the leader side is an out-of-band grant.
+//   - Followers are strictly read-only — ADX rejects .create/.drop/.ingest/
+//     .alter/.purge; the query route blocks them before the cluster is hit.
+//   - tableLevelSharingProperties is unsupported when databaseName = '*'.
+// ============================================================
+
+function attachedConfigUrl(cfg: KustoClusterArmConfig, configName: string): string {
+  return `${clusterUrl(cfg)}/attachedDatabaseConfigurations/${encodeURIComponent(configName)}?api-version=${KUSTO_API}`;
+}
+
+export interface AttachFollowerConfig {
+  configName: string;              // unique per follower cluster
+  leaderClusterResourceId: string; // /subscriptions/.../providers/Microsoft.Kusto/clusters/<leader>
+  databaseName: string;            // specific leader DB name, or '*' = follow all
+  defaultPrincipalsModificationKind: 'Union' | 'Replace' | 'None';
+  location?: string;               // defaults to LOOM_KUSTO_LOCATION; must match leader region
+}
+
+/**
+ * Create-or-replace an attachedDatabaseConfiguration on the Loom follower
+ * cluster. PUT is async — ARM may return 200 (sync), 201, or 202; we surface
+ * provisioningState immediately and the follower DB appears in `.show
+ * databases` within seconds of the ARM operation completing.
+ */
+export async function attachFollowerDatabase(
+  cfg: AttachFollowerConfig,
+): Promise<{ provisioningState: string; id: string; configName: string }> {
+  const arm = readKustoArmConfig();
+  const location = cfg.location || process.env.LOOM_KUSTO_LOCATION || 'eastus2';
+  const body = {
+    location,
+    properties: {
+      databaseName: cfg.databaseName,
+      clusterResourceId: cfg.leaderClusterResourceId,
+      defaultPrincipalsModificationKind: cfg.defaultPrincipalsModificationKind,
+    },
+  };
+  const r = await callArm(attachedConfigUrl(arm, cfg.configName), {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  if (!r.ok && r.status !== 202 && r.status !== 201) {
+    throw new KustoArmError(r.status, await r.text(), `attachFollowerDatabase failed ${r.status}`);
+  }
+  let json: any = null;
+  try { json = await r.json(); } catch { /* 202 may have empty body */ }
+  return {
+    provisioningState: json?.properties?.provisioningState || (r.status === 200 ? 'Succeeded' : 'Creating'),
+    id: json?.id || '',
+    configName: cfg.configName,
+  };
+}
+
+export interface AttachedDatabaseConfigurationResult {
+  name: string;                    // short name (after cluster/)
+  configId: string;                // full ARM id
+  leaderClusterResourceId: string;
+  databaseName: string;
+  provisioningState?: string;
+  attachedDatabaseNames?: string[]; // properties.attachedDatabaseNames
+}
+
+/** List all attachedDatabaseConfigurations on the Loom follower cluster. */
+export async function listAttachedDatabaseConfigurations(): Promise<AttachedDatabaseConfigurationResult[]> {
+  const cfg = readKustoArmConfig();
+  const url = `${clusterUrl(cfg)}/attachedDatabaseConfigurations?api-version=${KUSTO_API}`;
+  const r = await callArm(url);
+  if (!r.ok) {
+    throw new KustoArmError(r.status, await r.text(), `listAttachedDatabaseConfigurations failed ${r.status}`);
+  }
+  const json: any = await r.json();
+  const arr: any[] = Array.isArray(json?.value) ? json.value : [];
+  return arr.map((c) => ({
+    name: String(c?.name || '').split('/').pop() || String(c?.name || ''),
+    configId: String(c?.id || ''),
+    leaderClusterResourceId: String(c?.properties?.clusterResourceId || ''),
+    databaseName: String(c?.properties?.databaseName || ''),
+    provisioningState: c?.properties?.provisioningState,
+    attachedDatabaseNames: Array.isArray(c?.properties?.attachedDatabaseNames)
+      ? c.properties.attachedDatabaseNames.map((n: any) => String(n))
+      : [],
+  }));
+}
+
+/** Detach (DELETE) a follower configuration by its short config name. */
+export async function detachFollowerDatabase(configName: string): Promise<void> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(attachedConfigUrl(cfg, configName), { method: 'DELETE' });
+  // ARM returns 200 (deleted), 202 (async delete), or 204 (already gone).
+  if (!r.ok && r.status !== 202 && r.status !== 204) {
+    throw new KustoArmError(r.status, await r.text(), `detachFollowerDatabase failed ${r.status}`);
+  }
+}
+
+/**
+ * PATCH the cluster-level streaming-ingestion capability flag.
+ *
+ * ARM body: { "properties": { "enableStreamingIngest": true|false } }
+ *
+ * Unlike the SKU PATCH (which carries `sku` at the document root), this flag
+ * lives under `properties`. Toggling it triggers an async cluster
+ * reconfiguration: enabling is fast (seconds–minutes), disabling can take
+ * longer. ARM may answer 200 (full resource) or 202 (async). On 202 we return
+ * a synthetic shape with provisioningState='Updating' and the desired flag,
+ * matching updateKustoClusterSku.
+ *
+ * The UAMI must hold "Contributor" (or "Azure Kusto Contributor") at the
+ * cluster scope. Same auth + sovereign-cloud ARM host as the rest of this file.
+ */
+export async function updateKustoStreamingIngest(
+  enabled: boolean,
+): Promise<KustoClusterArm> {
+  const cfg = readKustoArmConfig();
+  const body = { properties: { enableStreamingIngest: enabled } };
+  const r = await callArm(
+    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `updateKustoStreamingIngest failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    return shape({
+      id: cfg.clusterName,
+      name: cfg.clusterName,
+      sku: {},
+      properties: { provisioningState: 'Updating', enableStreamingIngest: enabled },
+    });
   }
   return shape(await r.json());
 }
