@@ -153,3 +153,150 @@ export async function updateKustoClusterSku(
   }
   return shape(await r.json());
 }
+
+// ============================================================
+// Data connections (EventHub kind) — ARM REST
+//   Microsoft.Kusto/clusters/{name}/databases/{db}/dataConnections[/{name}]
+//   api-version = KUSTO_API (2023-08-15)
+//
+// These back the KQL-database "Event Hub data connection" wizard. ADX
+// authenticates to Event Hubs using the cluster's system-assigned MI
+// (managedIdentityResourceId = the cluster ARM id). That MI MUST hold
+// "Azure Event Hubs Data Receiver" on the namespace — granted by
+// eventhubs.bicep (adxClusterPrincipalId). The portal auto-grants it; the
+// ARM REST API does NOT, so the pre-grant is part of this feature's bicep.
+//
+// eventHubResourceId and managedIdentityResourceId are plain ARM resource
+// paths (no hostnames) so this code path is cloud-agnostic — no Event Hubs
+// data-plane suffix is needed here. (The data-plane *send* path used by the
+// validation test resolves the suffix via eventhubs-data-client's
+// LOOM_EVENTHUB_DATA_SUFFIX.)
+//
+// No mocks. Real ARM REST only.
+// ============================================================
+
+export type DataConnectionDataFormat =
+  | 'JSON' | 'MULTIJSON' | 'CSV' | 'TSV' | 'SCSV' | 'SOHSV' | 'PSV'
+  | 'TXT' | 'RAW' | 'SINGLEJSON' | 'AVRO' | 'APACHEAVRO' | 'PARQUET'
+  | 'ORC' | 'W3CLOGFILE' | 'TSVE';
+export type DataConnectionCompression = 'None' | 'GZip';
+
+export interface DataConnectionArm {
+  id: string;
+  name: string;
+  location: string;
+  kind: 'EventHub' | 'EventGrid' | 'IotHub' | 'CosmosDb';
+  properties: {
+    eventHubResourceId?: string;
+    consumerGroup?: string;
+    tableName?: string;
+    mappingRuleName?: string;
+    dataFormat?: DataConnectionDataFormat;
+    compression?: DataConnectionCompression;
+    managedIdentityResourceId?: string;
+    provisioningState?: string;
+    databaseRouting?: 'Single' | 'Multi';
+  };
+}
+
+export interface CreateEventHubDataConnectionSpec {
+  /** ARM resource ID of the event hub entity:
+   *  /subscriptions/{s}/resourceGroups/{rg}/providers/Microsoft.EventHub/namespaces/{ns}/eventhubs/{hub} */
+  eventHubResourceId: string;
+  /** Consumer group — MUST be dedicated (one per ADX data connection, per Azure docs). */
+  consumerGroup: string;
+  /** Optional target table. Omit for per-event (dynamic) routing. */
+  tableName?: string;
+  /** Optional ingestion mapping name. */
+  mappingRuleName?: string;
+  /** Optional data format. Defaults to JSON. */
+  dataFormat?: DataConnectionDataFormat;
+  /** Optional payload compression. Defaults to None. */
+  compression?: DataConnectionCompression;
+  /** ARM resource ID of the cluster (its system-assigned MI authenticates to Event Hubs). */
+  managedIdentityResourceId: string;
+  /** Cluster region — required in the PUT body. */
+  location: string;
+}
+
+function dataConnectionsBaseUrl(cfg: KustoClusterArmConfig, database: string): string {
+  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}/databases/${encodeURIComponent(database)}/dataConnections`;
+}
+
+function shapeDataConnection(raw: any): DataConnectionArm {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    location: raw?.location,
+    kind: raw?.kind || 'EventHub',
+    properties: {
+      eventHubResourceId: p.eventHubResourceId,
+      consumerGroup: p.consumerGroup,
+      tableName: p.tableName,
+      mappingRuleName: p.mappingRuleName,
+      dataFormat: p.dataFormat,
+      compression: p.compression,
+      managedIdentityResourceId: p.managedIdentityResourceId,
+      provisioningState: p.provisioningState,
+      databaseRouting: p.databaseRouting,
+    },
+  };
+}
+
+export async function listDataConnections(database: string): Promise<DataConnectionArm[]> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(`${dataConnectionsBaseUrl(cfg, database)}?api-version=${KUSTO_API}`);
+  if (!r.ok) throw new KustoArmError(r.status, await r.text(), `listDataConnections failed ${r.status}`);
+  const body: any = await r.json();
+  return Array.isArray(body?.value) ? body.value.map(shapeDataConnection) : [];
+}
+
+export async function createOrUpdateDataConnection(
+  database: string,
+  name: string,
+  spec: CreateEventHubDataConnectionSpec,
+): Promise<DataConnectionArm> {
+  const cfg = readKustoArmConfig();
+  const payload = {
+    kind: 'EventHub',
+    location: spec.location,
+    properties: {
+      eventHubResourceId: spec.eventHubResourceId,
+      consumerGroup: spec.consumerGroup,
+      managedIdentityResourceId: spec.managedIdentityResourceId,
+      ...(spec.tableName ? { tableName: spec.tableName } : {}),
+      ...(spec.mappingRuleName ? { mappingRuleName: spec.mappingRuleName } : {}),
+      dataFormat: spec.dataFormat ?? 'JSON',
+      compression: spec.compression ?? 'None',
+      databaseRouting: 'Single',
+    },
+  };
+  const r = await callArm(
+    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  );
+  // ARM returns 200 (update) / 201 (create), or 202 + Location for async ops.
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `createDataConnection failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    return shapeDataConnection({
+      id: name, name, location: spec.location, kind: 'EventHub',
+      properties: { ...payload.properties, provisioningState: 'Creating' },
+    });
+  }
+  return shapeDataConnection(await r.json());
+}
+
+export async function deleteDataConnection(database: string, name: string): Promise<void> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(
+    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+    { method: 'DELETE' },
+  );
+  // 200/204 (sync delete) or 202 (async) or 404 (already gone) are all OK.
+  if (!r.ok && r.status !== 204 && r.status !== 202 && r.status !== 404) {
+    throw new KustoArmError(r.status, await r.text(), `deleteDataConnection failed ${r.status}`);
+  }
+}

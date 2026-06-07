@@ -902,7 +902,7 @@ interface KqlDbInfo {
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
-type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
+type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest' | 'data-connection';
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -924,6 +924,20 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  // Event Hub data-connection wizard
+  const [wizDcHub, setWizDcHub] = useState('');
+  const [wizDcConsumerGroup, setWizDcConsumerGroup] = useState('');
+  const [wizDcFormat, setWizDcFormat] = useState('JSON');
+  const [wizDcCompression, setWizDcCompression] = useState('None');
+  const [wizDcTargetTable, setWizDcTargetTable] = useState('');
+  const [wizDcMappingRule, setWizDcMappingRule] = useState('');
+  const [wizDcHubs, setWizDcHubs] = useState<string[]>([]);
+  const [wizDcGroups, setWizDcGroups] = useState<string[]>([]);
+  const [wizDcTables, setWizDcTables] = useState<string[]>([]);
+  const [wizDcConnections, setWizDcConnections] = useState<Array<{ name: string; properties?: any }>>([]);
+  const [wizDcNamespace, setWizDcNamespace] = useState('');
+  const [wizDcEhGate, setWizDcEhGate] = useState<string | null>(null);
+  const [wizDcLoading, setWizDcLoading] = useState(false);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -977,10 +991,49 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [loading, id, run]);
 
+  // Load Event Hub pickers (namespace, hubs, tables, existing connections) when
+  // the data-connection wizard opens. Real ARM via the data-connections route.
+  useEffect(() => {
+    if (wizardKind !== 'data-connection' || !id || id === 'new') return;
+    setWizDcLoading(true);
+    setWizDcHubs([]); setWizDcGroups([]); setWizDcEhGate(null);
+    fetch(`/api/items/kql-database/${id}/data-connections`)
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (j?.ok === false && j?.code === 'not_configured') {
+          setWizDcEhGate((j.missing && (Array.isArray(j.missing) ? j.missing.join(', ') : j.missing)) || 'ADX cluster env');
+          return;
+        }
+        setWizDcNamespace(j.namespace || '');
+        setWizDcHubs(j.eventHubs || []);
+        setWizDcTables(j.tables || []);
+        setWizDcConnections(j.connections || []);
+        setWizDcEhGate(j.ehNotConfigured || null);
+      })
+      .catch(() => { /* leave empty — the wizard surfaces the gate */ })
+      .finally(() => setWizDcLoading(false));
+  }, [wizardKind, id]);
+
+  // Refresh the dedicated consumer-group list when the selected hub changes
+  // (each ADX data connection needs its OWN consumer group, per Azure docs).
+  useEffect(() => {
+    if (wizardKind !== 'data-connection' || !wizDcHub || !id || id === 'new') return;
+    setWizDcGroups([]);
+    fetch(`/api/items/kql-database/${id}/data-connections?hub=${encodeURIComponent(wizDcHub)}`)
+      .then((r) => r.json())
+      .then((j: any) => setWizDcGroups(j.consumerGroups || []))
+      .catch(() => { /* leave empty */ });
+  }, [wizardKind, wizDcHub, id]);
+
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    // Event Hub data-connection fields
+    setWizDcHub(''); setWizDcConsumerGroup(''); setWizDcFormat('JSON');
+    setWizDcCompression('None'); setWizDcTargetTable(''); setWizDcMappingRule('');
+    setWizDcHubs([]); setWizDcGroups([]); setWizDcTables([]); setWizDcConnections([]);
+    setWizDcNamespace(''); setWizDcEhGate(null);
   }, []);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
@@ -988,6 +1041,43 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const submitWizard = useCallback(async () => {
     if (!wizardKind) return;
     setWizError(null); setWizSuccess(null);
+
+    // Event Hub data connection — ARM REST, NOT a `.create` mgmt command.
+    if (wizardKind === 'data-connection') {
+      if (wizDcEhGate) { setWizError(`Event Hubs not configured: set ${wizDcEhGate}`); return; }
+      if (!wizDcHub) { setWizError('Event hub is required'); return; }
+      if (!wizDcConsumerGroup) { setWizError('Consumer group is required'); return; }
+      setWizSubmitting(true);
+      try {
+        const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name: wizName.trim() || undefined,
+            eventHubName: wizDcHub,
+            consumerGroup: wizDcConsumerGroup,
+            tableName: wizDcTargetTable || undefined,
+            mappingRuleName: wizDcMappingRule.trim() || undefined,
+            dataFormat: wizDcFormat,
+            compression: wizDcCompression,
+          }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          setWizError(j.error || (j.missing ? `Not configured: ${j.missing}` : 'Create failed'));
+        } else {
+          const st = j.connection?.properties?.provisioningState ?? 'Creating';
+          setWizSuccess(`Data connection "${j.connection?.name}" created (state: ${st}). Streaming ingestion starts within seconds. Refreshing…`);
+          await load();
+          setTimeout(() => setWizardKind(null), 900);
+        }
+      } catch (e: any) {
+        setWizError(e?.message || String(e));
+      } finally {
+        setWizSubmitting(false);
+      }
+      return;
+    }
+
     if (wizardKind !== 'ingest' && !wizName.trim()) {
       setWizError('Name is required');
       return;
@@ -1049,7 +1139,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load,
+      wizDcEhGate, wizDcHub, wizDcConsumerGroup, wizDcTargetTable, wizDcMappingRule, wizDcFormat, wizDcCompression]);
 
   const ribbon: RibbonTab[] = useMemo(() => {
     return [
@@ -1063,6 +1154,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         ]},
         { label: 'Data', actions: [
           { label: 'Get data', onClick: () => openWizard('ingest') },
+          { label: 'Data connections', onClick: () => openWizard('data-connection') },
           { label: 'Query with code', onClick: () => {
             // Already in code editor — focus the textarea.
             const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
@@ -1237,6 +1329,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
                   {wizardKind === 'ingest' && 'Get data — inline ingest (.ingest inline into table)'}
+                  {wizardKind === 'data-connection' && 'New Event Hub data connection'}
                 </DialogTitle>
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1290,6 +1383,69 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           onChange={(e) => setWizIngestFile(e.target.files?.[0] || null)}
                         />
                         <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
+                      </>
+                    )}
+                    {wizardKind === 'data-connection' && (
+                      <>
+                        {wizDcEhGate && (
+                          <MessageBar intent="warning">
+                            <MessageBarBody>
+                              <MessageBarTitle>Event Hubs not configured</MessageBarTitle>
+                              Set <code>{wizDcEhGate}</code> to enable the Event Hub picker. The cluster MI also needs
+                              {' '}<code>Azure Event Hubs Data Receiver</code> on the namespace (granted by eventhubs.bicep).
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {wizDcConnections.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <Caption1>Existing data connections ({wizDcConnections.length})</Caption1>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {wizDcConnections.map((c) => (
+                                <Badge key={c.name} appearance="outline" color="informative">
+                                  {c.name}{c.properties?.provisioningState ? ` · ${c.properties.provisioningState}` : ''}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <Field label="Connection name (auto-generated if blank)">
+                          <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder={`loom-dc-${wizDcHub || 'hub'}`} />
+                        </Field>
+                        <Field label="Event Hubs namespace">
+                          <Input value={wizDcNamespace || (wizDcLoading ? 'loading…' : '(not configured)')} readOnly />
+                        </Field>
+                        <Field label="Event hub">
+                          <Select value={wizDcHub} onChange={(_: unknown, d: any) => { setWizDcHub(d.value); setWizDcConsumerGroup(''); }} disabled={!!wizDcEhGate}>
+                            <option value="">— select hub —</option>
+                            {wizDcHubs.map((h) => <option key={h} value={h}>{h}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Consumer group (must be dedicated — one per ADX connection)">
+                          <Select value={wizDcConsumerGroup} onChange={(_: unknown, d: any) => setWizDcConsumerGroup(d.value)} disabled={!wizDcHub}>
+                            <option value="">— select consumer group —</option>
+                            {wizDcGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Data format">
+                          <Select value={wizDcFormat} onChange={(_: unknown, d: any) => setWizDcFormat(d.value)}>
+                            {['JSON', 'MULTIJSON', 'CSV', 'TSV', 'SCSV', 'PSV', 'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'RAW', 'TXT', 'W3CLOGFILE'].map((f) => <option key={f} value={f}>{f}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Compression">
+                          <Select value={wizDcCompression} onChange={(_: unknown, d: any) => setWizDcCompression(d.value)}>
+                            <option value="None">None</option>
+                            <option value="GZip">GZip</option>
+                          </Select>
+                        </Field>
+                        <Field label="Target table (optional — leave blank for per-event / dynamic routing)">
+                          <Select value={wizDcTargetTable} onChange={(_: unknown, d: any) => setWizDcTargetTable(d.value)}>
+                            <option value="">— none (per-event routing) —</option>
+                            {wizDcTables.map((t) => <option key={t} value={t}>{t}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Ingestion mapping name (optional)">
+                          <Input value={wizDcMappingRule} onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)} placeholder="myMapping" />
+                        </Field>
                       </>
                     )}
                     {wizError && <MessageBar intent="error"><MessageBarBody>{wizError}</MessageBarBody></MessageBar>}
