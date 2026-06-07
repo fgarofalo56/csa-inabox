@@ -38,6 +38,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
+import { cogScope } from '@/lib/azure/cloud-endpoints';
 
 type AssistMode = 'generate' | 'explain' | 'fix';
 
@@ -51,7 +52,7 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }

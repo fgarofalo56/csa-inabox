@@ -16,6 +16,7 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | New / open / delete notebook | Home ribbon |
 | 8 | Workspace notebook list | Item picker |
 | 9 | Help / docs | Help ribbon |
+| 10 | Copilot chat pane (context-aware, slash commands, apply-to-notebook) | Copilot sidebar |
 
 ## Loom coverage
 
@@ -30,10 +31,12 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 7 | ✅ | New (`createOpen`), Delete (`del`) |
 | 8 | ✅ | `/api/items/notebook?workspaceId=` list + Refresh |
 | 9 | ✅ | `Notebook docs` opens Learn |
+| 10 | ✅ | **Copilot chat pane** — docked `InlineDrawer` (~25% width) opened from the toolbar or View → Panes → Copilot. Streams a real Azure OpenAI answer via SSE from `POST /api/copilot/notebook-assist`. Context builder sends the current cell + prior 5 cells; the server appends the lakehouse datastore schema (Delta column names + types read from each table's `_delta_log/0.json` — Azure-native, no Fabric). Slash menu `/fix /explain /comments /optimize` (fixed allowlist). Multi-block answers render as a diff with **Apply to notebook** (writes cells back). Honest `no_aoai` MessageBar gate when no chat deployment is wired. History reuses `GET /api/copilot/sessions`. |
 
 ## Backend per control
 - Run / status → Fabric REST notebook job APIs (`/run`, `/runs/[runId]`, `/jobs`).
 - Lakehouse attach → Fabric REST lakehouse list.
 - CRUD → Fabric REST `/v1/workspaces/{ws}/notebooks`.
+- Copilot pane → `POST /api/copilot/notebook-assist` (Azure OpenAI chat-completions `stream:true`, AAD `cogScope()` token); schema grounding → ADLS `_delta_log` via `synapse-catalog-client` + `adls-client`; sessions → `copilot-sessions` Cosmos container (shared with the cross-item Copilot).
 
 Grade: **A (all inventory rows built + real Fabric REST backend).**
