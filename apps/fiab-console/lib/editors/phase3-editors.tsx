@@ -481,6 +481,351 @@ interface EventhouseState {
   error?: string;
 }
 
+type EhTimespan = 'PT1H' | 'P1D' | 'P7D' | 'P30D';
+type EhTab = 'overview' | 'databases';
+
+interface EhOverviewData {
+  ok: boolean;
+  cluster?: string;
+  timespan?: string;
+  diagnostics?: {
+    isHealthy: boolean;
+    isScaleOutRequired: boolean;
+    machinesTotal: number;
+    machinesOffline: number;
+    extentsTotal: number;
+    totalOriginalDataSizeBytes: number;
+    totalExtentSizeBytes: number;
+    ingestionsLoadFactor: number;
+    ingestionsInProgress: number;
+    ingestionsSuccessRate: number;
+  } | null;
+  capacity?: { ingestions: { total: number; consumed: number; remaining: number } } | null;
+  databases?: Array<{
+    name: string;
+    totalOriginalSizeBytes: number | null;
+    totalExtentSizeBytes: number | null;
+    hotDataSizeBytes: number | null;
+    rowCount: number | null;
+  }>;
+  topQueriedDbs?: Array<{ database: string; queryCount: number }>;
+  topUsers?: Array<{ user: string; queryCount: number }>;
+  monitor?: {
+    ingestionLatencyAvgSec: number | null;
+    queryDurationAvgMs: number | null;
+    cpuAvgPct: number | null;
+    ingestionUtilPct: number | null;
+    ingestionVolumeTotalMb: number | null;
+    throttledCommandsTotal: number | null;
+    throttledQueriesTotal: number | null;
+  } | null;
+  monitorGate?: string;
+  error?: string;
+}
+
+interface EhJournalEntry {
+  event: string;
+  eventTimestamp: string;
+  database: string;
+  entityName: string;
+  updatedEntityName: string;
+  changeCommand: string;
+  principal: string;
+}
+
+/** Bytes → human GB/MB string for the storage tiles. */
+function fmtBytes(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
+const EH_TIMESPAN_LABEL: Record<EhTimespan, string> = {
+  PT1H: '1H', P1D: '1D', P7D: '7D', P30D: '30D',
+};
+
+/** Small labelled metric tile used across the overview storage + monitor rows. */
+function EhStatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div style={{
+      padding: 14, minHeight: 92, border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: 6, background: tokens.colorNeutralBackground1, display: 'flex',
+      flexDirection: 'column', gap: 2,
+    }}>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
+      <div style={{ fontSize: 26, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.15 }}>{value}</div>
+      {hint && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{hint}</Caption1>}
+    </div>
+  );
+}
+
+/**
+ * Eventhouse system-overview dashboard — Fabric RTI Eventhouse "system overview"
+ * parity rendered over the live ADX cluster. State indicator, storage breakdown,
+ * per-db storage bar chart, time-range filter, ingestion/throttle Monitor tiles,
+ * top-queried/users grids, and the schema-change journal. All data comes from the
+ * /overview + /journal BFF routes — no mocks.
+ */
+function EventhouseOverviewPanel({
+  s, overview, journal, timespan, loading, err, onTimespan, onRefresh,
+}: {
+  s: ReturnType<typeof useStyles>;
+  overview: EhOverviewData | null;
+  journal: EhJournalEntry[] | null;
+  timespan: EhTimespan;
+  loading: boolean;
+  err: string | null;
+  onTimespan: (ts: EhTimespan) => void;
+  onRefresh: () => void;
+}) {
+  const diag = overview?.diagnostics || null;
+  const dbs = overview?.databases || [];
+  const mon = overview?.monitor || null;
+  const cap = overview?.capacity || null;
+
+  const compressionRatio =
+    diag && diag.totalExtentSizeBytes > 0
+      ? diag.totalOriginalDataSizeBytes / diag.totalExtentSizeBytes
+      : null;
+  const hotTotalBytes = dbs.reduce((a, d) => a + (d.hotDataSizeBytes ?? 0), 0);
+
+  const chartRows: unknown[][] = dbs
+    .filter((d) => (d.totalExtentSizeBytes ?? 0) > 0)
+    .sort((a, b) => (b.totalExtentSizeBytes ?? 0) - (a.totalExtentSizeBytes ?? 0))
+    .slice(0, 20)
+    .map((d) => [d.name, Math.round((d.totalExtentSizeBytes ?? 0) / 1024 / 1024)]);
+
+  return (
+    <div className={s.pad} style={{ paddingTop: 12 }}>
+      {/* time-range filter strip */}
+      <div className={s.toolbar}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Time range</Caption1>
+        {(['PT1H', 'P1D', 'P7D', 'P30D'] as EhTimespan[]).map((ts) => (
+          <Button
+            key={ts}
+            size="small"
+            appearance={timespan === ts ? 'primary' : 'outline'}
+            onClick={() => onTimespan(ts)}
+          >
+            {EH_TIMESPAN_LABEL[ts]}
+          </Button>
+        ))}
+        <Button
+          size="small"
+          appearance="outline"
+          icon={<ArrowSync20Regular />}
+          onClick={onRefresh}
+          disabled={loading}
+          style={{ marginLeft: 8 }}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </Button>
+        {diag && (
+          <Badge
+            appearance="filled"
+            color={diag.isHealthy ? 'success' : 'danger'}
+            style={{ marginLeft: 'auto' }}
+          >
+            {diag.isHealthy ? 'Healthy' : 'Unhealthy'}
+          </Badge>
+        )}
+        {diag && (
+          <Caption1>
+            Nodes: {diag.machinesTotal} ({diag.machinesOffline} offline) · Extents: {diag.extentsTotal.toLocaleString()}
+            {diag.isScaleOutRequired ? ' · scale-out recommended' : ''}
+          </Caption1>
+        )}
+      </div>
+
+      {loading && !overview && <Spinner size="small" label="Loading system overview…" />}
+      {err && (
+        <MessageBar intent="error">
+          <MessageBarBody>{err}</MessageBarBody>
+        </MessageBar>
+      )}
+      {overview && !overview.ok && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Overview unavailable</MessageBarTitle>
+            {overview.error || 'Unknown error'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {overview?.ok && (
+        <>
+          {/* storage breakdown */}
+          <Subtitle2>Storage</Subtitle2>
+          <div className={s.cardGrid}>
+            <EhStatTile
+              label="Original (uncompressed)"
+              value={fmtBytes(diag?.totalOriginalDataSizeBytes)}
+            />
+            <EhStatTile
+              label="Compressed (on disk)"
+              value={fmtBytes(diag?.totalExtentSizeBytes)}
+              hint={compressionRatio ? `${compressionRatio.toFixed(1)}× compression` : undefined}
+            />
+            <EhStatTile
+              label="Hot cache (SSD)"
+              value={fmtBytes(hotTotalBytes)}
+              hint="sum across databases"
+            />
+            <EhStatTile
+              label="Ingestion capacity"
+              value={cap ? `${cap.ingestions.consumed}/${cap.ingestions.total}` : '—'}
+              hint={cap ? `${cap.ingestions.remaining} concurrent slots free` : 'concurrent ingestions'}
+            />
+          </div>
+
+          {/* per-db storage bar chart */}
+          <Subtitle2>Storage by database (compressed MB)</Subtitle2>
+          <div className={s.card}>
+            {chartRows.length > 0 ? (
+              <ResultChart columns={['Database', 'Compressed (MB)']} rows={chartRows} kind="bar" />
+            ) : (
+              <Caption1>No per-database storage reported yet for this cluster.</Caption1>
+            )}
+          </div>
+
+          {/* ingestion + Monitor tiles */}
+          <Subtitle2>Ingestion &amp; query health ({EH_TIMESPAN_LABEL[timespan]})</Subtitle2>
+          {overview.monitorGate ? (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Azure Monitor metrics gated</MessageBarTitle>
+                {overview.monitorGate}
+              </MessageBarBody>
+            </MessageBar>
+          ) : null}
+          <div className={s.cardGrid}>
+            <EhStatTile
+              label="Ingestions in progress"
+              value={diag ? diag.ingestionsInProgress.toLocaleString() : '—'}
+              hint={diag ? `load factor ${diag.ingestionsLoadFactor}` : undefined}
+            />
+            <EhStatTile
+              label="Ingestion success rate"
+              value={diag ? `${diag.ingestionsSuccessRate}%` : '—'}
+            />
+            <EhStatTile
+              label="Ingested volume"
+              value={mon?.ingestionVolumeTotalMb != null ? `${mon.ingestionVolumeTotalMb.toLocaleString(undefined, { maximumFractionDigits: 1 })} MB` : '—'}
+              hint="Azure Monitor · total"
+            />
+            <EhStatTile
+              label="Ingest latency"
+              value={mon?.ingestionLatencyAvgSec != null ? `${mon.ingestionLatencyAvgSec.toFixed(1)} s` : '—'}
+              hint="Azure Monitor · avg"
+            />
+            <EhStatTile
+              label="Query duration"
+              value={mon?.queryDurationAvgMs != null ? `${Math.round(mon.queryDurationAvgMs).toLocaleString()} ms` : '—'}
+              hint="Azure Monitor · avg"
+            />
+            <EhStatTile
+              label="Throttled commands"
+              value={mon?.throttledCommandsTotal != null ? mon.throttledCommandsTotal.toLocaleString() : '—'}
+              hint={mon?.throttledQueriesTotal != null ? `${mon.throttledQueriesTotal.toLocaleString()} throttled queries` : 'Azure Monitor · total'}
+            />
+          </div>
+
+          {/* top queried dbs + top users */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+            <div className={s.card}>
+              <Subtitle2>Top databases by query count</Subtitle2>
+              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                <Table size="small" aria-label="Top queried databases">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Database</TableHeaderCell>
+                      <TableHeaderCell>Queries</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(overview.topQueriedDbs || []).map((r, i) => (
+                      <TableRow key={`${r.database}-${i}`}>
+                        <TableCell className={s.cell}>{r.database || '(unknown)'}</TableCell>
+                        <TableCell className={s.cell}>{r.queryCount.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(overview.topQueriedDbs || []).length === 0 && (
+                      <TableRow><TableCell className={s.cell}>No queries in this window.</TableCell><TableCell /></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+            <div className={s.card}>
+              <Subtitle2>Top users by query count</Subtitle2>
+              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                <Table size="small" aria-label="Top users">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>User</TableHeaderCell>
+                      <TableHeaderCell>Queries</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(overview.topUsers || []).map((r, i) => (
+                      <TableRow key={`${r.user}-${i}`}>
+                        <TableCell className={s.cell}>{r.user || '(unknown)'}</TableCell>
+                        <TableCell className={s.cell}>{r.queryCount.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(overview.topUsers || []).length === 0 && (
+                      <TableRow><TableCell className={s.cell}>No queries in this window.</TableCell><TableCell /></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+
+          {/* schema-change journal */}
+          <Subtitle2>Schema-change log</Subtitle2>
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Schema-change journal">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Timestamp</TableHeaderCell>
+                  <TableHeaderCell>Event</TableHeaderCell>
+                  <TableHeaderCell>Database</TableHeaderCell>
+                  <TableHeaderCell>Entity</TableHeaderCell>
+                  <TableHeaderCell>Change command</TableHeaderCell>
+                  <TableHeaderCell>Principal</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(journal || []).slice(0, 50).map((j, i) => (
+                  <TableRow key={`${j.eventTimestamp}-${i}`}>
+                    <TableCell className={s.cell}>{j.eventTimestamp}</TableCell>
+                    <TableCell className={s.cell}>{j.event}</TableCell>
+                    <TableCell className={s.cell}>{j.database}</TableCell>
+                    <TableCell className={s.cell}>{j.updatedEntityName || j.entityName}</TableCell>
+                    <TableCell className={s.cell} title={j.changeCommand}>
+                      {j.changeCommand.length > 60 ? `${j.changeCommand.slice(0, 60)}…` : j.changeCommand}
+                    </TableCell>
+                    <TableCell className={s.cell}>{j.principal}</TableCell>
+                  </TableRow>
+                ))}
+                {(!journal || journal.length === 0) && (
+                  <TableRow>
+                    <TableCell className={s.cell}>No metadata changes recorded.</TableCell>
+                    <TableCell /><TableCell /><TableCell /><TableCell /><TableCell />
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EventhouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
@@ -499,10 +844,24 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [getDataHubName, setGetDataHubName] = useState('');
   const [getDataConsumer, setGetDataConsumer] = useState('$Default');
   const [getDataOneLakePath, setGetDataOneLakePath] = useState('');
+  const [getDataFormat, setGetDataFormat] = useState<'auto' | 'csv' | 'json' | 'multijson' | 'parquet'>('auto');
+  // ARM-populated Event Hub pickers (from /api/eventhubs/{hubs,consumergroups}).
+  const [ehHubs, setEhHubs] = useState<string[]>([]);
+  const [ehHubsErr, setEhHubsErr] = useState<string | null>(null);
+  const [ehHubsLoading, setEhHubsLoading] = useState(false);
+  const [ehConsumerGroups, setEhConsumerGroups] = useState<string[]>(['$Default']);
+  const [ehCgLoading, setEhCgLoading] = useState(false);
+  // Loom medallion container quick-pick (from /api/loom/storage-paths).
+  const [loomContainers, setLoomContainers] = useState<Array<{ label: string; url: string }>>([]);
+  // Schema preview before commit.
+  const [schemaPreview, setSchemaPreview] = useState<{ columns: string[]; sampleRows: string[][]; detectedFormat?: string; sampleRowCount?: number } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [policiesOpen, setPoliciesOpen] = useState(false);
   const [hotCacheDays, setHotCacheDays] = useState<number>(7);
   const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
   const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
   // Cluster-level optimized auto-scale (ARM PATCH /clusters)
@@ -512,6 +871,14 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [autoscaleMax, setAutoscaleMax] = useState<number>(10);
   const [autoscaleBusy, setAutoscaleBusy] = useState(false);
   const [autoscaleResult, setAutoscaleResult] = useState<{ ok: boolean; msg: string; provisioningState?: string } | null>(null);
+
+  // Overview tab — live system dashboard over the ADX cluster.
+  const [activeTab, setActiveTab] = useState<EhTab>('overview');
+  const [timespan, setTimespan] = useState<EhTimespan>('P1D');
+  const [overview, setOverview] = useState<EhOverviewData | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewErr, setOverviewErr] = useState<string | null>(null);
+  const [journal, setJournal] = useState<EhJournalEntry[] | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -604,7 +971,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             kind: 'onelake', database: selectedDb, table: getDataTable.trim(),
-            oneLakePath: getDataOneLakePath.trim(),
+            oneLakePath: getDataOneLakePath.trim(), format: getDataFormat,
           }),
         });
         const ct = r.headers.get('content-type') || '';
@@ -616,7 +983,126 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setGetDataBusy(false);
     }
-  }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath]);
+  }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath, getDataFormat]);
+
+  // ---- Get-Data wizard: ARM-populated pickers + schema preview ----
+
+  // Load the deployment's Event Hubs from real ARM (/api/eventhubs/hubs) when
+  // the dialog opens in eventhub mode. Honest 503 gate is surfaced verbatim.
+  useEffect(() => {
+    if (!getDataOpen || getDataMode !== 'eventhub') return;
+    let cancelled = false;
+    setEhHubsLoading(true);
+    setEhHubsErr(null);
+    fetch('/api/eventhubs/hubs')
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (cancelled) return;
+        if (j?.ok) setEhHubs((j.hubs as Array<{ name: string }>).map((h) => h.name).filter(Boolean));
+        else if (j?.code === 'not_configured') setEhHubsErr(`Event Hubs namespace not configured — set ${j.missing}.`);
+        else setEhHubsErr(j?.error || 'Failed to list event hubs');
+      })
+      .catch((e: any) => { if (!cancelled) setEhHubsErr(e?.message || String(e)); })
+      .finally(() => { if (!cancelled) setEhHubsLoading(false); });
+    return () => { cancelled = true; };
+  }, [getDataOpen, getDataMode]);
+
+  // Load consumer groups for the chosen hub (real ARM list).
+  useEffect(() => {
+    if (!getDataHubName) { setEhConsumerGroups(['$Default']); return; }
+    let cancelled = false;
+    setEhCgLoading(true);
+    fetch(`/api/eventhubs/consumergroups?eventHub=${encodeURIComponent(getDataHubName)}`)
+      .then((r) => r.json())
+      .then((j: any) => {
+        if (cancelled) return;
+        if (j?.ok) {
+          const names = (j.consumerGroups as Array<{ name: string }>).map((c) => c.name).filter(Boolean);
+          setEhConsumerGroups(names.length ? names : ['$Default']);
+        }
+      })
+      .catch(() => { /* keep the $Default fallback */ })
+      .finally(() => { if (!cancelled) setEhCgLoading(false); });
+    return () => { cancelled = true; };
+  }, [getDataHubName]);
+
+  // Load Loom medallion container roots for the ADLS quick-pick (env-sourced).
+  useEffect(() => {
+    if (!getDataOpen) return;
+    let cancelled = false;
+    fetch('/api/loom/storage-paths')
+      .then((r) => r.json())
+      .then((j: any) => { if (!cancelled && j?.ok) setLoomContainers(j.containers || []); })
+      .catch(() => { /* quick-pick row simply stays hidden */ });
+    return () => { cancelled = true; };
+  }, [getDataOpen]);
+
+  // Reset the picker/preview state whenever the source mode changes so a stale
+  // schema from a previous source never lingers.
+  useEffect(() => {
+    setSchemaPreview(null);
+    setPreviewErr(null);
+    setGetDataResult(null);
+  }, [getDataMode, getDataOpen]);
+
+  // File mode: detect schema client-side from the first 16 KB (no round-trip).
+  useEffect(() => {
+    if (getDataMode !== 'file' || !getDataFile) { return; }
+    const slice = getDataFile.slice(0, 16 * 1024);
+    slice.text().then((text) => {
+      try {
+        const lower = (getDataFile.name || '').toLowerCase();
+        const isJson = /\.(json|jsonl|ndjson)$/.test(lower) || text.trim().startsWith('[') || text.trim().startsWith('{');
+        if (isJson) {
+          const trimmed = text.trim();
+          let rows: any[] = [];
+          if (trimmed.startsWith('[')) {
+            // tolerate truncation: parse leading complete objects
+            try { rows = JSON.parse(trimmed); } catch { rows = []; }
+          } else {
+            rows = trimmed.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          }
+          if (Array.isArray(rows) && rows.length) {
+            const keys = Array.from(new Set(rows.flatMap((r) => Object.keys(r ?? {}))));
+            const sampleRows = rows.slice(0, 5).map((r) => keys.map((k) => { const v = r?.[k]; return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); }));
+            setSchemaPreview({ columns: keys, sampleRows, detectedFormat: 'json', sampleRowCount: rows.length });
+            return;
+          }
+        }
+        // CSV fallback
+        const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+        if (lines.length && !/\n$/.test(text) && lines.length > 1) lines.pop();
+        if (!lines.length) { setSchemaPreview(null); return; }
+        const header = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+        const sampleRows = lines.slice(1, 6).map((l) => l.split(',').map((c) => c.replace(/^"|"$/g, '')));
+        setSchemaPreview({ columns: header, sampleRows, detectedFormat: 'csv', sampleRowCount: Math.max(0, lines.length - 1) });
+      } catch {
+        setSchemaPreview(null);
+      }
+    }).catch(() => setSchemaPreview(null));
+  }, [getDataMode, getDataFile]);
+
+  // URL mode: peek the blob/ADLS object on the server (MI or SAS) and preview.
+  const onPreview = useCallback(async () => {
+    if (!getDataOneLakePath.trim()) return;
+    setPreviewBusy(true);
+    setPreviewErr(null);
+    setSchemaPreview(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/ingest/preview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: getDataOneLakePath.trim(), format: getDataFormat }),
+      });
+      const j = await r.json();
+      if (j?.ok) setSchemaPreview({ columns: j.columns, sampleRows: j.sampleRows, detectedFormat: j.detectedFormat, sampleRowCount: j.sampleRowCount });
+      else setPreviewErr(j?.error || 'preview failed');
+    } catch (e: any) {
+      setPreviewErr(e?.message || String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [id, getDataOneLakePath, getDataFormat]);
 
   // Apply per-database caching + retention policies via the .alter database
   // policy KQL management commands. Also flips the OneLake availability
@@ -633,6 +1119,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         body: JSON.stringify({
           database: selectedDb,
           hotCacheDays, softDeleteDays, oneLakeAvailability: oneLakeEnabled,
+          enableStreamingIngest: streamingEnabled,
         }),
       });
       const ct = r.headers.get('content-type') || '';
@@ -644,7 +1131,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setPoliciesBusy(false);
     }
-  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
+  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, streamingEnabled, load]);
 
   // Cluster-level optimized auto-scale via ARM PATCH /clusters. Azure-native;
   // no Fabric workspace involved. Honest 422 gate on Dev/Basic SKUs.
@@ -688,6 +1175,32 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const isDevSku = (state?.sku?.tier || '').toLowerCase() === 'basic'
     || (state?.sku?.name || '').toLowerCase().startsWith('dev(no sla)');
 
+  // Load the live system-overview + schema-change journal for the current window.
+  const loadOverview = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setOverviewLoading(true);
+    setOverviewErr(null);
+    try {
+      const [ovRes, jRes] = await Promise.all([
+        fetch(`/api/items/eventhouse/${id}/overview?timespan=${timespan}`),
+        fetch(`/api/items/eventhouse/${id}/journal?limit=50`),
+      ]);
+      const ov = (await ovRes.json()) as EhOverviewData;
+      setOverview(ov);
+      const jr = await jRes.json();
+      if (jr?.ok) setJournal((jr.entries || []) as EhJournalEntry[]);
+      else setJournal([]);
+    } catch (e: any) {
+      setOverviewErr(e?.message || String(e));
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, [id, timespan]);
+
+  useEffect(() => {
+    if (activeTab === 'overview') loadOverview();
+  }, [activeTab, loadOverview]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'New', actions: [
@@ -711,6 +1224,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Auto-scale', onClick: state?.ok ? () => { setAutoscaleResult(null); setAutoscaleOpen(true); } : undefined,
           disabled: !state?.ok,
           title: !state?.ok ? 'cluster must be reachable' : 'configure optimized auto-scale (min/max instances)' },
+        { label: 'Streaming ingest', onClick: hasDbs && selectedDb ? () => { setStreamingEnabled(true); setPoliciesOpen(true); } : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs || !selectedDb ? 'pick a database first' : 'Enable/disable low-latency streaming ingestion on the cluster' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
@@ -757,6 +1273,15 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           </Dialog>
         </div>
 
+        {state?.ok && (
+          <div className={s.tabBar}>
+            <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab(d.value as EhTab)}>
+              <Tab value="overview">System overview</Tab>
+              <Tab value="databases">Databases ({dbCount})</Tab>
+            </TabList>
+          </div>
+        )}
+
         {!state && <Spinner size="small" label="Loading cluster…" />}
         {state && !state.ok && (
           <MessageBar intent="error">
@@ -766,7 +1291,21 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
-        {state?.ok && (
+
+        {state?.ok && activeTab === 'overview' && (
+          <EventhouseOverviewPanel
+            s={s}
+            overview={overview}
+            journal={journal}
+            timespan={timespan}
+            loading={overviewLoading}
+            err={overviewErr}
+            onTimespan={setTimespan}
+            onRefresh={loadOverview}
+          />
+        )}
+
+        {state?.ok && activeTab === 'databases' && (
           <>
             <Subtitle2>Databases ({dbCount})</Subtitle2>
             <div className={s.cardGrid}>
@@ -841,23 +1380,122 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       )}
                       {getDataMode === 'eventhub' && (
                         <>
+                          {ehHubsErr && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>{ehHubsErr}</MessageBarBody>
+                            </MessageBar>
+                          )}
                           <div>
-                            <Label>Event Hub name</Label>
-                            <Input value={getDataHubName} onChange={(_, d) => setGetDataHubName(d.value)} placeholder="orders-hub" />
+                            <Label>Event Hub</Label>
+                            {ehHubsLoading ? (
+                              <Spinner size="tiny" label="Loading event hubs…" />
+                            ) : (
+                              <Select
+                                value={getDataHubName}
+                                onChange={(_, d) => { setGetDataHubName(d.value); setGetDataConsumer('$Default'); }}
+                                disabled={!!ehHubsErr || ehHubs.length === 0}
+                              >
+                                <option value="">— select an event hub —</option>
+                                {ehHubs.map((h) => <option key={h} value={h}>{h}</option>)}
+                              </Select>
+                            )}
                           </div>
                           <div>
                             <Label>Consumer group</Label>
-                            <Input value={getDataConsumer} onChange={(_, d) => setGetDataConsumer(d.value)} placeholder="$Default" />
+                            {ehCgLoading ? (
+                              <Spinner size="tiny" label="Loading consumer groups…" />
+                            ) : (
+                              <Select
+                                value={getDataConsumer}
+                                onChange={(_, d) => setGetDataConsumer(d.value)}
+                                disabled={!getDataHubName}
+                              >
+                                {ehConsumerGroups.map((cg) => <option key={cg} value={cg}>{cg}</option>)}
+                              </Select>
+                            )}
                           </div>
+                          {getDataHubName && (
+                            <MessageBar intent="info">
+                              <MessageBarBody>
+                                Streaming connection <strong>{getDataHubName}</strong> / <strong>{getDataConsumer || '$Default'}</strong>.
+                                Schema is inferred from the first arriving JSON events; rows land as the data connection warms up (typically &lt;60s).
+                              </MessageBarBody>
+                            </MessageBar>
+                          )}
                         </>
                       )}
                       {getDataMode === 'onelake' && (
-                        <div>
-                          <Label>OneLake path</Label>
-                          <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/" />
-                        </div>
+                        <>
+                          <div>
+                            <Label>Storage path (ADLS Gen2 abfss:// or Blob https:// with SAS)</Label>
+                            <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/data.csv" />
+                          </div>
+                          {loomContainers.length > 0 && (
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <Caption1>Quick-pick:</Caption1>
+                              {loomContainers.map((c) => (
+                                <Button
+                                  key={c.label}
+                                  size="small"
+                                  appearance="outline"
+                                  onClick={() => setGetDataOneLakePath(c.url.endsWith('/') ? c.url : `${c.url}/`)}
+                                >
+                                  {c.label}
+                                </Button>
+                              ))}
+                            </div>
+                          )}
+                          <div>
+                            <Label>Format</Label>
+                            <Select value={getDataFormat} onChange={(_, d) => setGetDataFormat(d.value as any)}>
+                              <option value="auto">Auto-detect (from extension)</option>
+                              <option value="csv">CSV</option>
+                              <option value="json">JSON (one object per line)</option>
+                              <option value="multijson">MultiJSON (array)</option>
+                              <option value="parquet">Parquet</option>
+                            </Select>
+                          </div>
+                          <div>
+                            <Button
+                              appearance="outline"
+                              onClick={onPreview}
+                              disabled={previewBusy || !getDataOneLakePath.trim()}
+                            >
+                              {previewBusy ? 'Previewing…' : 'Preview schema'}
+                            </Button>
+                          </div>
+                          {previewErr && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>{previewErr}</MessageBarBody>
+                            </MessageBar>
+                          )}
+                        </>
                       )}
                     </div>
+                    {schemaPreview && schemaPreview.columns.length > 0 && (
+                      <div style={{ marginTop: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8 }}>
+                        <Caption1><strong>Detected schema</strong>{schemaPreview.detectedFormat ? ` (${schemaPreview.detectedFormat})` : ''}</Caption1>
+                        <div style={{ overflowX: 'auto', marginTop: 4 }}>
+                          <Table size="small" aria-label="Detected schema preview">
+                            <TableHeader>
+                              <TableRow>
+                                {schemaPreview.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {schemaPreview.sampleRows.slice(0, 3).map((row, i) => (
+                                <TableRow key={i}>
+                                  {schemaPreview.columns.map((_, j) => (
+                                    <TableCell key={j} className={s.cell}>{String(row?.[j] ?? '')}</TableCell>
+                                  ))}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                        <Caption1>{schemaPreview.columns.length} columns detected · {schemaPreview.sampleRows.length} sample rows shown.</Caption1>
+                      </div>
+                    )}
                     {getDataResult && (
                       <MessageBar intent={getDataResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
                         <MessageBarBody>
@@ -911,6 +1549,21 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                           label={oneLakeEnabled ? 'Mirrored to OneLake' : 'Not mirrored'}
                         />
                         <Caption1>Fabric-managed eventhouses only. Mirrors KQL tables into OneLake as Delta for Spark/Power BI.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Enable streaming ingestion</Label>
+                        <Switch
+                          checked={streamingEnabled}
+                          onChange={(_, d) => setStreamingEnabled(!!d.checked)}
+                          label={streamingEnabled ? 'Enabled' : 'Disabled'}
+                        />
+                        <Caption1>
+                          Cluster-level flag (ARM). Enables the low-latency (&lt;1s) ingest path
+                          for Event Hub data connections and the <code>.ingest inline</code> command,
+                          then turns on the database streaming-ingestion policy. Toggling triggers an
+                          async cluster update; the cluster stays online. New Loom clusters ship with
+                          this on by default.
+                        </Caption1>
                       </div>
                     </div>
                     {policiesErr && (
@@ -1045,13 +1698,18 @@ interface KqlDbInfo {
   schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
   starterQueries?: Array<{ name: string; kql: string }>;
   contentFallback?: boolean;
+  // Follower (database-shortcut) state — read-only replica of a leader cluster.
+  isFollower?: boolean;
+  followerLeaderCluster?: string | null;
+  followerConfigName?: string | null;
+  followerDatabaseName?: string | null;
   error?: string;
 }
 
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
-type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
+type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest' | 'follower';
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1073,6 +1731,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  // Follower (database-shortcut) wizard
+  const [wizLeaderResourceId, setWizLeaderResourceId] = useState('');
+  const [wizLeaderUri, setWizLeaderUri] = useState('');
+  const [wizFollowerDbName, setWizFollowerDbName] = useState('');
+  const [wizPrincipalsKind, setWizPrincipalsKind] = useState<'Union' | 'Replace' | 'None'>('Union');
+  // Detach-follower busy flag
+  const [detaching, setDetaching] = useState(false);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -1130,6 +1795,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    setWizLeaderResourceId(''); setWizLeaderUri(''); setWizFollowerDbName(''); setWizPrincipalsKind('Union');
   }, []);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
@@ -1137,6 +1803,39 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const submitWizard = useCallback(async () => {
     if (!wizardKind) return;
     setWizError(null); setWizSuccess(null);
+
+    // Follower (database-shortcut) attach — does NOT issue a `.` mgmt command;
+    // it PUTs an attachedDatabaseConfiguration via the dedicated ARM route.
+    if (wizardKind === 'follower') {
+      if (!wizLeaderResourceId.trim()) { setWizError('Leader cluster ARM resource ID is required'); return; }
+      setWizSubmitting(true);
+      try {
+        const r = await fetch(`/api/items/kql-database/${id}/follower`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            leaderClusterResourceId: wizLeaderResourceId.trim(),
+            leaderClusterUri: wizLeaderUri.trim(),
+            databaseName: wizFollowerDbName.trim() || '*',
+            principalsModificationKind: wizPrincipalsKind,
+          }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          setWizError(j.error || (Array.isArray(j.missing) ? `Not configured: ${j.missing.join(', ')}` : 'Attach failed'));
+        } else {
+          setWizSuccess(`Follower attach ${j.provisioningState} (config ${j.configName}). Refreshing…`);
+          await load();
+          setTimeout(() => { setWizardKind(null); }, 900);
+        }
+      } catch (e: any) {
+        setWizError(e?.message || String(e));
+      } finally {
+        setWizSubmitting(false);
+      }
+      return;
+    }
+
     if (wizardKind !== 'ingest' && !wizName.trim()) {
       setWizError('Name is required');
       return;
@@ -1198,20 +1897,40 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load]);
+
+  // Detach the follower configuration — restores read/write on the item.
+  const detachFollower = useCallback(async () => {
+    if (!info?.followerConfigName) return;
+    setDetaching(true);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/follower?configName=${encodeURIComponent(info.followerConfigName)}`, {
+        method: 'DELETE',
+      });
+      const j = await r.json();
+      if (j.ok) await load();
+    } finally {
+      setDetaching(false);
+    }
+  }, [info?.followerConfigName, id, load]);
 
   const ribbon: RibbonTab[] = useMemo(() => {
+    const isFollower = !!info?.isFollower;
+    const roTitle = 'Follower databases are read-only — write operations are blocked. Detach the follower to write.';
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'New', actions: [
-          { label: 'Table', onClick: () => openWizard('table') },
-          { label: 'Materialized view', onClick: () => openWizard('mv') },
-          { label: 'Function', onClick: () => openWizard('function') },
-          { label: 'Update policy', onClick: () => openWizard('update-policy') },
-          { label: 'Shortcut', disabled: true, title: 'OneLake shortcut wizard requires Fabric onelake API consent — pending tenant bootstrap' },
+          { label: 'Table', onClick: () => openWizard('table'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Materialized view', onClick: () => openWizard('mv'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Function', onClick: () => openWizard('function'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Update policy', onClick: () => openWizard('update-policy'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Shortcut (follower DB)',
+            onClick: () => openWizard('follower'),
+            disabled: isFollower,
+            title: isFollower ? 'Already attached as a follower. Detach first to re-point.' : 'Attach a leader cluster database as a read-only follower (Azure-native database shortcut)' },
         ]},
         { label: 'Data', actions: [
-          { label: 'Get data', onClick: () => openWizard('ingest') },
+          { label: 'Get data', onClick: () => openWizard('ingest'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Query with code', onClick: () => {
             // Already in code editor — focus the textarea.
             const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
@@ -1224,7 +1943,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         ]},
       ]},
     ];
-  }, [openWizard]);
+  }, [openWizard, info?.isFollower]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1261,11 +1980,35 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               {info?.cluster || 'cluster not configured'}
             </Badge>
             <Caption1>db: <strong>{info?.database || '—'}</strong></Caption1>
+            {info?.isFollower && (
+              <Badge appearance="filled" color="warning" title="Attached read-only follower (database shortcut)">
+                Read-only (follower)
+              </Badge>
+            )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
+            {info?.isFollower && (
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={detaching} onClick={detachFollower}>
+                {detaching ? 'Detaching…' : 'Detach follower'}
+              </Button>
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run} style={{ marginLeft: 'auto' }}>
               {loading ? 'Running…' : 'Run (Shift+Enter)'}
             </Button>
           </div>
+          {info?.isFollower && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Read-only follower database</MessageBarTitle>
+                This KQL database is attached as a follower of{' '}
+                <strong>{info.followerLeaderCluster || 'a leader cluster'}</strong>
+                {info.followerDatabaseName ? ` (database: ${info.followerDatabaseName})` : ''}.
+                Data is synchronized from the leader in near-real-time. Write operations
+                (ingest, create table, alter, drop, purge) are blocked — run queries against
+                the follower, or write to the leader database directly. Use{' '}
+                <strong>Detach follower</strong> to remove the shortcut and restore read/write.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {info && !info.ok && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1386,6 +2129,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
                   {wizardKind === 'ingest' && 'Get data — inline ingest (.ingest inline into table)'}
+                  {wizardKind === 'follower' && 'Database shortcut — attach follower (read-only)'}
                 </DialogTitle>
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1441,13 +2185,55 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
                       </>
                     )}
+                    {wizardKind === 'follower' && (
+                      <>
+                        <Caption1>Leader cluster ARM resource ID</Caption1>
+                        <Input
+                          value={wizLeaderResourceId}
+                          onChange={(_: unknown, d: any) => setWizLeaderResourceId(d.value)}
+                          placeholder="/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Kusto/clusters/{name}"
+                          style={{ fontFamily: 'Consolas, monospace' }}
+                        />
+                        <Caption1>Leader cluster URI (optional, display only)</Caption1>
+                        <Input
+                          value={wizLeaderUri}
+                          onChange={(_: unknown, d: any) => setWizLeaderUri(d.value)}
+                          placeholder="https://mycluster.eastus2.kusto.windows.net"
+                        />
+                        <Caption1>Database to follow (leave blank or * to follow all leader databases)</Caption1>
+                        <Input
+                          value={wizFollowerDbName}
+                          onChange={(_: unknown, d: any) => setWizFollowerDbName(d.value)}
+                          placeholder="MyLeaderDb or *"
+                        />
+                        <Caption1>Principal modification kind</Caption1>
+                        <Select
+                          value={wizPrincipalsKind}
+                          onChange={(_: unknown, d: any) => setWizPrincipalsKind(d.value as 'Union' | 'Replace' | 'None')}
+                        >
+                          <option value="Union">Union — leader principals + this cluster&apos;s principals</option>
+                          <option value="Replace">Replace — follower principals only</option>
+                          <option value="None">None — leader principals only</option>
+                        </Select>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Prerequisites</MessageBarTitle>
+                            The Loom managed identity must hold <strong>Contributor</strong> (or Azure
+                            Kusto Contributor) on the <em>leader</em> cluster — granted out-of-band; the
+                            follower cluster (this deployment) is already configured. Leader and follower
+                            must be in the <strong>same Azure region</strong>. The follower is read-only:
+                            queries return live leader data; writes are blocked.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    )}
                     {wizError && <MessageBar intent="error"><MessageBarBody>{wizError}</MessageBarBody></MessageBar>}
                     {wizSuccess && <MessageBar intent="success"><MessageBarBody>{wizSuccess}</MessageBarBody></MessageBar>}
                   </div>
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setWizardKind(null)} disabled={wizSubmitting}>Cancel</Button>
-                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : 'Create'}</Button>
+                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : (wizardKind === 'follower' ? 'Attach follower' : 'Create')}</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
