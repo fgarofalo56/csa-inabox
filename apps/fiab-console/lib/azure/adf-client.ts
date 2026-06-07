@@ -19,17 +19,27 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-// ARM host is cloud-aware: Azure Government (GCC-High / IL5) targets
-// management.usgovcloudapi.net, Commercial / GCC targets management.azure.com.
-// Without this, the Gov ADF path silently signs tokens for the Commercial
-// authority and every call 401s. AZURE_CLOUD is the same selector the rest of
-// the BFF uses (set by the admin-plane container env).
-const ARM_HOST =
-  process.env.AZURE_CLOUD === 'AzureUSGovernment'
-    ? 'management.usgovcloudapi.net'
-    : 'management.azure.com';
-const ARM_SCOPE = `https://${ARM_HOST}/.default`;
 const API = '2018-06-01';
+
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every ADF call below — including export-read and import-upsert — targets
+// the correct ARM host instead of management.azure.com.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
+const ARM_SCOPE = `${ARM_BASE}/.default`;
+// Bare ARM host (no scheme) for the few call sites that build their own URL
+// string. Derived from ARM_BASE so the sovereign-cloud selection above is the
+// single source of truth (Commercial / GCC-High / IL5 all honored).
+const ARM_HOST = ARM_BASE.replace(/^https?:\/\//, '');
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -50,7 +60,7 @@ function rg():  string { return required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
 function base(): string {
-  return `https://${ARM_HOST}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+  return `${ARM_BASE}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
 }
 
 /**
