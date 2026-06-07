@@ -37,6 +37,7 @@ import {
   Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
   Save20Regular, Code16Regular, TextDescription16Regular,
   Eye16Regular, Edit16Regular,
+  Sparkle16Regular, Wrench16Regular, Info16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -68,6 +69,15 @@ const useStyles = makeStyles({
   md: { padding: 12, fontSize: 14, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
   addBar: { display: 'flex', gap: 8, justifyContent: 'center', padding: '4px 0' },
+  assistBar: {
+    display: 'flex', gap: 6, padding: '4px 8px', alignItems: 'center',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  assistResult: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
+    whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+  },
 });
 
 // ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
@@ -182,6 +192,17 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // New-notebook name field.
   const [newName, setNewName] = useState('');
+
+  // Lightweight client-side schema hint for the per-cell AI assist (F21). The
+  // server route grounds primarily on T2 env (bronze/silver/gold) + Synapse
+  // serverless databases; this adds the open notebook + attached pool context.
+  const clientSchemaContext = useMemo(() => {
+    const parts: string[] = [];
+    if (openName) parts.push(`Open notebook: ${openName}`);
+    if (attachedPool) parts.push(`Attached Spark pool: ${attachedPool}`);
+    if (pools.length) parts.push(`Available Spark pools: ${pools.map((p) => p.name).join(', ')}`);
+    return parts.join('\n');
+  }, [openName, attachedPool, pools]);
 
   const refreshList = useCallback(async () => {
     setLoadingList(true);
@@ -526,6 +547,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                   canRun={!!attachedPool}
                   canUp={i > 0}
                   canDown={i < cells.length - 1}
+                  notebookId={id}
+                  schemaContext={clientSchemaContext}
                   onFocus={() => setActiveCell(c.id)}
                   onChange={(patch) => patchCell(c.id, patch)}
                   onRun={() => runCell(c.id)}
@@ -549,12 +572,58 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 // ── Single cell view ──────────────────────────────────────────────────────────
 function NotebookCellView(props: {
   cell: EditorCell; active: boolean; canRun: boolean; canUp: boolean; canDown: boolean;
+  notebookId: string; schemaContext?: string;
   onFocus: () => void; onChange: (patch: Partial<EditorCell>) => void; onRun: () => void;
   onDelete: () => void; onUp: () => void; onDown: () => void;
 }) {
   const s = useStyles();
   const { cell, active } = props;
   const [mdEditing, setMdEditing] = useState(!cell.source);
+
+  // ── Inline AI assist (F21) — generate / explain / fix per code cell ─────────
+  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
+  const [assistView, setAssistView] = useState<AssistView>('idle');
+  const [assistPrompt, setAssistPrompt] = useState('');
+  const [assistResult, setAssistResult] = useState<string | null>(null);
+  const [assistError, setAssistError] = useState<string | null>(null);
+  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
+
+  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
+    lastModeRef.current = mode;
+    setAssistView('loading');
+    setAssistError(null);
+    const out = cell.output;
+    const errorText = out?.status === 'error'
+      ? [out.ename ? `${out.ename}: ${out.evalue || ''}` : '', ...(out.traceback || []), out.text || '']
+          .filter(Boolean).join('\n')
+      : '';
+    try {
+      const r = await fetch(`/api/notebook/${encodeURIComponent(props.notebookId)}/assist`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          lang: cell.lang,
+          source: cell.source,
+          prompt: mode === 'generate' ? assistPrompt : undefined,
+          errorText: mode === 'fix' ? errorText : undefined,
+          schemaContext: props.schemaContext || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j?.ok) {
+        setAssistView('idle');
+        setAssistError(j?.code === 'no_aoai'
+          ? `Notebook Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
+          : (j?.error || 'AI assist failed'));
+        return;
+      }
+      setAssistResult(j.result);
+      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
+    } catch (e: any) {
+      setAssistView('idle');
+      setAssistError(e?.message || String(e));
+    }
+  }, [cell, assistPrompt, props.notebookId, props.schemaContext]);
 
   if (cell.type === 'markdown') {
     return (
@@ -595,6 +664,33 @@ function NotebookCellView(props: {
           aria-label="Cell language" style={{ minWidth: 150 }}>
           {(Object.keys(KIND_LABEL) as CellKind[]).map((k) => <Option key={k} value={k} text={KIND_LABEL[k]}>{KIND_LABEL[k]}</Option>)}
         </Dropdown>
+        {/* AI affordances (F21): Ask Copilot (generate) · Explain · Fix */}
+        <Tooltip content="Generate code from a description" relationship="label">
+          <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
+            disabled={assistView === 'loading'}
+            onClick={(e) => { e.stopPropagation(); setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
+            aria-label="Ask Copilot to generate code">
+            Ask Copilot
+          </Button>
+        </Tooltip>
+        <Tooltip content="Explain this cell" relationship="label">
+          <Button size="small" appearance="subtle" icon={<Info16Regular />}
+            disabled={!cell.source.trim() || assistView === 'loading'}
+            onClick={(e) => { e.stopPropagation(); callAssist('explain'); }}
+            aria-label="Explain cell">
+            Explain
+          </Button>
+        </Tooltip>
+        {out?.status === 'error' && (
+          <Tooltip content="Fix the error in this cell" relationship="label">
+            <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
+              disabled={assistView === 'loading'}
+              onClick={(e) => { e.stopPropagation(); callAssist('fix'); }}
+              aria-label="Fix error with AI">
+              {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
+            </Button>
+          </Tooltip>
+        )}
         {!props.canRun && <Caption1 className={s.tag}>attach a pool to run</Caption1>}
         <div className={s.spacer} />
         <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!props.canUp} onClick={(e) => { e.stopPropagation(); props.onUp(); }} aria-label="Move up" />
@@ -603,6 +699,61 @@ function NotebookCellView(props: {
       </div>
       <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })}
         language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} ariaLabel={`${cell.lang} code cell`} />
+
+      {/* Inline NL prompt for generate mode */}
+      {assistView === 'prompt' && (
+        <div className={s.assistBar}>
+          <Input size="small"
+            placeholder="Describe what this cell should do (e.g. count rows in bronze.orders)…"
+            value={assistPrompt}
+            onChange={(_, d) => setAssistPrompt(d.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
+              if (e.key === 'Escape') setAssistView('idle');
+            }}
+            style={{ flex: 1 }} autoFocus aria-label="AI code generation prompt" />
+          <Button size="small" appearance="primary" disabled={!assistPrompt.trim()}
+            onClick={() => callAssist('generate')}>Generate</Button>
+          <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
+        </div>
+      )}
+
+      {/* Loading */}
+      {assistView === 'loading' && (
+        <div className={s.assistBar}>
+          <Spinner size="tiny" labelPosition="after"
+            label={lastModeRef.current === 'generate' ? 'Generating…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
+        </div>
+      )}
+
+      {/* Suggestion / explanation result */}
+      {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
+        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+          <MessageBarBody>
+            <pre className={s.assistResult}>{assistResult}</pre>
+          </MessageBarBody>
+          <MessageBarActions>
+            {assistView === 'suggestion' && (
+              <Button size="small" appearance="primary"
+                onClick={() => { props.onChange({ source: assistResult }); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
+                Apply
+              </Button>
+            )}
+            <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
+      {/* Assist error / honest config gate */}
+      {assistError && (
+        <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+          <MessageBarBody>{assistError}</MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
       {out && (
         <div className={`${s.output} ${out.status === 'error' ? s.outputErr : ''}`}>
           {out.status === 'running' && <Spinner size="tiny" label="Running…" labelPosition="after" />}

@@ -24,6 +24,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       ok: true,
       dataflow: { id: resource.id, displayName: resource.displayName, description: resource.description },
       definition: (resource.state as any)?.definition || null,
+      sink: (resource.state as any)?.sink || null,
+      lastRunId: (resource.state as any)?.lastRunId || null,
     });
   } catch (e: any) {
     if (e?.code === 404) return err('dataflow not found', 404);
@@ -45,7 +47,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       ...existing,
       displayName: body?.displayName?.trim() || existing.displayName,
       description: 'description' in body ? body.description : existing.description,
-      state: { ...(existing.state || {}), ...(body?.definition !== undefined ? { definition: body.definition } : {}) },
+      state: {
+        ...(existing.state || {}),
+        ...(body?.definition !== undefined ? { definition: body.definition } : {}),
+        // The Output destination (ADLS / Azure SQL) the Run route compiles into
+        // an ADF WranglingDataFlow sink. Persisted alongside the M definition.
+        ...(body?.sink !== undefined ? { sink: body.sink } : {}),
+      },
       updatedAt: new Date().toISOString(),
     };
     const { resource } = await items.item(existing.id, workspaceId).replace(next);

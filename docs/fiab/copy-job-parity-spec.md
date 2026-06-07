@@ -1,4 +1,4 @@
-# Loom Copy Job Editor — Fabric-parity spec
+# copy-job — parity with the Fabric Copy Job editor
 
 !!! info "Comparative positioning note"
     This document is written from the
@@ -14,89 +14,93 @@
     Verify all third-party details against the vendor's current official
     documentation before making decisions.
 
+> **rev.2 (2026-06-06) — rewritten against current code.** The 2026-05-26
+> capture said "Loom has Cosmos persistence + /run POST to ADF copy activity"
+> and listed the whole editor as a gap. That is stale: `CopyJobEditor`
+> (`apps/fiab-console/lib/editors/phase2-misc-editors.tsx`) is a real
+> linked-service–driven source→sink editor wired to ADF + Synapse. This doc is
+> the honest, feature-by-feature comparison.
 
-> Captured 2026-05-26 by catalog agent `a30c2872e59523af4`. Source: live `CopyJob_1` in `casino-fabric-poc` + Fabric docs.
+Source UI: **Fabric Copy Job** (wizard-based data movement). Inventory grounded
+in Microsoft Learn: <https://learn.microsoft.com/fabric/data-factory/what-is-copy-job>.
 
-## Overview
-No-code, wizard-based data movement (no pipeline / activity authoring required). Strength: ease for simple source→destination copies; weakness: limited transforms (column mapping only).
+**Azure-native default (no real Fabric required, per `no-fabric-dependency.md`).**
+The copy runs as a **Synapse pipeline** (`loom-copy-<id>`) materialised + triggered
+on Run; the source/sink linked services come from the env-pinned **ADF factory**.
+No Fabric workspace is required. No mock data — the source/sink dropdowns are
+populated from a live `GET /api/adf/linked-services`, and Run executes a real
+pipeline; errors surface verbatim (no fake success).
 
-## Wizard panels
+---
 
-### 1. Source Configuration
-- **Connector picker**: searchable 100+ connectors by category (Databases / Cloud Storage / SaaS / APIs / File Systems)
-- **Connection settings**: server/endpoint URL · auth credentials · DB/container select · table/file picker w/ preview · validation
-- **Source preview**: sample rows · row count · column types · data quality indicators
-- **Supported sources**: Azure SQL DB/MI · On-prem SQL Server · Oracle/PostgreSQL/MySQL · Snowflake/BigQuery · Amazon RDS/Redshift · Azure Synapse · Fabric Lakehouse · ADLS · S3/GCS · Salesforce/Dynamics 365/Dataverse · 80+ more
+## Loom coverage — delivered editor surface
 
-### 2. Destination Configuration
-- **Type selector**: Lakehouse · Warehouse · KQL DB · SQL DB · ADLS · Azure SQL · Snowflake · Dataverse
-- **Settings**: connection, DB/container, schema select, auto-create table, truncate-before-load option
-- **Preview**: existing tables list, target schema
+Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate.
 
-### 3. Column Mapping Designer
-- **Source columns list (left)** — name, type, sample values
-- **Mapping (center)** — drag-drop, type conversion rules, rename, unmapped indicators
-- **Destination columns list (right)** — target name, target type, auto-mapping suggestions
-- **Options**: auto-map by name · auto-map by position · skip columns · rename during copy · custom transformations
+| Fabric capability | Loom | Backend (real REST) |
+| --- | --- | --- |
+| Create gate for a new item | ✅ `NewItemCreateGate` intro + Create | `POST /api/items/copy-job` |
+| **Source — linked-service picker** (from the factory) | ✅ `Dropdown` listing real LS w/ type | `GET /api/adf/linked-services` (`listLinkedServices`) |
+| Source type selector (AzureSql / AzureBlob / DelimitedText / Parquet / Json / AzureTable source) | ✅ `Dropdown` | stored in `state.source.type` |
+| Source SQL query (for SQL sources) | ✅ `Textarea` | `state.source.query` |
+| **Sink — linked-service picker** | ✅ same LS API | `GET /api/adf/linked-services` |
+| Sink type selector (6 sink types matching sources) | ✅ `Dropdown` | `state.sink.type` |
+| Sink table / path | ✅ `Input` | `state.sink.table` |
+| **Column mappings** (source col → sink col, add/remove rows) | ✅ `KeyValueGrid` (array mode `{source,sink}`) | `state.mappings[]` |
+| Save state (Ctrl+S + ribbon + button) | ✅ keyboard + ribbon `Edit` group | `PUT /api/items/copy-job/[id]` (Cosmos `saveItem`) |
+| **Run now** (materialise + trigger the Synapse copy pipeline) | ✅ ribbon `Run` group + button (saves first) | `POST /api/items/copy-job/[id]/run` (`upsertPipeline` + `runPipeline`) |
+| **Run history** (runId / status / start / end / duration / message) | ✅ `Table`, colour-coded status badges, Refresh runs | `GET /api/items/copy-job/[id]/runs` (`queryPipelineRuns`) |
+| Last-run confirmation (runId) | ✅ success `MessageBar` | from Run response |
+| Errors surface verbatim (no fabricated success) | ✅ `ErrBar` + per-action `MessageBar` | n/a |
+| No ADF linked services available | ⚠️ honest-gate — `MessageBar intent="warning"` "No ADF Linked Services found" naming the Manage → Linked services remediation | `ls.linkedServices.length === 0` |
+| ADF factory not provisioned / unreachable | ⚠️ honest-gate — `MessageBar intent="warning"` "ADF Linked Services unavailable" with the underlying error + hint (names `LOOM_ADF_NAME`) | `listLinkedServices` 503 / 401/403 |
 
-### 4. Copy Mode Selector
-- **Full Copy** — overwrite destination every run; for refreshes/initial loads
-- **Incremental Copy** — first run = full; subsequent runs = only changed rows. Needs incremental column (ROWVERSION / DateTime / Date / Int / String-as-datetime)
-- **CDC** — tracks inserts/updates/deletes. Requires CDC enabled on source. Preserves delete info. SCD Type 2 historical tracking option
+Every row above is ✅ or an honest ⚠️ gate — zero stub banners, zero dead
+controls. The Run button is disabled (not fake) until both source and sink
+linked services are chosen.
 
-### 5. Write Behavior
-- **Append** — adds rows, preserves existing (default)
-- **Overwrite** — replaces all data
-- **Merge** — update by primary key + insert new
-- **SCD Type 2** — versioned rows, effective dating, soft deletes (CDC mode only)
+## Backend per control (real REST, no mocks)
 
-### 6. Schedule & Trigger
-- Run Once / Schedule (cron-based, daily/weekly/etc, timezone, start+end dates, enable toggle) / Event Triggers (file arrival, DB changes)
-- Manual Execution: Run button respects incremental state
+- Linked-service pickers: `useLinkedServices()` → `GET /api/adf/linked-services` → `lib/azure/adf-client.ts#listLinkedServices`.
+- Save: `saveItem('copy-job', id, state)` → `PUT /api/items/copy-job/[id]` (Cosmos owned-item).
+- Run: `POST /api/items/copy-job/[id]/run` → Synapse `upsertPipeline('loom-copy-<id>')` + `runPipeline`.
+- Runs: `GET /api/items/copy-job/[id]/runs` → `queryPipelineRuns`.
+- Auth: Console UAMI against `management.azure.com` (ADF + Synapse REST).
 
-### 7. Advanced Settings
-- **Auto-partitioning (Preview)** — parallel reads for large tables, balanced boundaries (SQL Server family, Oracle, SAP HANA, Fabric)
-- **Audit columns** — extraction timestamp, source file path, workspace ID, Copy Job ID, Run ID, job name, incremental window bounds, custom user values appended to each row
-- **Performance** — parallel degree, timeout, retry policy, batch size
-- **Network**: on-prem data gateway, VNet gateway, VNet service endpoint, SSL/TLS
+## Beyond this editor — full Fabric Copy Job capabilities not yet built (honest)
 
-### 8. Table Selection
-- Source table browser with schema hierarchy, row counts, filter/search, multi-select
-- Per-table options: column subset, custom query for filtering, incremental column assignment, write mode override, truncate override
+The Fabric Copy Job is an 11-panel guided wizard. Loom's editor is a flat,
+real-backend source→sink form. These wizard capabilities are genuinely absent
+(tracked, not claimed):
 
-### 9. Summary & Review
-- Source/destination + types · table count · copy mode · write behavior · schedule · audit columns · estimated data volume
-- Validation indicators (completeness, warnings, missing settings)
+| Fabric capability | Status |
+| --- | --- |
+| Wizard-style guided flow (Source → Destination → Mapping → Mode → Settings → Review) | ❌ not built — flat form |
+| 100+ connector gallery (searchable, categorized) | ❌ not built — 6 source / 6 sink types |
+| Schema browser + data preview (sample rows, column types, row counts) | ❌ not built |
+| Copy mode selector (Full / Incremental / CDC) + incremental watermark column | ❌ not built — always full copy |
+| Write-behavior selector (Append / Overwrite / Merge / SCD Type 2) | ❌ not built |
+| Per-table multi-select + per-table overrides | ❌ not built — single source/sink |
+| Auto-partitioning, audit columns, performance tuning | ❌ not built |
+| Run-history drill-down (per-table stats, source-vs-sink row counts) | ❌ not built — flat run list |
 
-### 10. Run History & Monitoring
-- Run timestamp / status (Running/Succeeded/Failed/Skipped) / duration / rows read / rows written / error messages
-- Per-run detail expansion: per-table stats, source-vs-destination row counts, data size, incremental state, error logs
-- Real-time live progress bar, row count updates, duration timer, cancel button
+## Bicep / env sync
 
-### 11. Job Settings & Editing
-- Edit source/destination · table selection · column mappings · write behavior · schedule · reset incremental state (full reload) · rename · description
+- Consumed env vars: `LOOM_ADF_NAME` (+ `LOOM_ADF_RG`, `LOOM_SUBSCRIPTION_ID`,
+  `LOOM_DLZ_RG`, `LOOM_SYNAPSE_WORKSPACE`). The "ADF Linked Services
+  unavailable" gate names them.
+- Resource: the env-pinned ADF factory (`adf.bicep`) + Synapse workspace
+  (already deployed). **No new Azure resource** — the copy runs as a Synapse
+  pipeline created on demand. The 2026-06-06 `adfPrivateDnsZoneId` threading fix
+  (see `data-pipeline-parity-spec.md`) is what makes the factory deploy in a
+  clean sub so the linked-service pickers populate. No `LOOM_COPYJOB_*` env var
+  is consumed by the current editor (incremental watermark/control-table is in
+  the "not yet built" list above, so no Bicep for it is introduced — adding it
+  before the code reads it would be dead config per `no-vaporware.md`).
+- No new Cosmos container (copy-job persists in the shared owned-items container).
 
-## Key UI elements
-- Mode Toggle (Full / Incremental / CDC) with visual distinction
-- Connection management: Add / Manage / Validate
-- Status indicators: connection, completeness %, preview loading, schedule validation
-- Action buttons: Save · Save+Run · Run · Test Connection · Preview Data · Advanced Options
+## Verification
 
-## What Loom has
-- Cosmos persistence (state.copyJob.{source, destination, mode, schedule, mappings})
-- `/run` POSTs to ADF copy activity (already wired in v3)
-
-## Gaps for parity
-1. **Wizard-style UI** — Loom has flat form, needs the 11-panel guided flow
-2. **Connector picker** — needs the 100+ connector browser
-3. **Column mapping designer** — needs the drag-drop side-by-side UI
-4. **Per-table multi-select** — currently single table only
-5. **Auto-partitioning + audit columns** — config not exposed
-6. **Run history pane** — needs the per-run drill-down with row counts
-
-## Backend mapping
-- Existing ADF Copy activity does most of the work
-- Need: ADF Linked Service browser (already exists at `/api/adf/linked-services` — needs UI), schema inference endpoint (need to add), row-count probe (Synapse Serverless `COUNT(*)` against source connector)
-
-## Estimated effort
-2-3 sessions: wizard UI scaffold + 11 panels + connector picker reuse from ADF.
+Per `no-vaporware.md`: Save → Cosmos, Run → real Synapse pipeline, runs →
+`queryPipelineRuns`; the no-LS / unreachable states are honest gates. Live
+side-by-side against the Fabric Copy Job wizard confirms the gap rows above.
