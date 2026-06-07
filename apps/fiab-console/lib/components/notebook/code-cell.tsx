@@ -13,6 +13,7 @@ import {
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { CopilotPane } from './copilot-pane';
 
 const useStyles = makeStyles({
   shell: {
@@ -132,6 +133,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
 
   // In-cell Copilot popover state.
   const [copilotOpen, setCopilotOpen] = useState(false);
@@ -336,25 +338,50 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         className={mergeClasses(locked && s.editorLocked)}
       />
       {cell.output && (
-        <div className={mergeClasses(
-          s.outputBox,
-          maximized && s.outputBoxMaximized,
-          cell.output.status === 'error' && s.outputError,
-        )}>
-          {cell.output.status === 'error' && (
-            <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
-              {cell.output.ename || 'Error'}
-            </Badge>
-          )}
-          {cell.output.status === 'error' ? (
+        <>
+          <div className={mergeClasses(
+            s.outputBox,
+            maximized && s.outputBoxMaximized,
+            cell.output.status === 'error' && s.outputError,
+          )}>
+            {cell.output.status === 'error' && (
+              <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
+                {cell.output.ename || 'Error'}
+              </Badge>
+            )}
+            {cell.output.status === 'error' ? (
+              <>
+                {cell.output.evalue}
+                {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
+              </>
+            ) : (
+              cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
+            )}
+          </div>
+          {cell.output.status === 'error' && !locked && (
             <>
-              {cell.output.evalue}
-              {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
+              <Button
+                size="small"
+                appearance="outline"
+                icon={<Sparkle16Regular />}
+                style={{ margin: '4px 8px 8px', alignSelf: 'flex-start' }}
+                onClick={(e) => { e.stopPropagation(); setCopilotOpen(true); }}
+              >
+                Fix with Copilot
+              </Button>
+              <CopilotPane
+                open={copilotOpen}
+                cell={cell}
+                output={cell.output}
+                onAccept={(proposedCode) => {
+                  onChange({ ...cell, source: proposedCode, output: undefined, executionCount: undefined });
+                  setCopilotOpen(false);
+                }}
+                onClose={() => setCopilotOpen(false)}
+              />
             </>
-          ) : (
-            cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
           )}
-        </div>
+        </>
       )}
     </div>
   );
