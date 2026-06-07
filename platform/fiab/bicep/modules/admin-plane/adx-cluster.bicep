@@ -206,3 +206,6 @@ output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
 // so they are operator-manual one-time actions surfaced as honest-gate
 // MessageBars in the editor (see app/api/items/kql-database/[id]/data-connections).
 output clusterPrincipalId string = adxCluster.identity.principalId
+// ARM resource id of the cluster — used by workspace-monitor.bicep to set the
+// EventHub data connection's managedIdentityResourceId to the cluster's MI.
+output clusterResourceId string = adxCluster.id

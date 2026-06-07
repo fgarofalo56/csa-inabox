@@ -512,6 +512,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/eventhouse"
     } },
+  { slug: 'workspace-monitor', displayName: 'Workspace monitoring', restType: 'Eventhouse', category: 'Real-Time Intelligence',
+    description: 'Read-only ADX database of platform usage/performance telemetry, fed by Azure Monitor diagnostic settings.',
+    learnContent: {
+      "overview": "Workspace monitoring is the Azure-native parity for Fabric's monitoring Eventhouse: a read-only Azure Data Explorer database on the shared Loom ADX cluster that holds the platform's own usage and performance telemetry. Diagnostic settings on every Loom resource route logs + metrics to Log Analytics; a data-export rule streams them to ADX so operators can query and dashboard them with KQL — no Microsoft Fabric required.",
+      "steps": [
+        {
+          "title": "Provision the monitoring DB",
+          "body": "Installing the Workspace Monitoring app creates the read-only ADX database (ResourceDiagnostics, ActivityEvents, PlatformMetrics, AppTelemetry) and enables diag-loom-stdz on any resource missing it."
+        },
+        {
+          "title": "Wire the live feed",
+          "body": "Set LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID to stream AzureDiagnostics / AzureActivity / AzureMetrics / AppRequests through Event Hubs into ADX continuously. Until then the seeded tables stay fully queryable."
+        },
+        {
+          "title": "Query with KQL",
+          "body": "Use the WorkspaceMonitor functions (RequestRate, DiagnosticCoverage) or open a KQL queryset to explore the telemetry."
+        },
+        {
+          "title": "Open the dashboard",
+          "body": "The bundled Workspace Monitoring Dashboard renders diagnostic coverage, request rate, failure %, and resource errors over the live ADX data."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/logs/logs-data-export"
+    } },
   { slug: 'kql-database', displayName: 'KQL database', restType: 'KQLDatabase', category: 'Real-Time Intelligence',
     description: 'Kusto database for high-volume, low-latency analytics with OneLake availability.',
     learnContent: {

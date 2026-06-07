@@ -34,6 +34,7 @@ import logicAppsIntegration from './app-logic-apps-integration';
 import dataGovernance from './app-data-governance';
 import realTimeDashboards from './app-real-time-dashboards';
 import hybridTopology from './app-hybrid-topology';
+import workspaceMonitoring from './app-workspace-monitoring';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -57,6 +58,7 @@ const REGISTRY: Record<string, AppBundle> = {
   [dataGovernance.appId]: dataGovernance,
   [realTimeDashboards.appId]: realTimeDashboards,
   [hybridTopology.appId]: hybridTopology,
+  [workspaceMonitoring.appId]: workspaceMonitoring,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {
