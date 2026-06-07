@@ -212,6 +212,12 @@ param loomAlertRg string = ''
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
 
+@description('ADLS Gen2 storage account name for ADX continuous-export (Delta / OneLake-style availability). Backs LOOM_RTI_EXPORT_ADLS and grants the ADX cluster MI Storage Blob Data Contributor. Defaults to loomStorageAccount when empty.')
+param loomRtiExportAdls string = ''
+
+@description('Resource group of the ADX continuous-export ADLS account. Empty defaults to this deployment RG.')
+param loomRtiExportAdlsRg string = ''
+
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
 
@@ -620,6 +626,19 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   }
 }
 
+// Continuous-export (Delta → ADLS Gen2) RBAC: grant the new ADX cluster's
+// system-assigned MI Storage Blob Data Contributor on the export account so
+// OneLake-style availability works Azure-native (no Fabric workspace). Deployed
+// at the storage account's RG (DLZ lake account is commonly in a different RG).
+module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && !empty(!empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount)) {
+  name: 'adx-export-rbac'
+  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : resourceGroup().name)
+  params: {
+    exportAdlsAccountName: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount
+    clusterPrincipalId: adxCluster!.outputs.clusterPrincipalId
+  }
+}
+
 // =====================================================================
 // 10. Catalog dispatcher (Purview / UC managed / Atlas-on-AKS)
 // =====================================================================
@@ -725,6 +744,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
             // shortcut examples resolve to a non-existent host (ENOTFOUND).
             { name: 'LOOM_ADLS_ACCOUNT', value: loomStorageAccount }
+            // ADLS Gen2 account for ADX continuous-export (Delta / OneLake-style
+            // availability). When unset, the eventhouse Export dialog shows an
+            // honest gate. Defaults to the lake account (same MI grant).
+            { name: 'LOOM_RTI_EXPORT_ADLS', value: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"

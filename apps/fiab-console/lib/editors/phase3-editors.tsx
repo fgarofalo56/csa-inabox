@@ -495,9 +495,28 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [policiesOpen, setPoliciesOpen] = useState(false);
   const [hotCacheDays, setHotCacheDays] = useState<number>(7);
   const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
-  const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
+
+  // Export to OneLake/ADLS dialog state (continuous-export → Delta on ADLS Gen2)
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportSourceTable, setExportSourceTable] = useState('');
+  const [exportName, setExportName] = useState('');
+  const [exportAdlsAccount, setExportAdlsAccount] = useState('');
+  const [exportContainer, setExportContainer] = useState('bronze');
+  const [exportPath, setExportPath] = useState('');
+  const [exportInterval, setExportInterval] = useState('1h');
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportResult, setExportResult] = useState<{
+    ok?: boolean; code?: string; missing?: string; hint?: string;
+    error?: string; abfssPath?: string; receipt?: string; verify?: string;
+  } | null>(null);
+  const [continuousExports, setContinuousExports] = useState<Array<{
+    name: string; externalTableName?: string; lastRunResult?: string; isRunning?: boolean;
+  }>>([]);
+  const [exportContainers, setExportContainers] = useState<string[]>(['bronze', 'silver', 'gold', 'landing']);
+  const [exportConfigAccount, setExportConfigAccount] = useState<string>('');
+  const [exportsLoading, setExportsLoading] = useState(false);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -599,9 +618,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath]);
 
   // Apply per-database caching + retention policies via the .alter database
-  // policy KQL management commands. Also flips the OneLake availability
-  // mirroring toggle (Fabric-only feature — falls through to a structured
-  // error MessageBar if the cluster isn't Fabric-managed).
+  // policy KQL management commands.
   const applyPolicies = useCallback(async () => {
     if (!selectedDb) return;
     setPoliciesBusy(true);
@@ -612,7 +629,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           database: selectedDb,
-          hotCacheDays, softDeleteDays, oneLakeAvailability: oneLakeEnabled,
+          hotCacheDays, softDeleteDays,
         }),
       });
       const ct = r.headers.get('content-type') || '';
@@ -624,7 +641,56 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setPoliciesBusy(false);
     }
-  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
+  }, [id, selectedDb, hotCacheDays, softDeleteDays, load]);
+
+  // Load active continuous-export jobs + the ADLS picker config (account +
+  // visible containers) from the real backend (GET .../continuous-export).
+  const loadExports = useCallback(async () => {
+    if (!selectedDb) return;
+    setExportsLoading(true);
+    try {
+      const r = await fetch(
+        `/api/items/eventhouse/${id}/continuous-export?database=${encodeURIComponent(selectedDb)}`,
+      );
+      const j = await r.json();
+      if (j.ok) {
+        if (Array.isArray(j.exports)) setContinuousExports(j.exports);
+        if (j.config?.containers?.length) setExportContainers(j.config.containers);
+        if (typeof j.config?.adlsAccount === 'string') setExportConfigAccount(j.config.adlsAccount);
+      }
+    } catch { /* best-effort — gate surfaces on POST */ }
+    finally { setExportsLoading(false); }
+  }, [id, selectedDb]);
+
+  // Create / replace a continuous Delta-export job to ADLS Gen2 (OneLake-style
+  // availability via Azure-native ADX continuous-export — no Fabric workspace).
+  const submitExport = useCallback(async () => {
+    setExportBusy(true);
+    setExportResult(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/continuous-export`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          database:    selectedDb,
+          sourceTable: exportSourceTable.trim(),
+          exportName:  exportName.trim(),
+          adlsAccount: exportAdlsAccount.trim() || undefined,
+          container:   exportContainer,
+          path:        exportPath.trim(),
+          interval:    exportInterval,
+        }),
+      });
+      const j = await r.json();
+      setExportResult(j);
+      if (j.ok) { void loadExports(); }
+    } catch (e: any) {
+      setExportResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setExportBusy(false);
+    }
+  }, [id, selectedDb, exportSourceTable, exportName, exportAdlsAccount,
+      exportContainer, exportPath, exportInterval, loadExports]);
 
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
@@ -646,15 +712,20 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Data policies', onClick: hasDbs && selectedDb ? () => setPoliciesOpen(true) : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs ? 'create a KQL database first' : !selectedDb ? 'select a database below' : undefined },
-        { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
+        { label: 'Export to OneLake/ADLS',
+          onClick: hasDbs && selectedDb
+            ? () => { setExportResult(null); setExportOpen(true); void loadExports(); }
+            : undefined,
           disabled: !hasDbs || !selectedDb,
-          title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+          title: !hasDbs || !selectedDb
+            ? 'pick a database first'
+            : 'configure continuous Delta export to ADLS Gen2 / OneLake' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
       ]},
     ]},
-  ], [hasDbs, selectedDb, openKqlEditor, load]);
+  ], [hasDbs, selectedDb, openKqlEditor, load, loadExports]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -841,15 +912,6 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                         />
                         <Caption1>How many days data is retained before automatic delete.</Caption1>
                       </div>
-                      <div>
-                        <Label>OneLake availability</Label>
-                        <Switch
-                          checked={oneLakeEnabled}
-                          onChange={(_, d) => setOneLakeEnabled(!!d.checked)}
-                          label={oneLakeEnabled ? 'Mirrored to OneLake' : 'Not mirrored'}
-                        />
-                        <Caption1>Fabric-managed eventhouses only. Mirrors KQL tables into OneLake as Delta for Spark/Power BI.</Caption1>
-                      </div>
                     </div>
                     {policiesErr && (
                       <MessageBar intent="error" style={{ marginTop: 12 }}>
@@ -861,6 +923,151 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     <Button appearance="secondary" onClick={() => setPoliciesOpen(false)}>Cancel</Button>
                     <Button appearance="primary" onClick={applyPolicies} disabled={policiesBusy}>
                       {policiesBusy ? 'Applying…' : 'Apply'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Export to OneLake/ADLS dialog — continuous Delta export via Kusto
+                continuous-export (Azure-native; no Fabric workspace required). */}
+            <Dialog open={exportOpen} onOpenChange={(_, d) => setExportOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: 560 }}>
+                <DialogBody>
+                  <DialogTitle>Export to OneLake / ADLS Gen2 (Delta)</DialogTitle>
+                  <DialogContent>
+                    <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                      Configures a Kusto continuous-export job that writes Delta files to ADLS Gen2 on
+                      each interval. The ADX cluster&rsquo;s system-assigned MI authenticates to storage
+                      (impersonation — no SAS key). Requires <strong>Storage Blob Data Contributor</strong> on
+                      the target account, provisioned by <code>adx-cluster.bicep</code> when
+                      <code> LOOM_RTI_EXPORT_ADLS</code> is set.
+                    </Caption1>
+
+                    {/* Honest gate — fires when LOOM_RTI_EXPORT_ADLS is not set */}
+                    {exportResult?.code === 'no_adls_config' && (
+                      <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>ADLS export not configured</MessageBarTitle>
+                          {exportResult.hint ||
+                            'Set LOOM_RTI_EXPORT_ADLS to the storage account name and redeploy. ' +
+                            'See adx-cluster.bicep (exportAdlsAccountName param).'}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div>
+                        <Label>Source table</Label>
+                        <Input
+                          value={exportSourceTable}
+                          onChange={(_, d) => setExportSourceTable(d.value)}
+                          placeholder="raw_events"
+                        />
+                        <Caption1>KQL fact table in <strong>{selectedDb}</strong>. New rows exported each interval.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Export name</Label>
+                        <Input
+                          value={exportName}
+                          onChange={(_, d) => setExportName(d.value)}
+                          placeholder={exportSourceTable ? `export_${exportSourceTable}_delta` : 'export_raw_events_delta'}
+                        />
+                        <Caption1>Unique continuous-export job name in this database (KQL identifier).</Caption1>
+                      </div>
+                      <div>
+                        <Label>ADLS account</Label>
+                        <Input
+                          value={exportAdlsAccount}
+                          onChange={(_, d) => setExportAdlsAccount(d.value)}
+                          placeholder={exportConfigAccount
+                            ? `${exportConfigAccount} (deployment default)`
+                            : '(uses LOOM_RTI_EXPORT_ADLS when blank)'}
+                        />
+                        <Caption1>Storage account name. Leave blank to use the deployment default.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Container</Label>
+                        <Select value={exportContainer} onChange={(_, d) => setExportContainer(d.value)}>
+                          {exportContainers.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </Select>
+                        <Caption1>ADLS Gen2 filesystem (populated from the deployment&rsquo;s storage account).</Caption1>
+                      </div>
+                      <div>
+                        <Label>Path (inside container)</Label>
+                        <Input
+                          value={exportPath}
+                          onChange={(_, d) => setExportPath(d.value)}
+                          placeholder={`exports/${selectedDb}/${exportSourceTable || 'table'}`}
+                        />
+                        <Caption1>Root folder for the Delta table, e.g. <code>exports/raw_events</code>.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Export interval</Label>
+                        <Select value={exportInterval} onChange={(_, d) => setExportInterval(d.value)}>
+                          <option value="5m">5 minutes</option>
+                          <option value="15m">15 minutes</option>
+                          <option value="30m">30 minutes</option>
+                          <option value="1h">1 hour (recommended)</option>
+                          <option value="6h">6 hours</option>
+                          <option value="24h">24 hours</option>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Active exports list */}
+                    {exportsLoading && (
+                      <Spinner size="extra-small" label="Loading exports…" style={{ marginTop: 12 }} />
+                    )}
+                    {continuousExports.length > 0 && (
+                      <div style={{ marginTop: 16 }}>
+                        <Caption1 style={{ fontWeight: 600 }}>Active exports ({continuousExports.length})</Caption1>
+                        {continuousExports.map((ce) => (
+                          <div key={ce.name} style={{ fontSize: 12, marginTop: 4, fontFamily: 'monospace' }}>
+                            <strong>{ce.name}</strong>
+                            {ce.externalTableName && ` → ${ce.externalTableName}`}
+                            {ce.lastRunResult && (
+                              <Caption1 style={{ marginLeft: 8 }}>{ce.lastRunResult}</Caption1>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Success receipt */}
+                    {exportResult?.ok && (
+                      <MessageBar intent="success" style={{ marginTop: 12 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Export configured</MessageBarTitle>
+                          Delta files will land at <code>{exportResult.abfssPath}</code> every {exportInterval}.
+                          Verify: <code>{exportResult.verify}</code>
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    {/* Error (not the honest gate) */}
+                    {exportResult && !exportResult.ok && exportResult.code !== 'no_adls_config' && (
+                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                        <MessageBarBody>{exportResult.error}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setExportOpen(false)}>Close</Button>
+                    <Button
+                      appearance="primary"
+                      onClick={submitExport}
+                      disabled={
+                        exportBusy ||
+                        !selectedDb ||
+                        !exportSourceTable.trim() ||
+                        !exportName.trim() ||
+                        !exportContainer
+                      }
+                    >
+                      {exportBusy ? 'Configuring…' : 'Create export'}
                     </Button>
                   </DialogActions>
                 </DialogBody>
