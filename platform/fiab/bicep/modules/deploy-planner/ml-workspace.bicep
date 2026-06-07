@@ -113,5 +113,20 @@ resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// AzureML Compute Operator — list / start / stop / restart Compute Instances
+// on this workspace (role e503ece1-11d0-4e8e-8e2c-7a6c3bf38815). Mirrors the
+// grant on the Foundry hub (ai-foundry.bicep) so the CI lifecycle routes
+// (/api/foundry/computes[/{id}/start|status]) work against any AML workspace
+// the Console drives. Data Scientist above lacks computes/*.
+resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: workspace
+  name: guid(workspace.id, consolePrincipalId, 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
