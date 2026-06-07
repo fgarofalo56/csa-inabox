@@ -1,25 +1,33 @@
 /**
  * aml-client — typed Azure Machine Learning CONTROL-PLANE REST client.
  *
- * Covers the standalone AML workspace surfaces the Data Science experiences
- * need: computes, datastores, experiments / runs (ARM "jobs"), models,
- * schedules, and environments. Everything here is pure ARM — each object is a
- * child resource of `Microsoft.MachineLearningServices/workspaces/<ws>` — so a
- * single sovereign-cloud-aware fetch helper serves them all.
+ * This single module serves two integrated surfaces, both pure ARM (every
+ * object is a child of `Microsoft.MachineLearningServices/workspaces/<ws>`):
+ *
+ *   1. The Data Science experiences: computes, datastores, experiments / runs
+ *      (ARM "jobs"), models, schedules, environments — list surfaces.
+ *   2. The notebook "Azure ML" path: list Compute Instances (CI), auto-start a
+ *      stopped CI, read datastores (with abfss:// / wasbs:// path building for
+ *      the Datastore Explorer), submit a Command job onto a CI, and poll it.
+ *
+ * Everything routes through one sovereign-cloud-aware fetch helper. Workspace
+ * coordinates come from `resolve-aml-target.ts` (LOOM_AML_* → LOOM_FOUNDRY_*
+ * fallback), so an already-deployed Loom keeps working without new config.
  *
  * Grounding (Microsoft Learn — Azure Machine Learning REST, api-version
  * 2024-10-01 GA):
- *   GET <ws>/computes      https://learn.microsoft.com/rest/api/azureml/compute/list
- *   GET <ws>/datastores    https://learn.microsoft.com/rest/api/azureml/datastores/list
- *   GET <ws>/jobs          https://learn.microsoft.com/rest/api/azureml/jobs/list
- *   GET <ws>/models        https://learn.microsoft.com/rest/api/azureml/model-containers/list
- *   GET <ws>/schedules     https://learn.microsoft.com/rest/api/azureml/schedules/list
- *   GET <ws>/environments  https://learn.microsoft.com/rest/api/azureml/environment-containers/list
+ *   GET  <ws>/computes      https://learn.microsoft.com/rest/api/azureml/compute/list
+ *   POST <ws>/computes/{n}/start                                   (202, no body)
+ *   GET  <ws>/datastores    https://learn.microsoft.com/rest/api/azureml/datastores/list
+ *   PUT  <ws>/jobs/{name}                                          (Command job)
+ *   GET  <ws>/jobs          https://learn.microsoft.com/rest/api/azureml/jobs/list
+ *   GET  <ws>/models        https://learn.microsoft.com/rest/api/azureml/model-containers/list
+ *   GET  <ws>/schedules     https://learn.microsoft.com/rest/api/azureml/schedules/list
+ *   GET  <ws>/environments  https://learn.microsoft.com/rest/api/azureml/environment-containers/list
  *
  * Cloud routing: the ARM host + AAD scope come from `cloud-endpoints.ts`
  * (`armBase()` / `armScope()`), resolved at REQUEST time so AZURE_CLOUD /
  * LOOM_ARM_ENDPOINT pick the `management.usgovcloudapi.net` host in Government.
- * The workspace coordinates come from `resolve-aml-target.ts`.
  *
  * Auth: ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID),
  * DefaultAzureCredential) against the ARM `.default` scope — identical to
@@ -29,9 +37,10 @@
  * already grants it.
  *
  * NO mocks, NO `return []` placeholders. Real ARM REST only. When env is unset
- * the BFF 503s via `amlConfigGate()` with the exact missing variable. NO Fabric
- * dependency — works with LOOM_DEFAULT_FABRIC_WORKSPACE unset (Azure-native by
- * default, per no-fabric-dependency.md).
+ * the BFF gates via `amlConfigGate()` / `amlIsConfigured()` with the exact
+ * missing variable. NO Fabric dependency — works with
+ * LOOM_DEFAULT_FABRIC_WORKSPACE unset (Azure-native by default, per
+ * no-fabric-dependency.md).
  */
 
 import {
@@ -39,7 +48,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, isGovCloud } from './cloud-endpoints';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -70,6 +79,51 @@ export class AmlError extends Error {
   }
 }
 
+// Re-export the resolver surface so route handlers import everything AML from
+// one module.
+export {
+  resolveAmlTarget,
+  amlWorkspaceArmPath,
+  isAmlConfigured,
+  amlDataPlaneHostSuffix,
+  AmlNotConfiguredError,
+  type AmlTarget,
+} from './resolve-aml-target';
+
+// ============================================================
+// Config / gate helpers
+// ============================================================
+
+/** Resolved AML workspace coordinates + the full ARM base (host + path). */
+export interface AmlConfig {
+  subscriptionId: string;
+  resourceGroup: string;
+  workspace: string;
+  region: string;
+  /** Full ARM resource base for the workspace (host + path, no api-version). */
+  base: string;
+}
+
+/**
+ * Resolve the AML workspace config (coordinates + full ARM base) from env.
+ * Delegates to `resolveAmlTarget()`; throws `AmlNotConfiguredError` (carrying
+ * the exact missing vars) when the workspace can't be addressed.
+ */
+export function amlConfig(): AmlConfig {
+  const t = resolveAmlTarget();
+  return { ...t, base: `${armBase()}${amlWorkspaceArmPath(t)}` };
+}
+
+/** True when the AML workspace can be addressed (env is set). Lets callers branch without try/catch. */
+export function amlIsConfigured(): boolean {
+  try {
+    resolveAmlTarget();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Honest config gate. Returns the exact missing env var so the BFF can 503 with
  * a precise Fluent MessageBar instead of a generic 500. Returns null when the
@@ -84,6 +138,10 @@ export function amlConfigGate(): { missing: string } | null {
     throw e;
   }
 }
+
+// ============================================================
+// Fetch foundation
+// ============================================================
 
 /**
  * ARM fetch against `<armBase><workspaceArmPath><path>?api-version=ML_API`.
@@ -159,6 +217,9 @@ export interface AmlCompute {
   createdOn?: string;
 }
 
+/** A Compute Instance view (subset of AmlCompute) used by the notebook path. */
+export type AmlComputeInstance = AmlCompute;
+
 function shapeCompute(raw: any): AmlCompute {
   const p = raw?.properties || {};
   const inner = p.properties || {};
@@ -174,10 +235,55 @@ function shapeCompute(raw: any): AmlCompute {
   };
 }
 
-/** GET <ws>/computes — the acceptance-test surface (live Compute Instance list). */
+/** GET <ws>/computes — the acceptance-test surface (live compute list). */
 export async function listComputes(): Promise<AmlCompute[]> {
   const rows = await pagedList('/computes', 'listComputes');
   return rows.map(shapeCompute);
+}
+
+/**
+ * List the workspace's Compute Instances (CI). Filters the merged compute list
+ * to `computeType === 'ComputeInstance'` (AmlCompute clusters / others are
+ * dropped — a notebook runs on a CI).
+ */
+export async function listCIs(): Promise<AmlComputeInstance[]> {
+  const rows = await pagedList('/computes', 'listCIs');
+  return rows
+    .filter((r) => (r?.properties?.computeType || '') === 'ComputeInstance')
+    .map(shapeCompute);
+}
+
+/** Whether a CI state means it's ready to run cells. */
+const CI_RUNNING = ['Running', 'running', 'Online', 'Available'];
+export function ciIsRunning(state?: string): boolean {
+  return CI_RUNNING.includes(state || '');
+}
+/** Whether a CI state means it's stopped and can be (auto-)started. */
+const CI_STOPPED = ['Stopped', 'stopped', 'Deallocated'];
+export function ciIsStopped(state?: string): boolean {
+  return CI_STOPPED.includes(state || '');
+}
+
+/**
+ * Start a stopped Compute Instance.
+ *   POST {base}/computes/{name}/start?api-version=2024-10-01  → 202 Accepted
+ * Idempotent enough for auto-start: a 4xx that says "already running" is
+ * swallowed so the caller's debounced auto-start doesn't surface a scary error.
+ */
+export async function startCI(name: string): Promise<void> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}/start`, { method: 'POST' });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const t = await res.text().catch(() => '');
+  // Treat "already started / not stopped" conflicts as success for auto-start.
+  if (res.status === 409 || /already|not.*stopped|running/i.test(t)) return;
+  throw new AmlError(res.status, t, `Compute Instance start failed: ${t.slice(0, 240)}`);
+}
+
+/** Read a single CI (state probe after start). */
+export async function getCI(name: string): Promise<AmlComputeInstance | null> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}`);
+  const j = await readAmlJson<any>(res, 'getCI');
+  return j ? shapeCompute(j) : null;
 }
 
 // ============================================================
@@ -185,19 +291,53 @@ export async function listComputes(): Promise<AmlCompute[]> {
 // ============================================================
 
 export interface AmlDatastore {
-  id: string;
+  id?: string;
   name: string;
-  datastoreType?: string;
+  datastoreType?: string;       // AzureBlob | AzureDataLakeGen2 | AzureFile | AzureDataLakeGen1 | OneLake | …
   isDefault?: boolean;
   description?: string;
   accountName?: string;
-  containerName?: string;
+  containerName?: string;       // AzureBlob
+  filesystem?: string;          // AzureDataLakeGen2
+  endpoint?: string;            // cloud storage suffix, e.g. "core.windows.net"
   tags?: Record<string, string>;
+  /** abfss:// for ADLS Gen2 datastores (null otherwise). */
+  abfssPath?: string | null;
+  /** wasbs:// for Blob datastores (null otherwise). */
+  wasbsPath?: string | null;
+}
+
+/** Blob host suffix for the active cloud (endpoint property is the storage suffix). */
+function blobSuffix(endpoint?: string): string {
+  if (endpoint) return `blob.${endpoint.replace(/^\./, '')}`;
+  return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';
+}
+/** DFS host suffix for the active cloud (endpoint property is the storage suffix). */
+function dfsHostSuffix(endpoint?: string): string {
+  if (endpoint) return `dfs.${endpoint.replace(/^\./, '')}`;
+  return isGovCloud() ? 'dfs.core.usgovcloudapi.net' : 'dfs.core.windows.net';
+}
+
+/**
+ * Build the canonical fully-qualified URI a Spark/Python cell uses to read a
+ * datastore's backing storage. ADLS Gen2 → abfss://, Blob → wasbs://, else null.
+ */
+export function toAbfssPath(ds: { datastoreType?: string; accountName?: string; filesystem?: string; endpoint?: string }): string | null {
+  if (ds.datastoreType === 'AzureDataLakeGen2' && ds.accountName && ds.filesystem) {
+    return `abfss://${ds.filesystem}@${ds.accountName}.${dfsHostSuffix(ds.endpoint)}/`;
+  }
+  return null;
+}
+export function toWasbsPath(ds: { datastoreType?: string; accountName?: string; containerName?: string; endpoint?: string }): string | null {
+  if (ds.datastoreType === 'AzureBlob' && ds.accountName && ds.containerName) {
+    return `wasbs://${ds.containerName}@${ds.accountName}.${blobSuffix(ds.endpoint)}/`;
+  }
+  return null;
 }
 
 function shapeDatastore(raw: any): AmlDatastore {
   const p = raw?.properties || {};
-  return {
+  const ds: AmlDatastore = {
     id: raw?.id,
     name: raw?.name,
     datastoreType: p.datastoreType,
@@ -205,12 +345,23 @@ function shapeDatastore(raw: any): AmlDatastore {
     description: p.description,
     accountName: p.accountName,
     containerName: p.containerName,
+    filesystem: p.filesystem,
+    endpoint: p.endpoint,
     tags: p.tags,
   };
+  ds.abfssPath = toAbfssPath(ds);
+  ds.wasbsPath = toWasbsPath(ds);
+  return ds;
 }
 
 export async function listDatastores(): Promise<AmlDatastore[]> {
   const rows = await pagedList('/datastores', 'listDatastores');
+  return rows.map(shapeDatastore);
+}
+
+/** Notebook Datastore Explorer surface — same data as listDatastores, named for the editor. */
+export async function listAmlDatastores(): Promise<AmlDatastore[]> {
+  const rows = await pagedList('/datastores', 'listAmlDatastores');
   return rows.map(shapeDatastore);
 }
 
@@ -219,7 +370,7 @@ export async function listDatastores(): Promise<AmlDatastore[]> {
 // ============================================================
 
 export interface AmlJob {
-  id: string;
+  id?: string;
   name: string;
   displayName?: string;
   jobType?: string;
@@ -228,6 +379,7 @@ export interface AmlJob {
   startTimeUtc?: string;
   endTimeUtc?: string;
   computeId?: string;
+  command?: string;
   description?: string;
   tags?: Record<string, string>;
 }
@@ -244,6 +396,7 @@ function shapeJob(raw: any): AmlJob {
     startTimeUtc: p.startTimeUtc,
     endTimeUtc: p.endTimeUtc,
     computeId: p.computeId,
+    command: p.command,
     description: p.description,
     tags: p.tags,
   };
@@ -268,6 +421,66 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
     j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
   }
   return out.slice(0, cap);
+}
+
+/** Default curated AML environment that ships Python 3.10 (used when no env override is given). */
+export const DEFAULT_AML_ENVIRONMENT =
+  'azureml://registries/azureml/environments/sklearn-1.5/labels/latest';
+
+/** Single-quote a string for a POSIX shell `-c` argument (the CI runs Linux). */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Submit a Command job that runs `code` on the given Compute Instance.
+ *   PUT {base}/jobs/{name}?api-version=2024-10-01
+ * The command runs `python -c "<code>"` (or `Rscript -e` for R) on the CI's
+ * default compute. Returns the job so the caller can poll getCiJob().
+ */
+export async function submitCiJob(opts: {
+  ciName: string;
+  code: string;
+  lang?: 'python' | 'r';
+  displayName?: string;
+}): Promise<AmlJob> {
+  const t = resolveAmlTarget();
+  const name = `loom-nb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const computeId =
+    `/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}` +
+    `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}/computes/${opts.ciName}`;
+  const command = opts.lang === 'r'
+    ? `Rscript -e ${shellQuote(opts.code)}`
+    : `python -c ${shellQuote(opts.code)}`;
+  const armBody = {
+    properties: {
+      jobType: 'Command',
+      displayName: opts.displayName || 'Loom notebook cell run',
+      experimentName: 'loom-notebook-runs',
+      command,
+      environmentId: DEFAULT_AML_ENVIRONMENT,
+      computeId,
+    },
+  };
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+  });
+  const j = await readAmlJson<any>(res, 'submitCiJob');
+  return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
+}
+
+/** Poll a Command job's status. Null on 404. */
+export async function getCiJob(name: string): Promise<AmlJob | null> {
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`);
+  const j = await readAmlJson<any>(res, 'getCiJob');
+  return j ? shapeJob(j) : null;
+}
+
+/** AML terminal job states. */
+const AML_TERMINAL = ['Completed', 'Failed', 'Canceled', 'NotResponding'];
+export function amlJobIsTerminal(status?: string): boolean {
+  return AML_TERMINAL.includes(status || '');
 }
 
 // ============================================================
@@ -359,14 +572,3 @@ export async function listEnvironments(): Promise<AmlEnvironment[]> {
   const rows = await pagedList('/environments', 'listEnvironments');
   return rows.map(shapeEnvironment);
 }
-
-// Re-export the resolver surface so route handlers import everything AML from
-// one module.
-export {
-  resolveAmlTarget,
-  amlWorkspaceArmPath,
-  isAmlConfigured,
-  amlDataPlaneHostSuffix,
-  AmlNotConfiguredError,
-  type AmlTarget,
-} from './resolve-aml-target';

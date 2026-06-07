@@ -112,6 +112,12 @@ param aiSearchEnabled = false
 param adxEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
+// Azure ML workspace — backs the notebook "Azure ML" compute path (Compute
+// Instances + datastores + Command-job cell runs). The deploy-planner
+// ml-workspace.bicep module provisions an AML workspace + its KV/Storage/
+// AppInsights deps and grants the Console UAMI AzureML Data Scientist, which
+// surfaces LOOM_AML_WORKSPACE/RG/REGION to the console. No Fabric dependency.
+param mlWorkspaceEnabled = true
 
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource

@@ -49,3 +49,38 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 - CRUD → Cosmos workspace-items.
 
 Grade: **A (all inventory rows built + real Spark Livy backend; session sizing + variable explorer sort unit-tested).**
+
+## Azure ML path (Azure-native default — no Fabric/Power BI dependency)
+
+The editor has a **Compute backend** toggle: *Loom (Spark)* (above) and *Azure ML*.
+The Azure ML path is parity with Azure ML studio's notebook experience and runs
+entirely on ARM control-plane calls against a dedicated AML workspace
+(`lib/azure/aml-client.ts`). The notebook record still lives in Cosmos (the Loom
+workspace), so CRUD / import are unchanged.
+
+Source UI: Azure ML studio Notebooks — https://learn.microsoft.com/azure/machine-learning/how-to-run-jupyter-notebooks
+
+| # | Capability (AML studio) | Status | Loom implementation |
+|---|---|---|---|
+| A1 | Workspace-type switch (Azure ML \| Fabric) | ✅ | `workspaceType` toggle in toolbar |
+| A2 | Compute Instance selector + state | ✅ | CI picker filtered to `kind==='aml-ci'` (`/api/aml/compute-instances` → `/api/loom/compute-targets`), state badge |
+| A3 | Start a stopped CI | ✅ | `Start compute` button → `POST /api/aml/compute-instances/{name}/start` |
+| A4 | Auto-start a stopped CI on select | ✅ | Debounced effect kicks `startCI` when a Stopped CI is selected; run-route also auto-starts before submit |
+| A5 | New-notebook wizard (name + kernel Python 3.10 / R) | ✅ | New dialog `Kernel` select; kernel drives starter code + `defaultLang` |
+| A6 | Datastore explorer + insert path | ✅ | `DatastoreExplorer` sidebar (`/api/aml/datastores`), click **or drag** an `abfss://` / `wasbs://` path into a code cell |
+| A7 | `.ipynb` upload | ✅ | Existing `/api/items/notebook/import` (workspace-agnostic) — works on both paths |
+| A8 | Run a cell on the CI | ✅ | Run-route submits an AML Command job (`PUT .../jobs/{name}`, `computeId` → the CI); poll-route maps job status to the cell-output contract |
+| A9 | Delta schema via delta-rs | ⚠️ honest-gate | Starter cell documents `deltalake.DeltaTable(path).schema()`; `deltalake` is `pip install`-able on the CI (no sidecar) |
+| A10 | Honest infra gate | ⚠️ | When `LOOM_AML_WORKSPACE` is unset, the CI picker + Datastore sidebar show a Fluent `MessageBar` naming `LOOM_AML_WORKSPACE` + `LOOM_AML_REGION` and the AzureML Data Scientist grant. Full surface still renders. |
+
+### Backend per control (AML path)
+- CI list → ARM `GET .../workspaces/{ws}/computes?api-version=2024-10-01` (filter `computeType==='ComputeInstance'`).
+- CI start → ARM `POST .../computes/{name}/start?api-version=2024-10-01` (202).
+- Datastores → ARM `GET .../datastores?api-version=2024-10-01`; abfss/wasbs path built from `accountName`/`filesystem`/`containerName`/`endpoint` (sovereign-cloud-aware via `cloud-endpoints`).
+- Cell run → ARM `PUT .../jobs/{name}?api-version=2024-10-01` Command job onto the CI; poll `GET .../jobs/{name}`.
+- Auth → Console UAMI ChainedTokenCredential on the ARM `.default` scope; UAMI granted **AzureML Data Scientist** by `platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep`.
+- Bicep sync → `mlWorkspaceEnabled=true` (commercial-full) provisions the AML workspace; `admin-plane/main.bicep` injects `LOOM_AML_WORKSPACE`/`LOOM_AML_RG`/`LOOM_AML_REGION`.
+
+Sovereign clouds: Commercial / GCC use `management.azure.com` + `dfs.core.windows.net`; GCC-High / IL5 use the USGov suffixes automatically (`cloud-endpoints.armBase()` / `dfsSuffix()`). AML isn't offered in DoD/IL6 — `amlIsConfigured()` returns false there and the toggle simply gates.
+
+Grade: **A (Azure-native default, real ARM backend, contract-tested in `__tests__/aml-client.test.ts`).**

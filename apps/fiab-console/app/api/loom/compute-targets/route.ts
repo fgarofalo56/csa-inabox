@@ -30,7 +30,7 @@ export const dynamic = 'force-dynamic';
 interface ComputeTarget {
   id: string;
   name: string;
-  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
+  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql' | 'aml-ci';
   state?: string;
   sku?: string;
   nodeSize?: string;
@@ -109,6 +109,31 @@ export async function GET() {
       }
     }
   } catch { /* helper not exported in this build — skip silently */ }
+
+  // Azure ML Compute Instances — the AML notebook path's compute. Added when
+  // LOOM_AML_WORKSPACE is configured (deploy-planner mlWorkspace module). The
+  // notebook editor filters to kind === 'aml-ci' when its workspace toggle is
+  // set to Azure ML. Azure-native — no Fabric dependency.
+  try {
+    const { amlIsConfigured, listCIs, ciIsRunning } = await import('@/lib/azure/aml-client');
+    if (amlIsConfigured()) {
+      const cis = await listCIs();
+      for (const ci of cis) {
+        computes.push({
+          id: `aml-ci:${ci.name}`,
+          name: `${ci.name} (AML Compute Instance)`,
+          kind: 'aml-ci',
+          state: ci.state,
+          nodeSize: ci.vmSize,
+          sku: ci.vmSize,
+          runEndpoint: '/api/items/notebook/{id}/run',
+        });
+        void ciIsRunning; // running-state computed client-side from `state`
+      }
+    }
+  } catch (e: any) {
+    errors.push({ kind: 'aml-ci', error: e?.message || String(e) });
+  }
 
   return NextResponse.json({ ok: true, computes, errors });
 }

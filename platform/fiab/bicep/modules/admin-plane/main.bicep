@@ -335,6 +335,11 @@ param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
 param existingFoundryRg string = ''
 
+@description('Azure ML workspace name backing the notebook AML path (deploy-planner mlWorkspace module). Empty → the AML notebook toggle honest-gates (LOOM_AML_WORKSPACE unset).')
+param amlWorkspaceName string = ''
+@description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
+param amlWorkspaceRg string = ''
+
 // Effective "reuse-or-new" identities used for Console env wiring below.
 var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGroup().name
 var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
@@ -1190,8 +1195,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // hub IS an AML workspace (kind=Hub), so we point at it by default;
             // loomAmlWorkspace / loomAmlRg override to a dedicated AML workspace.
             // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
-            { name: 'LOOM_AML_WORKSPACE', value: !empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '') }
-            { name: 'LOOM_AML_RG', value: !empty(loomAmlRg) ? loomAmlRg : byoFoundryRg }
+            { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '')) }
+            { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : (!empty(loomAmlRg) ? loomAmlRg : byoFoundryRg) }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
@@ -1201,17 +1206,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_REGION', value: location }
             // ML Experiment editor — Azure ML MLflow tracking. LOOM_AML_WORKSPACE
             // / LOOM_AML_RG are already set above (shared with aml-environments-
-            // client); mlflow-client.ts also reads LOOM_AML_REGION +
+            // client AND the notebook "Azure ML" compute path in aml-client.ts →
+            // list/start Compute Instances, list datastores, submit Command jobs);
+            // mlflow-client.ts also reads LOOM_AML_REGION +
             // LOOM_SUBSCRIPTION_ID to construct the Commercial / GCC / sovereign
             // tracking URI automatically (amlDataPlaneHost picks the right host).
             // IL5 / GCC-High may instead pin an explicit tracking URI below.
             //
             // Standalone Azure ML workspace coordinates also back aml-client.ts
             // (resolveAmlTarget): the AML control-plane navigator (computes /
-            // datastores / jobs / models / schedules / environments). Empty
-            // values fall back to LOOM_FOUNDRY_* / LOOM_SUBSCRIPTION_ID in the
-            // resolver, so an AI Foundry hub doubles as the AML workspace
-            // without extra config. Cloud routing is handled at runtime.
+            // datastores / jobs / models / schedules / environments) and the
+            // notebook AML toggle. Empty values fall back to LOOM_FOUNDRY_* /
+            // LOOM_SUBSCRIPTION_ID in the resolver, so an AI Foundry hub doubles
+            // as the AML workspace without extra config. The deploy-planner
+            // mlWorkspace module provisions a dedicated workspace + grants the
+            // Console UAMI AzureML Data Scientist. No Fabric dependency. Cloud
+            // routing is handled at runtime.
             { name: 'LOOM_AML_REGION', value: empty(loomAmlRegion) ? location : loomAmlRegion }
             { name: 'LOOM_AML_RESOURCE_GROUP', value: loomAmlResourceGroup }
             { name: 'LOOM_AML_SUBSCRIPTION', value: loomAmlSubscription }
