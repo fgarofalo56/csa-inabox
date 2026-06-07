@@ -22,7 +22,7 @@ const COLD_TRANSFORM_TIMEOUT_MS = 120_000;
 
 const ENV_SHARED = {
   LOOM_DEFAULT_FABRIC_WORKSPACE: 'ws-fix-123',
-  LOOM_KUSTO_CLUSTER_URI: 'https://adx-fix.kusto.windows.net',
+  LOOM_KUSTO_CLUSTER_URI: 'https://adx-fix.kusto.usgovcloudapi.net',
   LOOM_KUSTO_CLUSTER_NAME: 'adx-fix',
   LOOM_KUSTO_RG: 'rg-fix',
   LOOM_SUBSCRIPTION_ID: 'sub-fix',

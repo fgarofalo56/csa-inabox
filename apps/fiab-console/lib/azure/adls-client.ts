@@ -50,7 +50,7 @@ function resolveAccountName(): string {
   for (const c of KNOWN_CONTAINERS) {
     const url = containerUrl(c);
     if (!url) continue;
-    const m = url.match(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net/i);
+    const m = url.match(/^https:\/\/([^.]+)\./i);
     if (m) return m[1];
   }
   throw new Error('No LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL configured — cannot resolve ADLS account.');
@@ -68,7 +68,7 @@ export function getServiceClientFor(account: string): DataLakeServiceClient {
   const key = account.toLowerCase();
   let c = serviceClients.get(key);
   if (!c) {
-    c = new DataLakeServiceClient(`https://${account}.dfs.core.windows.net`, credential);
+    c = new DataLakeServiceClient(dfsUrl(account), credential);
     serviceClients.set(key, c);
   }
   return c;
@@ -248,7 +248,7 @@ export async function createDirectory(
 /** Build the full https URL for OPENROWSET BULK against a SPECIFIC account. */
 export function pathToHttpsUrlFor(account: string, container: string, path: string): string {
   const clean = path.replace(/^\/+/, '');
-  return `https://${account}.dfs.core.windows.net/${container}/${clean}`;
+  return `${dfsUrl(account)}/${container}/${clean}`;
 }
 
 /**
@@ -368,8 +368,9 @@ import {
   ChainedTokenCredential as _ChainedCredential,
   type TokenCredential as _TokenCredential,
 } from '@azure/identity';
+import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const armCred: _TokenCredential = uamiClientId
   ? new _ChainedCredential(
       new _MICredential({ clientId: uamiClientId }),
@@ -442,7 +443,7 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
 
 export async function listContainerRoleAssignments(container: string): Promise<ContainerRoleAssignment[]> {
   const scope = resolveStorageScope(container);
-  const url = `https://management.azure.com${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
+  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
   const res = await armCall<{ value: any[] }>(url);
   const out: ContainerRoleAssignment[] = [];
   for (const r of (res.value || [])) {
@@ -480,7 +481,7 @@ export async function grantContainerRole(
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
-  const url = `https://management.azure.com${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
+  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
   const res = await armCall<any>(url, {
     method: 'PUT',
     body: JSON.stringify({
@@ -501,6 +502,6 @@ export async function grantContainerRole(
 }
 
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
-  const url = `https://management.azure.com${roleAssignmentArmId}?api-version=2022-04-01`;
+  const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
   await armCall<void>(url, { method: 'DELETE' });
 }

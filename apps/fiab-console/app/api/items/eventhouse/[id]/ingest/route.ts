@@ -32,6 +32,7 @@ import {
   executeMgmtCommand, ingestInline, KustoError,
 } from '@/lib/azure/kusto-client';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,10 +45,8 @@ const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
-// Cloud-aware ARM base. Commercial → management.azure.com (default); Gov
-// (GCC-High / IL5) sets LOOM_ARM_ENDPOINT=https://management.usgovcloudapi.net
-// via bicep. Mirrors adf-client / azure-sql-client.
-const ARM_BASE = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+// Cloud-aware ARM base/scope come from cloud-endpoints (armBase / armScope),
+// which honor LOOM_ARM_ENDPOINT / AZURE_CLOUD for Gov (GCC-High / IL5).
 
 // .ingest formats accepted from the Get-Data wizard's Format dropdown. 'auto'
 // lets ADX infer from the extension; anything else is passed through verbatim
@@ -199,12 +198,12 @@ async function handleEventHub(_id: string, body: any): Promise<NextResponse> {
   const location = process.env.LOOM_KUSTO_LOCATION || 'eastus2';
   if (!sub) return NextResponse.json({ ok: false, error: 'LOOM_SUBSCRIPTION_ID env var not set' }, { status: 503 });
 
-  const armToken = await credential.getToken(`${ARM_BASE}/.default`);
+  const armToken = await credential.getToken(armScope());
   if (!armToken?.token) return NextResponse.json({ ok: false, error: 'failed to acquire ARM token' }, { status: 401 });
 
   const connName = `${table}-eh-${eventHubName}`.slice(0, 40).replace(/[^A-Za-z0-9_-]/g, '-');
   const url =
-    `${ARM_BASE}/subscriptions/${sub}/resourceGroups/${rg}` +
+    `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}` +
     `/providers/Microsoft.Kusto/clusters/${cluster}/databases/${encodeURIComponent(database)}` +
     `/dataConnections/${encodeURIComponent(connName)}?api-version=2023-08-15`;
   const payload = {

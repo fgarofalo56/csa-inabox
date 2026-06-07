@@ -311,7 +311,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             <MessageBarTitle>ADX cluster not configured</MessageBarTitle>
             Set <code>{gate.missing}</code> so the Loom console can reach a real Azure Data Explorer /
             Fabric Eventhouse cluster (the Kusto data plane at{' '}
-            <code>https://&lt;cluster&gt;.kusto.windows.net</code>). The navigator stays here; objects
+            <code>https://&lt;cluster&gt;.&lt;region&gt;.kusto.&lt;cloud-suffix&gt;</code>). The navigator stays here; objects
             appear once the cluster is reachable. The Loom UAMI needs at least{' '}
             <strong>Database Admin</strong> (or <strong>AllDatabasesAdmin</strong> on the cluster) to
             create/drop tables, functions, materialized views, and ingestion mappings.

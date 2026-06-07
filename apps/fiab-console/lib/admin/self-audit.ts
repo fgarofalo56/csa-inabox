@@ -89,7 +89,7 @@ const VALUE_HINT: Record<string, string> = {
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',
   LOOM_SYNAPSE_WORKSPACE: '<synapse-workspace-name>',
   LOOM_SYNAPSE_DEDICATED_POOL: '<dedicated-sql-pool-name>',
-  LOOM_KUSTO_CLUSTER_URI: 'https://<adx-cluster>.<region>.kusto.windows.net',
+  LOOM_KUSTO_CLUSTER_URI: 'https://<adx-cluster>.<region>.kusto.<cloud-suffix>',
   LOOM_KUSTO_DEFAULT_DB: 'loomdb-default',
   LOOM_EVENTHUB_NAMESPACE: '<eventhubs-namespace>',
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',

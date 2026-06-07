@@ -19,8 +19,9 @@
  *   https://learn.microsoft.com/azure/machine-learning/how-to-track-experiments-mlflow
  *
  * Auth: the AML MLflow server accepts the same AAD bearer token used elsewhere
- * for the AML data plane — the ARM token (`https://management.azure.com/.default`)
- * minted from the Console UAMI via ChainedTokenCredential. This matches how
+ * for the AML data plane — the ARM token (the sovereign-cloud ARM `.default`
+ * scope from cloud-endpoints) minted from the Console UAMI via
+ * ChainedTokenCredential. This matches how
  * foundry-client.ts authenticates `*.api.azureml.ms` calls.
  *
  * Honest infra-gate: when the workspace/region cannot be resolved from env,
@@ -33,8 +34,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId

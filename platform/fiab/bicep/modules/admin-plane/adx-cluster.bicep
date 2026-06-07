@@ -82,7 +82,7 @@ param ehNamespaceName string = ''
 @description('Resource group of the Event Hubs namespace (defaults to the cluster RG if empty — override to the DLZ RG).')
 param ehNamespaceRg string = ''
 
-@description('Console UAMI principal ID — granted Monitoring Contributor at cluster scope so the Console BFF can create/manage metric alert rules and configure diagnostic settings on the cluster. Empty skips.')
+@description('Console UAMI principal ID — granted Monitoring Contributor at cluster scope (metric alert rules + diagnostic settings) AND AllDatabasesAdmin via principalAssignment (so kusto-client can query / run mgmt commands / ingest across every per-domain database). Empty skips both grants.')
 param consolePrincipalId string = ''
 
 @description('When true, skip all role grants (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
@@ -206,6 +206,22 @@ output clusterDataIngestionUri string = adxCluster.properties.dataIngestionUri
 // so they are operator-manual one-time actions surfaced as honest-gate
 // MessageBars in the editor (see app/api/items/kql-database/[id]/data-connections).
 output clusterPrincipalId string = adxCluster.identity.principalId
+
+// ADX data-plane RBAC. ADX roles (AllDatabasesAdmin/Viewer) are NOT Azure
+// RBAC roleDefinitions (no GUID) — they are assigned via the cluster's own
+// principalAssignments child resource. Grants the Console UAMI cluster-wide
+// admin so kusto-client can query / run .create-merge / ingest across every
+// per-domain database. principalType 'App' = service principal (the UAMI).
+resource adxConsoleAdmin 'Microsoft.Kusto/clusters/principalAssignments@2024-04-13' = if (!empty(consolePrincipalId)) {
+  parent: adxCluster
+  name: 'console-uami-alldatabasesadmin'
+  properties: {
+    principalId: consolePrincipalId
+    principalType: 'App'
+    role: 'AllDatabasesAdmin'
+  }
+}
+
 // ARM resource id of the cluster — used by workspace-monitor.bicep to set the
 // EventHub data connection's managedIdentityResourceId to the cluster's MI.
 output clusterResourceId string = adxCluster.id

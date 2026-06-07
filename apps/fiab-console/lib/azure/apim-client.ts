@@ -6,9 +6,9 @@
  *   2. DefaultAzureCredential — local dev / az login fallback
  *
  * Calls the ARM REST API for the APIM service:
- *   https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ApiManagement/service/{name}/...
+ *   {ARM}/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ApiManagement/service/{name}/...
  *
- * Auth scope: https://management.azure.com/.default
+ * Auth scope: the sovereign-cloud ARM `.default` scope (cloud-endpoints.armScope()).
  * UAMI role:  "API Management Service Contributor" at the APIM service scope
  *             (granted via scripts/csa-loom/grant-apim-rbac.sh).
  *
@@ -22,8 +22,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const APIM_API = '2024-06-01-preview';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -44,7 +45,7 @@ function apimBase(): string {
   const sub = required('LOOM_SUBSCRIPTION_ID');
   const rg = process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2';
-  return `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service/${name}`;
+  return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service/${name}`;
 }
 
 /**
@@ -768,7 +769,7 @@ export async function getSubscription(
  *   allApis       → .../apis   (all APIs)
  */
 export function subscriptionScope(target: { product?: string; api?: string; allApis?: boolean }): string {
-  const base = apimBase().replace('https://management.azure.com', '');
+  const base = stripArmBase(apimBase());
   if (target.product) return `${base}/products/${encodeURIComponent(target.product)}`;
   if (target.api) return `${base}/apis/${encodeURIComponent(target.api)}`;
   return `${base}/apis`;
@@ -909,7 +910,7 @@ export async function createApiRevision(
   const sourceRev = opts.sourceApiRevision
     ? `;rev=${opts.sourceApiRevision}`
     : '';
-  const sourceApiId = `${apimBase().replace('https://management.azure.com', '')}/apis/${encodeURIComponent(apiId)}${sourceRev}`;
+  const sourceApiId = `${stripArmBase(apimBase())}/apis/${encodeURIComponent(apiId)}${sourceRev}`;
   const targetId = `${encodeURIComponent(apiId)};rev=${encodeURIComponent(apiRevision)}`;
   const res = await apimFetch(`/apis/${targetId}`, {
     method: 'PUT',
@@ -956,7 +957,7 @@ export async function createApiRelease(
   notes?: string,
 ): Promise<ApimApiRelease> {
   const releaseId = `rel-${Date.now()}`;
-  const fullApiId = `${apimBase().replace('https://management.azure.com', '')}/apis/${encodeURIComponent(apiId)};rev=${encodeURIComponent(apiRevision)}`;
+  const fullApiId = `${stripArmBase(apimBase())}/apis/${encodeURIComponent(apiId)};rev=${encodeURIComponent(apiRevision)}`;
   const res = await apimFetch(`/apis/${encodeURIComponent(apiId)}/releases/${encodeURIComponent(releaseId)}`, {
     method: 'PUT',
     body: JSON.stringify({ properties: { apiId: fullApiId, notes: notes || '' } }),

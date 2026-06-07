@@ -29,6 +29,7 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -208,7 +209,7 @@ export async function listFabricCapacities(): Promise<FabricCapacity[]> {
 // Power BI Premium capacities use Microsoft.PowerBIDedicated/capacities.
 // We let the caller pass the resource id so the BFF can resolve either.
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const FABRIC_CAPACITY_API = '2023-11-01';
 const POWERBI_CAPACITY_API = '2021-01-01';
 
@@ -233,7 +234,7 @@ export async function updateCapacitySku(
   const isPowerBI = resourceId.toLowerCase().includes('/microsoft.powerbidedicated/');
   const apiVersion = isPowerBI ? POWERBI_CAPACITY_API : FABRIC_CAPACITY_API;
   const tier = isPowerBI ? 'PBIE_Azure' : 'Fabric';
-  const url = `https://management.azure.com${resourceId}?api-version=${apiVersion}`;
+  const url = `${armBase()}${resourceId}?api-version=${apiVersion}`;
   const token = await getArmToken();
   const res = await fetch(url, {
     method: 'PATCH',

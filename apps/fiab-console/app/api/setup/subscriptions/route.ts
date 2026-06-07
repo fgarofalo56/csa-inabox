@@ -14,7 +14,7 @@
  * a Loom filter.
  *
  * Cloud selection:
- *   LOOM_ARM_ENDPOINT  (Commercial: https://management.azure.com — default)
+ *   LOOM_ARM_ENDPOINT  (Commercial: the ARM commercial host — default)
  *                      (Gov:        https://management.usgovcloudapi.net)
  *
  * Response shape:
@@ -24,12 +24,13 @@
 import { NextResponse } from 'next/server';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function arm(): string {
-  return process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
+  return armBase();
 }
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;

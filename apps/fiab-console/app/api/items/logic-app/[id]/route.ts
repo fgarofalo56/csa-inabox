@@ -33,6 +33,7 @@ import {
   readLogicAppArmConfig,
   LOGIC_API,
 } from '@/lib/install/provisioners/logic-app';
+import { armBase, LOGIC_APP_WORKFLOW_SCHEMA } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,7 +42,7 @@ function err(error: string, status: number) { return NextResponse.json({ ok: fal
 
 /** Default empty WDL definition (used only if a record has neither content nor a saved definition). */
 const EMPTY_DEFINITION = {
-  $schema: 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#',
+  $schema: LOGIC_APP_WORKFLOW_SCHEMA,
   contentVersion: '1.0.0.0',
   parameters: {},
   triggers: {},
@@ -63,7 +64,7 @@ function resolveBinding(state: any): { subscriptionId: string; resourceGroup: st
 }
 
 function workflowUrl(b: { subscriptionId: string; resourceGroup: string; workflowName: string }): string {
-  return `https://management.azure.com/subscriptions/${b.subscriptionId}/resourceGroups/${b.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(b.workflowName)}`;
+  return `${armBase()}/subscriptions/${b.subscriptionId}/resourceGroups/${b.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(b.workflowName)}`;
 }
 
 /** Pull the WDL definition + parameter values out of bundle state.content. */

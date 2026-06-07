@@ -14,7 +14,7 @@
  * 501 MessageBar that names the bicep module + env vars the operator
  * needs. No mock arrays, no "return []" lies.
  *
- * No mocks. Real REST against management.azure.com only.
+ * No mocks. Real ARM REST only (sovereign-cloud aware via cloud-endpoints).
  */
 
 import {
@@ -22,26 +22,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
-// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
-// so every ASA call below targets the correct ARM host instead of
-// management.azure.com. LOOM_CLOUD is also honored for the gov clouds.
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  const loomCloud = (process.env.LOOM_CLOUD || '').toLowerCase();
-  if (loomCloud.startsWith('gcc') || loomCloud === 'il5' || loomCloud === 'usgov') {
-    return 'https://management.usgovcloudapi.net';
-  }
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
-const ARM_BASE = armBase();
-const ARM_SCOPE = `${ARM_BASE}/.default`;
+const ARM_SCOPE = armScope();
 // 2021-10-01-preview is the management-plane API version that supports
 // `authenticationMode: 'Msi'` on Blob/ADLS Gen2 and Kusto/ADX outputs (and
 // matches the deploy-planner ASA bicep). It is a superset of 2020-03-01 for
@@ -101,12 +84,12 @@ export function readAsaConfig(): AsaConfig {
 }
 
 function rgBase(cfg: AsaConfig): string {
-  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.StreamAnalytics/streamingjobs`;
 }
 
 /** Subscription/location-scoped base for the compile/test query RP actions. */
 function locationBase(cfg: AsaConfig, location: string): string {
-  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/providers/Microsoft.StreamAnalytics/locations/${encodeURIComponent(location)}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/providers/Microsoft.StreamAnalytics/locations/${encodeURIComponent(location)}`;
 }
 
 async function call(url: string, init?: RequestInit): Promise<Response> {

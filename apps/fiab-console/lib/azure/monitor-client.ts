@@ -29,27 +29,11 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-// ARM endpoint is sovereign-cloud aware (mirrors adf-client.ts). Default =
-// Commercial (unchanged behavior). GCC-High / IL5 (Azure Government / DoD)
-// deployments set LOOM_ARM_ENDPOINT (or AZURE_CLOUD) so every Monitor ARM call —
-// inventory, health, metrics, activity log, metric/alert-management, and the
-// scheduledQueryRules / actionGroups create for the Activator — targets the
-// correct ARM host instead of management.azure.com. The Log-Analytics QUERY host
-// is selected separately via LOOM_LOG_ANALYTICS_ENDPOINT (api.loganalytics.us in
-// Gov). Mirrors lib/azure/adf-client.ts so all Loom ARM clients agree.
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
+// Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
-// Token scope is env-overridable for sovereign clouds; defaults to the ARM host.
-const ARM_SCOPE = process.env.LOOM_ARM_SCOPE || `${ARM}/.default`;
+const ARM_SCOPE = armScope();
 const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
 const LA_SCOPE = `${LA_ENDPOINT}/.default`;
 

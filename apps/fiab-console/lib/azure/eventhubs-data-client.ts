@@ -3,8 +3,8 @@
  *
  * This is the data plane that complements the ARM control plane in
  * eventhubs-client.ts. It talks to the Event Hubs runtime endpoint
- *   https://<namespace>.servicebus.windows.net/<eventHub>/messages
- * NOT to management.azure.com. The two are deliberately separate clients.
+ *   https://<namespace>.<serviceBusSuffix>/<eventHub>/messages
+ * NOT to the ARM control plane. The two are deliberately separate clients.
  *
  * ── Auth ───────────────────────────────────────────────────────────────────
  * The deployment namespace sets `disableLocalAuth: true`, so SAS keys are
@@ -54,6 +54,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { eventhubsConfigGate } from './eventhubs-client';
+import { serviceBusSuffix } from './cloud-endpoints';
 
 /**
  * Event Hubs DATA-plane token scope. Distinct from the ARM scope used by the
@@ -115,20 +116,20 @@ export class EventHubsReceiveUnavailableError extends Error {
 
 /** Resolved data-plane target derived from env (no SAS — Entra only). */
 export interface EventHubsDataConfig {
-  /** Fully-qualified namespace, e.g. `loom-evhns.servicebus.windows.net`. */
+  /** Fully-qualified namespace, e.g. `loom-evhns` + the cloud Service Bus suffix. */
   fullyQualifiedNamespace: string;
 }
 
 /**
  * Build the fully-qualified namespace from LOOM_EVENTHUB_NAMESPACE. Accepts
  * either a bare namespace name (`loom-evhns`) or an already-qualified host
- * (`loom-evhns.servicebus.windows.net`) and an explicit sovereign-cloud
- * suffix override via LOOM_EVENTHUB_DATA_SUFFIX (e.g. servicebus.usgovcloudapi.net).
+ * and an optional sovereign-cloud suffix override via LOOM_EVENTHUB_DATA_SUFFIX
+ * (defaults to the cloud-correct suffix from cloud-endpoints.serviceBusSuffix()).
  */
 export function readEventHubsDataConfig(): EventHubsDataConfig {
   const raw = (process.env.LOOM_EVENTHUB_NAMESPACE || '').trim();
   if (!raw) throw new EventHubsDataError(503, undefined, 'Event Hubs namespace not configured');
-  const suffix = (process.env.LOOM_EVENTHUB_DATA_SUFFIX || 'servicebus.windows.net').replace(/^\.+|\.+$/g, '');
+  const suffix = (process.env.LOOM_EVENTHUB_DATA_SUFFIX || serviceBusSuffix()).replace(/^\.+|\.+$/g, '');
   const fqdn = raw.includes('.') ? raw.replace(/\/+$/, '') : `${raw}.${suffix}`;
   return { fullyQualifiedNamespace: fqdn };
 }

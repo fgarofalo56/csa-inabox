@@ -3,7 +3,7 @@
  *
  * Talks to two surfaces with the same credential chain:
  *
- *   1. ARM ({management.azure.com})       — Spark Big Data pool CRUD
+ *   1. ARM (the cloud's ARM control plane)  — Spark Big Data pool CRUD
  *      (Microsoft.Synapse/workspaces/{ws}/bigDataPools/*)
  *   2. Dev endpoint ({ws}.dev.azuresynapse.net) — Livy Spark batches,
  *      Pipelines (Synapse Integrate), pipeline runs.
@@ -20,15 +20,16 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armHost } from './cloud-endpoints';
 
-// Cloud-aware endpoint hosts. Default to Azure Commercial; override per
-// sovereign cloud via env so the same code path works in GCC / GCC-High / IL5:
-//   AZURE_ARM_HOST=management.usgovcloudapi.net
+// Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
+// LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
+// The Synapse dev host suffix overrides per sovereign cloud via env, e.g.:
 //   AZURE_SYNAPSE_DEV_HOST_SUFFIX=dev.azuresynapse.usgovcloudapi.net
 // The Livy/ARM API versions + paths are identical across clouds — only the host
 // (and therefore the token audience, handled automatically by the credential)
 // changes.
-const ARM_HOST = process.env.AZURE_ARM_HOST || 'management.azure.com';
+const ARM_HOST = process.env.AZURE_ARM_HOST || armHost();
 const DEV_HOST_SUFFIX = process.env.AZURE_SYNAPSE_DEV_HOST_SUFFIX || 'dev.azuresynapse.net';
 
 const ARM_SCOPE = `https://${ARM_HOST}/.default`;

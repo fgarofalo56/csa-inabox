@@ -28,23 +28,9 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
-// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
-// so every Event Hubs ARM call below targets the correct ARM host instead of
-// management.azure.com. LOOM_ARM_ENDPOINT (set via bicep) takes precedence and
-// mirrors adf-client / azure-sql-client / setup routes.
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
-const ARM_BASE = armBase();
-const ARM_SCOPE = `${ARM_BASE}/.default`;
+const ARM_SCOPE = armScope();
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
 // authorizationRules, networkRuleSets, disasterRecoveryConfigs.
 const EH_API = '2024-01-01';
@@ -102,7 +88,7 @@ export function readEventHubsConfig(): EventHubsConfig {
 }
 
 function nsUrl(cfg: EventHubsConfig): string {
-  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {

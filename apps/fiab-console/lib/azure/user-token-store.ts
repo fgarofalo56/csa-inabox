@@ -1,6 +1,6 @@
 /**
  * User ARM-token store — caches the signed-in user's Azure Resource Manager
- * (audience https://management.azure.com) access token so BFF routes can query
+ * (the sovereign-cloud ARM audience) access token so BFF routes can query
  * Azure with the USER's RBAC (e.g. Azure Resource Graph across every
  * subscription the user can see), instead of the single-subscription Loom UAMI.
  *

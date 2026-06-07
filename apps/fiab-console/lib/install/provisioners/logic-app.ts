@@ -34,10 +34,11 @@ import {
 } from '@azure/identity';
 import type { Provisioner, ProvisionResult } from './types';
 import { triggerAndPollWorkflowRun } from './_seed-logic-app';
+import { armBase, armScope, LOGIC_APP_WORKFLOW_SCHEMA } from '../../azure/cloud-endpoints';
 
 // ─── ARM auth (mirrors lib/azure/kusto-arm-client.ts exactly) ────────────
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 /** Microsoft.Logic stable API version (Consumption workflows). */
 export const LOGIC_API = '2016-06-01';
 
@@ -96,7 +97,7 @@ export function logicAppArmMissing(): string[] {
 }
 
 function workflowUrl(cfg: LogicAppArmConfig, name: string): string {
-  return `https://management.azure.com/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(name)}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Logic/workflows/${encodeURIComponent(name)}`;
 }
 
 export async function callLogicArm(url: string, init?: RequestInit): Promise<Response> {
@@ -122,7 +123,7 @@ export async function callLogicArm(url: string, init?: RequestInit): Promise<Res
  */
 function buildWorkflowBody(content: any, cfg: LogicAppArmConfig, appId: string): any {
   const definition = content?.definition || {
-    $schema: 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#',
+    $schema: LOGIC_APP_WORKFLOW_SCHEMA,
     contentVersion: '1.0.0.0',
     parameters: {},
     triggers: {},

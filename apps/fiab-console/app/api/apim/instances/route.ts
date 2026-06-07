@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { ChainedTokenCredential, ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
+import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,7 @@ export async function GET(_req: NextRequest) {
 
   let token: string;
   try {
-    const t = await credential.getToken('https://management.azure.com/.default');
+    const t = await credential.getToken(armScope());
     token = t!.token;
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: `auth failed: ${e?.message}` }, { status: 502 });
@@ -45,7 +46,7 @@ export async function GET(_req: NextRequest) {
 
   for (const rg of rgs) {
     try {
-      const url = `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service?api-version=2024-05-01`;
+      const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service?api-version=2024-05-01`;
       const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) {
         const t = await r.text();

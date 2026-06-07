@@ -28,15 +28,8 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './arm-endpoint';
+import { armBase, armScope } from './cloud-endpoints';
 
-// Sovereign-cloud aware ARM host + scope. Resolved from AZURE_CLOUD /
-// LOOM_ARM_ENDPOINT via the shared arm-endpoint helper so every Kusto ARM call
-// below — GET cluster, PATCH SKU, PATCH optimizedAutoscale, PATCH
-// enableStreamingIngest, follower-attach, data connections — targets the right
-// host + token scope (Commercial / GCC / GCC-High / IL5 / IL6) instead of a
-// hardcoded management.azure.com. Required because follower-attach ships in Gov.
-const ARM_BASE = armBase();
 const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
 
@@ -87,7 +80,7 @@ export function readKustoArmConfig(): KustoClusterArmConfig {
 }
 
 function clusterUrl(cfg: KustoClusterArmConfig): string {
-  return `${ARM_BASE}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
+  return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.Kusto/clusters/${cfg.clusterName}`;
 }
 
 async function callArm(url: string, init?: RequestInit): Promise<Response> {

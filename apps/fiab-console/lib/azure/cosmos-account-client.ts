@@ -25,7 +25,7 @@
  *     /sqlDatabases/{db}/throughputSettings/default             read (RU/s)
  *     /sqlDatabases/{db}/containers/{c}/throughputSettings/default  read (RU/s)
  *
- * Auth scope: https://management.azure.com/.default
+ * Auth scope: the sovereign-cloud ARM `.default` scope (cloud-endpoints.armScope()).
  * UAMI role:  "Cosmos DB Operator" (control-plane CRUD on databases/containers)
  *             or "DocumentDB Account Contributor" at the account scope.
  *
@@ -41,8 +41,9 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { armBase, armScope } from './cloud-endpoints';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_SCOPE = armScope();
 const COSMOS_ARM_API = '2024-11-15';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -94,7 +95,7 @@ function accountBase(): string {
   const sub = required('LOOM_SUBSCRIPTION_ID');
   const rg = required('LOOM_COSMOS_ACCOUNT_RG');
   const acct = required('LOOM_COSMOS_ACCOUNT');
-  return `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;
+  return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;
 }
 
 export class CosmosArmError extends Error {

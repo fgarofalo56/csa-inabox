@@ -10,7 +10,7 @@
  * flowName already exists in the project, it is reused (and updated).
  *
  * Auth: ChainedTokenCredential (UAMI → DefaultAzureCredential) against
- * https://management.azure.com/.default (the AML data-plane accepts the
+ * the sovereign-cloud ARM `.default` scope (the AML data-plane accepts the
  * ARM token for flow CRUD).
  *
  * Remediation gates (honest config-only state, per no-vaporware.md):

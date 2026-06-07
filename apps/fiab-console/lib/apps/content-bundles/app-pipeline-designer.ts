@@ -36,6 +36,7 @@
  *   - examples/data-api-builder/sql/setup.sql
  */
 import type { AppBundle } from './types';
+import { armBase, armAudience } from '@/lib/azure/cloud-endpoints';
 
 // ─── dbt models bundled into the Warehouse item ─────────────────────
 
@@ -668,14 +669,14 @@ of them and see the result in the warehouse editor.
                   type: 'WebActivity',
                   typeProperties: {
                     method: 'POST',
-                    url: 'https://management.azure.com/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01',
+                    url: `${armBase()}/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01`,
                     body: {
                       value:
                         "@concat('{\"sapSystemId\":\"', pipeline().parameters.sapSystemId, '\",\"table\":\"', item(), '\",\"runDate\":\"', pipeline().parameters.runDate, '\"}')",
                       type: 'Expression',
                     },
                     headers: { 'Content-Type': 'application/json' },
-                    authentication: { type: 'MSI', resource: 'https://management.azure.com/' },
+                    authentication: { type: 'MSI', resource: armAudience() },
                   },
                 },
               ],
@@ -699,14 +700,14 @@ of them and see the result in the warehouse editor.
               description:
                 'Posts a completion notification for the SAP → Lakehouse run. On a provisioned factory this targets the Teams channel webhook pulled from Key Vault; here it calls the ARM endpoint with MSI auth so the activity is self-contained (no Key Vault linked service / GetWebhook dependency).',
               method: 'POST',
-              url: 'https://management.azure.com/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01',
+              url: `${armBase()}/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01`,
               body: {
                 value:
                   "@concat('{\"text\":\"SAP -> Lakehouse run ', pipeline().parameters.runDate, ' dispatched for tables ', join(pipeline().parameters.extractTables, ','), '\"}')",
                 type: 'Expression',
               },
               headers: { 'Content-Type': 'application/json' },
-              authentication: { type: 'MSI', resource: 'https://management.azure.com/' },
+              authentication: { type: 'MSI', resource: armAudience() },
             },
           },
         ],

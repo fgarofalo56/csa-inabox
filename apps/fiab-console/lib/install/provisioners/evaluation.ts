@@ -11,7 +11,7 @@
  * by GET /api/items/evaluation/<id>?project=<project>&results=1.
  *
  * Auth: ChainedTokenCredential (UAMI → DefaultAzureCredential) against
- * https://management.azure.com/.default.
+ * the sovereign-cloud ARM `.default` scope.
  *
  * Remediation gates (honest config-only state, per no-vaporware.md) — an
  * evaluation run genuinely needs three pieces of tenant config, each named
