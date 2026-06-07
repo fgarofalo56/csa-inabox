@@ -21,6 +21,7 @@ import {
   Connector24Regular,
   Branch24Regular,
   PlugConnected24Regular,
+  DataUsage24Regular,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
 
@@ -38,6 +39,7 @@ const navItems = [
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
+  { href: '/rti-hub', icon: DataUsage24Regular, label: 'RTI catalog' },
   { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
   { href: '/copilot', icon: CopilotIcon, label: 'Copilot' },
   { href: '/workload-hub', icon: PuzzlePieceRegular, label: 'Workload hub' },

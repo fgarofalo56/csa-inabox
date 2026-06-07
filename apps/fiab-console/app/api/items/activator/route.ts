@@ -76,12 +76,15 @@ export async function POST(req: NextRequest) {
   if (!displayName) return NextResponse.json({ ok: false, error: 'displayName required' }, { status: 400 });
 
   // Azure-native default: create a Cosmos activator item (rules attach via the
-  // /rules route → Azure Monitor). No Fabric reflex created.
+  // /rules route → Azure Monitor). No Fabric reflex created. An optional
+  // `source` (e.g. a stream selected in the RTI hub) is carried in state so the
+  // Activator editor can pre-wire its trigger against that stream.
   if (!useFabric()) {
+    const source = (body?.source && typeof body.source === 'object') ? body.source : undefined;
     const res = await createOwnedItem(session, 'activator', {
       workspaceId, displayName,
       description: body?.description ? String(body.description) : undefined,
-      state: { content: { kind: 'activator' }, rules: [] },
+      state: { content: { kind: 'activator' }, rules: [], ...(source ? { source } : {}) },
     });
     if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
     return NextResponse.json({ ok: true, activator: { id: res.item.id, displayName: res.item.displayName, type: 'Reflex' }, backend: 'azure-monitor' });

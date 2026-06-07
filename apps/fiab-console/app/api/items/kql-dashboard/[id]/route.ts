@@ -25,8 +25,8 @@ import {
   executeQuery, KustoError,
 } from '@/lib/azure/kusto-client';
 import {
-  sanitizeModel, substituteTileKql, resolveTileDatabase,
-  type DashboardParam, type DashboardTile, type DashboardDataSource,
+  sanitizeModel, buildTileKql, resolveTileDatabase,
+  type DashboardParam, type DashboardTile, type DashboardDataSource, type BaseQuery,
 } from '@/lib/azure/kql-dashboard-model';
 
 export const runtime = 'nodejs';
@@ -64,6 +64,7 @@ function readModel(state: Record<string, any> | undefined) {
       })),
       dataSources: state?.dataSources,
       parameters: state?.parameters,
+      baseQueries: state?.baseQueries ?? content?.baseQueries,
       timeRange: state?.timeRange,
       autoRefreshMs: state?.autoRefreshMs,
     });
@@ -72,6 +73,7 @@ function readModel(state: Record<string, any> | undefined) {
     tiles: state?.tiles,
     dataSources: state?.dataSources,
     parameters: state?.parameters,
+    baseQueries: state?.baseQueries,
     timeRange: state?.timeRange,
     autoRefreshMs: state?.autoRefreshMs,
   });
@@ -108,7 +110,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
 
     const rendered = run
-      ? await runTiles(model.tiles, model.dataSources, params, timeKey, fallbackDb)
+      ? await runTiles(model.tiles, model.dataSources, params, timeKey, fallbackDb, model.baseQueries)
       : model.tiles;
 
     return NextResponse.json({
@@ -119,6 +121,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       tiles: rendered,
       dataSources: model.dataSources,
       parameters: params,
+      baseQueries: model.baseQueries,
       timeRange: timeKey,
       autoRefreshMs: model.autoRefreshMs ?? 0,
     });
@@ -140,6 +143,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       tiles: model.tiles,
       dataSources: model.dataSources,
       parameters: model.parameters,
+      baseQueries: model.baseQueries,
     };
     if (model.timeRange) patch.timeRange = model.timeRange;
     if (model.autoRefreshMs !== undefined) patch.autoRefreshMs = model.autoRefreshMs;
@@ -152,6 +156,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       tiles: saved.state?.tiles || [],
       dataSources: saved.state?.dataSources || [],
       parameters: saved.state?.parameters || [],
+      baseQueries: saved.state?.baseQueries || [],
     });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
@@ -166,11 +171,12 @@ export async function runTiles(
   params: DashboardParam[],
   timeKey: string,
   fallbackDb: string,
+  baseQueries: BaseQuery[] = [],
 ) {
   return Promise.all(tiles.map(async (t) => {
     try {
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
-      const kql = substituteTileKql(t.kql, params, timeKey);
+      const kql = buildTileKql(t.kql, params, timeKey, baseQueries);
       const result = await executeQuery(db, kql);
       return { ...t, result, resolvedDatabase: db };
     } catch (e: any) {

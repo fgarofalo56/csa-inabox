@@ -412,6 +412,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
@@ -449,6 +450,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
@@ -783,6 +785,30 @@ module dpDefenderCloud 'modules/deploy-planner/defender-cloud.bicep' = if (deplo
 module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (deploymentMode == 'single-sub' && policyEnabled) {
   name: 'dp-policy'
   scope: subscription()
+}
+
+// =====================================================================
+// RTI hub cross-subscription discovery — Reader at SUBSCRIPTION scope.
+//
+// The Real-Time Intelligence hub catalog (/rti-hub -> GET /api/rti-hub) lists
+// every Event Hub namespace, IoT Hub, and ADX cluster the Console UAMI can see
+// via Azure Resource Graph. Resource Graph honors RBAC: rows are returned only
+// for scopes where the principal has at least Reader. The UAMI's other grants
+// are resource-group-scoped, so without a subscription-scoped Reader the graph
+// query returns [] and the hub appears empty. Reader is read-only — the
+// least-privilege grant that makes cross-RG discovery work.
+//
+// Split into its own subscription-scoped module so consolePrincipalId arrives
+// as a plain start-time param (avoids BCP177/BCP120 on the roleAssignment
+// name/if — same pattern as admin-plane/scaling-rbac.bicep).
+// =====================================================================
+module rtiHubRbac 'modules/admin-plane/rti-hub-rbac.bicep' = {
+  name: 'rti-hub-rbac'
+  scope: subscription()
+  params: {
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
 }
 
 output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''

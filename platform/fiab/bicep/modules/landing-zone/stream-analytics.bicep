@@ -56,12 +56,20 @@ param workspaceId string
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
+@description('Optional: ADLS Gen2 storage account in THIS resource group that ASA Blob/lakehouse outputs write to. When set, the ASA job managed identity is granted Storage Blob Data Contributor on it (MSI auth, no account keys).')
+param adlsAccountName string = ''
+
+@description('Optional: ADX (Azure Data Explorer) cluster name backing KQL Database outputs. Used only for documentation/output — ADX ingestor grants are a Kusto control-plane operation, not ARM RBAC (see comment below).')
+param adxClusterName string = ''
+
 // =====================================================================
 // Streaming job — Stopped on creation. Inputs / outputs are authored
-// in the Loom editor or directly in the portal.
+// in the Loom editor or directly in the portal. API 2021-10-01-preview
+// is required for `authenticationMode: 'Msi'` on Blob/ADLS Gen2 and
+// Kusto/ADX outputs (matches the deploy-planner ASA module).
 // =====================================================================
 
-resource asaJob 'Microsoft.StreamAnalytics/streamingjobs@2020-03-01' = {
+resource asaJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-preview' = {
   name: 'asa-loom-${domainName}-${location}'
   location: location
   tags: complianceTags
@@ -82,7 +90,7 @@ resource asaJob 'Microsoft.StreamAnalytics/streamingjobs@2020-03-01' = {
 // Default transformation — placeholder SAQL with 3 SU. Operator
 // replaces this in the Loom editor; we provision it so the job is
 // immediately editable.
-resource transformation 'Microsoft.StreamAnalytics/streamingjobs/transformations@2020-03-01' = {
+resource transformation 'Microsoft.StreamAnalytics/streamingjobs/transformations@2021-10-01-preview' = {
   parent: asaJob
   name: 'Transformation'
   properties: {
@@ -108,6 +116,45 @@ resource consoleAsaContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 }
 
 // =====================================================================
+// RBAC — ASA job managed identity → Storage Blob Data Contributor on the
+// ADLS Gen2 account, so the Lakehouse/Blob output can write transformed
+// events as files using MSI auth (no account keys). Only assigned when
+// `adlsAccountName` is supplied AND the account lives in this RG.
+// Built-in role: ba92f5b4-2d11-453d-a403-e96b0029c9fe
+// =====================================================================
+
+resource adlsAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(adlsAccountName)) {
+  name: adlsAccountName
+}
+
+resource asaBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adlsAccountName)) {
+  scope: adlsAccount
+  name: guid(adlsAccount.id, asaJob.id, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  properties: {
+    principalId: asaJob.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  }
+}
+
+// =====================================================================
+// ADX / KQL Database output ingestor — NOT expressible as ARM RBAC.
+// Azure Data Explorer authorizes ingestion via Kusto control-plane
+// principal assignments, not Microsoft.Authorization role assignments.
+// After this job is created, grant its managed identity ingest rights:
+//
+//   az kusto cluster-principal-assignment create \
+//     --cluster-name <adxClusterName> --resource-group <adxResourceGroup> \
+//     --principal-assignment-name asa-loom-ingestor \
+//     --principal-id <asaJob.identity.principalId> --principal-type App \
+//     --role AllDatabasesIngestor
+//
+// (Or a database-scoped `.add database <db> ingestors ('aadapp=<principalId>')`
+// control command.) This is wired into the post-deploy bootstrap rather than
+// bicep. `adxClusterName` is surfaced as an output to drive that step.
+// =====================================================================
+
+// =====================================================================
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
@@ -129,3 +176,5 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 output jobId   string = asaJob.id
 output jobName string = asaJob.name
 output rgName  string = resourceGroup().name
+output asaPrincipalId string = asaJob.identity.principalId
+output adxClusterForIngestor string = adxClusterName

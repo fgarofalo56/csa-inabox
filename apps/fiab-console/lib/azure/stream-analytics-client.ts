@@ -23,16 +23,30 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-// Cloud-aware ARM endpoint. Commercial uses management.azure.com; all the
-// Azure Government clouds (GCC / GCC-High / IL5 — usgovvirginia, usgovtexas,
-// usgovarizona) share management.usgovcloudapi.net. Computed once at module
-// init from LOOM_CLOUD so every helper (and the preview test/compile actions)
-// targets the right sovereign endpoint.
-const LOOM_CLOUD = (process.env.LOOM_CLOUD || 'commercial').toLowerCase();
-const IS_GOV = LOOM_CLOUD.startsWith('gcc') || LOOM_CLOUD === 'il5' || LOOM_CLOUD === 'usgov';
-const ARM_BASE = IS_GOV ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com';
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every ASA call below targets the correct ARM host instead of
+// management.azure.com. LOOM_CLOUD is also honored for the gov clouds.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const loomCloud = (process.env.LOOM_CLOUD || '').toLowerCase();
+  if (loomCloud.startsWith('gcc') || loomCloud === 'il5' || loomCloud === 'usgov') {
+    return 'https://management.usgovcloudapi.net';
+  }
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
 const ARM_SCOPE = `${ARM_BASE}/.default`;
-const API = '2020-03-01';
+// 2021-10-01-preview is the management-plane API version that supports
+// `authenticationMode: 'Msi'` on Blob/ADLS Gen2 and Kusto/ADX outputs (and
+// matches the deploy-planner ASA bicep). It is a superset of 2020-03-01 for
+// list/get/transformations/start/stop/inputs/outputs, so we use it throughout.
+const API = '2021-10-01-preview';
 // The compile/test/sample-input query actions are only exposed on the
 // preview API surface (Microsoft.StreamAnalytics/locations/*Query/action).
 const API_PREVIEW = '2021-10-01-preview';
@@ -184,6 +198,50 @@ export async function getJob(name: string): Promise<AsaJobDetail> {
     functions,
     query: body.properties?.transformation?.properties?.query,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming job (Microsoft.StreamAnalytics/streamingjobs/{name})
+// ---------------------------------------------------------------------------
+
+export interface AsaJobCreateSpec {
+  name: string;
+  location: string;        // e.g. 'eastus', 'usgovvirginia'
+  streamingUnits?: number; // applied to the default transformation; default 3
+}
+
+/**
+ * Idempotent ARM PUT to create (or update) a streaming job resource. The job
+ * is created with a SystemAssigned identity so it can be granted Kusto / Event
+ * Hubs data-plane RBAC independently. 200 = updated, 201 = created.
+ */
+export async function createOrUpdateJob(
+  spec: AsaJobCreateSpec,
+): Promise<{ id: string; name: string }> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(spec.name)}?api-version=${API}`;
+  const body = {
+    location: spec.location,
+    identity: { type: 'SystemAssigned' },
+    properties: {
+      sku: { name: 'Standard' },
+      eventsOutOfOrderPolicy: 'Adjust',
+      outputErrorPolicy: 'Stop',
+      eventsOutOfOrderMaxDelayInSeconds: 5,
+      eventsLateArrivalMaxDelayInSeconds: 5,
+      dataLocale: 'en-US',
+      compatibilityLevel: '1.2',
+      jobType: 'Cloud',
+      contentStoragePolicy: 'SystemAccount',
+    },
+  };
+  const r = await call(url, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok && r.status !== 201) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA createOrUpdateJob failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+  const j = (await r.json().catch(() => ({}))) as any;
+  return { id: j?.id ?? '', name: j?.name ?? spec.name };
 }
 
 export async function saveTransformation(name: string, query: string): Promise<void> {
@@ -352,8 +410,15 @@ export interface AsaOutputCreateSpec {
     | 'Microsoft.EventHub/EventHub'
     | 'Microsoft.DBForPostgreSQL/servers/databases'
     | 'PowerBI'
-    | 'Microsoft.DataLake/Accounts'
     | 'Microsoft.Kusto/clusters/databases';
+  /**
+   * Auth mode for ARM output datasources that support it (Blob/ADLS Gen2,
+   * Kusto/ADX, Event Hub). Default 'Msi' — the ASA job is created with a
+   * system-assigned managed identity by both bicep modules, so no connection
+   * string / account key is required when RBAC is granted. 'ConnectionString'
+   * is selected automatically when a key is supplied.
+   */
+  authenticationMode?: 'ConnectionString' | 'Msi' | 'UserToken';
   // sql
   server?: string;
   database?: string;
@@ -400,15 +465,26 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
         table: spec.table,
       };
       break;
-    case 'Microsoft.Storage/Blob':
+    case 'Microsoft.Storage/Blob': {
+      // ADLS Gen2 is reached through the same Blob datasource type (accountName
+      // accepts an ADLS Gen2 account). MSI by default — the ASA job MI must hold
+      // "Storage Blob Data Contributor" on the account. ConnectionString only
+      // when an explicit account key is supplied.
+      const blobMsi = !spec.storageAccountKey && spec.authenticationMode !== 'ConnectionString';
       ds.properties = {
-        storageAccounts: [{ accountName: spec.storageAccount, accountKey: spec.storageAccountKey }],
+        storageAccounts: [
+          blobMsi
+            ? { accountName: spec.storageAccount }
+            : { accountName: spec.storageAccount, accountKey: spec.storageAccountKey },
+        ],
         container: spec.container,
         pathPattern: spec.pathPattern || '',
         dateFormat: spec.dateFormat || 'yyyy/MM/dd',
         timeFormat: spec.timeFormat || 'HH',
+        authenticationMode: spec.authenticationMode || (blobMsi ? 'Msi' : 'ConnectionString'),
       };
       break;
+    }
     case 'Microsoft.Storage/Table':
       ds.properties = {
         accountName: spec.storageAccount,
@@ -434,14 +510,24 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
         sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
       };
       break;
-    case 'Microsoft.EventHub/EventHub':
+    case 'Microsoft.EventHub/EventHub': {
+      // SAS key when supplied, otherwise MSI (the ASA job MI needs "Azure Event
+      // Hubs Data Sender" on the namespace/hub). Custom Event Hub + Activator
+      // destinations both route through this type.
+      const ehMsi = !spec.sharedAccessPolicyKey && spec.authenticationMode !== 'ConnectionString';
       ds.properties = {
         eventHubName: spec.eventHubName,
         serviceBusNamespace: spec.namespace,
-        sharedAccessPolicyName: spec.sharedAccessPolicyName,
-        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+        ...(ehMsi
+          ? { authenticationMode: 'Msi' }
+          : {
+              sharedAccessPolicyName: spec.sharedAccessPolicyName,
+              sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+              authenticationMode: 'ConnectionString',
+            }),
       };
       break;
+    }
     case 'PowerBI':
       ds.properties = {
         dataset: spec.dataset,
@@ -452,10 +538,14 @@ function buildOutputProperties(spec: AsaOutputCreateSpec): any {
       };
       break;
     case 'Microsoft.Kusto/clusters/databases':
+      // ADX / KQL Database output. MSI by default — the ASA job MI must be
+      // granted the AllDatabasesIngestor (or table-scoped ingestor) role on the
+      // ADX cluster (Kusto control command / az kusto cluster-principal-assignment).
       ds.properties = {
         cluster: spec.kustoClusterUrl,
         database: spec.kustoDatabase,
         table: spec.kustoTable,
+        authenticationMode: spec.authenticationMode || 'Msi',
       };
       break;
   }

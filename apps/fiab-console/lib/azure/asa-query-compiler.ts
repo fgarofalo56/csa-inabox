@@ -27,7 +27,7 @@
 // zero dependency on the React component file.
 // ============================================================
 
-export type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka';
+export type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka' | 'custom-app';
 export type TransformKind = 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join' | 'window';
 export type SinkKind = 'kusto' | 'lakehouse' | 'eventhub' | 'reflex' | 'derivedStream';
 
@@ -43,6 +43,17 @@ export interface AggregateSpec {
   alias: string;
 }
 
+/** Real ingest endpoint resolved/provisioned by the source BFF route. */
+export interface ProvisionedEndpoint {
+  fqdn?: string;
+  entityPath?: string;
+  kafkaBootstrap?: string;
+  auth?: 'entra' | 'sas';
+  connectionString?: string | null;
+  localAuthDisabled?: boolean;
+  saslConfig?: string;
+}
+
 export interface SourceNode {
   kind: SourceKind;
   name: string;
@@ -51,6 +62,20 @@ export interface SourceNode {
   iotHub?: string;
   connectionString?: string;
   topic?: string;
+  // Event Hubs / custom-app entity name.
+  eventHubName?: string;
+  // IoT Hub ARM lookup overrides.
+  iotHubResourceGroup?: string;
+  iotHubSubscriptionId?: string;
+  // CDC (ADF) source descriptor.
+  cdcDatabaseType?: 'sqlserver' | 'postgresql' | 'mysql' | 'cosmosdb';
+  cdcServerHost?: string;
+  cdcDatabase?: string;
+  cdcTable?: string;
+  cdcUsername?: string;
+  cdcAdfPipelineName?: string;
+  // Filled after provisioning by /api/items/eventstream/[id]/source.
+  provisionedEndpoint?: ProvisionedEndpoint;
 }
 
 export interface TransformNode {
@@ -82,8 +107,23 @@ export interface TransformNode {
 export interface SinkNode {
   kind: SinkKind;
   name: string;
+  // kusto / KQL Database (ADX)
+  kustoClusterUrl?: string;
   database?: string;
   table?: string;
+  // lakehouse / ADLS Gen2 (Azure-native default)
+  storageAccount?: string;
+  storageAccountKey?: string;
+  container?: string;
+  pathPattern?: string;
+  dateFormat?: string;
+  timeFormat?: string;
+  // eventhub + activator-via-eventhub
+  eventHubName?: string;
+  namespace?: string;
+  sharedAccessPolicyName?: string;
+  sharedAccessPolicyKey?: string;
+  // legacy Fabric-only fields (preserved for backward compat; NOT sent to ASA)
   lakehouseId?: string;
   workspaceId?: string;
   reflexId?: string;
