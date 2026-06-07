@@ -1735,6 +1735,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  // Update-policy wizard — table pickers + transform-function selector + transactional toggle
+  const [wizTransactional, setWizTransactional] = useState(false);
+  const [wizFn, setWizFn] = useState(''); // selected stored function; '' = use inline query
+  const [upTables, setUpTables] = useState<string[]>([]);
+  const [upFunctions, setUpFunctions] = useState<string[]>([]);
+  const [upLoading, setUpLoading] = useState(false);
   // Query | Diagram tab — the Diagram tab is the React Flow entity diagram of
   // the live ADX database (tables / MVs / functions / shortcuts + dependency
   // edges), Fabric RTI schema-graph parity built on the Azure-native cluster.
@@ -1870,8 +1876,30 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    setWizTransactional(false); setWizFn(''); setUpTables([]); setUpFunctions([]);
     setWizLeaderResourceId(''); setWizLeaderUri(''); setWizFollowerDbName(''); setWizPrincipalsKind('Union');
   }, []);
+
+  // When the update-policy wizard opens, populate the table pickers and the
+  // transform-function selector from the live database (real .show tables /
+  // .show functions via the existing ADX navigator routes). Best-effort: a
+  // load failure leaves empty dropdowns; the user can still type a function
+  // call into the inline-query box.
+  useEffect(() => {
+    if (wizardKind !== 'update-policy' || !id || id === 'new') return;
+    let cancelled = false;
+    setUpLoading(true);
+    Promise.all([
+      fetch(`/api/adx/tables?id=${id}`).then((r) => r.json()),
+      fetch(`/api/adx/functions?id=${id}`).then((r) => r.json()),
+    ]).then(([tj, fj]) => {
+      if (cancelled) return;
+      setUpTables(((tj.tables || []) as Array<{ name: string }>).map((t) => t.name));
+      setUpFunctions(((fj.functions || []) as Array<{ name: string }>).map((f) => f.name));
+    }).catch(() => { /* best-effort — leave dropdowns empty */ })
+      .finally(() => { if (!cancelled) setUpLoading(false); });
+    return () => { cancelled = true; };
+  }, [wizardKind, id]);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
   // same; mgmt commands starting with `.` are auto-routed to /v1/rest/mgmt).
@@ -1930,14 +1958,39 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         // .create function NAME(args) { body }
         mgmtCmd = `.create-or-alter function with (folder = "Loom", docstring = "Created via CSA Loom") ${wizName}(${wizArgs}) { ${wizQuery} }`;
         break;
-      case 'update-policy':
-        if (!wizSource || !wizQuery) { setWizError('Source + transform query required'); return; }
-        // .alter table TGT policy update @'[{"IsEnabled":true,"Source":"SRC","Query":"<KQL>","IsTransactional":false,"PropagateIngestionProperties":false}]'
-        {
-          const policyArr = [{ IsEnabled: true, Source: wizSource, Query: wizQuery, IsTransactional: false, PropagateIngestionProperties: false }];
-          mgmtCmd = `.alter table ${wizName} policy update @'${JSON.stringify(policyArr)}'`;
+      case 'update-policy': {
+        // Target table = wizName; source table = wizSource. Prefer a stored
+        // function (wizFn) over the inline KQL query (wizQuery).
+        if (!wizName.trim() || !wizSource.trim()) { setWizError('Target table and source table are required'); return; }
+        const queryValue = wizFn ? `${wizFn}()` : wizQuery.trim();
+        if (!queryValue) { setWizError('Transform function or inline KQL query is required'); return; }
+        setWizSubmitting(true);
+        try {
+          // POST to the dedicated policies route (.alter table policy update),
+          // NOT the generic query route — the route reads the policy back as a receipt.
+          const r2 = await fetch(`/api/adx/policies?id=${id}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              targetTable: wizName.trim(),
+              source: wizSource.trim(),
+              query: queryValue,
+              isTransactional: wizTransactional,
+              propagateIngestionProperties: false,
+            }),
+          });
+          const j2 = await r2.json();
+          if (!j2.ok) { setWizError(j2.error || 'Command failed'); return; }
+          const receipt = j2.policy?.raw ? ` Receipt: ${j2.policy.raw}` : '';
+          setWizSuccess(`Update policy applied to ${j2.targetTable}.${receipt}`);
+          await load();
+          setTimeout(() => { setWizardKind(null); }, 2500);
+        } catch (e: any) {
+          setWizError(e?.message || String(e));
+        } finally {
+          setWizSubmitting(false);
         }
-        break;
+        return; // dedicated route handled the submit — skip the common mgmtCmd path
+      }
       case 'ingest': {
         if (!wizIngestFile) { setWizError('Choose a file to ingest'); return; }
         // Real ingest: POST multipart to /api/items/eventhouse/[id]/ingest is per-eventhouse;
@@ -1972,7 +2025,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, wizFn, wizTransactional, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load]);
 
   // Detach the follower configuration — restores read/write on the item.
   const detachFollower = useCallback(async () => {
@@ -2313,11 +2366,55 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     {wizardKind === 'update-policy' && (
                       <>
                         <Caption1>Target table (receives the transformed rows)</Caption1>
-                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events_silver" />
-                        <Caption1>Source table (incoming raw rows)</Caption1>
-                        <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events_raw" />
-                        <Caption1>Transform query</Caption1>
-                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events_raw | extend ts = todatetime(timestamp)" />
+                        {upLoading
+                          ? <Spinner size="tiny" label="Loading tables…" />
+                          : (
+                            <Select
+                              value={wizName}
+                              onChange={(_: unknown, d: any) => setWizName(d.value)}
+                              aria-label="Target table"
+                            >
+                              <option value="">— select target table —</option>
+                              {upTables.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </Select>
+                          )}
+                        <Caption1>Source table (incoming raw rows trigger the policy)</Caption1>
+                        <Select
+                          value={wizSource}
+                          onChange={(_: unknown, d: any) => setWizSource(d.value)}
+                          aria-label="Source table"
+                          disabled={upLoading}
+                        >
+                          <option value="">— select source table —</option>
+                          {upTables.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </Select>
+                        <Caption1>Transform function (recommended — a stored KQL function)</Caption1>
+                        <Select
+                          value={wizFn}
+                          onChange={(_: unknown, d: any) => { setWizFn(d.value); if (d.value) setWizQuery(''); }}
+                          aria-label="Transform function"
+                          disabled={upLoading}
+                        >
+                          <option value="">— none (use inline query below) —</option>
+                          {upFunctions.map((f) => <option key={f} value={f}>{f}</option>)}
+                        </Select>
+                        {!wizFn && (
+                          <>
+                            <Caption1>Inline transform query (used when no function is selected)</Caption1>
+                            <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events_raw | extend ts = todatetime(timestamp) | project-away rawField" />
+                          </>
+                        )}
+                        <Switch
+                          checked={wizTransactional}
+                          onChange={(_: unknown, d: any) => setWizTransactional(!!d.checked)}
+                          label={wizTransactional
+                            ? 'Transactional (ingest fails if the transform fails — recommended for production)'
+                            : 'Non-transactional (source table is updated even if the transform fails)'}
+                        />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Applies <code>.alter table {wizName || '«target»'} policy update</code>; the wizard reads
+                          {' '}<code>.show table {wizName || '«target»'} policy update</code> back as the receipt.
+                        </Caption1>
                       </>
                     )}
                     {wizardKind === 'ingest' && (
