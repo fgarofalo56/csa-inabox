@@ -98,8 +98,12 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
-// Grant the Console UAMI AzureML Data Scientist on the hub workspace. This one
+// Console UAMI → AzureML Data Scientist on the Foundry Hub workspace. This one
 // data-plane grant serves several BFF surfaces:
+//   - ml-model + ml-experiment editors → foundry-client.ts (listMlWorkspaces /
+//     listModels / listModelVersions / getModel / registerModelVersion /
+//     createOnlineEndpoint) AND mlflow-client.ts experiment tracking
+//     (searchRuns / getMetricHistory). Without this grant they 403 on a clean deploy.
 //   - notebook Library & Environment management → aml-environments-client.ts
 //     (list + register AML Environment versions; read + environment-version PUT)
 //   - ml-model editor stage-transition + register-from-run → MLflow registry
@@ -107,7 +111,8 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
 //     Stages are an MLflow-layer concept (Learn "how-to-manage-models-mlflow");
 //     no new Azure resource is required, only this role grant — without it the
 //     MLflow REST calls 403.
-resource hubUamiDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+// Role f6c7c914-8db3-469d-8ca1-694a8f32e121 = AzureML Data Scientist.
+resource hubConsoleDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: foundryHub
   name: guid(foundryHub.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
   properties: {

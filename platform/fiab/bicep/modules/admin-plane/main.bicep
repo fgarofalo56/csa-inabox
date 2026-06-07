@@ -183,6 +183,9 @@ param loomSynapseHostSuffix string = ''
 @description('Synapse SQL endpoint suffix for the live Tables catalog row-count path. Commercial = azuresynapse.net (default); Azure Government (GCC / GCC-High / IL5) = azuresynapse.us. Leave empty for Commercial.')
 param loomSynapseSqlSuffix string = ''
 
+@description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab, mlflow-client.ts). Empty → falls back to LOOM_FOUNDRY_RG. Set explicitly when pointing at a dedicated AML workspace; requires the Console UAMI AzureML Data Scientist on that workspace.')
+param loomAmlRg string = ''
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -1167,11 +1170,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
             // Azure ML workspace for notebook Library & Environment management
-            // (aml-environments-client.ts). The Foundry hub IS an AML workspace
-            // (kind=Hub), so we point env management at it by default. Falls back
-            // to LOOM_FOUNDRY_NAME/_RG in code when these are empty. No Fabric dep.
-            { name: 'LOOM_AML_WORKSPACE', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
-            { name: 'LOOM_AML_RG', value: byoFoundryRg }
+            // (aml-environments-client.ts) AND MLflow experiment tracking
+            // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). The Foundry
+            // hub IS an AML workspace (kind=Hub), so we point at it by default;
+            // loomAmlWorkspace / loomAmlRg override to a dedicated AML workspace.
+            // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
+            { name: 'LOOM_AML_WORKSPACE', value: !empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '') }
+            { name: 'LOOM_AML_RG', value: !empty(loomAmlRg) ? loomAmlRg : byoFoundryRg }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).

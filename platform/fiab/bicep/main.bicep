@@ -129,6 +129,12 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
 param aiFoundryEnabled bool = false
 
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = false
+
+@description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
+param loomAmlRg string = ''
+
 @description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
 param apimEnabled bool = false
 
@@ -360,6 +366,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     skipRoleGrants: skipRoleGrants
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
+    agentFoundryEnabled: agentFoundryEnabled
+    loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
