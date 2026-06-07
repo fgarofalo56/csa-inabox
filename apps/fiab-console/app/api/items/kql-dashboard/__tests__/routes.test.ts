@@ -134,6 +134,7 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
       tiles: [{ title: 'T', kql: 'print 1', viz: 'pie', w: 6, h: 3 }],
       dataSources: [{ id: 's', name: 'S', database: 'db1' }],
       parameters: [{ variableName: '_x', type: 'fixed', dataType: 'string', values: ['a', 'b'] }],
+      baseQueries: [{ id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' }],
       timeRange: 'last-1h',
     };
     const res = await PUT(jsonReq(body), ctx);
@@ -144,7 +145,37 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
     expect(patch.tiles[0].viz).toBe('pie');
     expect(patch.dataSources[0].database).toBe('db1');
     expect(patch.parameters[0].variableName).toBe('_x');
+    expect(patch.baseQueries[0]).toMatchObject({ id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' });
     expect(patch.timeRange).toBe('last-1h');
+    // The save response echoes the persisted base queries back to the client.
+    expect(j.baseQueries[0].name).toBe('Filtered');
+  });
+
+  it('round-trips a tile drillthrough through PUT (persists and returns it)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    (loadKustoItem as any).mockResolvedValue({ id: 'dash-1', workspaceId: 'w', itemType: 'kql-dashboard', displayName: 'D', state: {} });
+    (saveItemState as any).mockImplementation(async (_item: any, patch: any) => ({ state: patch }));
+    const body = {
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '_state' } }],
+    };
+    const res = await PUT(jsonReq(body), ctx);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const patch = (saveItemState as any).mock.calls[0][1];
+    expect(patch.tiles[0].drillthrough).toEqual({ column: 'State', paramName: '_state' });
+    expect(j.tiles[0].drillthrough).toEqual({ column: 'State', paramName: '_state' });
+  });
+
+  it('strips a partial (column-only) drillthrough on PUT', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    (loadKustoItem as any).mockResolvedValue({ id: 'dash-1', workspaceId: 'w', itemType: 'kql-dashboard', displayName: 'D', state: {} });
+    (saveItemState as any).mockImplementation(async (_item: any, patch: any) => ({ state: patch }));
+    const body = {
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '' } }],
+    };
+    await PUT(jsonReq(body), ctx);
+    const patch = (saveItemState as any).mock.calls[0][1];
+    expect(patch.tiles[0].drillthrough).toBeUndefined();
   });
 });
 
@@ -186,6 +217,22 @@ describe('POST /api/items/kql-dashboard/[id]/run', () => {
     expect(j.ok).toBe(true);
     expect(j.tiles[0].error).toContain('Semantic error');
     expect(j.tiles[0].result).toBeUndefined();
+  });
+
+  it('inlines a $baseQuery() reference into the executed tile KQL', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    const body = {
+      tiles: [{ title: 'T', kql: `$baseQuery('Filtered') | where ts > _startTime | count`, viz: 'stat' }],
+      baseQueries: [{ id: 'bq1', name: 'Filtered', kql: 'StormEvents | where State == "Texas"' }],
+      timeRange: 'last-1h',
+    };
+    const res = await RUN(jsonReq(body), ctxNew);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const [, executedKql] = (executeQuery as any).mock.calls[0];
+    expect(executedKql).toContain('(StormEvents | where State == "Texas")');
+    expect(executedKql).toContain('ago(1h)');
+    expect(executedKql).not.toContain('$baseQuery');
   });
 });
 

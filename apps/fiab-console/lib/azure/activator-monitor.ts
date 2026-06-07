@@ -18,6 +18,9 @@ import {
   upsertActionGroup,
   upsertScheduledQueryRule,
   queryLogs,
+  type SmsReceiverInput,
+  type WebhookReceiverInput,
+  type LogicAppReceiverInput,
 } from './monitor-client';
 
 // ── pure helpers (mirror of provisioners/activator.ts) ──────────────────────
@@ -73,6 +76,36 @@ function ruleEmails(rule: any): string[] {
   return targets.map((t) => t.trim()).filter((t) => t.includes('@'));
 }
 
+/** Webhook receivers from a rule's action config (Webhook / Teams-via-webhook actions). */
+function ruleWebhooks(rule: any): WebhookReceiverInput[] {
+  const cfg = rule?.action?.config || {};
+  const uris: string[] = [];
+  for (const k of ['webhookUrl', 'url', 'triggerUrl', 'serviceUri']) {
+    const v = cfg[k];
+    if (typeof v === 'string' && /^https?:\/\//i.test(v.trim())) uris.push(v.trim());
+  }
+  // de-dupe
+  return Array.from(new Set(uris)).map((serviceUri) => ({ serviceUri, useCommonAlertSchema: true }));
+}
+
+/** SMS receiver from a rule's action config (SMS action). */
+function ruleSmsReceivers(rule: any): SmsReceiverInput[] {
+  const cfg = rule?.action?.config || {};
+  const phone = String(cfg.phoneNumber || cfg.phone || '').replace(/[^0-9]/g, '');
+  if (!phone) return [];
+  const countryCode = String(cfg.countryCode || '1').replace(/[^0-9]/g, '') || '1';
+  return [{ countryCode, phoneNumber: phone }];
+}
+
+/** Logic App receiver from a rule's action config (LogicApp action). */
+function ruleLogicAppReceivers(rule: any): LogicAppReceiverInput[] {
+  const cfg = rule?.action?.config || {};
+  const resourceId = String(cfg.logicAppResourceId || '').trim();
+  const callbackUrl = String(cfg.callbackUrl || '').trim();
+  if (!resourceId || !callbackUrl) return [];
+  return [{ resourceId, callbackUrl, useCommonAlertSchema: true }];
+}
+
 // ── runtime ──────────────────────────────────────────────────────────────
 export interface MonitorRuleInput {
   name?: string;
@@ -81,6 +114,9 @@ export interface MonitorRuleInput {
   query?: string;
   sourceTable?: string;
   severity?: number;
+  /** ARM id of an EXISTING action group to attach instead of creating one from
+   *  the rule's action config (the editor's pick-existing flow). */
+  existingActionGroupId?: string;
 }
 
 export interface MonitorRuleRecord {
@@ -91,6 +127,8 @@ export interface MonitorRuleRecord {
   condition?: any;
   action?: any;
   actionGroupId?: string;
+  /** Summary of the receivers attached to this rule's action group (for the UI). */
+  actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
   severity: number;
   state: 'Active';
   backend: 'azure-monitor';
@@ -106,14 +144,29 @@ export async function createMonitorActivatorRule(
   input: MonitorRuleInput,
 ): Promise<MonitorRuleRecord> {
   const { query, note } = buildRuleQuery(input);
-  const emails = ruleEmails(input);
-  let actionGroupId: string | undefined;
-  if (emails.length) {
-    actionGroupId = await upsertActionGroup({
-      name: safeRuleName(activatorDisplayName, 'ag'),
-      shortName: (activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom',
-      emails,
-    });
+
+  // Pick-existing flow: attach a known action group as-is. Otherwise compose a
+  // new action group from the rule's action config (email / SMS / webhook /
+  // Logic App). All four receiver kinds are real ARM receivers — no Fabric.
+  let actionGroupId: string | undefined = input.existingActionGroupId?.trim() || undefined;
+  let receivers: MonitorRuleRecord['actionGroupReceivers'];
+  if (!actionGroupId) {
+    const emails = ruleEmails(input);
+    const webhooks = ruleWebhooks(input);
+    const smsArr = ruleSmsReceivers(input);
+    const logicApps = ruleLogicAppReceivers(input);
+    const hasReceivers = emails.length || webhooks.length || smsArr.length || logicApps.length;
+    if (hasReceivers) {
+      actionGroupId = await upsertActionGroup({
+        name: safeRuleName(activatorDisplayName, 'ag'),
+        shortName: (activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom',
+        emails,
+        smsReceivers: smsArr,
+        webhookReceivers: webhooks,
+        logicAppReceivers: logicApps,
+      });
+      receivers = { emails: emails.length, sms: smsArr.length, webhooks: webhooks.length, logicApps: logicApps.length };
+    }
   }
   const ruleSuffix = (input.name || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
@@ -133,6 +186,7 @@ export async function createMonitorActivatorRule(
     condition: input.condition,
     action: input.action,
     actionGroupId,
+    ...(receivers ? { actionGroupReceivers: receivers } : {}),
     severity,
     state: 'Active',
     backend: 'azure-monitor',

@@ -145,6 +145,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       query: typeof body?.query === 'string' ? body.query : undefined,
       sourceTable: typeof body?.sourceTable === 'string' ? body.sourceTable : undefined,
       severity: typeof body?.severity === 'number' ? body.severity : undefined,
+      existingActionGroupId: typeof body?.existingActionGroupId === 'string' ? body.existingActionGroupId : undefined,
     });
     // Persist onto the Cosmos item so the rule list survives reload.
     const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];

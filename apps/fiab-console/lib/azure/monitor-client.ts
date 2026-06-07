@@ -30,8 +30,11 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 
-const ARM = 'https://management.azure.com';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+// ARM endpoint + token scope are env-overridable so the same client works in
+// Azure Government (GCC-High / IL5: https://management.usgovcloudapi.net) and
+// other sovereign clouds. Commercial is the default when unset.
+const ARM = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+const ARM_SCOPE = process.env.LOOM_ARM_SCOPE || `${ARM}/.default`;
 const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
 const LA_SCOPE = `${LA_ENDPOINT}/.default`;
 
@@ -149,6 +152,27 @@ async function armPut(path: string, body: unknown): Promise<any> {
     throw new MonitorError(msg, res.status, json || text);
   }
   return json;
+}
+
+async function armPost(path: string, body: unknown): Promise<{ status: number; json: any; operationLocation?: string }> {
+  const tk = await token(ARM_SCOPE);
+  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || text || `ARM POST failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  const operationLocation =
+    res.headers.get('azure-asyncoperation') || res.headers.get('location') || undefined;
+  return { status: res.status, json, operationLocation };
 }
 
 // ----------------------------------------------------------------------------
@@ -517,7 +541,17 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
   'microsoft.kusto/clusters': [
     { metric: 'CPU', aggregation: 'Average', label: 'CPU %' },
     { metric: 'IngestionUtilization', aggregation: 'Average', label: 'Ingestion util %' },
+    { metric: 'CacheUtilizationFactor', aggregation: 'Average', label: 'Cache util %' },
+    { metric: 'TotalNumberOfConcurrentQueries', aggregation: 'Average', label: 'Concurrent queries' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
     { metric: 'KeepAlive', aggregation: 'Average', label: 'Keep-alive' },
+    // Eventhouse overview panel — ingestion + query health + throttling.
+    { metric: 'IngestionLatencyInSeconds', aggregation: 'Average', label: 'Ingest latency (s)' },
+    { metric: 'IngestionVolumeInMB', aggregation: 'Total', label: 'Ingested volume (MB)' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
+    { metric: 'QueryDuration', aggregation: 'Average', label: 'Query duration (ms)' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
   ],
   'microsoft.synapse/workspaces': [
     { metric: 'IntegrationPipelineRunsEnded', aggregation: 'Total', label: 'Pipeline runs ended' },
@@ -543,6 +577,17 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
   'microsoft.cognitiveservices/accounts': [
     { metric: 'TotalCalls', aggregation: 'Total', label: 'Total calls' },
     { metric: 'TotalTokens', aggregation: 'Total', label: 'Total tokens' },
+  ],
+  // Azure Stream Analytics streaming jobs — the headline health metrics the
+  // ASA portal Overview surfaces (SU% utilization, watermark delay, backlog).
+  // Metrics are only emitted while the job is Running.
+  // https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-streamanalytics-streamingjobs-metrics
+  'microsoft.streamanalytics/streamingjobs': [
+    { metric: 'ResourceUtilization', aggregation: 'Average', label: 'SU % Utilization' },
+    { metric: 'OutputWatermarkDelaySeconds', aggregation: 'Maximum', label: 'Watermark Delay (s)' },
+    { metric: 'InputEventsSourcesBacklogged', aggregation: 'Maximum', label: 'Backlogged Events' },
+    { metric: 'InputEvents', aggregation: 'Total', label: 'Input Events' },
+    { metric: 'OutputEvents', aggregation: 'Total', label: 'Output Events' },
   ],
 };
 
@@ -689,6 +734,27 @@ export async function enableDiagnostics(resourceId: string): Promise<{ settingNa
   throw lastErr instanceof Error ? lastErr : new MonitorError('enableDiagnostics failed', 500);
 }
 
+export interface SmsReceiverInput {
+  /** Numeric country/dialing code, e.g. '1' for US. */
+  countryCode: string;
+  /** Phone number (digits only). */
+  phoneNumber: string;
+}
+
+export interface WebhookReceiverInput {
+  /** HTTPS endpoint the alert POSTs the Common Alert Schema payload to. */
+  serviceUri: string;
+  useCommonAlertSchema?: boolean;
+}
+
+export interface LogicAppReceiverInput {
+  /** ARM resource id of the Logic App (Consumption) workflow. */
+  resourceId: string;
+  /** The workflow trigger's listCallbackUrl (SAS). Fetch via getLogicAppCallbackUrl(). */
+  callbackUrl: string;
+  useCommonAlertSchema?: boolean;
+}
+
 export interface ActionGroupInput {
   /** Resource name e.g. 'loom-activator-ag'. */
   name: string;
@@ -696,6 +762,12 @@ export interface ActionGroupInput {
   shortName: string;
   /** Email receivers; each becomes an emailReceiver. */
   emails?: string[];
+  /** SMS receivers (Teams/pager-style escalation). */
+  smsReceivers?: SmsReceiverInput[];
+  /** Webhook receivers (Teams incoming webhook, PagerDuty, custom HTTPS sink). */
+  webhookReceivers?: WebhookReceiverInput[];
+  /** Logic App receivers (Teams adaptive-card / pipeline-trigger workflows). */
+  logicAppReceivers?: LogicAppReceiverInput[];
 }
 
 /** Create/update an action group (Global). Returns its ARM id. Idempotent PUT. */
@@ -706,6 +778,28 @@ export async function upsertActionGroup(input: ActionGroupInput): Promise<string
   const emailReceivers = (input.emails || [])
     .filter((e) => e && e.includes('@'))
     .map((e, i) => ({ name: `email${i}`, emailAddress: e.trim(), useCommonAlertSchema: true }));
+  const smsReceivers = (input.smsReceivers || [])
+    .filter((r) => r && r.phoneNumber)
+    .map((r, i) => ({
+      name: `sms${i}`,
+      countryCode: String(r.countryCode || '1').replace(/[^0-9]/g, '') || '1',
+      phoneNumber: String(r.phoneNumber).replace(/[^0-9]/g, ''),
+    }));
+  const webhookReceivers = (input.webhookReceivers || [])
+    .filter((r) => r && r.serviceUri && /^https?:\/\//i.test(r.serviceUri))
+    .map((r, i) => ({
+      name: `webhook${i}`,
+      serviceUri: r.serviceUri.trim(),
+      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
+    }));
+  const logicAppReceivers = (input.logicAppReceivers || [])
+    .filter((r) => r && r.resourceId && r.callbackUrl)
+    .map((r, i) => ({
+      name: `logicapp${i}`,
+      resourceId: r.resourceId.trim(),
+      callbackUrl: r.callbackUrl.trim(),
+      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
+    }));
   const path =
     `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(input.name)}?api-version=${ACTION_GROUPS_API}`;
   const body = {
@@ -714,10 +808,122 @@ export async function upsertActionGroup(input: ActionGroupInput): Promise<string
       groupShortName: input.shortName.slice(0, 12),
       enabled: true,
       emailReceivers,
+      smsReceivers,
+      webhookReceivers,
+      logicAppReceivers,
     },
   };
   const res = await armPut(path, body);
   return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/actionGroups/${input.name}`;
+}
+
+export interface ActionGroupSummary {
+  id: string;
+  name: string;
+  shortName: string;
+  enabled: boolean;
+  /** Receiver counts so the editor can summarize each group in a row. */
+  emailCount: number;
+  smsCount: number;
+  webhookCount: number;
+  logicAppCount: number;
+}
+
+/** List the action groups in the Loom alert resource group (for the pick-existing flow). */
+export async function listActionGroups(): Promise<ActionGroupSummary[]> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const j = await armGet(
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups?api-version=${ACTION_GROUPS_API}`,
+  );
+  return (j?.value || []).map((ag: any): ActionGroupSummary => {
+    const p = ag?.properties || {};
+    return {
+      id: ag.id,
+      name: ag.name,
+      shortName: p.groupShortName || '',
+      enabled: p.enabled !== false,
+      emailCount: (p.emailReceivers || []).length,
+      smsCount: (p.smsReceivers || []).length,
+      webhookCount: (p.webhookReceivers || []).length,
+      logicAppCount: (p.logicAppReceivers || []).length,
+    };
+  });
+}
+
+/**
+ * Fetch a Logic App (Consumption) trigger's invocable callback URL (SAS) via
+ * ARM listCallbackUrl. This is what a logicAppReceiver.callbackUrl must hold so
+ * Azure Monitor can invoke the workflow when the alert fires.
+ *   POST .../workflows/{wf}/triggers/{trigger}/listCallbackUrl?api-version=2016-06-01
+ */
+export async function getLogicAppCallbackUrl(workflowResourceId: string, triggerName = 'manual'): Promise<string> {
+  if (!workflowResourceId || !/\/providers\/Microsoft\.Logic\/workflows\//i.test(workflowResourceId)) {
+    throw new MonitorError('A Logic App (Microsoft.Logic/workflows) resource id is required', 400);
+  }
+  const path =
+    `${workflowResourceId.replace(/\/+$/, '')}/triggers/${encodeURIComponent(triggerName)}/listCallbackUrl?api-version=2016-06-01`;
+  const { json } = await armPost(path, {});
+  const callbackUrl = json?.value || json?.basePath;
+  if (!callbackUrl) throw new MonitorError('Logic App trigger callback URL not returned by ARM', 502, json);
+  return callbackUrl;
+}
+
+export interface TestNotificationResult {
+  /** ARM async-operation URL to poll for delivery details (when long-running). */
+  operationLocation?: string;
+  status: number;
+  /** alertType the test was issued for. */
+  alertType: string;
+  /** Receiver counts mirrored from the action group into the test request. */
+  receivers: { emails: number; sms: number; webhooks: number; logicApps: number };
+}
+
+/**
+ * Fire a real test notification through an action group's receivers — the
+ * Azure-native "Test" button. Reads the action group's live receivers and
+ * re-sends them through the Action Groups createNotifications API so the
+ * webhook / Logic App / email / SMS receivers all get a Common Alert Schema
+ * payload, exactly as a fired alert would deliver.
+ *   POST .../actionGroups/{name}/createNotifications?api-version=2023-01-01
+ */
+export async function sendActionGroupTestNotification(
+  actionGroupId: string,
+  alertType = 'logalertv2',
+): Promise<TestNotificationResult> {
+  const m = /\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/[Mm]icrosoft\.[Ii]nsights\/actionGroups\/([^/?]+)/.exec(actionGroupId || '');
+  if (!m) throw new MonitorError('A valid action group ARM id is required', 400);
+  const [, sub, rg, name] = m;
+  // Mirror the group's current receivers into the test request.
+  const ag = await armGet(
+    `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${name}?api-version=${ACTION_GROUPS_API}`,
+  );
+  const p = ag?.properties || {};
+  const emailReceivers = p.emailReceivers || [];
+  const smsReceivers = p.smsReceivers || [];
+  const webhookReceivers = p.webhookReceivers || [];
+  const logicAppReceivers = p.logicAppReceivers || [];
+  const path =
+    `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${name}/createNotifications?api-version=${ACTION_GROUPS_API}`;
+  const { status, operationLocation } = await armPost(path, {
+    alertType,
+    emailReceivers,
+    smsReceivers,
+    webhookReceivers,
+    logicAppReceivers,
+  });
+  return {
+    operationLocation,
+    status,
+    alertType,
+    receivers: {
+      emails: emailReceivers.length,
+      sms: smsReceivers.length,
+      webhooks: webhookReceivers.length,
+      logicApps: logicAppReceivers.length,
+    },
+  };
 }
 
 export interface ScheduledQueryRuleInput {
