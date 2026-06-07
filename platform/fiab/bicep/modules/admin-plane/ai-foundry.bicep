@@ -98,6 +98,51 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
+// Grant the Console UAMI AzureML Data Scientist on the hub workspace. This one
+// data-plane grant serves several BFF surfaces:
+//   - notebook Library & Environment management → aml-environments-client.ts
+//     (list + register AML Environment versions; read + environment-version PUT)
+//   - ml-model editor stage-transition + register-from-run → MLflow registry
+//     data plane (model-versions/transition-stage, model-versions/create).
+//     Stages are an MLflow-layer concept (Learn "how-to-manage-models-mlflow");
+//     no new Azure resource is required, only this role grant — without it the
+//     MLflow REST calls 403.
+resource hubUamiDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: foundryHub
+  name: guid(foundryHub.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+  properties: {
+    // AzureML Data Scientist
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// AzureML Compute Operator — lets the Console UAMI list / start / stop /
+// restart Compute Instances on the Foundry hub workspace. Required by the CI
+// lifecycle BFF routes:
+//   GET  /api/foundry/computes
+//   POST /api/foundry/computes/{id}/start
+//   GET  /api/foundry/computes/{id}/status
+// `AzureML Data Scientist` (granted to the admin group above) does NOT include
+// Microsoft.MachineLearningServices/workspaces/computes/* — so without this
+// grant the routes return 403 with an honest-gate MessageBar naming this role.
+// Role: e503ece1-11d0-4e8e-8e2c-7a6c3bf38815
+resource amlComputeOperatorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: foundryHub
+  name: guid(foundryHub.id, consolePrincipalId, 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+  properties: {
+    // AzureML Compute Operator
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Private endpoint to the Hub
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${foundryHub.name}'

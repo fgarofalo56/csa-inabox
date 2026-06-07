@@ -301,6 +301,11 @@ export function MonacoTextarea({
           automaticLayout: true,
           suggestOnTriggerCharacters: true,
           quickSuggestions: { other: true, comments: false, strings: false },
+          // Enable the ghost-text inline-suggestion surface. Without this flag
+          // results from registerInlineCompletionsProvider are silently dropped
+          // and Tab-to-accept never fires. `keepOnBlur` keeps the suggestion
+          // visible when a debounced fetch resolves after focus shifts briefly.
+          inlineSuggest: { enabled: true, keepOnBlur: true },
           fixedOverflowWidgets: true,
         }}
       />
