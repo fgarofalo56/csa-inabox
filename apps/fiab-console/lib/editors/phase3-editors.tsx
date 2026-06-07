@@ -841,6 +841,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [hotCacheDays, setHotCacheDays] = useState<number>(7);
   const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
   const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
 
@@ -966,6 +967,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         body: JSON.stringify({
           database: selectedDb,
           hotCacheDays, softDeleteDays, oneLakeAvailability: oneLakeEnabled,
+          enableStreamingIngest: streamingEnabled,
         }),
       });
       const ct = r.headers.get('content-type') || '';
@@ -977,7 +979,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setPoliciesBusy(false);
     }
-  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
+  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, streamingEnabled, load]);
 
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
@@ -1028,6 +1030,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+        { label: 'Streaming ingest', onClick: hasDbs && selectedDb ? () => { setStreamingEnabled(true); setPoliciesOpen(true); } : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs || !selectedDb ? 'pick a database first' : 'Enable/disable low-latency streaming ingestion on the cluster' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
@@ -1252,6 +1257,21 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                         />
                         <Caption1>Fabric-managed eventhouses only. Mirrors KQL tables into OneLake as Delta for Spark/Power BI.</Caption1>
                       </div>
+                      <div>
+                        <Label>Enable streaming ingestion</Label>
+                        <Switch
+                          checked={streamingEnabled}
+                          onChange={(_, d) => setStreamingEnabled(!!d.checked)}
+                          label={streamingEnabled ? 'Enabled' : 'Disabled'}
+                        />
+                        <Caption1>
+                          Cluster-level flag (ARM). Enables the low-latency (&lt;1s) ingest path
+                          for Event Hub data connections and the <code>.ingest inline</code> command,
+                          then turns on the database streaming-ingestion policy. Toggling triggers an
+                          async cluster update; the cluster stays online. New Loom clusters ship with
+                          this on by default.
+                        </Caption1>
+                      </div>
                     </div>
                     {policiesErr && (
                       <MessageBar intent="error" style={{ marginTop: 12 }}>
@@ -1298,13 +1318,18 @@ interface KqlDbInfo {
   schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
   starterQueries?: Array<{ name: string; kql: string }>;
   contentFallback?: boolean;
+  // Follower (database-shortcut) state — read-only replica of a leader cluster.
+  isFollower?: boolean;
+  followerLeaderCluster?: string | null;
+  followerConfigName?: string | null;
+  followerDatabaseName?: string | null;
   error?: string;
 }
 
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
-type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
+type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest' | 'follower';
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1326,6 +1351,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+  // Follower (database-shortcut) wizard
+  const [wizLeaderResourceId, setWizLeaderResourceId] = useState('');
+  const [wizLeaderUri, setWizLeaderUri] = useState('');
+  const [wizFollowerDbName, setWizFollowerDbName] = useState('');
+  const [wizPrincipalsKind, setWizPrincipalsKind] = useState<'Union' | 'Replace' | 'None'>('Union');
+  // Detach-follower busy flag
+  const [detaching, setDetaching] = useState(false);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -1383,6 +1415,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+    setWizLeaderResourceId(''); setWizLeaderUri(''); setWizFollowerDbName(''); setWizPrincipalsKind('Union');
   }, []);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
@@ -1390,6 +1423,39 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const submitWizard = useCallback(async () => {
     if (!wizardKind) return;
     setWizError(null); setWizSuccess(null);
+
+    // Follower (database-shortcut) attach — does NOT issue a `.` mgmt command;
+    // it PUTs an attachedDatabaseConfiguration via the dedicated ARM route.
+    if (wizardKind === 'follower') {
+      if (!wizLeaderResourceId.trim()) { setWizError('Leader cluster ARM resource ID is required'); return; }
+      setWizSubmitting(true);
+      try {
+        const r = await fetch(`/api/items/kql-database/${id}/follower`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            leaderClusterResourceId: wizLeaderResourceId.trim(),
+            leaderClusterUri: wizLeaderUri.trim(),
+            databaseName: wizFollowerDbName.trim() || '*',
+            principalsModificationKind: wizPrincipalsKind,
+          }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          setWizError(j.error || (Array.isArray(j.missing) ? `Not configured: ${j.missing.join(', ')}` : 'Attach failed'));
+        } else {
+          setWizSuccess(`Follower attach ${j.provisioningState} (config ${j.configName}). Refreshing…`);
+          await load();
+          setTimeout(() => { setWizardKind(null); }, 900);
+        }
+      } catch (e: any) {
+        setWizError(e?.message || String(e));
+      } finally {
+        setWizSubmitting(false);
+      }
+      return;
+    }
+
     if (wizardKind !== 'ingest' && !wizName.trim()) {
       setWizError('Name is required');
       return;
@@ -1451,20 +1517,40 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, wizLeaderResourceId, wizLeaderUri, wizFollowerDbName, wizPrincipalsKind, id, load]);
+
+  // Detach the follower configuration — restores read/write on the item.
+  const detachFollower = useCallback(async () => {
+    if (!info?.followerConfigName) return;
+    setDetaching(true);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/follower?configName=${encodeURIComponent(info.followerConfigName)}`, {
+        method: 'DELETE',
+      });
+      const j = await r.json();
+      if (j.ok) await load();
+    } finally {
+      setDetaching(false);
+    }
+  }, [info?.followerConfigName, id, load]);
 
   const ribbon: RibbonTab[] = useMemo(() => {
+    const isFollower = !!info?.isFollower;
+    const roTitle = 'Follower databases are read-only — write operations are blocked. Detach the follower to write.';
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'New', actions: [
-          { label: 'Table', onClick: () => openWizard('table') },
-          { label: 'Materialized view', onClick: () => openWizard('mv') },
-          { label: 'Function', onClick: () => openWizard('function') },
-          { label: 'Update policy', onClick: () => openWizard('update-policy') },
-          { label: 'Shortcut', disabled: true, title: 'OneLake shortcut wizard requires Fabric onelake API consent — pending tenant bootstrap' },
+          { label: 'Table', onClick: () => openWizard('table'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Materialized view', onClick: () => openWizard('mv'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Function', onClick: () => openWizard('function'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Update policy', onClick: () => openWizard('update-policy'), disabled: isFollower, title: isFollower ? roTitle : undefined },
+          { label: 'Shortcut (follower DB)',
+            onClick: () => openWizard('follower'),
+            disabled: isFollower,
+            title: isFollower ? 'Already attached as a follower. Detach first to re-point.' : 'Attach a leader cluster database as a read-only follower (Azure-native database shortcut)' },
         ]},
         { label: 'Data', actions: [
-          { label: 'Get data', onClick: () => openWizard('ingest') },
+          { label: 'Get data', onClick: () => openWizard('ingest'), disabled: isFollower, title: isFollower ? roTitle : undefined },
           { label: 'Query with code', onClick: () => {
             // Already in code editor — focus the textarea.
             const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
@@ -1477,7 +1563,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         ]},
       ]},
     ];
-  }, [openWizard]);
+  }, [openWizard, info?.isFollower]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1514,11 +1600,35 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               {info?.cluster || 'cluster not configured'}
             </Badge>
             <Caption1>db: <strong>{info?.database || '—'}</strong></Caption1>
+            {info?.isFollower && (
+              <Badge appearance="filled" color="warning" title="Attached read-only follower (database shortcut)">
+                Read-only (follower)
+              </Badge>
+            )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
+            {info?.isFollower && (
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={detaching} onClick={detachFollower}>
+                {detaching ? 'Detaching…' : 'Detach follower'}
+              </Button>
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run} style={{ marginLeft: 'auto' }}>
               {loading ? 'Running…' : 'Run (Shift+Enter)'}
             </Button>
           </div>
+          {info?.isFollower && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Read-only follower database</MessageBarTitle>
+                This KQL database is attached as a follower of{' '}
+                <strong>{info.followerLeaderCluster || 'a leader cluster'}</strong>
+                {info.followerDatabaseName ? ` (database: ${info.followerDatabaseName})` : ''}.
+                Data is synchronized from the leader in near-real-time. Write operations
+                (ingest, create table, alter, drop, purge) are blocked — run queries against
+                the follower, or write to the leader database directly. Use{' '}
+                <strong>Detach follower</strong> to remove the shortcut and restore read/write.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {info && !info.ok && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1639,6 +1749,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'function' && 'New function (.create-or-alter function)'}
                   {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
                   {wizardKind === 'ingest' && 'Get data — inline ingest (.ingest inline into table)'}
+                  {wizardKind === 'follower' && 'Database shortcut — attach follower (read-only)'}
                 </DialogTitle>
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1694,13 +1805,55 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
                       </>
                     )}
+                    {wizardKind === 'follower' && (
+                      <>
+                        <Caption1>Leader cluster ARM resource ID</Caption1>
+                        <Input
+                          value={wizLeaderResourceId}
+                          onChange={(_: unknown, d: any) => setWizLeaderResourceId(d.value)}
+                          placeholder="/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Kusto/clusters/{name}"
+                          style={{ fontFamily: 'Consolas, monospace' }}
+                        />
+                        <Caption1>Leader cluster URI (optional, display only)</Caption1>
+                        <Input
+                          value={wizLeaderUri}
+                          onChange={(_: unknown, d: any) => setWizLeaderUri(d.value)}
+                          placeholder="https://mycluster.eastus2.kusto.windows.net"
+                        />
+                        <Caption1>Database to follow (leave blank or * to follow all leader databases)</Caption1>
+                        <Input
+                          value={wizFollowerDbName}
+                          onChange={(_: unknown, d: any) => setWizFollowerDbName(d.value)}
+                          placeholder="MyLeaderDb or *"
+                        />
+                        <Caption1>Principal modification kind</Caption1>
+                        <Select
+                          value={wizPrincipalsKind}
+                          onChange={(_: unknown, d: any) => setWizPrincipalsKind(d.value as 'Union' | 'Replace' | 'None')}
+                        >
+                          <option value="Union">Union — leader principals + this cluster&apos;s principals</option>
+                          <option value="Replace">Replace — follower principals only</option>
+                          <option value="None">None — leader principals only</option>
+                        </Select>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Prerequisites</MessageBarTitle>
+                            The Loom managed identity must hold <strong>Contributor</strong> (or Azure
+                            Kusto Contributor) on the <em>leader</em> cluster — granted out-of-band; the
+                            follower cluster (this deployment) is already configured. Leader and follower
+                            must be in the <strong>same Azure region</strong>. The follower is read-only:
+                            queries return live leader data; writes are blocked.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    )}
                     {wizError && <MessageBar intent="error"><MessageBarBody>{wizError}</MessageBarBody></MessageBar>}
                     {wizSuccess && <MessageBar intent="success"><MessageBarBody>{wizSuccess}</MessageBarBody></MessageBar>}
                   </div>
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setWizardKind(null)} disabled={wizSubmitting}>Cancel</Button>
-                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : 'Create'}</Button>
+                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : (wizardKind === 'follower' ? 'Attach follower' : 'Create')}</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
