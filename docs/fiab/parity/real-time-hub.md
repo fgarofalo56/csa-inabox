@@ -1,4 +1,4 @@
-# realtime-hub — parity with Fabric Real-Time hub
+# real-time-hub — parity with Fabric Real-Time hub
 
 Source UI: Fabric portal → left nav **Real-Time** → Real-Time hub page (All data streams + task cards), the **Data sources / Get events** wizard, and the **Fabric events** / **Azure events** pages.
 
@@ -37,21 +37,23 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | Task cards: Get events, Subscribe to events, Explore data in motion | ✅ built — three task cards at the top of the page | wired to the dialogs/drawers above |
 | Honest infra-gate when the UAMI isn't authorized in Fabric | ⚠️ honest-gate — `MessageBar intent="warning"` naming the SP-toggle + `LOOM_UAMI_CLIENT_ID` workspace-role requirement; **full hub UI still renders** | 401/403 `FabricError` passed through verbatim with `hint` |
 
-## Gaps (tracked, not stubbed)
+## Tracked follow-ups (honest, not faked)
 
 | Fabric capability | Status | Why / next |
 | --- | --- | --- |
-| Per-row **Item owner / Endorsement / Sensitivity** columns | ❌ not surfaced | Fabric item list payload doesn't include owner/endorsement; needs the admin `scanResult` / endorsement APIs. Tracked — not faked. |
+| Per-row **Item owner / Endorsement / Sensitivity** columns | ⚠️ tracked | Fabric item list payload doesn't include owner/endorsement; needs the admin `scanResult` / endorsement APIs. Tracked — not faked. |
 | **Visualize data** (create Real-Time dashboard from a KQL table) | ➡️ delegated | Handled by the existing KQL-dashboard editor (`/items/kql-dashboard/new`); not duplicated on the hub. |
 | Per-stream-node **Activate / Deactivate** | ⚠️ disclosed | Not in the public Eventstream REST surface (portal-only toggle) — disclosed honestly per `no-vaporware.md`, consistent with the Eventstream editor. |
-| **Business events** (preview) | ❌ not built | Preview-only Fabric feature; out of scope for this pass. |
+| **Business events** (preview) | ⚠️ tracked | Preview-only Fabric feature; tracked follow-up for the preview pass. |
 
 ## Backend per control
 
-- `GET  /api/realtime-hub/streams` — `listFabricWorkspaces()` → fan-out `listEventstreams` + `listKqlDatabases` (`listEventhouses` fallback). Auth 401, Fabric gate 401/403 verbatim.
-- `POST /api/realtime-hub/connect-source` — content-type guard (415) → validate `sourceType` against `RTH_SOURCE_TYPES` (400) → `connectEventstreamSource(ws, {sourceType, properties})` → real `POST /workspaces/{ws}/eventstreams`.
-- `POST /api/realtime-hub/preview` — content-type guard (415) → `executeQuery(db, '["table"] | take N')` (N clamped ≤ 200). Kusto errors → 502.
-- `GET  /api/realtime-hub/endpoints` — `getEventstreamDefinition(ws, id)` → decode Base64 `eventstream.json` → project sources/destinations/streams.
+| Control | Backend |
+| --- | --- |
+| All data streams | `GET /api/realtime-hub/streams` — `listFabricWorkspaces()` → fan-out `listEventstreams` + `listKqlDatabases` (`listEventhouses` fallback). Auth 401, Fabric gate 401/403 verbatim. |
+| Connect data source | `POST /api/realtime-hub/connect-source` — content-type guard (415) → validate `sourceType` against `RTH_SOURCE_TYPES` (400) → `connectEventstreamSource(ws, {sourceType, properties})` → real `POST /workspaces/{ws}/eventstreams`. |
+| Preview data | `POST /api/realtime-hub/preview` — content-type guard (415) → `executeQuery(db, '["table"] \| take N')` (N clamped ≤ 200, real ADX/Kusto). Kusto errors → 502. |
+| Stream endpoints | `GET /api/realtime-hub/endpoints` — `getEventstreamDefinition(ws, id)` → decode Base64 `eventstream.json` → project sources/destinations/streams. |
 
 ## Verification
 
