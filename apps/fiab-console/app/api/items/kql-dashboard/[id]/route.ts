@@ -25,7 +25,7 @@ import {
   executeQuery, KustoError,
 } from '@/lib/azure/kusto-client';
 import {
-  sanitizeModel, substituteTileKql, resolveTileDatabase,
+  sanitizeModel, buildTileKql, resolveTileDatabase,
   type DashboardParam, type DashboardTile, type DashboardDataSource,
 } from '@/lib/azure/kql-dashboard-model';
 
@@ -170,7 +170,7 @@ export async function runTiles(
   return Promise.all(tiles.map(async (t) => {
     try {
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
-      const kql = substituteTileKql(t.kql, params, timeKey);
+      const kql = buildTileKql(t.kql, params, timeKey);
       const result = await executeQuery(db, kql);
       return { ...t, result, resolvedDatabase: db };
     } catch (e: any) {

@@ -4906,6 +4906,20 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
   }, [id, tiles, buildModel, updateTile]);
 
+  // Re-run ONLY the tiles whose KQL body references the given parameter
+  // variable name (selective dependent-tile re-run, like Fabric re-evaluating
+  // just the tiles a changed filter feeds). `duration` params affect every
+  // tile that uses the synthetic _startTime/_endTime tokens, so those re-run
+  // the whole dashboard via runAll.
+  const runDependentTiles = useCallback((varName: string) => {
+    if (!varName) return;
+    const esc = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${esc}\\b`);
+    tiles.forEach((t, idx) => {
+      if (re.test(t.kql)) runTile(idx);
+    });
+  }, [tiles, runTile]);
+
   const save = useCallback(async () => {
     setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
     try {
@@ -5081,25 +5095,54 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 160 }}>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.label || p.variableName}</Caption1>
               {p.type === 'fixed' || p.type === 'datasource' ? (
-                <Select value={(p.value as string) || ''} onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); }} onBlur={runAll}>
+                <Select value={(p.value as string) || ''}
+                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); setTimeout(() => runDependentTiles(p.variableName), 0); }}>
                   <option value="">(all)</option>
                   {(p.type === 'datasource' ? dataSources.map((d) => d.name) : (p.values || [])).map((v) => <option key={v} value={v}>{v}</option>)}
                 </Select>
               ) : p.type === 'query' ? (
                 <Select value={(p.value as string) || ''}
                   onFocus={() => { if (!paramValueCache[p.variableName]) loadParamValues(p); }}
-                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); }} onBlur={runAll}>
+                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); setTimeout(() => runDependentTiles(p.variableName), 0); }}>
                   <option value="">(all)</option>
                   {(paramValueCache[p.variableName] || []).map((v) => <option key={v} value={v}>{v}</option>)}
                 </Select>
+              ) : p.type === 'duration' ? (
+                // Time-range picker — matches the Fabric "Duration" param type.
+                // Changing it sets the global time range (which drives the
+                // synthetic _startTime/_endTime tokens) and re-runs every tile.
+                <Select value={(p.value as string) || timeRange}
+                  onChange={(_: unknown, d: any) => {
+                    updateParam(i, { value: d.value });
+                    if (TIME_ORDER.includes(d.value as TimeRangeKey)) setTimeRange(d.value as TimeRangeKey);
+                    setTimeout(() => runAll(), 0);
+                  }}>
+                  {TIME_ORDER.map((k) => <option key={k} value={k}>{k}</option>)}
+                </Select>
               ) : p.type === 'multi' ? (
-                <Input placeholder="comma,separated,values"
-                  value={Array.isArray(p.value) ? p.value.join(',') : ''}
-                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value.split(',').map((x: string) => x.trim()).filter(Boolean) })}
-                  onBlur={runAll} />
+                p.values && p.values.length > 0 ? (
+                  // Fixed-value multi-select — native <select multiple> backed
+                  // by the param's allowed values list.
+                  <select
+                    multiple
+                    size={Math.min(p.values.length, 5)}
+                    value={Array.isArray(p.value) ? (p.value as string[]) : []}
+                    onChange={(e) => updateParam(i, { value: Array.from(e.target.selectedOptions).map((o) => o.value) })}
+                    onBlur={() => runDependentTiles(p.variableName)}
+                    aria-label={p.label || p.variableName}
+                    style={{ minWidth: 160, padding: 4, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: 4, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                    {p.values.map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                ) : (
+                  <Input placeholder="comma,separated,values"
+                    value={Array.isArray(p.value) ? p.value.join(',') : ''}
+                    onChange={(_: unknown, d: any) => updateParam(i, { value: d.value.split(',').map((x: string) => x.trim()).filter(Boolean) })}
+                    onBlur={() => runDependentTiles(p.variableName)} />
+                )
               ) : (
                 <Input value={Array.isArray(p.value) ? '' : (p.value || '')}
-                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value })} onBlur={runAll} />
+                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value })}
+                  onBlur={() => runDependentTiles(p.variableName)} />
               )}
             </div>
           ))}
@@ -5157,6 +5200,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                       setTimeout(() => runAll(), 0);
                     } : undefined}
                   />
+                  {/* Stable, machine-readable first-row snapshot — the
+                      before/after receipt target for the param-change E2E. */}
+                  <span data-testid="tile-result-row" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+                    {JSON.stringify(t.result.rows?.[0] ?? [])}
+                  </span>
                 </div>
               )}
               {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
