@@ -1,14 +1,20 @@
 'use client';
 
 /**
- * DataflowGen2Editor — Fabric-native Dataflow Gen2 editor wired to live
- * Fabric REST. Dataflows are managed as items + JSON definition; Refresh
- * triggers a Refresh job on the item.
+ * DataflowGen2Editor — Azure-native Dataflow Gen2 (Power Query Online parity).
  *
- * Auth gate: requires Console UAMI SP authorized in the Fabric tenant and
- * added to the target workspace. Underlying 401/403 surface verbatim.
+ * DEFAULT backend: no Fabric. Authored Power Query (M) is saved to Cosmos and,
+ * on Run, compiled into an ADF WranglingDataFlow that executes on ADF Spark and
+ * writes the output query to the chosen ADLS / Azure SQL destination.
  *
- * Backed by /api/loom/workspaces + /api/items/dataflow/**.
+ * Fabric is strictly opt-in (LOOM_DATAFLOW_BACKEND=fabric + a bound workspace);
+ * the editor renders fully and Runs against Azure with no Fabric workspace.
+ *
+ * Workspace selector below is the LOOM (Cosmos) workspace the dataflow item
+ * lives in — NOT a Fabric workspace — so dataflows scope to a Loom workspace
+ * exactly like every other Loom item.
+ *
+ * Backed by /api/loom/workspaces + /api/items/dataflow/** + /api/items/dataflow/config.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -20,10 +26,12 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
+  Add20Regular, Save20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { DataflowDiagram } from '@/lib/components/pipeline/dataflow-diagram';
+import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
+import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
+import { parseSharedQueries, type DataflowSink } from '@/lib/components/pipeline/dataflow/m-script';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -31,13 +39,6 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  editor: {
-    width: '100%', minHeight: 300,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
-  },
   treePad: { padding: 8 },
 });
 
@@ -63,12 +64,30 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading };
 }
 
-const STARTER_M = `// Power Query M (mashup.pq). Edit then click Save.
-section Section1;
+interface DataflowConfig { backend: string; adfConfigured: boolean; adfMissing: string | null; adlsConfigured: boolean; fabricWorkspaceBound: boolean; }
+function useDataflowConfig() {
+  const [config, setConfig] = useState<DataflowConfig | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/dataflow/config');
+        const j = await r.json();
+        if (!cancelled && j.ok) setConfig(j);
+      } catch { /* non-fatal — editor still renders */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return config;
+}
+
+const STARTER_M = `section Section1;
+
 shared Query1 = let
-    Source = #table({"col1","col2"}, {{"hello", "world"}})
+    Source = #table({"region","amount"}, {{"east", 10}, {"west", 20}}),
+    Filtered = Table.SelectRows(Source, each [amount] > 0)
 in
-    Source;`;
+    Filtered;`;
 
 function toB64(s: string): string {
   return typeof window === 'undefined' ? Buffer.from(s, 'utf-8').toString('base64')
@@ -86,23 +105,30 @@ interface Props { item: FabricItemType; id: string; }
 export function DataflowGen2Editor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+  const config = useDataflowConfig();
   const [workspaceId, setWorkspaceId] = useState('');
   const [dataflows, setDataflows] = useState<DataflowLite[] | null>(null);
   const [dataflowId, setDataflowId] = useState('');
   const [defText, setDefText] = useState(STARTER_M);
   const [partPath, setPartPath] = useState('mashup.pq');
+  const [sink, setSink] = useState<DataflowSink | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [tab, setTab] = useState<'diagram' | 'script'>('diagram');
+  const [tab, setTab] = useState<'authoring' | 'output' | 'script'>('authoring');
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [runHint, setRunHint] = useState<string | null>(null);
+  const [runOk, setRunOk] = useState<boolean | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+
+  const isM = /\.(pq|m)$/i.test(partPath);
+  const queryNames = useMemo(() => (isM ? parseSharedQueries(defText).map((q) => q.name) : []), [isM, defText]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
@@ -116,7 +142,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   }, [dataflowId]);
 
   const loadDetail = useCallback(async (wsId: string, dId: string) => {
-    setDetailErr(null); setRefreshMsg(null);
+    setDetailErr(null); setRunMsg(null); setRunHint(null); setRunOk(null);
     try {
       const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
@@ -127,6 +153,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
         || parts[0];
       if (main?.payload) { setPartPath(main.path); setDefText(fromB64(main.payload)); }
       else { setPartPath('mashup.pq'); setDefText(STARTER_M); }
+      setSink((j.sink as DataflowSink) || null);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -134,54 +161,55 @@ export function DataflowGen2Editor({ item, id }: Props) {
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && dataflowId) loadDetail(workspaceId, dataflowId); }, [workspaceId, dataflowId, loadDetail]);
 
-  const save = useCallback(async () => {
-    if (!workspaceId || !dataflowId) return;
-    setSaving(true); setDetailErr(null); setRefreshMsg('Saving dataflow…');
-    // Phase 4.5 — snapshot defText via functional setter so a Run-then-Edit
-    // race doesn't clobber in-flight edits with a stale closure capture.
+  const save = useCallback(async (): Promise<boolean> => {
+    if (!workspaceId || !dataflowId) return false;
+    setSaving(true); setDetailErr(null);
     let textSnapshot = defText;
     setDefText((prev) => { textSnapshot = prev; return prev; });
+    let sinkSnapshot = sink;
+    setSink((prev) => { sinkSnapshot = prev; return prev; });
     try {
       const definition = { parts: [{ path: partPath, payload: toB64(textSnapshot), payloadType: 'InlineBase64' }] };
       const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition, sink: sinkSnapshot }),
       });
       const j = await r.json();
-      if (!j.ok) {
-        setDetailErr(j.error || 'save failed');
-        setRefreshMsg(`Save failed: ${j.error || 'unknown'}`);
-      } else {
-        setDirty(false);
-        setRefreshMsg(`Saved at ${new Date().toLocaleTimeString()}`);
-      }
+      if (!j.ok) { setDetailErr(j.error || 'save failed'); return false; }
+      setDirty(false);
+      return true;
     } catch (e: any) {
       setDetailErr(e?.message || String(e));
-      setRefreshMsg(`Save failed: ${e?.message || e}`);
+      return false;
     } finally { setSaving(false); }
-  }, [workspaceId, dataflowId, partPath, defText]);
+  }, [workspaceId, dataflowId, partPath, defText, sink]);
 
-  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  // Ctrl+S / Cmd+S keyboard shortcut for Save.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (workspaceId && dataflowId && dirty && !saving) save();
+        if (workspaceId && dataflowId && dirty && !saving) void save();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [workspaceId, dataflowId, dirty, saving, save]);
 
-  const refresh = useCallback(async () => {
+  // Run = Save (if dirty) then dispatch the ADF WranglingDataFlow run.
+  const run = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
-    setRefreshing(true); setRefreshMsg(null);
+    setRunning(true); setRunMsg(null); setRunHint(null); setRunOk(null);
     try {
+      if (dirty) { const ok = await save(); if (!ok) { setRunOk(false); setRunMsg('Save failed — fix the error above before running.'); return; } }
       const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
-      if (!j.ok) setRefreshMsg(`Refresh failed: ${j.error}`);
-      else setRefreshMsg('Refresh job queued.');
-    } finally { setRefreshing(false); }
-  }, [workspaceId, dataflowId]);
+      if (!j.ok) { setRunOk(false); setRunMsg(j.error || 'Run failed'); setRunHint(j.hint || null); return; }
+      setRunOk(true);
+      setRunMsg(`Run dispatched on ADF (${j.backend}). runId ${j.runId} · writes ${j.outputQuery} → ${j.pipelineName}.`);
+    } catch (e: any) { setRunOk(false); setRunMsg(e?.message || String(e)); }
+    finally { setRunning(false); }
+  }, [workspaceId, dataflowId, dirty, save]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -207,14 +235,14 @@ export function DataflowGen2Editor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, dataflowId, loadList]);
 
-  const canRefresh = !refreshing && !!dataflowId;
+  const canRun = !running && !saving && !!dataflowId;
   const canSave = !saving && !!dataflowId && dirty;
   const canDelete = !!dataflowId;
   const canCreate = !!workspaceId;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Refresh', actions: [
-        { label: refreshing ? 'Refreshing…' : 'Refresh now', onClick: canRefresh ? refresh : undefined, disabled: !canRefresh },
+      { label: 'Run', actions: [
+        { label: running ? 'Running…' : 'Save & Run', onClick: canRun ? run : undefined, disabled: !canRun },
       ]},
       { label: 'Item', actions: [
         { label: 'New dataflow', onClick: canCreate ? () => setCreateOpen(true) : undefined, disabled: !canCreate },
@@ -222,7 +250,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
         { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
       ]},
     ]},
-  ], [refreshing, canRefresh, refresh, canCreate, saving, canSave, save, canDelete, del]);
+  ], [running, canRun, run, canCreate, saving, canSave, save, canDelete, del]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -247,12 +275,15 @@ export function DataflowGen2Editor({ item, id }: Props) {
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Dataflow Gen2</Badge>
+            <Badge appearance="outline" color={config?.backend === 'fabric' ? 'warning' : 'success'}>
+              {config?.backend === 'fabric' ? 'Fabric (opt-in)' : 'Azure-native (ADF)'}
+            </Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
                 {(ws.workspaces || []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · dedicated' : ''}</option>
                 ))}
               </Select>
             </div>
@@ -263,7 +294,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
               </DialogTrigger>
               <DialogSurface>
                 <DialogBody>
-                  <DialogTitle>Create Fabric dataflow Gen2</DialogTitle>
+                  <DialogTitle>Create dataflow Gen2</DialogTitle>
                   <DialogContent>
                     <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
                     {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
@@ -275,29 +306,45 @@ export function DataflowGen2Editor({ item, id }: Props) {
                 </DialogBody>
               </DialogSurface>
             </Dialog>
-            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !dataflowId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
-            <Button appearance="primary" icon={<ArrowSync20Regular />} disabled={refreshing || !dataflowId} onClick={refresh}>{refreshing ? 'Refreshing…' : 'Refresh'}</Button>
+            <Button appearance="outline" icon={<Save20Regular />} disabled={!canSave} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={!canRun} onClick={run}>{running ? 'Running…' : 'Save & Run'}</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!dataflowId} onClick={del}>Delete</Button>
           </div>
+
+          {config && !config.adfConfigured && config.backend !== 'fabric' && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Data Factory not configured</MessageBarTitle>
+                Authoring + Save work, but Run needs ADF. Set <code>{config.adfMissing || 'LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID'}</code> on
+                the Console app — deployed by <code>platform/fiab/bicep/modules/landing-zone/adf.bicep</code>.
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {(ws.error || listErr) && (
             <MessageBar intent="error">
               <MessageBarBody>
-                <MessageBarTitle>Fabric not reachable</MessageBarTitle>
+                <MessageBarTitle>Workspace list unavailable</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
               </MessageBarBody>
             </MessageBar>
           )}
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
-          {refreshMsg && <MessageBar intent="info"><MessageBarBody>{refreshMsg}</MessageBarBody></MessageBar>}
+          {runMsg && (
+            <MessageBar intent={runOk === false ? 'error' : runOk ? 'success' : 'info'}>
+              <MessageBarBody>
+                {runMsg}
+                {runHint && <><br /><Caption1>{runHint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {!dataflowId && (
             <MessageBar intent="info">
               <MessageBarBody>
-                Design your dataflow below — drag a source or transform from the palette to scaffold a query.
-                To <strong>Save / Refresh</strong> against the live Fabric backing, pick a dataflow from the
-                left rail (or click <strong>New</strong>).
+                Pick a dataflow from the left rail (or click <strong>New</strong>) to author its
+                Power Query, set an output destination, and Run it on ADF — no Fabric required.
               </MessageBarBody>
             </MessageBar>
           )}
@@ -305,36 +352,42 @@ export function DataflowGen2Editor({ item, id }: Props) {
           {dataflowId && <Caption1>Definition part: <code>{partPath}</code></Caption1>}
 
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'diagram' | 'script')}>
-              <Tab value="diagram">Diagram</Tab>
-              <Tab value="script">Script ({/\.(pq|m)$/i.test(partPath) ? 'M' : 'JSON'})</Tab>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'authoring' | 'output' | 'script')}>
+              <Tab value="authoring">Power Query</Tab>
+              <Tab value="output">Output destination</Tab>
+              <Tab value="script">Script ({isM ? 'M' : 'JSON'})</Tab>
             </TabList>
           </div>
 
-          {tab === 'diagram' && (
-            /\.(pq|m)$/i.test(partPath) ? (
-              <DataflowDiagram
+          {tab === 'authoring' && (
+            isM ? (
+              <PowerQueryHost
                 mScript={defText}
                 onChange={(v) => { setDefText(v); setDirty(true); }}
               />
             ) : (
               <MessageBar intent="info">
                 <MessageBarBody>
-                  The visual diagram projects Power Query (M). This dataflow part is
+                  The Power Query editor projects Power Query (M). This dataflow part is
                   <code> {partPath}</code> — edit it on the Script tab.
                 </MessageBarBody>
               </MessageBar>
             )
           )}
 
+          {tab === 'output' && (
+            <DestinationPicker
+              sink={sink}
+              queries={queryNames}
+              onChange={(next) => { setSink(next); setDirty(true); }}
+            />
+          )}
+
           {tab === 'script' && (
             <MonacoTextarea
               value={defText}
               onChange={(v) => { setDefText(v); setDirty(true); }}
-              /* Pick a sensible Monaco language based on the active part: .pq/.m
-                 is Power Query M (no first-class Monaco mode — fall back to
-                 plaintext); queryMetadata.json + the rest are JSON. */
-              language={/\.(pq|m)$/i.test(partPath) ? 'plaintext' : 'json'}
+              language={isM ? 'plaintext' : 'json'}
               height={360}
               minHeight={280}
               ariaLabel="Dataflow definition"

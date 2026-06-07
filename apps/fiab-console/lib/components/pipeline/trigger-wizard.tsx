@@ -17,12 +17,14 @@
  *   learn.microsoft.com/rest/api/datafactory/triggers/create-or-update
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Input, Field, Dropdown, Option, Switch, Textarea, Text, Badge,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { ParamSourcePicker, EMPTY_BINDING, type ParamBinding } from './param-source-picker';
+import type { PipelineParameter } from './types';
 
 type TriggerKind = 'ScheduleTrigger' | 'TumblingWindowTrigger' | 'BlobEventsTrigger' | 'CustomEventsTrigger';
 
@@ -40,6 +42,12 @@ const useStyles = makeStyles({
   typeDesc: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
   fields: { display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '4px' },
+  paramSection: {
+    display: 'flex', flexDirection: 'column', gap: '12px',
+    padding: '12px', borderRadius: '10px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
 });
 
 const TYPES: { kind: TriggerKind; title: string; desc: string }[] = [
@@ -55,16 +63,40 @@ const TIMEZONES = ['UTC', 'Eastern Standard Time', 'Central Standard Time', 'Mou
 export interface TriggerWizardProps {
   open: boolean;
   onClose: () => void;
-  /** Receives (name, properties) — the ADF trigger payload. Should POST + resolve. */
-  onCreate: (name: string, properties: Record<string, unknown>) => Promise<void>;
+  /**
+   * Receives (name, properties, paramBindings) — the ADF trigger payload plus
+   * the per-parameter value bindings (direct / Key Vault / App Config). The
+   * caller POSTs these; the BFF route resolves KV/App Config server-side and
+   * injects the resolved literals into the trigger's pipeline parameters.
+   */
+  onCreate: (
+    name: string,
+    properties: Record<string, unknown>,
+    paramBindings: Record<string, ParamBinding>,
+  ) => Promise<void>;
+  /** Declared parameters of the bound pipeline — rendered as a value source per param. */
+  pipelineParams?: PipelineParameter[];
+  /** LOOM_PARAM_KEYVAULT configured (surfaced for the honest gate hint). */
+  kvAvailable?: boolean;
+  /** LOOM_PARAM_APPCONFIG configured (surfaced for the honest gate hint). */
+  appConfigAvailable?: boolean;
   busy?: boolean;
   error?: string | null;
 }
 
-export function TriggerWizard({ open, onClose, onCreate, busy, error }: TriggerWizardProps) {
+export function TriggerWizard({
+  open, onClose, onCreate, pipelineParams, kvAvailable = true, appConfigAvailable = true, busy, error,
+}: TriggerWizardProps) {
   const styles = useStyles();
   const [name, setName] = useState('');
   const [kind, setKind] = useState<TriggerKind>('ScheduleTrigger');
+
+  // Per-parameter value bindings (paramName -> ParamBinding). Reset on open.
+  const [bindings, setBindings] = useState<Record<string, ParamBinding>>({});
+  useEffect(() => { if (open) setBindings({}); }, [open]);
+  const bindingFor = (p: string) => bindings[p] || EMPTY_BINDING;
+  const setBindingFor = (p: string, next: ParamBinding) =>
+    setBindings((prev) => ({ ...prev, [p]: next }));
 
   // Schedule / tumbling shared
   const [frequency, setFrequency] = useState('Day');
@@ -300,6 +332,33 @@ export function TriggerWizard({ open, onClose, onCreate, busy, error }: TriggerW
                 </>
               )}
 
+              {pipelineParams && pipelineParams.length > 0 && (
+                <div className={styles.paramSection}>
+                  <Text size={300} style={{ fontWeight: 600 }}>
+                    Parameter values{' '}
+                    <Badge appearance="tint" color="informative">
+                      Passed each run
+                    </Badge>
+                  </Text>
+                  <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                    These values are supplied to the pipeline every time the
+                    trigger fires. Pull them from a direct value, a Key Vault
+                    secret, or an App Configuration key.
+                  </Text>
+                  {pipelineParams.map((p) => (
+                    <Field key={p.name} label={`${p.name} (${p.type})`}>
+                      <ParamSourcePicker
+                        binding={bindingFor(p.name)}
+                        onChange={(next) => setBindingFor(p.name, next)}
+                        paramType={p.type}
+                        kvAvailable={kvAvailable}
+                        appConfigAvailable={appConfigAvailable}
+                      />
+                    </Field>
+                  ))}
+                </div>
+              )}
+
               <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                 <Badge appearance="tint" color="informative">Created stopped</Badge>{' '}
                 The trigger is created in a stopped state — start it from the trigger list.
@@ -310,7 +369,7 @@ export function TriggerWizard({ open, onClose, onCreate, busy, error }: TriggerW
           <DialogActions>
             <Button appearance="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
             <Button appearance="primary" disabled={!valid || busy}
-              onClick={() => onCreate(name.trim(), properties)}>
+              onClick={() => onCreate(name.trim(), properties, bindings)}>
               {busy ? 'Creating…' : 'Create trigger'}
             </Button>
           </DialogActions>
