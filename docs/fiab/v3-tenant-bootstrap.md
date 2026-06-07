@@ -499,3 +499,145 @@ object id.
 limitation). Until a `LOOM_STORAGE_ENDPOINT_SUFFIX` is introduced, only
 **same-account** references are supported in sovereign clouds; cross-account
 references there are blocked until the DFS host is parameterized.
+
+---
+
+## Azure ML / AI Foundry Hub — Console UAMI AzureML Data Scientist {#aml-data-scientist}
+
+The Data Science editors — **`ml-model`** (model registry + online endpoints)
+and **`ml-experiment`** (jobs + MLflow runs/metrics) — call the Azure ML data
+plane (`Microsoft.MachineLearningServices/workspaces/.../{models,jobs}` ARM REST
+and the `*.api.azureml.ms` MLflow tracking server) **with the Console UAMI's
+managed identity**. Both require the UAMI to hold **AzureML Data Scientist**
+(`f6c7c914-8db3-469d-8ca1-694a8f32e121`) on the target workspace. Without it,
+`GET /api/items/ml-model` and `GET /api/items/ml-experiment` return **403** and
+the editors render their honest MessageBars naming this role.
+
+### Greenfield (let bicep do it)
+
+No action needed. When `aiFoundryEnabled = true`, `ai-foundry.bicep` grants the
+Console UAMI AzureML Data Scientist on the Foundry hub workspace
+(`hubConsoleDataScientist`) at deploy time — the editors work on a clean deploy.
+
+### Bring-your-own Foundry hub
+
+When you point Loom at an existing hub (`EXISTING_AOAI` / `existingFoundryAccountName`),
+bicep does **not** touch that workspace's RBAC. Grant the UAMI manually:
+
+```bash
+az role assignment create \
+  --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "AzureML Data Scientist" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.MachineLearningServices/workspaces/<hub-name>
+# role id: f6c7c914-8db3-469d-8ca1-694a8f32e121
+```
+
+### Verify
+
+Open an `ml-model` item → the bind picker lists real AML workspaces + models.
+Open an `ml-experiment` item → the jobs list loads (no 403); the "Runs &
+metrics" tab returns MLflow runs. If gated, the MessageBar names the unset env
+var / this role.
+
+### Bicep sync
+
+- Greenfield grant: `platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep`
+  (`hubConsoleDataScientist`).
+
+---
+
+## Deploy-planner ML workspace — LOOM_AML_WORKSPACE env patch {#aml-workspace-env-patch}
+
+By default the `ml-experiment` "Runs & metrics" tab tracks against the AI Foundry
+hub workspace (via the `LOOM_FOUNDRY_NAME` / `LOOM_FOUNDRY_REGION` fallback in
+`mlflow-client.ts`) — so it works out of the box. When you deploy a **dedicated**
+Azure ML workspace alongside the console (deploy-planner `mlWorkspaceEnabled = true`,
+or a BYO AML workspace) and want experiment tracking to target **that** workspace,
+the console's `LOOM_AML_WORKSPACE` env var must be set.
+
+The admin-plane Container App env is rendered **before** the deploy-planner
+workspace exists (same ordering constraint as the Databricks hostname), so this
+is a one-time post-deploy patch:
+
+```bash
+AML_WS=$(az ml workspace show -g <dlz-rg> -n <aml-workspace-name> --query name -o tsv)
+az containerapp update --name loom-console -g rg-csa-loom-admin-<region> \
+  --set-env-vars LOOM_AML_WORKSPACE="$AML_WS" LOOM_AML_RG=<dlz-rg>
+```
+
+Without the patch, the tab falls back to the Foundry hub as the MLflow target —
+still functional, but runs logged against the dedicated workspace won't appear.
+Also grant the Console UAMI AzureML Data Scientist on that workspace
+([§AzureML Data Scientist](#aml-data-scientist)).
+
+| Env var | Backs | Fallback when empty |
+|---|---|---|
+| `LOOM_AML_WORKSPACE` | MLflow tracking workspace name (`mlflow-client.ts`) | `LOOM_FOUNDRY_NAME` |
+| `LOOM_AML_RG` | RG of that workspace | `LOOM_FOUNDRY_RG` |
+
+### Bicep sync
+
+- `LOOM_AML_WORKSPACE` / `LOOM_AML_RG` params + env wiring:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomAmlWorkspace` /
+  `loomAmlRg`), threaded from `platform/fiab/bicep/main.bicep`.
+
+---
+
+## Notebook Pylance / pylsp IntelliSense bridge
+
+The notebook cell editor (Monaco) gets Pylance-grade Python IntelliSense
+(completions, hover docstrings, signature help, diagnostics) from
+**python-lsp-server + pyright** running **in the Console container** — no
+Fabric, no external call, all clouds. It is **opt-in** so the default image is
+untouched.
+
+To enable it:
+
+1. **Build the Console image with the pylsp layer.** CI passes the build-arg for
+   the Data Science notebook variant:
+
+   ```bash
+   docker build apps/fiab-console --build-arg LOOM_INCLUDE_PYLSP=true -t <acr>/loom-console:<tag>
+   ```
+
+   Without this layer the bridge simply stays off (probe reports
+   `lspAvailable:false`) and cells keep Monaco's built-in completions.
+
+2. **Turn the bridge on** by setting the Console app env var (Bicep param
+   `pylspEnabled` on `admin-plane/app-deployments.bicep`, surfaced as
+   `LOOM_PYLSP_ENABLED`):
+
+   ```bicep
+   // params/<cloud>-full.bicepparam
+   param pylspEnabled = true
+   ```
+
+   `instrumentation.ts` then attaches the WebSocket bridge to the Next HTTP
+   server on `/api/notebook/*/lsp` (same port, same Container Apps ingress;
+   WebSockets work on the default `http` transport). The upgrade is authenticated
+   with the encrypted `loom_session` cookie.
+
+3. **(Optional) Curated AML Environment.** `deploy-planner/ml-workspace.bicep`
+   ships `loom-pylsp-env` (jupyter-lsp + python-lsp-server + pyright over
+   pandas/numpy/scikit-learn) so AML compute instances + JupyterLab get the same
+   IntelliSense and the VS Code for the Web path uses a known-good kernel.
+
+### "Open in VS Code for the Web" deep-link (Commercial only)
+
+The notebook header shows an **Open in VS Code for the Web** button that
+deep-links to the AML compute-instance VS Code surface. Microsoft does not offer
+VS Code for the Web in GCC / GCC-High / DoD, so the button is gated on
+`CSA_LOOM_BOUNDARY === 'Commercial'` **and** only renders when both AML values
+are configured (no dead button):
+
+```bicep
+param amlInstance     = '<aml-compute-instance-name>'   // LOOM_AML_INSTANCE
+param amlWorkspaceId  = '<aml-workspace-arm-id-or-wsId>' // LOOM_AML_WORKSPACE_ID
+// param amlPortalBase = 'https://ml.azure.com'          // default
+```
+
+These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`,
+`LOOM_AML_WORKSPACE_ID`, `LOOM_AML_PORTAL_BASE`. The gate is evaluated
+server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
+directly.

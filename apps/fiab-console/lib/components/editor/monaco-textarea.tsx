@@ -81,6 +81,7 @@ export type MonacoLanguage =
   | 'javascript'
   | 'typescript'
   | 'yaml'
+  | 'markdown'
   | 'plaintext';
 
 export interface MonacoTextareaProps {
@@ -126,6 +127,7 @@ function mapLanguage(lang?: MonacoLanguage): string {
     case 'graphql': return 'graphql';
     case 'javascript': return 'javascript';
     case 'typescript': return 'typescript';
+    case 'markdown': return 'markdown';
     default: return 'plaintext';
   }
 }
@@ -299,6 +301,11 @@ export function MonacoTextarea({
           automaticLayout: true,
           suggestOnTriggerCharacters: true,
           quickSuggestions: { other: true, comments: false, strings: false },
+          // Enable the ghost-text inline-suggestion surface. Without this flag
+          // results from registerInlineCompletionsProvider are silently dropped
+          // and Tab-to-accept never fires. `keepOnBlur` keeps the suggestion
+          // visible when a debounced fetch resolves after focus shifts briefly.
+          inlineSuggest: { enabled: true, keepOnBlur: true },
           fixedOverflowWidgets: true,
         }}
       />

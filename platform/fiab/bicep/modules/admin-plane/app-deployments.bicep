@@ -34,6 +34,18 @@ param boundary string
 @description('Key Vault URI')
 param keyVaultUri string
 
+@description('Enable the Console notebook Pylance/pylsp WebSocket bridge (image must be built with --build-arg LOOM_INCLUDE_PYLSP=true).')
+param pylspEnabled bool = false
+
+@description('AML compute-instance name for the notebook "Open in VS Code for Web" deep-link (Commercial only). Empty hides the button.')
+param amlInstance string = ''
+
+@description('AML workspace id (wsId) for the VS Code for the Web deep-link.')
+param amlWorkspaceId string = ''
+
+@description('AML portal base for the VS Code for the Web deep-link. Default ml.azure.com (Commercial).')
+param amlPortalBase string = 'https://ml.azure.com'
+
 @description('App definitions — name, image, UAMI ID, app-specific env, ingress port, scale rules')
 param apps array
 
@@ -83,6 +95,14 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               { name: 'AZURE_CLIENT_ID', value: app.uamiClientId }
               { name: 'KEYVAULT_URI', value: keyVaultUri }
               { name: 'LOOM_TIER', value: contains(app, 'tier') ? app.tier : 'service' }
+              // Notebook Pylance/pylsp bridge + VS Code for the Web deep-link.
+              // Read only by the Console app; ignored elsewhere. VS Code for the
+              // Web button stays hidden unless boundary == Commercial AND both
+              // AML values are set (honest gate in /api/notebook/[id]/lsp).
+              { name: 'LOOM_PYLSP_ENABLED', value: pylspEnabled ? 'true' : '' }
+              { name: 'LOOM_AML_INSTANCE', value: amlInstance }
+              { name: 'LOOM_AML_WORKSPACE_ID', value: amlWorkspaceId }
+              { name: 'LOOM_AML_PORTAL_BASE', value: amlPortalBase }
             ],
             contains(app, 'env') ? app.env : []
           )
