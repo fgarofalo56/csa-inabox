@@ -695,6 +695,7 @@ export function NotebookEditor({ item, id }: Props) {
               status: p.output.status === 'ok' ? 'ok' : 'error',
               textPlain: p.output.textPlain,
               data: p.output.data,
+              richDisplay: p.output.richDisplay,
               ename: p.output.ename,
               evalue: p.output.evalue,
               traceback: p.output.traceback,
@@ -1044,6 +1045,9 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        notebookId={notebookId}
+                        workspaceId={workspaceId}
+                        computeId={computeId}
                       />
                     ) : (
                       <MarkdownCell

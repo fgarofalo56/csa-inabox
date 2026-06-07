@@ -26,6 +26,21 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants — set true when re-provisioning to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('''Rich display() AML startup — base64-encoded shell command run at compute-instance start.
+It must drop apps/fiab-console/lib/notebook/ai-display.py into the IPython startup dir
+(~/.ipython/profile_default/startup/99_loom_display.py) so display(df) emits the Loom
+rich-display MIME in AML Jupyter, matching the Synapse-Spark path. Empty = skip the
+opt-in compute instance below (the Synapse Livy path still injects the helper at runtime,
+so display() rich rendering works without this). Build it from ai-display.py — see
+docs/fiab/parity/notebook-display.md.''')
+param richDisplayStartupScriptBase64 string = ''
+
+@description('Name of the opt-in AML compute instance that carries the rich-display startup script. Empty = none. Only created when richDisplayStartupScriptBase64 is also set.')
+param richDisplayComputeInstanceName string = ''
+
+@description('VM size for the rich-display compute instance.')
+param richDisplayComputeVmSize string = 'Standard_DS3_v2'
+
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
@@ -113,5 +128,34 @@ resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// Rich display() — opt-in AML compute instance whose startup script installs the
+// ai-display.py helper into the IPython startup dir, so display(df) renders the
+// Loom interactive grid + chart recommendations in AML Jupyter (parity with the
+// Synapse Spark path). startupScript runs at every machine start (inline source,
+// base64 command) — the supported AML setup-script mechanism. Gated on both the
+// name and the script being supplied, so default deploys are unaffected and the
+// Synapse Livy path (which injects the same helper at session start) is unchanged.
+resource displayComputeInstance 'Microsoft.MachineLearningServices/workspaces/computes@2023-04-01' = if (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) {
+  parent: workspace
+  name: richDisplayComputeInstanceName
+  location: location
+  tags: complianceTags
+  properties: {
+    computeType: 'ComputeInstance'
+    properties: {
+      vmSize: richDisplayComputeVmSize
+      setupScripts: {
+        scripts: {
+          startupScript: {
+            scriptSource: 'inline'
+            scriptData: richDisplayStartupScriptBase64
+          }
+        }
+      }
+    }
+  }
+}
+
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
+output richDisplayComputeInstanceName string = (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) ? richDisplayComputeInstanceName : ''

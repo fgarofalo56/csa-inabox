@@ -119,6 +119,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (sessionId === undefined) {
         const sess = await createLivySessionAsync(pool, sessKind);
         sessionId = sess.id; sessState = sess.state;
+
+        // Rich display() — inject the ai-display.py helper as statement 0 of a
+        // FRESH pyspark session so display(df) emits the Loom rich-display MIME.
+        // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric dependency).
+        // Skipped on reuse (loaded once per session) and for non-pyspark kinds.
+        // Non-fatal: if it fails, display() falls back to the built-in table.
+        if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && sessKind === 'pyspark') {
+          try {
+            const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+            const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
+            await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
+          } catch { /* non-fatal — display() degrades to the built-in renderer */ }
+        }
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
 

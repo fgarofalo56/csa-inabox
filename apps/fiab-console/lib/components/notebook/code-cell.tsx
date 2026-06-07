@@ -8,7 +8,10 @@ import {
   ArrowMaximize16Regular, ArrowMinimize16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { LOOM_DISPLAY_MIME } from '@/lib/types/notebook-cell';
+import type { LoomDisplayPayload } from '@/lib/types/notebook-cell';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { RichDisplay } from '@/lib/components/notebook/rich-display';
 
 const useStyles = makeStyles({
   shell: {
@@ -112,9 +115,13 @@ export interface CodeCellProps {
   onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Threaded so the rich display() surface can fire full-dataset Spark aggregations. */
+  notebookId?: string;
+  workspaceId?: string;
+  computeId?: string;
 }
 
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: CodeCellProps) {
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, notebookId, workspaceId, computeId }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -191,27 +198,42 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         ariaLabel={`Code cell ${cell.id}`}
         className={mergeClasses(locked && s.editorLocked)}
       />
-      {cell.output && (
-        <div className={mergeClasses(
-          s.outputBox,
-          maximized && s.outputBoxMaximized,
-          cell.output.status === 'error' && s.outputError,
-        )}>
-          {cell.output.status === 'error' && (
-            <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
-              {cell.output.ename || 'Error'}
-            </Badge>
-          )}
-          {cell.output.status === 'error' ? (
-            <>
-              {cell.output.evalue}
-              {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
-            </>
-          ) : (
-            cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
-          )}
-        </div>
-      )}
+      {cell.output && (() => {
+        // Rich display(): prefer the structured payload; fall back to the raw
+        // MIME if it slipped through in output.data. Render the interactive grid
+        // + charts instead of the plain text table when present.
+        const richFromField = cell.output.richDisplay;
+        const richFromData = (cell.output.data as Record<string, unknown> | undefined)?.[LOOM_DISPLAY_MIME] as LoomDisplayPayload | undefined;
+        const rich = richFromField || (richFromData && Array.isArray(richFromData.columns) ? richFromData : undefined);
+        if (cell.output.status !== 'error' && rich) {
+          return (
+            <div style={{ padding: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+              <RichDisplay payload={rich} cellId={cell.id} notebookId={notebookId || ''} workspaceId={workspaceId || ''} computeId={computeId || ''} />
+            </div>
+          );
+        }
+        return (
+          <div className={mergeClasses(
+            s.outputBox,
+            maximized && s.outputBoxMaximized,
+            cell.output.status === 'error' && s.outputError,
+          )}>
+            {cell.output.status === 'error' && (
+              <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
+                {cell.output.ename || 'Error'}
+              </Badge>
+            )}
+            {cell.output.status === 'error' ? (
+              <>
+                {cell.output.evalue}
+                {cell.output.traceback && '\n' + (Array.isArray(cell.output.traceback) ? cell.output.traceback.join('\n') : cell.output.traceback)}
+              </>
+            ) : (
+              cell.output.textPlain || JSON.stringify(cell.output.data, null, 2)
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 
