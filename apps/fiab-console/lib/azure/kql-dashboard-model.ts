@@ -101,10 +101,28 @@ export interface DashboardTile {
   drillthrough?: DashTileDrillthrough;
 }
 
+/**
+ * A shared KQL snippet referenced by tiles via a `$baseQuery('name')` token.
+ * Fabric Real-Time Dashboards model these as a top-level `baseQueries[]` array
+ * whose `queryId` is referenced by tiles/parameters; in Loom a tile inlines the
+ * named base query as a parenthesised sub-query at substitution time, so a
+ * single shared filter/projection can back many tiles without copy-paste.
+ */
+export interface BaseQuery {
+  /** Stable id (Fabric `queryId` analog) — survives renames. */
+  id: string;
+  /** Friendly name referenced by `$baseQuery('name')` in tile KQL. */
+  name: string;
+  /** The shared KQL snippet (a tabular expression). */
+  kql: string;
+}
+
 export interface DashboardModel {
   tiles: DashboardTile[];
   dataSources: DashboardDataSource[];
   parameters: DashboardParam[];
+  /** Shared KQL snippets referenced by tiles via `$baseQuery('name')`. */
+  baseQueries: BaseQuery[];
   /** Global time range key, e.g. `last-24h`, or a raw `ago(...)` token. */
   timeRange?: string;
   autoRefreshMs?: number;
@@ -150,10 +168,29 @@ export function renderParamLiteral(value: string, dataType: ParamDataType | unde
 }
 
 /**
+ * Inline every `$baseQuery('name')` / `$baseQuery("name")` token with the
+ * matching base query's KQL, wrapped in parentheses so it composes as a
+ * sub-expression (`$baseQuery('Filtered') | summarize ...`). Unknown names are
+ * left intact so the KQL surfaces an honest "unresolved base query" error
+ * rather than silently dropping the reference.
+ */
+export function substituteBaseQueries(kql: string, baseQueries: BaseQuery[] | undefined): string {
+  let out = kql;
+  for (const bq of baseQueries || []) {
+    if (!bq?.name || !bq?.kql) continue;
+    const escaped = bq.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\$baseQuery\\(\\s*['"]${escaped}['"]\\s*\\)`, 'g');
+    out = out.replace(re, `(${bq.kql})`);
+  }
+  return out;
+}
+
+/**
  * Substitute the global time range and every dashboard parameter into a
  * tile's KQL.
  *
  * Substitution tokens (in precedence order):
+ *  - `$baseQuery('name')` → the named base query's KQL (parenthesised)
  *  - `_loomTimeFrom`  → resolved time-from (back-compat with v2.x tiles)
  *  - `_startTime` / `_endTime` → Fabric duration-param convention
  *  - each param's `variableName` (e.g. `_eventType`) → typed literal.
@@ -163,9 +200,12 @@ export function substituteTileKql(
   kql: string,
   params: DashboardParam[],
   timeKey: string | undefined,
+  baseQueries?: BaseQuery[],
 ): string {
+  // Base queries first so their KQL also receives time/param substitution.
+  const expanded = substituteBaseQueries(kql, baseQueries);
   const timeFrom = resolveTimeFrom(timeKey);
-  let out = kql.replace(/\b_loomTimeFrom\b/g, timeFrom);
+  let out = expanded.replace(/\b_loomTimeFrom\b/g, timeFrom);
 
   // Fabric duration-parameter convention: _startTime / _endTime.
   out = out
@@ -234,11 +274,16 @@ export function buildTileKql(
   kql: string,
   params: DashboardParam[],
   timeKey: string | undefined,
+  baseQueries?: BaseQuery[],
 ): string {
   const timeFrom = resolveTimeFrom(timeKey);
 
+  // Base queries first so `$baseQuery('name')` references are expanded before
+  // param binding — the expanded KQL still gets time/param treatment below.
+  const expanded = substituteBaseQueries(kql, baseQueries);
+
   // Synthetic time tokens — text-substitute (not user params).
-  const body = kql
+  const body = expanded
     .replace(/\b_loomTimeFrom\b/g, timeFrom)
     .replace(/\b_startTime\b/g, timeFrom)
     .replace(/\b_endTime\b/g, 'now()');
@@ -350,13 +395,32 @@ export function sanitizeModel(input: any): DashboardModel {
         .slice(0, 100)
     : [];
 
+  const baseQueries: BaseQuery[] = Array.isArray(input?.baseQueries)
+    ? input.baseQueries
+        .map((q: any): BaseQuery => ({
+          id: String(q?.id || '').slice(0, 80) || genId(),
+          name: String(q?.name || 'Query').slice(0, 120),
+          kql: String(q?.kql || ''),
+        }))
+        .filter((q: BaseQuery) => q.kql.length > 0 && q.kql.length <= 65_536)
+        .slice(0, 50)
+    : [];
+
   return {
     tiles,
     dataSources: sources,
     parameters,
+    baseQueries,
     timeRange: input?.timeRange ? String(input.timeRange).slice(0, 60) : undefined,
     autoRefreshMs: Number.isFinite(Number(input?.autoRefreshMs)) ? Number(input.autoRefreshMs) : undefined,
   };
+}
+
+function genId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  } catch { /* noop */ }
+  return 'bq-' + Math.random().toString(36).slice(2, 10);
 }
 
 function clampInt(v: any, min: number, max: number): number | undefined {

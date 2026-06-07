@@ -7,7 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   substituteTileKql, buildTileKql, paramTypeToKustoType,
   renderParamLiteral, resolveTimeFrom, resolveTileDatabase,
-  sanitizeModel, type DashboardParam,
+  sanitizeModel, substituteBaseQueries,
+  type DashboardParam, type BaseQuery,
 } from '../kql-dashboard-model';
 
 describe('resolveTimeFrom', () => {
@@ -77,6 +78,39 @@ describe('substituteTileKql', () => {
     const out = substituteTileKql('T | where _state == 1 and n == _st', params, 'all');
     expect(out).toContain('_state == 1');
     expect(out).toContain('n == 5');
+  });
+});
+
+describe('substituteBaseQueries', () => {
+  const baseQueries: BaseQuery[] = [
+    { id: 'q1', name: 'Filtered', kql: 'StormEvents | where State == "Texas"' },
+    { id: 'q2', name: 'Recent', kql: 'T | where ts > ago(1h)' },
+  ];
+
+  it('inlines a $baseQuery() reference as a parenthesised sub-query', () => {
+    const out = substituteBaseQueries(`$baseQuery('Filtered') | summarize count()`, baseQueries);
+    expect(out).toBe('(StormEvents | where State == "Texas") | summarize count()');
+  });
+
+  it('supports double quotes and surrounding whitespace', () => {
+    const out = substituteBaseQueries('$baseQuery( "Recent" ) | take 5', baseQueries);
+    expect(out).toBe('(T | where ts > ago(1h)) | take 5');
+  });
+
+  it('leaves unknown base-query names intact (honest unresolved error)', () => {
+    const out = substituteBaseQueries(`$baseQuery('Missing') | count`, baseQueries);
+    expect(out).toContain(`$baseQuery('Missing')`);
+  });
+
+  it('substituteTileKql expands base queries before params/time', () => {
+    const params: DashboardParam[] = [{ variableName: '_n', type: 'freetext', dataType: 'long', value: '5' }];
+    const out = substituteTileKql(
+      `$baseQuery('Filtered') | where ts > _startTime | take _n`,
+      params, 'last-1h', baseQueries,
+    );
+    expect(out).toContain('(StormEvents | where State == "Texas")');
+    expect(out).toContain('ts > ago(1h)');
+    expect(out).toContain('take 5');
   });
 });
 
@@ -207,6 +241,24 @@ describe('sanitizeModel', () => {
   it('preserves data sources', () => {
     const m = sanitizeModel({ dataSources: [{ id: 's1', name: 'Src', database: 'd1' }] });
     expect(m.dataSources[0]).toMatchObject({ id: 's1', name: 'Src', database: 'd1' });
+  });
+
+  it('coerces base queries and drops empty-kql entries', () => {
+    const m = sanitizeModel({ baseQueries: [
+      { id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' },
+      { name: 'NoKql', kql: '' },
+      { name: 'NoId', kql: 'T | take 1' },
+    ]});
+    expect(m.baseQueries).toHaveLength(2);
+    expect(m.baseQueries[0]).toMatchObject({ id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' });
+    expect(m.baseQueries[1].name).toBe('NoId');
+    expect(m.baseQueries[1].id).toBeTruthy(); // auto-generated id
+  });
+
+  it('always returns a baseQueries array even when absent', () => {
+    const m = sanitizeModel({ tiles: [] });
+    expect(Array.isArray(m.baseQueries)).toBe(true);
+    expect(m.baseQueries).toHaveLength(0);
   });
 });
 

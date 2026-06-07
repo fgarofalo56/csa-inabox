@@ -134,6 +134,7 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
       tiles: [{ title: 'T', kql: 'print 1', viz: 'pie', w: 6, h: 3 }],
       dataSources: [{ id: 's', name: 'S', database: 'db1' }],
       parameters: [{ variableName: '_x', type: 'fixed', dataType: 'string', values: ['a', 'b'] }],
+      baseQueries: [{ id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' }],
       timeRange: 'last-1h',
     };
     const res = await PUT(jsonReq(body), ctx);
@@ -144,7 +145,10 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
     expect(patch.tiles[0].viz).toBe('pie');
     expect(patch.dataSources[0].database).toBe('db1');
     expect(patch.parameters[0].variableName).toBe('_x');
+    expect(patch.baseQueries[0]).toMatchObject({ id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' });
     expect(patch.timeRange).toBe('last-1h');
+    // The save response echoes the persisted base queries back to the client.
+    expect(j.baseQueries[0].name).toBe('Filtered');
   });
 
   it('round-trips a tile drillthrough through PUT (persists and returns it)', async () => {
@@ -213,6 +217,22 @@ describe('POST /api/items/kql-dashboard/[id]/run', () => {
     expect(j.ok).toBe(true);
     expect(j.tiles[0].error).toContain('Semantic error');
     expect(j.tiles[0].result).toBeUndefined();
+  });
+
+  it('inlines a $baseQuery() reference into the executed tile KQL', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    const body = {
+      tiles: [{ title: 'T', kql: `$baseQuery('Filtered') | where ts > _startTime | count`, viz: 'stat' }],
+      baseQueries: [{ id: 'bq1', name: 'Filtered', kql: 'StormEvents | where State == "Texas"' }],
+      timeRange: 'last-1h',
+    };
+    const res = await RUN(jsonReq(body), ctxNew);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const [, executedKql] = (executeQuery as any).mock.calls[0];
+    expect(executedKql).toContain('(StormEvents | where State == "Texas")');
+    expect(executedKql).toContain('ago(1h)');
+    expect(executedKql).not.toContain('$baseQuery');
   });
 });
 
