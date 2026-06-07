@@ -52,11 +52,11 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ADX-supported data formats. IoT Hub does NOT support RAW (per ADX docs), so
-// it is intentionally absent — the UI dropdown offers the same curated set.
+// ADX-supported data formats. RAW is valid for Event Hubs but NOT for IoT Hub
+// (per ADX docs) — handleIotHub rejects RAW explicitly below.
 const VALID_FORMATS = new Set([
   'MULTIJSON', 'JSON', 'CSV', 'TSV', 'SCSV', 'SOHSV', 'PSV', 'TXT', 'TSVE',
-  'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE', 'SINGLEJSON',
+  'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE', 'SINGLEJSON', 'RAW',
 ]);
 
 const EVENTHUB_ID_RE =
@@ -235,8 +235,8 @@ async function handleIotHub(database: string, body: any): Promise<NextResponse> 
     return NextResponse.json({ ok: false, error: 'a valid sharedAccessPolicyName is required (e.g. iothubowner or service)' }, { status: 400 });
   }
   if (!tableName || !validKustoIdent(tableName)) return NextResponse.json({ ok: false, error: 'a valid target tableName is required' }, { status: 400 });
-  // IoT Hub does not support RAW; VALID_FORMATS already excludes it.
-  if (!VALID_FORMATS.has(dataFormat)) return NextResponse.json({ ok: false, error: `unsupported dataFormat '${dataFormat}' (IoT Hub does not support RAW)` }, { status: 400 });
+  // IoT Hub does not support RAW; reject it explicitly (EH allows it).
+  if (dataFormat === 'RAW' || !VALID_FORMATS.has(dataFormat)) return NextResponse.json({ ok: false, error: `unsupported dataFormat '${dataFormat}' (IoT Hub does not support RAW)` }, { status: 400 });
 
   const connName = connectionName(tableName, 'iot', lastSegment(iotHubResourceId));
   const connection = await createIotHubDataConnection(database, connName, {
