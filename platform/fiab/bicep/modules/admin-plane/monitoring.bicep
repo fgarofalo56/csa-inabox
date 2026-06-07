@@ -181,6 +181,21 @@ resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+// Monitoring Contributor — 749f88ad-0bdc-4e1b-a8b6-bfb96b995e05
+// Lets the Console UAMI PUT Microsoft.Insights/scheduledQueryRules + action
+// groups in this RG, which is what the Azure-native Activator rule wizard does
+// (lib/azure/activator-monitor.ts → monitor-client.upsertScheduledQueryRule).
+// LOOM_ALERT_RG defaults to this admin RG (see main.bicep) so the grant scope
+// matches where alert rules are created. No Microsoft Fabric required.
+resource consoleMonitorContrib 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  name: guid(resourceGroup().id, consolePrincipalId, '749f88ad-0bdc-4e1b-a8b6-bfb96b995e05')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '749f88ad-0bdc-4e1b-a8b6-bfb96b995e05')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // =====================================================================
 // Diagnostic settings catalog (callers wire per-resource)
 // =====================================================================

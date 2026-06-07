@@ -24,6 +24,9 @@ param synapseManagedIdentityPrincipalId string
 @description('Console UAMI principal (object) id — granted Storage Blob Data Reader so the BFF live Tables catalog scan can list paths + read _delta_log entries without needing write/Contributor. Empty = skip.')
 param consolePrincipalId string = ''
 
+@description('Shared ADX cluster system-assigned MI principal (object) id — granted Storage Blob Data Reader so .create external table kind=delta (…;managed_identity=system) over this lakehouse ADLS account can read the delta log + data files (Eventhouse → lakehouse/warehouse Delta endpoint). Empty = skip.')
+param adxClusterPrincipalId string = ''
+
 // Storage Blob Data Contributor
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Storage Blob Data Reader (read-only data plane — sufficient for the catalog scan)
@@ -51,6 +54,21 @@ resource consoleReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01'
   scope: sa
   properties: {
     principalId: consolePrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Shared ADX cluster system MI → Storage Blob Data Reader on the lakehouse
+// storage account. Required for the Eventhouse → lakehouse/warehouse Delta
+// endpoint: .create-or-alter external table kind=delta (…;managed_identity=system)
+// + query_acceleration read the _delta_log + Parquet data files as the cluster MI.
+// Read-only — external tables never write back. No Fabric/OneLake dependency.
+resource adxReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adxClusterPrincipalId)) {
+  name: guid(sa.id, adxClusterPrincipalId, storageBlobDataReaderRoleId)
+  scope: sa
+  properties: {
+    principalId: adxClusterPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
     principalType: 'ServicePrincipal'
   }
