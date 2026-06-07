@@ -18,7 +18,13 @@
 
 import { listPaths } from './adls-client';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
-import { listWarehouses, executeStatement, databricksConfigGate } from './databricks-client';
+import {
+  listWarehouses,
+  executeStatement,
+  databricksConfigGate,
+  writeUcVolumesFile,
+  deleteUcVolumesFile,
+} from './databricks-client';
 import {
   getKeyVaultSecret,
   keyVaultConfigGate,
@@ -171,8 +177,67 @@ export async function createTablesShortcut(args: {
     synapseDataSource?: string;
     /** Object key under the bucket, for the Synapse OPENROWSET BULK path. */
     objectKey?: string;
+    /** Delta Sharing credential + parsed share coordinates (delta_sharing source). */
+    deltaSharing?: ExternalBinding['deltaSharing'];
+    /** Lakehouse id — needed to derive the Delta Sharing credential file path. */
+    lakehouseId?: string;
   };
 }): Promise<TablesRegistration | EngineGate> {
+  // --- Delta Sharing Tables: register a UC table with the delta_sharing provider. ---
+  // This uses the Spark `delta_sharing` data source, which requires the
+  // Databricks engine. The credential profile is written to a UC Volume so the
+  // workspace can authenticate against the share server, then the table is
+  // created over `<credPath>#<share>.<schema>.<table>`.
+  if (args.external?.deltaSharing) {
+    if (databricksConfigGate()) {
+      return {
+        gated: true,
+        code: 'delta_sharing_needs_databricks',
+        hint:
+          'Delta Sharing Tables shortcuts use the delta_sharing Spark provider, which requires the ' +
+          'Databricks engine. Set LOOM_DATABRICKS_HOSTNAME so the shortcut can be registered as a UC ' +
+          'table. A Files shortcut (kind=files) works without Databricks — the credential is validated ' +
+          'against the share server on create and the profile is stored in the registry for notebook reads.',
+      };
+    }
+    const ds = args.external.deltaSharing;
+    const lhId = args.external.lakehouseId || args.lakehouseId;
+    const credPath = deltaSharingCredPath(lhId, args.name);
+    try {
+      await writeUcVolumesFile(credPath, JSON.stringify(ds.profile));
+    } catch (e: any) {
+      const v = deltaSharingVolume();
+      return {
+        gated: true,
+        code: 'delta_sharing_needs_uc_volume',
+        hint:
+          `Could not write the Delta Sharing credential file to the UC Volume ` +
+          `${v.catalog}.${v.schema}.${v.volume}. Create it once as a metastore admin ` +
+          `(CREATE VOLUME IF NOT EXISTS ${v.catalog}.${v.schema}.${v.volume};) and grant the Console UAMI ` +
+          `WRITE VOLUME on it, or set LOOM_DELTA_SHARING_VOLUME to an existing governed volume. (${e?.message || e})`,
+      };
+    }
+    const obj = ucObject(lhId, args.name);
+    const warehouses = await listWarehouses();
+    const wh = warehouses.find((w) => w.state === 'RUNNING') || warehouses[0];
+    if (!wh) {
+      return {
+        gated: true,
+        code: 'no_warehouse',
+        hint:
+          'Databricks is configured but the workspace has no SQL Warehouse to run the Delta Sharing ' +
+          'table DDL. Create a SQL Warehouse (Compute → SQL Warehouses) and retry.',
+      };
+    }
+    const [cat, sch, tbl] = obj.split('.');
+    const loc = `${credPath}#${ds.share}.${ds.schema}.${ds.table}`.replace(/'/g, "''");
+    const ddl =
+      `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
+      `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} USING deltaSharing LOCATION '${loc}';`;
+    await executeStatement(wh.id, ddl);
+    return { engine: 'databricks', engineObject: obj };
+  }
+
   const engine = pickTablesEngine();
   if (!engine) {
     return {
@@ -303,6 +368,31 @@ export async function dropExternalBinding(
 }
 
 /**
+ * Delete the Delta Sharing credential file a Tables shortcut wrote to the UC
+ * Volume. Best-effort — never touches the shared source data. Only meaningful
+ * for delta_sharing shortcuts on the Databricks engine.
+ */
+export async function dropDeltaSharingCredential(lakehouseId: string, name: string): Promise<void> {
+  if (databricksConfigGate()) return;
+  await deleteUcVolumesFile(deltaSharingCredPath(lakehouseId, name)).catch(() => {});
+}
+
+/**
+ * Re-write the Delta Sharing credential file on the UC Volume from a (refreshed)
+ * profile. Called by the Test/Retry route so that, after the operator updates
+ * the Key Vault secret with a new bearer token, the UC table backing a Tables
+ * shortcut picks up the new token. Requires the Databricks engine.
+ */
+export async function refreshDeltaSharingCredential(
+  lakehouseId: string,
+  name: string,
+  profile: { endpoint: string; bearerToken: string; expirationTime?: string; shareCredentialsVersion?: number },
+): Promise<void> {
+  if (databricksConfigGate()) return;
+  await writeUcVolumesFile(deltaSharingCredPath(lakehouseId, name), JSON.stringify(profile));
+}
+
+/**
  * Pre-flight honest-gate for external cloud sources (S3/GCS/Dataverse).
  *
  * Returns a gate ONLY when:
@@ -324,6 +414,7 @@ export function externalSourceGate(targetType: ShortcutTargetType, hasCredential
     const secret =
       targetType === 's3' ? 'an AWS IAM role ARN (UC engine) or access key/secret (Synapse engine)' :
       targetType === 'gcs' ? 'a GCS service-account JSON' :
+      targetType === 'delta_sharing' ? "the Delta Sharing credential file JSON (endpoint + bearerToken), obtained from the provider's activation link" :
       'the Dataverse Synapse-Link linked ADLS Gen2 storage path';
     return {
       gated: true,
@@ -375,6 +466,25 @@ function ucCredNames(lakehouseId: string, name: string): { cred: string; loc: st
 }
 
 /**
+ * UC Volume that holds Delta Sharing credential files. Overridable via
+ * LOOM_DELTA_SHARING_VOLUME (catalog.schema.volume) for tenants that keep
+ * shortcut credentials in a different governed volume. Default matches the
+ * bootstrap DDL in docs/fiab/v3-tenant-bootstrap.md.
+ */
+function deltaSharingVolume(): { catalog: string; schema: string; volume: string } {
+  const raw = (process.env.LOOM_DELTA_SHARING_VOLUME || 'loom.loom_shortcuts.loom_shortcut_files').trim();
+  const [catalog, schema, volume] = raw.split('.');
+  return { catalog: catalog || 'loom', schema: schema || 'loom_shortcuts', volume: volume || 'loom_shortcut_files' };
+}
+
+/** UC Volume file path for a shortcut's Delta Sharing credential file. */
+function deltaSharingCredPath(lakehouseId: string, name: string): string {
+  const safe = (s: string) => s.replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+  const v = deltaSharingVolume();
+  return `/Volumes/${v.catalog}/${v.schema}/${v.volume}/loom_${safe(lakehouseId)}_${safe(name)}.share`;
+}
+
+/**
  * The real read-through binding for external cloud sources. Resolves the
  * Key Vault secret named by credentialRef.keyVaultSecret, then materialises
  * the engine binding and returns the address the Tables/Files engine reads
@@ -387,7 +497,7 @@ function ucCredNames(lakehouseId: string, name: string): { cred: string; loc: st
  *   - { readUri, synapse: {...} }  Synapse scoped-credential + data-source names
  */
 export interface ExternalBinding {
-  /** The address the engine reads from (s3://… , gs://… , or abfss://… for Dataverse). */
+  /** The address the engine reads from (s3://… , gs://… , abfss://… for Dataverse, or delta-sharing://… ). */
   readUri: string;
   /** UC external location name (Databricks UC engine), if one was created. */
   ucExternalLocation?: string;
@@ -395,12 +505,24 @@ export interface ExternalBinding {
   ucStorageCredential?: string;
   /** Synapse external-data-source + scoped-credential names, if Synapse engine. */
   synapse?: { dataSource: string; scopedCredential: string };
+  /**
+   * Delta Sharing credential profile + parsed share/schema/table (set when
+   * targetType='delta_sharing'). The route passes this through to
+   * createTablesShortcut so it can write the credential file to a UC Volume and
+   * register the table with the `delta_sharing` provider.
+   */
+  deltaSharing?: {
+    profile: { endpoint: string; bearerToken: string; expirationTime?: string; shareCredentialsVersion?: number };
+    share: string;
+    schema: string;
+    table: string;
+  };
 }
 
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
-  targetType: 's3' | 'gcs' | 'dataverse';
+  targetType: 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
   targetUri: string;
   credentialRef: ShortcutCredentialRef;
 }): Promise<ExternalBinding | EngineGate> {
@@ -408,6 +530,86 @@ export async function bindExternalSource(args: {
   const secretName = credentialRef.keyVaultSecret;
   if (!secretName) {
     return { gated: true, code: 'needs_credential', hint: `${labelFor(targetType)} requires credentialRef.keyVaultSecret.` };
+  }
+
+  // --- Delta Sharing: validate the credential file + test the share server. ---
+  // The KV secret holds the open-sharing credential file JSON
+  // ({ shareCredentialsVersion, endpoint, bearerToken, expirationTime }) the
+  // provider hands out via an activation link. We parse it, then prove the
+  // bearer token works by listing shares (GET <endpoint>/shares). A 401/403 =>
+  // the token is expired/invalid (the "broken" state — fix the KV secret + Retry).
+  // Learn: https://learn.microsoft.com/azure/databricks/delta-sharing/read-data-open
+  if (targetType === 'delta_sharing') {
+    const raw = (await getKeyVaultSecret(secretName)).trim();
+    let profile: { shareCredentialsVersion?: number; endpoint?: string; bearerToken?: string; expirationTime?: string };
+    try {
+      profile = JSON.parse(raw);
+    } catch {
+      throw Object.assign(
+        new Error(
+          `Delta Sharing secret '${secretName}' must be the credential file JSON ` +
+          `(shareCredentialsVersion, endpoint, bearerToken). Download it from the provider's ` +
+          `activation link and store the raw JSON as the Key Vault secret value.`,
+        ),
+        { code: 'bad_delta_sharing_secret' },
+      );
+    }
+    if (!profile.endpoint || !profile.bearerToken) {
+      throw Object.assign(
+        new Error(`Delta Sharing credential file in '${secretName}' is missing 'endpoint' or 'bearerToken'.`),
+        { code: 'bad_delta_sharing_secret' },
+      );
+    }
+    // delta-sharing://<share>/<schema>/<table> is the canonical address.
+    const dsMatch = (targetUri || '').match(/^delta-sharing:\/\/([^/]+)\/([^/]+)\/(.+)$/i);
+    if (!dsMatch) {
+      throw Object.assign(
+        new Error(`Delta Sharing targetUri must be delta-sharing://<share>/<schema>/<table>; got: ${targetUri}`),
+        { code: 'bad_target' },
+      );
+    }
+    // Real HTTP test: list shares with the bearer token. 401/403 => auth failure.
+    const sharesUrl = profile.endpoint.replace(/\/+$/, '') + '/shares';
+    let testRes: Response;
+    try {
+      testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+    } catch (netErr: any) {
+      throw Object.assign(
+        new Error(`Delta Sharing endpoint unreachable: ${sharesUrl} — ${netErr?.message || netErr}`),
+        { code: 'delta_sharing_unreachable' },
+      );
+    }
+    if (testRes.status === 401 || testRes.status === 403) {
+      throw Object.assign(
+        new Error(
+          `Delta Sharing authentication failed (HTTP ${testRes.status}). The bearer token in secret ` +
+          `'${secretName}' is invalid or expired (open-sharing tokens expire after at most 1 year). ` +
+          `Download a fresh credential file from the provider's activation link, update the Key Vault ` +
+          `secret, then Retry.`,
+        ),
+        { code: 'delta_sharing_auth_failure' },
+      );
+    }
+    if (!testRes.ok) {
+      throw Object.assign(
+        new Error(`Delta Sharing endpoint returned HTTP ${testRes.status}: ${sharesUrl}`),
+        { code: 'delta_sharing_unreachable' },
+      );
+    }
+    return {
+      readUri: targetUri,
+      deltaSharing: {
+        profile: {
+          endpoint: profile.endpoint,
+          bearerToken: profile.bearerToken,
+          expirationTime: profile.expirationTime,
+          shareCredentialsVersion: profile.shareCredentialsVersion,
+        },
+        share: dsMatch[1],
+        schema: dsMatch[2],
+        table: dsMatch[3],
+      },
+    };
   }
 
   // --- Dataverse: bind via the Synapse-Link linked ADLS Gen2 storage. ---
@@ -538,6 +740,7 @@ export function labelFor(t: ShortcutTargetType): string {
     case 's3': return 'Amazon S3';
     case 'gcs': return 'Google Cloud Storage';
     case 'dataverse': return 'Dataverse';
+    case 'delta_sharing': return 'Delta Sharing';
     default: return t;
   }
 }

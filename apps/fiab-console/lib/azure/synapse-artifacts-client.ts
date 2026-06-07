@@ -340,3 +340,33 @@ export function emptySqlScriptProperties(): SynapseSqlScript['properties'] {
     },
   };
 }
+
+// ============================================================
+// Spark configurations  (workspaces/.../sparkconfigurations)
+//
+// A Spark configuration is the Synapse equivalent of a "notebook environment":
+// a named bag of Spark session settings (spark.* keys) that a notebook can
+// attach so its Livy session inherits library packages and config. The Synapse
+// Studio notebook header surfaces it as the "Environment / Spark configuration"
+// picker next to the Spark-pool attach dropdown.
+//
+// Dev-plane REST (api-version 2020-12-01):
+//   GET https://<ws>.dev.azuresynapse.net/sparkconfigurations?api-version=…
+// `properties.configs` is a flat { [key]: value } string map.
+//   Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-configuration
+// ============================================================
+
+export interface SynapseSparkConfiguration extends SynapseArtifact {
+  properties?: {
+    description?: string;
+    configs?: Record<string, string>;
+    annotations?: unknown[];
+    notes?: string;
+    createdBy?: string;
+    configMergeRule?: Record<string, string>;
+  };
+}
+
+export async function listSparkConfigurations(): Promise<SynapseSparkConfiguration[]> {
+  return listAll<SynapseSparkConfiguration>('sparkconfigurations', 'listSparkConfigurations');
+}

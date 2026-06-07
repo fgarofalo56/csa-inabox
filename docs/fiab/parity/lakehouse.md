@@ -22,13 +22,19 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | Download a file | Explorer context menu |
 | 14 | Object Properties | Explorer context menu |
 | 15 | List / delete existing shortcuts | Explorer (shortcuts appear as folders/tables) |
+| 16 | **Get data** ribbon menu (Upload, New shortcut, New dataflow, New pipeline, New notebook, Copy activity) | Home ribbon → Get data ▼ |
+| 17 | **Analyze data** ribbon menu (SQL endpoint, New/Existing notebook) | Home ribbon → Analyze data ▼ |
+| 18 | **New semantic model** (DirectLake over Delta) | Home ribbon |
+| 19 | **Share** the lakehouse | Home ribbon → Share |
+| 20 | **Reference (secondary) lakehouse** is read-only — write commands gray out | Explorer "Add lakehouses" |
+| 21 | **Reference / add another lakehouse** to the explorer for read-only side-by-side browse + preview; primary distinguished; writes blocked on references | Lakehouse explorer "Add lakehouse" (reference lakehouses) |
 
 ## Loom coverage
 
 | # | Status | Notes |
 |---|---|---|
-| 1 | ✅ | Tables + Files tabs/tree rendered |
-| 2 | ✅ | ADLS Gen2 tree via lakehouse API |
+| 1 | ✅ | Tables + Files tabs/tree rendered. The **Tables** tree is the live Delta catalog (real `_delta_log` scan), grouped by schema, with Delta/non-Delta icons and broken/empty status badges. |
+| 2 | ✅ | ADLS Gen2 tree via lakehouse API. Tables tab additionally renders a per-schema grid: format, status (ok/broken/empty), Delta version, row count, size, last-modified — all from the live scan. |
 | 3 | ✅ | New folder + upload wired (`canFileAction`) |
 | 4 | ✅ | `preview` tab — sample rows |
 | 5 | ✅ | `Query this file` → SQL tab, runs through serverless `/query` |
@@ -42,13 +48,48 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 13 | ✅ (built) | Download via `/api/lakehouse/download` (ADLS byte passthrough, `attachment` disposition). |
 | 14 | ✅ (built) | Properties dialog from the real ADLS metadata already in state. |
 | 15 | ⚠️ (honest-gate) | Folds into row 7 — list/delete of native shortcuts ships with the Azure-native engine build (tracked design doc). No Fabric REST. |
+| 16 | ✅ (built) | `Get data ▼` Fluent Menu in the ribbon (`ribbon.tsx` `dropdownItems`). Upload → `onUploadClick`; New shortcut → `setTab('shortcuts')` + `openShortcutWizard()`; New dataflow/pipeline/notebook/Copy activity → `router.push('/items/<type>/new')` (real registered editors). Every item navigates to a real surface — no toast. Grays out on a reference lakehouse. |
+| 17 | ✅ (built) | `Analyze data ▼` menu. SQL endpoint → `setTab('sql')` (Synapse Serverless OPENROWSET, row 6 backend); New notebook → `/items/notebook/new?lakehouse=`; Existing notebook → `/items/notebook/new`. |
+| 18 | ⚠️ (honest-gate) | `New semantic model` opens a `MessageBar intent="warning"` dialog: Fabric DirectLake needs a Power BI/Fabric capacity (no Azure-native 1:1), documents the Synapse-Serverless + Power BI Desktop path, and offers an in-app "Open SQL endpoint" action. Strictly opt-in via `LOOM_LAKEHOUSE_BACKEND=fabric`; never gates the default Azure-native lakehouse. |
+| 19 | ✅ (built) | `Share` dialog grants Entra principals container-scope RBAC via the existing `/api/lakehouse/permissions` POST (Storage Blob Data Reader/Contributor/Owner). Real ARM role assignment — no Fabric/Power BI workspace. |
+| 20 | ✅ (built) | `isReferenceLakehouse = state.isReference === true` drives `writeBlocked`; Refresh, Get data, Settings disable with a "Read-only — reference lakehouse" tooltip. Analyze data, Preview, Query, Permissions, Share (read/admin) stay enabled, matching Fabric. |
+| 21 | ✅ (built) | **Reference Lakehouses federation (F8).** Left explorer shows the **primary lakehouse (bold)** plus a **References** section; the **+** picker lists in-workspace lakehouses (from Cosmos `items`) and adds them via `/api/lakehouse/references` (persisted on `state.referencedLakehouseIds` — no new container). Each reference is an expandable tree node (containers → real ADLS files via the **read-only** `/api/lakehouse/references/paths` route). Selecting a reference file runs a real OPENROWSET preview through the account-scoped `/api/lakehouse/preview?...&account=` route (pass-through RBAC). **Write actions (Upload / New folder / Delete) render disabled with a Tooltip** in the reference pane — there is no write BFF route for references, so the disable is enforced, not cosmetic. Unreachable references (UAMI lacks Storage Blob Data Reader) show an error icon + the exact remediation tooltip. Zero Fabric dependency — same-account refs use the primary LOOM ADLS account; cross-account refs use the lakehouse's `state.storageAccount`. |
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
+- **Live Tables catalog** → `GET /api/lakehouse/tables` → `synapse-catalog-client.scanLakehouseTables`: ADLS Gen2 directory scan of each container's `Tables/` dir + `_delta_log` read for Delta detection / latest commit version / status, parquet-byte size aggregation, and optional Synapse Serverless `OPENROWSET COUNT(*)` row counts (`rowCounts=true`). Row counts are `null` — never a fabricated 0 — when Serverless is offline. No Fabric / OneLake dependency. Requires the Console UAMI hold **Storage Blob Data Reader** on the lakehouse storage account (granted by `synapse-storage-rbac.bicep` via the `consolePrincipalId` param). Honest-empty `{ ok: true, tables: [], gate }` when no `LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL` is set.
 - T-SQL query → Synapse serverless TDS (`executeQuery` / `serverlessTarget`) via `/api/items/lakehouse/[id]/query`.
 - Download → ADLS `readToBuffer` (`downloadFile`) via `/api/lakehouse/download`.
 - Context-menu commands → reuse the above backends (no separate / dead paths).
 - Settings → `defaultSparkPool` is an enumerated Dropdown bound to real Synapse Spark pools from `/api/loom/compute-targets` (no freeform compute input); honest empty-state when none deployed.
 - Shortcuts → **no backend yet, by design.** Honest infra-gate only. The Azure-native engine (ADLS Gen2 + Synapse Serverless / Databricks UC + Cosmos registry) is tracked in `docs/fiab/design/lakehouse-shortcuts.md`. The prior Fabric REST path (`/api/catalog/shortcut`) was removed from this editor to eliminate the lakehouse's last hard Fabric dependency.
+- Get data / Analyze data menus → client-side `router.push` to existing item editors (`/items/dataflow|data-pipeline|notebook|copy-job/new`) + tab switches (`setTab('sql'|'shortcuts')`); upload/shortcut reuse the existing ADLS/wizard handlers. No new BFF route.
+- Share → existing `/api/lakehouse/permissions` POST (ARM `Microsoft.Authorization/roleAssignments` at the container scope) — same backend the Permissions dialog uses.
+- New semantic model → no backend (intentional honest-gate). DirectLake is Fabric-capacity-only and strictly opt-in; the dialog points to the Synapse-Serverless + Power BI Desktop Azure-native path.
+- Reference Lakehouses (F8) → `/api/lakehouse/references` (GET list + workspace picker, POST add/remove) over Cosmos `items` (`state.referencedLakehouseIds`, validated to the same workspace to prevent reference-injection); `/api/lakehouse/references/paths` (GET only — read-only ADLS `listPaths` with optional `state.storageAccount`); read-only preview via `/api/lakehouse/preview?...&account=` (account-scoped OPENROWSET, validated `^[a-z0-9]{3,24}$`). Cross-account references require the Console UAMI to hold **Storage Blob Data Reader** on the referenced storage account — see `docs/fiab/v3-tenant-bootstrap.md#reference-lakehouse-cross-account-rbac`. Same-account references work out of the box (the UAMI already holds Storage Blob Data Contributor on the primary LOOM ADLS account).
 
 Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**
+
+## Settings — table optimization & acceleration (F12 / F22)
+
+Source UI: Fabric Lakehouse table maintenance + Spark/Delta optimization —
+https://learn.microsoft.com/azure/databricks/delta/clustering ·
+https://learn.microsoft.com/fabric/data-engineering/delta-optimization-and-v-order ·
+https://learn.microsoft.com/fabric/data-engineering/autotune ·
+https://learn.microsoft.com/fabric/data-engineering/native-execution-engine-overview
+
+Route: `apps/fiab-console/app/api/lakehouse/settings/route.ts` · Editor Settings dialog: `apps/fiab-console/lib/editors/lakehouse-editor.tsx` · Validation: `apps/fiab-console/lib/editors/lakehouse-spark-conf.ts`
+
+| # | Capability | Status | Backend / disclosure |
+|---|---|---|---|
+| F12 | **Liquid clustering** — pick clustering columns for a Delta table | ✅ | Real `ALTER TABLE delta.\`abfss://…/Tables/<t>\` CLUSTER BY (<cols>)` via a Databricks SQL Warehouse (`executeStatement`). Azure-native, no Fabric. Table picker enumerated from the live `/Tables/` listing (+ bundle tables) — no freeform unless empty. Honest gate when `LOOM_DATABRICKS_HOSTNAME` unset / no warehouse exists; columns persist to Cosmos either way. Success MessageBar echoes the exact SQL and reminds to run `OPTIMIZE`. |
+| F22a | **V-Order** toggle (`spark.sql.parquet.vorder.default`) | ⚠️ honest-gate | Persists preference to Cosmos. `MessageBar intent="warning"` states it is Fabric-Spark-only and that the Azure path (Synapse Spark / Databricks `OPTIMIZE`) runs standard Delta compaction without V-Order. No false "enabled-on-Azure" claim. |
+| F22b | **Autotune** toggle (`spark.ms.autotune.enabled`) | ⚠️ honest-gate | Persists preference. Warning MessageBar: Fabric Runtime 1.2 only; key silently ignored on Synapse Spark / Databricks. |
+| F22c | **Native execution engine** (Velox / Apache Gluten) | ⚠️ honest-gate | Persists preference. Warning MessageBar: Fabric Runtime 1.3 / 2.0 only; enabled at the capacity/runtime layer, not via a Spark config key. |
+| F22d | **sparkConfig typo validation** | ✅ | `sparkConfigWarnings()` flags common typos (missing `spark.sql.` prefix, `BroadCast` casing, abbreviated `mem`, `enable`→`enabled`, legacy `vorder.enable`) as errors with the correct key + hint, and flags Fabric-only keys (`spark.ms.*`, `spark.sql.parquet.vorder.*`) as warnings. Unit-tested (`lib/editors/__tests__/lakehouse-spark-conf.test.ts`). |
+
+Per-cloud honesty: the GET response returns the cloud boundary (commercial / gcc / gcch / il5, inferred from `AZURE_AUTHORITY_HOST` + `LOOM_GCCH`/`LOOM_IL5`); in GCC/GCC-High/IL5 the Fabric-only toggles append a note that there is no Fabric F-SKU / Fabric Spark path in that cloud so the preference has no runtime effect anywhere.
+
+Bicep: `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` (optional warehouse pin, blank → first RUNNING warehouse) added to `platform/fiab/bicep/modules/admin-plane/main.bicep`. Liquid clustering reuses the already-deployed `LOOM_DATABRICKS_HOSTNAME` + Console UAMI Databricks workspace access.
+
+Grade: **A+ (liquid clustering hits a real Databricks DDL backend; the three Fabric-only accelerators are honest persisted-preference gates with precise warning MessageBars — never a fake Azure "enabled"; sparkConfig validation is unit-tested; bicep-synced).**

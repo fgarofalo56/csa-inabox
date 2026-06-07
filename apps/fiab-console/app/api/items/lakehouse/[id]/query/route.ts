@@ -25,7 +25,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
+import { serverlessTarget, executeQuery, getSynapseSqlSuffix } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
     return NextResponse.json({
       ok: true,
       ...result,
-      endpoint: `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.sql.azuresynapse.net`,
+      endpoint: `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}`,
       database,
       executedBy: session.claims.upn,
     });
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
           code: 'synapse_access_denied',
           error:
             'Access denied to the Synapse Serverless SQL endpoint ' +
-            `(${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.sql.azuresynapse.net). ` +
+            `(${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}). ` +
             'Two grants are required and one is missing in this deployment: ' +
             '(1) the Console UAMI must have CONNECT + db_datareader on the serverless DB ' +
             '(run: CREATE LOGIN/USER FROM EXTERNAL PROVIDER for the UAMI + GRANT), and ' +

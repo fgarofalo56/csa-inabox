@@ -69,6 +69,7 @@ import {
   listContainers as adlsListContainers,
   uploadFile as adlsUploadFile,
   pathToHttpsUrl,
+  resolveAbfssRoot,
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
@@ -542,6 +543,14 @@ async function provisionAzureNative(
       `${externalViews.length ? `, ${externalViews.length} Synapse view(s)` : ''}.`,
   );
 
+  // abfss URI of this lakehouse's ADLS Gen2 root — the LOCATION for the paired
+  // synapse-serverless-sql-pool item's external data source (F3/F14 share one
+  // Serverless endpoint). Sovereign-cloud-correct (parsed from LOOM_{c}_URL).
+  const abfssRoot = resolveAbfssRoot(container, root);
+  if (abfssRoot) {
+    steps.push(`Lakehouse ADLS root (abfss): ${abfssRoot} — paired SQL analytics endpoint will target it.`);
+  }
+
   return {
     status: 'created',
     resourceId: `${container}/${root}`,
@@ -549,6 +558,7 @@ async function provisionAzureNative(
       backend: 'azure-native-adls',
       container,
       rootPath: root,
+      ...(abfssRoot ? { adlsRoot: abfssRoot } : {}),
       ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
       ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
       ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
