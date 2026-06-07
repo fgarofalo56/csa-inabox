@@ -2765,7 +2765,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         </TabList>
 
         {activeTab === 'designer' && (
-          <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} />
+          <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} itemId={id} />
         )}
 
         {activeTab === 'json' && (

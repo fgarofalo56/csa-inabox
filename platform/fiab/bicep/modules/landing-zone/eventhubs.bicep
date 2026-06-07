@@ -37,6 +37,12 @@ param workspaceId string
 @description('Loom Console UAMI principal ID — granted Azure Event Hubs Data Owner (data plane) + Contributor (ARM control plane) on the namespace so the Eventstream editor\'s Event Hubs navigator can create/list/delete hubs, consumer groups, and schema groups. Empty skips the grants.')
 param consolePrincipalId string = ''
 
+@description('ADF system-assigned MI principal ID — granted Azure Event Hubs Data Sender so ADF CDC pipelines (Eventstream "CDC" source nodes) can write decoded change events to namespace Event Hubs. Empty skips the grant.')
+param adfPrincipalId string = ''
+
+@description('Disable local (SAS key) authentication on the namespace. Defaults true (Entra-only — the secure default and the only allowed posture at IL5/GCC-High). Set false ONLY in Commercial deployments where a custom-app Eventstream source must push events with a SAS connection string; Entra/HTTPS-REST ingest works regardless.')
+param disableLocalAuth bool = true
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -57,7 +63,7 @@ resource ns 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
     maximumThroughputUnits: maxThroughputUnits
     kafkaEnabled: kafkaEnabled
     publicNetworkAccess: 'Disabled'
-    disableLocalAuth: true
+    disableLocalAuth: disableLocalAuth
     minimumTlsVersion: '1.2'
     zoneRedundant: true
   }
@@ -196,6 +202,20 @@ resource ehDataReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
     // Azure Event Hubs Data Receiver
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
     principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Azure Event Hubs Data Sender — granted to the ADF factory MI so Eventstream
+// "CDC" source pipelines (database change feed → Event Hub) can write decoded
+// change events to the namespace's hubs with the factory's managed identity.
+resource ehAdfDataSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adfPrincipalId) && !skipRoleGrants) {
+  scope: ns
+  name: guid(ns.id, adfPrincipalId, '2b629674-e913-4c01-ae53-ef4638d8f975')
+  properties: {
+    // Azure Event Hubs Data Sender
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
+    principalId: adfPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

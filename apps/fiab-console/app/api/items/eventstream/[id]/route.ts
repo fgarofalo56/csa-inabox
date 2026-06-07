@@ -55,6 +55,7 @@ function mapSourceKind(t: string): string {
   if (k.includes('kafka')) return 'kafka';
   if (k.includes('sample')) return 'sample';
   if (k.includes('cdc') || k.includes('mirror')) return 'cdc-mirror';
+  if (k.includes('custom')) return 'custom-app';
   return 'eventhub';
 }
 function mapSinkKind(t: string): string {

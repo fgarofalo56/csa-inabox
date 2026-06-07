@@ -197,6 +197,9 @@ module eventhubs 'eventhubs.bicep' = {
     privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
+    // ADF factory MI gets Azure Event Hubs Data Sender so Eventstream "CDC"
+    // source pipelines can write change events to namespace Event Hubs.
+    adfPrincipalId: (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
