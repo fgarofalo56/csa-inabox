@@ -20,7 +20,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, amlDataPlaneHost } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -506,7 +506,8 @@ async function armFetch(
 }
 
 // Data-plane fetch against the AML regional endpoint.
-// e.g. https://eastus2.api.azureml.ms/<segment>
+// Sovereign-cloud aware: <region>.api.azureml.ms (Commercial/GCC) vs
+// <region>.api.ml.azure.us (GCC-High / IL5) — see cloud-endpoints.amlDataPlaneHost.
 async function amlDataPlaneFetch(
   segment: string,
   init: RequestInit = {},
@@ -514,7 +515,7 @@ async function amlDataPlaneFetch(
   const region = process.env.LOOM_FOUNDRY_REGION || 'eastus2';
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AML data plane');
-  const url = `https://${region}.api.azureml.ms${segment.startsWith('/') ? segment : '/' + segment}`;
+  const url = `https://${amlDataPlaneHost(region)}${segment.startsWith('/') ? segment : '/' + segment}`;
   return fetch(url, {
     ...init,
     headers: {

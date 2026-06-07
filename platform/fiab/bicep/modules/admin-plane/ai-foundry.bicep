@@ -98,9 +98,15 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
-// Grant the Console UAMI AzureML Data Scientist on the hub workspace so the BFF
-// can list + register AML Environment versions (notebook Library & Environment
-// management → aml-environments-client.ts). Read + environment-version PUT.
+// Grant the Console UAMI AzureML Data Scientist on the hub workspace. This one
+// data-plane grant serves several BFF surfaces:
+//   - notebook Library & Environment management → aml-environments-client.ts
+//     (list + register AML Environment versions; read + environment-version PUT)
+//   - ml-model editor stage-transition + register-from-run → MLflow registry
+//     data plane (model-versions/transition-stage, model-versions/create).
+//     Stages are an MLflow-layer concept (Learn "how-to-manage-models-mlflow");
+//     no new Azure resource is required, only this role grant — without it the
+//     MLflow REST calls 403.
 resource hubUamiDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: foundryHub
   name: guid(foundryHub.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')

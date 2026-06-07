@@ -122,3 +122,68 @@ describe('createOnlineEndpoint / createOnlineDeployment', () => {
     expect(body.properties.endpointComputeType).toBe('Managed');
   });
 });
+
+// MLflow registry — stages + lineage. These live on the MLflow REST surface
+// AML hosts (api.azureml.ms/mlflow/v1.0/...), NOT on ARM — per Microsoft Learn
+// "how-to-manage-models-mlflow" stages are an MLflow-layer concept.
+describe('transitionModelVersionStage (MLflow REST)', () => {
+  it('POSTs model-versions/transition-stage with the stage + parses current_stage', async () => {
+    const calls = captureFetch((url) => {
+      if (url.includes('/model-versions/transition-stage')) {
+        return { body: { model_version: { name: 'fraud', version: '5', current_stage: 'Production', run_id: 'run-9' } } };
+      }
+      return { body: {} };
+    });
+    const { transitionModelVersionStage } = await import('../mlflow-client');
+    const mv = await transitionModelVersionStage('fraud', '5', 'Production', { workspace: 'aml-prod' });
+    const call = calls.find((c) => c.url.includes('/model-versions/transition-stage'));
+    expect(call, 'transition-stage POST').toBeTruthy();
+    // MLflow tracking base for the BOUND workspace (not the env hub).
+    expect(call!.url).toMatch(/mlflow\/v1\.0\/.*\/workspaces\/aml-prod\/api\/2\.0\/mlflow\/model-versions\/transition-stage$/);
+    expect(call!.init?.method).toBe('POST');
+    const body = JSON.parse(String(call!.init?.body));
+    expect(body).toMatchObject({ name: 'fraud', version: '5', stage: 'Production', archive_existing_versions: false });
+    expect(mv.currentStage).toBe('Production');
+    expect(mv.runId).toBe('run-9');
+  });
+
+  it('threads archive_existing_versions when requested', async () => {
+    const calls = captureFetch(() => ({ body: { model_version: { name: 'fraud', version: '5', current_stage: 'Production' } } }));
+    const { transitionModelVersionStage } = await import('../mlflow-client');
+    await transitionModelVersionStage('fraud', '5', 'Production', { archiveExisting: true });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.archive_existing_versions).toBe(true);
+  });
+});
+
+describe('getMlflowModelVersion (lineage)', () => {
+  it('GETs model-versions/get and surfaces run_id as runId', async () => {
+    const calls = captureFetch(() => ({ body: { model_version: { name: 'fraud', version: '3', current_stage: 'Staging', run_id: 'run-77', source: 'azureml://x' } } }));
+    const { getMlflowModelVersion } = await import('../mlflow-client');
+    const mv = await getMlflowModelVersion('fraud', '3');
+    expect(calls[0].url).toMatch(/\/model-versions\/get\?name=fraud&version=3$/);
+    expect(mv?.runId).toBe('run-77');
+    expect(mv?.currentStage).toBe('Staging');
+  });
+
+  it('returns null on 404', async () => {
+    captureFetch(() => ({ status: 404, body: { error_code: 'RESOURCE_DOES_NOT_EXIST' } }));
+    const { getMlflowModelVersion } = await import('../mlflow-client');
+    expect(await getMlflowModelVersion('nope', '1')).toBeNull();
+  });
+});
+
+describe('createMlflowModelVersion (register-from-run)', () => {
+  it('POSTs model-versions/create with source + run_id and parses the version', async () => {
+    const calls = captureFetch(() => ({ body: { model_version: { name: 'fraud', version: '6', source: 'azureml://run/model', run_id: 'run-42' } } }));
+    const { createMlflowModelVersion } = await import('../mlflow-client');
+    const mv = await createMlflowModelVersion('fraud', { source: 'azureml://run/model', runId: 'run-42' });
+    const call = calls.find((c) => c.url.includes('/model-versions/create'));
+    expect(call, 'create POST').toBeTruthy();
+    expect(call!.init?.method).toBe('POST');
+    const body = JSON.parse(String(call!.init?.body));
+    expect(body).toMatchObject({ name: 'fraud', source: 'azureml://run/model', run_id: 'run-42' });
+    expect(mv.version).toBe('6');
+    expect(mv.runId).toBe('run-42');
+  });
+});
