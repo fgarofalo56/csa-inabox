@@ -16,6 +16,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { LOOM_DISPLAY_MIME } from '@/lib/types/notebook-cell';
+import { buildLoomDisplay, enrichChartRecs } from '@/lib/notebook/display-stats';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -115,6 +117,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       }
       const sqlJson = out?.data?.['application/json'];
       const sqlTable = sqlJson && Array.isArray(sqlJson.data) ? formatSqlTable(sqlJson) : undefined;
+
+      // Rich display(): the ai-display.py helper emits
+      //   data['application/vnd.loom.display+json'] = LoomDisplayPayload
+      // (columns + sampled rows + real stats, chartRecs left empty). Enrich its
+      // chart recommendations server-side. FALLBACK: a raw Spark DataFrame
+      // (e.g. Spark SQL output, or display() without the helper loaded) arrives
+      // as application/json split-orient — profile it here so the grid still
+      // renders real column stats + at least one recommended chart.
+      const sampleRows = Number(process.env.LOOM_DISPLAY_SAMPLE_ROWS) || 5000;
+      let richDisplay: import('@/lib/types/notebook-cell').LoomDisplayPayload | undefined;
+      const kernelDisplay = out?.data?.[LOOM_DISPLAY_MIME];
+      if (kernelDisplay && Array.isArray(kernelDisplay.columns) && Array.isArray(kernelDisplay.rows)) {
+        richDisplay = enrichChartRecs(kernelDisplay as import('@/lib/types/notebook-cell').LoomDisplayPayload);
+      } else if (sqlJson && Array.isArray(sqlJson.data) && Array.isArray(sqlJson.schema?.fields)) {
+        richDisplay = buildLoomDisplay(sqlJson, sampleRows) || undefined;
+      }
+
       return NextResponse.json({
         ok: true,
         status: stmt.state,
@@ -124,7 +143,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           status: 'ok',
           data: out.data || {},
           textPlain: sqlTable || out.data?.['text/plain'] || '(no output)',
-          rowCount: sqlJson?.data?.length,
+          rowCount: sqlJson?.data?.length ?? richDisplay?.totalCount,
+          richDisplay,
         } : out.status === 'error' ? {
           status: 'error',
           ename: out.ename,

@@ -34,7 +34,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armScope, isGovCloud } from './cloud-endpoints';
+import { armScope, amlDataPlaneHost } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 
@@ -99,25 +99,30 @@ interface MlflowConfig {
 }
 
 /**
+/**
  * Resolve the MLflow tracking base URI from env.
  *
  * Priority:
- *   1. LOOM_MLFLOW_TRACKING_URI — an explicit AML MLflow tracking URI. This is
- *      the ONLY supported path in a sovereign boundary (GCC-High / IL5) where
- *      the commercial `*.api.azureml.ms` host is wrong and no public alternate
- *      hostname is documented. The URI is what `az ml workspace show
- *      --query mlflow_tracking_uri` returns; private-link workspaces also use a
- *      boundary-specific shape that only this override can express.
- *   2. LOOM_AML_WORKSPACE + LOOM_AML_REGION + LOOM_SUBSCRIPTION_ID — the
- *      Commercial / GCC auto-construction (workspace + region honor the
- *      Foundry hub env as a fallback so an already-configured Loom keeps
- *      working without new vars).
+ *   1. LOOM_MLFLOW_TRACKING_URI — an explicit AML MLflow tracking URI. Useful
+ *      for private-link workspaces or boundary-specific shapes that auto-
+ *      construction cannot express; it is exactly what `az ml workspace show
+ *      --query mlflow_tracking_uri` returns. The bearer ARM token authenticates
+ *      the derived https data-plane host.
+ *   2. LOOM_AML_WORKSPACE + LOOM_AML_REGION + LOOM_SUBSCRIPTION_ID — auto-
+ *      construction with a sovereign-aware data-plane host (api.azureml.ms in
+ *      Commercial / GCC, api.ml.azure.us in GCC-High / IL5, resolved by
+ *      `amlDataPlaneHost`). Workspace + region honor the task's dedicated vars
+ *      first, then fall back to the Foundry hub env so an already-configured
+ *      Loom keeps working without new vars.
  *
- * In a Gov boundary with neither set we throw naming LOOM_MLFLOW_TRACKING_URI
- * specifically (auto-construction is not valid there).
+ * `workspaceOverride` lets a caller target a *bound* AML workspace (the model
+ * registry / stage operations run against the workspace the Loom item is bound
+ * to, not just the env hub). The region + resource group still come from env —
+ * for the default Loom deployment every workspace lives in the same admin
+ * plane; set `LOOM_AML_REGION` / `LOOM_AML_RG` when a bound workspace differs.
  */
-export function mlflowConfig(): MlflowConfig {
-  // 1. Explicit tracking URI override (required for IL5 / GCC-High).
+export function mlflowConfig(workspaceOverride?: string): MlflowConfig {
+  // 1. Explicit tracking URI override (private-link / boundary-specific shapes).
   const explicit = process.env.LOOM_MLFLOW_TRACKING_URI?.trim();
   if (explicit) {
     // `azureml://...` tracking URIs map 1:1 to the https data-plane host; the
@@ -132,23 +137,26 @@ export function mlflowConfig(): MlflowConfig {
       region: process.env.LOOM_AML_REGION || process.env.LOOM_FOUNDRY_REGION || 'unknown',
       subscriptionId: subMatch?.[1] || process.env.LOOM_SUBSCRIPTION_ID || '',
       resourceGroup: rgMatch?.[1] || process.env.LOOM_AML_RG || process.env.LOOM_FOUNDRY_RG || '',
-      workspace: wsMatch?.[1] || process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME || '',
+      workspace:
+        (workspaceOverride && workspaceOverride.trim()) ||
+        wsMatch?.[1] ||
+        process.env.LOOM_AML_WORKSPACE ||
+        process.env.LOOM_FOUNDRY_NAME ||
+        '',
       base,
     };
   }
 
-  // 2. Auto-construction — valid only in Commercial / GCC (public Azure
-  // endpoints). In a Gov boundary the `*.api.azureml.ms` host is wrong, so the
-  // explicit override is mandatory there.
-  if (isGovCloud()) {
-    throw new MlflowNotConfiguredError(['LOOM_MLFLOW_TRACKING_URI']);
-  }
+  // 2. Auto-construction with a sovereign-aware data-plane host.
 
   const missing: string[] = [];
   const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
   if (!subscriptionId) missing.push('LOOM_SUBSCRIPTION_ID');
 
-  const workspace = process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME;
+  const workspace =
+    (workspaceOverride && workspaceOverride.trim()) ||
+    process.env.LOOM_AML_WORKSPACE ||
+    process.env.LOOM_FOUNDRY_NAME;
   if (!workspace) missing.push('LOOM_AML_WORKSPACE');
 
   const region =
@@ -162,8 +170,10 @@ export function mlflowConfig(): MlflowConfig {
     process.env.LOOM_FOUNDRY_RG ||
     'rg-csa-loom-admin-eastus2';
 
+  // Sovereign-cloud aware host: api.azureml.ms (Commercial/GCC) vs
+  // api.ml.azure.us (GCC-High / IL5). Never hard-code the Commercial host.
   const base =
-    `https://${region}.api.azureml.ms/mlflow/v1.0` +
+    `https://${amlDataPlaneHost(region!)}/mlflow/v1.0` +
     `/subscriptions/${subscriptionId}` +
     `/resourceGroups/${resourceGroup}` +
     `/providers/Microsoft.MachineLearningServices/workspaces/${workspace}`;
@@ -189,10 +199,10 @@ async function authHeader(): Promise<string> {
 
 async function mlflowFetch(
   apiPath: string,
-  init: RequestInit & { query?: Record<string, string | string[]> } = {},
+  init: RequestInit & { query?: Record<string, string | string[]>; workspace?: string } = {},
 ): Promise<Response> {
-  const cfg = mlflowConfig();
-  const { query, ...rest } = init;
+  const { query, workspace, ...rest } = init;
+  const cfg = mlflowConfig(workspace);
   let url = `${cfg.base}/api/2.0/mlflow${apiPath}`;
   if (query) {
     const sp = new URLSearchParams();
@@ -477,4 +487,165 @@ export async function listArtifacts(runId: string, path?: string): Promise<Mlflo
     isDir: f.is_dir ?? f.isDir ?? false,
     fileSize: numOrUndef(f.file_size ?? f.fileSize),
   }));
+}
+
+// ---------------- Model Registry (stages live HERE, not in ARM) ----------------
+
+/**
+ * MLflow model-version — the registry view that carries `current_stage`
+ * (None | Staging | Production | Archived) and the source `run_id` (lineage).
+ *
+ * IMPORTANT: stages are an MLflow-layer concept. Per Microsoft Learn
+ * ("how-to-manage-models-mlflow"): "You can access stages only by using the
+ * MLflow SDK. They aren't visible in the Azure Machine Learning studio. You
+ * can't retrieve stages by using the Azure Machine Learning SDK, the CLI, or
+ * the REST API." The ARM model-version object (foundry-client FoundryModelVersion)
+ * has no stage — it lives here on the MLflow REST surface AML hosts.
+ */
+export interface MlflowModelVersion {
+  name: string;
+  version: string;
+  /** None | Staging | Production | Archived. */
+  currentStage?: string;
+  description?: string;
+  creationTimestamp?: number;
+  lastUpdatedTimestamp?: number;
+  /** Artifact source URI (azureml://…). */
+  source?: string;
+  /** Source run id — the lineage link back to the training run. */
+  runId?: string;
+  runLink?: string;
+  /** READY | PENDING_REGISTRATION | FAILED_REGISTRATION. */
+  status?: string;
+  statusMessage?: string;
+  tags?: Record<string, string>;
+}
+
+/** Valid MLflow model stages (the transition-stage target values). */
+export const MLFLOW_MODEL_STAGES = ['None', 'Staging', 'Production', 'Archived'] as const;
+export type MlflowModelStage = (typeof MLFLOW_MODEL_STAGES)[number];
+
+export function isMlflowModelStage(v: unknown): v is MlflowModelStage {
+  return typeof v === 'string' && (MLFLOW_MODEL_STAGES as readonly string[]).includes(v);
+}
+
+function shapeModelVersion(raw: any): MlflowModelVersion {
+  const tags = Array.isArray(raw?.tags)
+    ? Object.fromEntries((raw.tags as any[]).map((t) => [t.key, t.value]))
+    : undefined;
+  return {
+    name: raw?.name,
+    version: String(raw?.version ?? ''),
+    currentStage: raw?.current_stage || raw?.currentStage,
+    description: raw?.description,
+    creationTimestamp: numOrUndef(raw?.creation_timestamp ?? raw?.creationTimestamp),
+    lastUpdatedTimestamp: numOrUndef(raw?.last_updated_timestamp ?? raw?.lastUpdatedTimestamp),
+    source: raw?.source,
+    runId: raw?.run_id || raw?.runId,
+    runLink: raw?.run_link || raw?.runLink,
+    status: raw?.status,
+    statusMessage: raw?.status_message || raw?.statusMessage,
+    tags,
+  };
+}
+
+/**
+ * GET <base>/api/2.0/mlflow/model-versions/get?name=...&version=...
+ * https://mlflow.org/docs/latest/rest-api.html#get-modelversion
+ * Returns null on 404. Carries `current_stage` + `run_id` (lineage).
+ */
+export async function getMlflowModelVersion(
+  name: string,
+  version: string,
+  workspace?: string,
+): Promise<MlflowModelVersion | null> {
+  const res = await mlflowFetch('/model-versions/get', {
+    method: 'GET',
+    query: { name, version: String(version) },
+    workspace,
+  });
+  if (res.status === 404) return null;
+  const j = await readMlflowJson<{ model_version?: any }>(res);
+  return j.model_version ? shapeModelVersion(j.model_version) : null;
+}
+
+/**
+ * POST <base>/api/2.0/mlflow/model-versions/search
+ * https://mlflow.org/docs/latest/rest-api.html#search-modelversions
+ * All versions of a registered model, each with its `current_stage`. This is
+ * how the editor decorates the (ARM-sourced) version table with stages.
+ */
+export async function searchMlflowModelVersions(
+  name: string,
+  workspace?: string,
+): Promise<MlflowModelVersion[]> {
+  const out: MlflowModelVersion[] = [];
+  let pageToken: string | undefined;
+  const filter = `name='${name.replace(/'/g, "\\'")}'`;
+  do {
+    const body: any = { filter, max_results: 200 };
+    if (pageToken) body.page_token = pageToken;
+    const res = await mlflowFetch('/model-versions/search', { method: 'POST', body: JSON.stringify(body), workspace });
+    if (res.status === 404) return out;
+    const j = await readMlflowJson<{ model_versions?: any[]; next_page_token?: string }>(res);
+    for (const m of j.model_versions || []) out.push(shapeModelVersion(m));
+    pageToken = j.next_page_token;
+  } while (pageToken && out.length < 2000);
+  return out;
+}
+
+/**
+ * POST <base>/api/2.0/mlflow/model-versions/transition-stage
+ * https://mlflow.org/docs/latest/rest-api.html#transition-modelversion-stage
+ * Body: { name, version, stage, archive_existing_versions }.
+ * Returns the updated model_version (current_stage reflects the change) — this
+ * IS the registry receipt the acceptance test wants.
+ */
+export async function transitionModelVersionStage(
+  name: string,
+  version: string,
+  stage: MlflowModelStage,
+  opts: { archiveExisting?: boolean; workspace?: string } = {},
+): Promise<MlflowModelVersion> {
+  const body = {
+    name,
+    version: String(version),
+    stage,
+    archive_existing_versions: !!opts.archiveExisting,
+  };
+  const res = await mlflowFetch('/model-versions/transition-stage', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    workspace: opts.workspace,
+  });
+  const j = await readMlflowJson<{ model_version?: any }>(res);
+  if (!j.model_version) {
+    throw new MlflowError(res.status, j, 'transition-stage returned no model_version');
+  }
+  return shapeModelVersion(j.model_version);
+}
+
+/**
+ * POST <base>/api/2.0/mlflow/model-versions/create
+ * https://mlflow.org/docs/latest/rest-api.html#create-modelversion
+ * The register-FROM-RUN path: supplying `run_id` records lineage so the new
+ * version's `run_id` field points back at the training run (visible via
+ * getMlflowModelVersion). The ARM PUT path (foundry-client.registerModelVersion)
+ * cannot carry run lineage; this can.
+ */
+export async function createMlflowModelVersion(
+  name: string,
+  body: { source: string; runId?: string; description?: string; tags?: Record<string, string> },
+  workspace?: string,
+): Promise<MlflowModelVersion> {
+  const payload: any = { name, source: body.source };
+  if (body.runId) payload.run_id = body.runId;
+  if (body.description) payload.description = body.description;
+  if (body.tags) payload.tags = Object.entries(body.tags).map(([key, value]) => ({ key, value }));
+  const res = await mlflowFetch('/model-versions/create', { method: 'POST', body: JSON.stringify(payload), workspace });
+  const j = await readMlflowJson<{ model_version?: any }>(res);
+  if (!j.model_version) {
+    throw new MlflowError(res.status, j, 'model-versions/create returned no model_version');
+  }
+  return shapeModelVersion(j.model_version);
 }

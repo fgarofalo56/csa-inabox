@@ -1989,6 +1989,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
                       onDuplicate={() => duplicateCell(cell.id)}
                       canMoveUp={i > 0}
                       canMoveDown={i < cells.length - 1}
+                      priorCells={cells.slice(0, i).filter((pc) => pc.type === 'code').slice(-3).map((pc) => pc.source)}
                     />
                     <DbxCellOutput res={res} />
                   </div>
