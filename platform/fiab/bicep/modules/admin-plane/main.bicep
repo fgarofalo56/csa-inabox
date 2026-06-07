@@ -53,6 +53,14 @@ param loomNotebookBackend string = ''
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
 
+@description('Enable rich display() visualization for notebook cells (F-DS). When true, the BFF injects the ai-display.py helper as Livy session statement 0 so display(df) renders the Loom interactive grid + chart recommendations. Azure-native (Synapse Spark) — no Fabric dependency. When false/unset, display(df) falls back to the kernel built-in table.')
+param loomRichDisplay bool = true
+
+@description('Maximum rows sampled for the display() rich visualization grid + client-side chart aggregation (full-dataset aggregation still fires a real Spark job). Default 5000.')
+@minValue(100)
+@maxValue(20000)
+param loomDisplaySampleRows int = 5000
+
 @description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
 #disable-next-line no-unused-params
 param openaiLocation string
@@ -882,6 +890,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_DEV_SUFFIX', value: loomSynapseDevSuffix }
             { name: 'LOOM_SYNAPSE_HOST_SUFFIX', value: loomSynapseHostSuffix }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
+            // Rich display() — interactive grid + chart recommendations for
+            // display(df). Injects ai-display.py as Livy session statement 0.
+            { name: 'LOOM_RICH_DISPLAY', value: loomRichDisplay ? '1' : '0' }
+            { name: 'LOOM_DISPLAY_SAMPLE_ROWS', value: string(loomDisplaySampleRows) }
             // TDS AAD token audience cloud portability (read by synapse-sql-client sqlScope()).
             // Commercial / GCC use database.windows.net; GCC-High / IL5 use the US-Gov audience.
             { name: 'LOOM_SYNAPSE_SQL_TOKEN_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'database.usgovcloudapi.net' : 'database.windows.net' }

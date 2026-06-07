@@ -858,6 +858,7 @@ export function NotebookEditor({ item, id }: Props) {
               status: p.output.status === 'ok' ? 'ok' : 'error',
               textPlain: p.output.textPlain,
               data: p.output.data,
+              richDisplay: p.output.richDisplay,
               ename: p.output.ename,
               evalue: p.output.evalue,
               traceback: p.output.traceback,
@@ -1457,10 +1458,12 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        notebookId={notebookId}
+                        workspaceId={workspaceId}
+                        computeId={computeId}
                         lspWsUrl={lspWsUrl}
                         priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
                         schemaContext={inlineSchemaContext}
-                        notebookId={notebookId}
                         onInsertBelow={(newCell) => {
                           setCells(prev => {
                             const spliceIdx = prev.findIndex(cell => cell.id === c.id);

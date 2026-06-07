@@ -12,11 +12,14 @@ import {
   Sparkle16Regular, Sparkle16Filled,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { LOOM_DISPLAY_MIME } from '@/lib/types/notebook-cell';
+import type { LoomDisplayPayload } from '@/lib/types/notebook-cell';
 import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
 import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CopilotPane } from './copilot-pane';
+import { RichDisplay } from '@/lib/components/notebook/rich-display';
 
 const useStyles = makeStyles({
   shell: {
@@ -120,6 +123,9 @@ export interface CodeCellProps {
   onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Threaded so the rich display() surface can fire full-dataset Spark aggregations. */
+  workspaceId?: string;
+  computeId?: string;
   /**
    * WebSocket path for the Pylance/pylsp bridge (e.g. `/api/notebook/<id>/lsp`),
    * or null when the bridge is not enabled in this deployment. When set and the
@@ -131,7 +137,8 @@ export interface CodeCellProps {
   /** Lakehouse / notebook schema hint forwarded to inline completion. */
   schemaContext?: string;
   /** Notebook item id — when present (with onInsertBelow) the in-cell Copilot
-   *  button is shown. Absent in the legacy scratchpad pane, where it stays hidden. */
+   *  button is shown. Absent in the legacy scratchpad pane, where it stays hidden.
+   *  Also threaded so the rich display() surface can fire full-dataset Spark aggregations. */
   notebookId?: string;
   /** Parent splices the Copilot-generated cell directly below this one. */
   onInsertBelow?: (cell: NotebookCell) => void;
@@ -144,7 +151,7 @@ const PY_LANGS = new Set<NotebookCellLang>(['python', 'pyspark']);
  * popover with slash commands; the result is inserted as a new cell below.
  * Slash parsing + result-cell construction live in ./copilot-commands.
  */
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, lspWsUrl, priorCells, schemaContext, notebookId, onInsertBelow }: CodeCellProps) {
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, notebookId, workspaceId, computeId, lspWsUrl, priorCells, schemaContext, onInsertBelow }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -457,8 +464,22 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         className={mergeClasses(locked && s.editorLocked)}
         onReady={handleEditorReady}
       />
-      {cell.output && (
-        <>
+      {cell.output && (() => {
+        // Rich display(): prefer the structured payload; fall back to the raw
+        // MIME if it slipped through in output.data. Render the interactive grid
+        // + charts instead of the plain text table when present.
+        const richFromField = cell.output.richDisplay;
+        const richFromData = (cell.output.data as Record<string, unknown> | undefined)?.[LOOM_DISPLAY_MIME] as LoomDisplayPayload | undefined;
+        const rich = richFromField || (richFromData && Array.isArray(richFromData.columns) ? richFromData : undefined);
+        if (cell.output.status !== 'error' && rich) {
+          return (
+            <div style={{ padding: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+              <RichDisplay payload={rich} cellId={cell.id} notebookId={notebookId || ''} workspaceId={workspaceId || ''} computeId={computeId || ''} />
+            </div>
+          );
+        }
+        return (
+          <>
           <div className={mergeClasses(
             s.outputBox,
             maximized && s.outputBoxMaximized,
@@ -501,8 +522,9 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
               />
             </>
           )}
-        </>
-      )}
+          </>
+        );
+      })()}
     </div>
   );
 
