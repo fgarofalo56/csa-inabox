@@ -998,6 +998,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
             { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // AOAI token audience by cloud (public: cognitiveservices.azure.com,
+            // Gov: cognitiveservices.azure.us). Derived from the ARM environment()
+            // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
+            // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
+            { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
