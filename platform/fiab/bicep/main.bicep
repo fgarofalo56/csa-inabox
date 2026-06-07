@@ -412,6 +412,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
@@ -449,6 +450,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId

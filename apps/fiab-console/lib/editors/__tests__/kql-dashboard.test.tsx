@@ -56,4 +56,35 @@ describe('KqlDashboardEditor', () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="new" />);
     expect(calls.filter((c) => c.url.includes('/api/items/kql-dashboard/new')).length).toBe(0);
   });
+
+  it('renders the auto-refresh interval Select defaulting to off', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    const select = screen.getByRole('combobox', { name: /Auto-refresh interval/i }) as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.value).toBe('0'); // default autoRefreshMs = 0 → off
+    // The 30-second acceptance option is present.
+    expect(screen.getByRole('option', { name: /every 30 seconds/i })).toBeInTheDocument();
+  });
+
+  it('changing the auto-refresh Select updates the selected interval', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    const select = screen.getByRole('combobox', { name: /Auto-refresh interval/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '30000' } });
+    expect(select.value).toBe('30000');
+  });
+
+  it('shows the drill-through config when a tile is expanded', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // Expand the first tile editor.
+    const editBtns = screen.getAllByRole('button', { name: /Edit tile/i });
+    fireEvent.click(editBtns[0]);
+    await waitFor(() => {
+      expect(screen.getByText('Drill-through')).toBeInTheDocument();
+      // No params yet → the section prompts to add a parameter first.
+      expect(screen.getByText(/Add at least one dashboard/i)).toBeInTheDocument();
+    });
+  });
 });
