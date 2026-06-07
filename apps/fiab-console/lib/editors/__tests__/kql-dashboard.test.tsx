@@ -56,4 +56,38 @@ describe('KqlDashboardEditor', () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="new" />);
     expect(calls.filter((c) => c.url.includes('/api/items/kql-dashboard/new')).length).toBe(0);
   });
+
+  it('changing a parameter re-runs the dependent tile with the new value', async () => {
+    // Fresh mock: a dashboard with a _state freetext param bound to a tile.
+    const m = installFetchMock({
+      '/api/items/kql-dashboard/dash-params/run': () => ({
+        ok: true,
+        tiles: [{ title: 'By State', kql: '...', viz: 'table', result: { ok: true, columns: ['State'], rows: [['Texas']] } }],
+      }),
+      '/api/items/kql-dashboard/dash-params': () => ({
+        ok: true,
+        database: 'loomdb-default',
+        tiles: [{ title: 'By State', kql: 'StormEvents | where State == _state', viz: 'table' }],
+        parameters: [{ variableName: '_state', label: 'State', type: 'freetext', dataType: 'string', value: '' }],
+      }),
+    });
+
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-params" />);
+    await waitFor(() => expect(screen.getByText('By State')).toBeInTheDocument());
+
+    // The param bar renders a free-text input for _state. Type a new value, blur.
+    const input = screen.getAllByRole('textbox')[0];
+    fireEvent.change(input, { target: { value: 'Texas' } });
+    fireEvent.blur(input);
+
+    // The blur fires runDependentTiles → runTile → POST /run carrying the new
+    // parameter value, which is what makes the tile re-query with new data.
+    await waitFor(() => {
+      expect(m.calls.some((c) =>
+        c.url.includes('/dash-params/run') &&
+        typeof c.init?.body === 'string' &&
+        c.init.body.includes('"value":"Texas"'),
+      )).toBe(true);
+    });
+  });
 });
