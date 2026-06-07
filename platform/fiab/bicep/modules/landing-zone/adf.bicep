@@ -38,8 +38,17 @@ param workspaceId string
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
-@description('DLZ ADLS Gen2 storage account NAME (same RG). When set, the ADF system-assigned MI is granted Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
+@description('DLZ storage account resource ID. When set, grants the factory system-assigned MI Storage Blob Data Contributor so linked services using MSI auth (e.g. the "Practice with sample data" copy pipeline) can read/write ADLS Gen2 without an account key.')
+param storageAccountId string = ''
+
+@description('DLZ ADLS Gen2 storage account NAME (same RG). Alternative to storageAccountId — also grants the ADF system-assigned MI Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
 param adlsAccountName string = ''
+
+// Unify both inputs: prefer the explicit account name, else derive it from the
+// resource ID. A single grant covers MSI-auth copy pipelines AND Dataflow Gen2
+// sinks (same role, same principal, same account) — avoids a duplicate
+// role-assignment collision on the storage account scope.
+var sblobAccountName = !empty(adlsAccountName) ? adlsAccountName : (!empty(storageAccountId) ? last(split(storageAccountId, '/')) : '')
 
 // =====================================================================
 // Data Factory
@@ -128,20 +137,23 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 }
 
 // =====================================================================
-// RBAC — ADF system-assigned MI → Storage Blob Data Contributor on the DLZ
-// ADLS Gen2 account (built-in role: ba92f5b4-2d11-453d-a403-e96b0029c9fe).
-// Required so Dataflow Gen2 (WranglingDataFlow) can write its Parquet/CSV
-// sink to ADLS via the factory MI. Scoped to the storage account; assumes
-// it lives in this RG (the DLZ orchestrator passes its name).
+// =====================================================================
+// RBAC — ADF factory system-assigned MI → Storage Blob Data Contributor
+// on the DLZ storage account (built-in role:
+// ba92f5b4-2d11-453d-a403-e96b0029c9fe). Required so ADF linked services
+// using MSI auth (no account key) can read landing/ and write bronze/ —
+// backs the "Practice with sample data" copy pipeline — AND so Dataflow
+// Gen2 (WranglingDataFlow) can write its Parquet/CSV sink to ADLS.
+// One grant covers both; scoped to the storage account in this RG.
 // =====================================================================
 
-resource adlsAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(adlsAccountName)) {
-  name: empty(adlsAccountName) ? 'placeholder' : adlsAccountName
+resource storageForAdfRbac 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(sblobAccountName)) {
+  name: empty(sblobAccountName) ? 'placeholder' : sblobAccountName
 }
 
-resource adfAdlsBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adlsAccountName)) {
-  scope: adlsAccount
-  name: guid(adf.id, adlsAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(sblobAccountName)) {
+  scope: storageForAdfRbac
+  name: guid(adf.id, sblobAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   properties: {
     principalId: adf.identity.principalId
     principalType: 'ServicePrincipal'

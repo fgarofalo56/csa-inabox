@@ -236,6 +236,12 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
 
+  // "Practice with sample data" landing-card state. Seeds real ADLS + runs a
+  // real ADF copy pipeline — honest gate when LOOM_SAMPLE_ADLS is unset.
+  const [seeding, setSeeding] = useState(false);
+  const [seedErr, setSeedErr] = useState<string | null>(null);
+  const [seedErrIntent, setSeedErrIntent] = useState<'warning' | 'error'>('error');
+
   // ── Import / Export / Template gallery (F3 + F28) ──
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [importErr, setImportErr] = useState<string | null>(null);
@@ -582,6 +588,44 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
+  // "Practice with sample data" — seed real ADLS Gen2 with a sample CSV, create
+  // + run an ADF copy pipeline, then navigate to the generated pipeline item and
+  // surface its Output tab. No simulated success: an honest MessageBar renders
+  // the precise infra gate when LOOM_SAMPLE_ADLS / ADF is unset.
+  const practiceWithSampleData = useCallback(async () => {
+    setSeedErr(null);
+    if (!workspaceId) {
+      setSeedErr('Select a workspace first (dropdown above) before seeding sample data.');
+      setSeedErrIntent('warning');
+      return;
+    }
+    setSeeding(true);
+    try {
+      const r = await fetch('/api/items/data-pipeline/practice-seed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setSeedErr(j.gate?.remediation || j.gate?.reason || j.error || 'Seeding failed');
+        setSeedErrIntent(j.gate ? 'warning' : 'error');
+        return;
+      }
+      // Navigate to the generated pipeline and surface its real run in Output.
+      setPipelineId(j.pipelineId);
+      setTopTab('output');
+      await loadList(workspaceId);
+      dispatchToast(
+        <Toast><ToastTitle>Sample data seeded · run {String(j.runId || '').slice(0, 8)} queued</ToastTitle></Toast>,
+        { intent: 'success' },
+      );
+    } catch (e: any) {
+      setSeedErr(e?.message || String(e));
+      setSeedErrIntent('error');
+    } finally { setSeeding(false); }
+  }, [workspaceId, dispatchToast, loadList]);
+
   // ── Export: GET the packaged .zip and trigger a browser download ──
   const exportPipeline = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
@@ -815,13 +859,100 @@ export function DataPipelineEditor({ item, id }: Props) {
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
 
           {!pipelineId && (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Design your pipeline below — drag activities from the palette onto the canvas and wire them
-                up. To <strong>Save / Validate / Run</strong> against the live Fabric backing, pick a workspace
-                and pipeline from the left rail (or click <strong>New pipeline</strong> in the ribbon).
-              </MessageBarBody>
-            </MessageBar>
+            <div>
+              {seedErr && (
+                <MessageBar intent={seedErrIntent} style={{ marginBottom: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Practice with sample data</MessageBarTitle>
+                    {seedErr}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                <MessageBarBody>
+                  Design your pipeline below — drag activities from the palette onto the canvas and wire them
+                  up. To <strong>Save / Validate / Run</strong> against the live backing, pick a workspace
+                  and pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
+                </MessageBarBody>
+              </MessageBar>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 12,
+              }}>
+                {/* Card: Start with a blank canvas */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  style={{
+                    cursor: canCreate ? 'pointer' : 'not-allowed',
+                    opacity: canCreate ? 1 : 0.6,
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={canCreate ? () => setCreateOpen(true) : undefined}
+                  onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
+                >
+                  <Add20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Subtitle2>Start with blank canvas</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Create an empty pipeline and drag activities from the palette.
+                    {!canCreate ? ' Select a workspace first.' : ''}
+                  </Caption1>
+                </div>
+
+                {/* Card: Practice with sample data (real ADLS seed + ADF run) */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-busy={seeding}
+                  style={{
+                    cursor: seeding ? 'default' : 'pointer',
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={seeding ? undefined : practiceWithSampleData}
+                  onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
+                >
+                  {seeding
+                    ? <Spinner size="extra-small" label="Seeding ADLS…" />
+                    : <CloudArrowUp20Regular style={{ color: tokens.colorBrandForeground1 }} />}
+                  <Subtitle2>Practice with sample data</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Seed a real CSV to ADLS Gen2, run an auto-generated copy pipeline,
+                    and see live Output rows — no mock data.
+                  </Caption1>
+                </div>
+
+                {/* Card: Templates gallery — opens the real curated gallery */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  style={{
+                    cursor: 'pointer',
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={() => setGalleryOpen(true)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
+                >
+                  <AppsList20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Subtitle2>Templates gallery</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Curated templates: incremental copy, metadata-driven, ForEach patterns.
+                  </Caption1>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Visual designer always renders so the canvas + palette are
