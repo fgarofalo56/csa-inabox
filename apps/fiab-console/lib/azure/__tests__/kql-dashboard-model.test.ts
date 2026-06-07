@@ -8,7 +8,8 @@ import {
   substituteTileKql, buildTileKql, paramTypeToKustoType,
   renderParamLiteral, resolveTimeFrom, resolveTileDatabase,
   sanitizeModel, substituteBaseQueries,
-  type DashboardParam, type BaseQuery,
+  evalConditionalRules, evalCondition, gradientColor,
+  type DashboardParam, type BaseQuery, type ConditionalRule,
 } from '../kql-dashboard-model';
 
 describe('resolveTimeFrom', () => {
@@ -243,6 +244,129 @@ describe('sanitizeModel', () => {
     expect(m.dataSources[0]).toMatchObject({ id: 's1', name: 'Src', database: 'd1' });
   });
 
+  it('round-trips conditionalRules on a tile and validates them', () => {
+    const m = sanitizeModel({ tiles: [{
+      title: 't', kql: 'print 1', viz: 'table',
+      conditionalRules: [
+        { type: 'condition', color: 'red', applyTo: 'row', conditions: [{ column: 'Count', operator: '>=', value: '500' }] },
+        { type: 'value', column: 'Count', theme: 'cold', minValue: 0, maxValue: 1000 },
+        // invalid rules below are dropped:
+        { type: 'condition', color: 'red', conditions: [] },             // no conditions
+        { type: 'condition', conditions: [{ column: 'X', operator: 'bogus', value: '1' }] }, // bad operator
+        { type: 'value' },                                                // no column
+      ],
+    }]});
+    expect(m.tiles[0].conditionalRules).toHaveLength(2);
+    expect(m.tiles[0].conditionalRules![0]).toMatchObject({ type: 'condition', color: 'red', applyTo: 'row' });
+    expect(m.tiles[0].conditionalRules![0].conditions![0]).toMatchObject({ column: 'Count', operator: '>=', value: '500' });
+    expect(m.tiles[0].conditionalRules![1]).toMatchObject({ type: 'value', column: 'Count', theme: 'cold' });
+  });
+
+  it('leaves conditionalRules undefined when absent or empty', () => {
+    expect(sanitizeModel({ tiles: [{ title: 't', kql: 'print 1', viz: 'table' }] }).tiles[0].conditionalRules).toBeUndefined();
+    expect(sanitizeModel({ tiles: [{ title: 't', kql: 'print 1', viz: 'table', conditionalRules: [] }] }).tiles[0].conditionalRules).toBeUndefined();
+  });
+
+  it('caps conditionalRules at 20 per tile', () => {
+    const many = Array.from({ length: 30 }, () => ({ type: 'condition', color: 'red', conditions: [{ column: 'a', operator: '>', value: '1' }] }));
+    const m = sanitizeModel({ tiles: [{ title: 't', kql: 'print 1', viz: 'table', conditionalRules: many }] });
+    expect(m.tiles[0].conditionalRules).toHaveLength(20);
+  });
+});
+
+describe('evalCondition', () => {
+  it('numeric comparisons', () => {
+    expect(evalCondition(120, '>=', '100')).toBe(true);
+    expect(evalCondition(80, '>=', '100')).toBe(false);
+    expect(evalCondition(5, '<', '10')).toBe(true);
+  });
+  it('string equality falls back when non-numeric', () => {
+    expect(evalCondition('Texas', '==', 'Texas')).toBe(true);
+    expect(evalCondition('Texas', '!=', 'Ohio')).toBe(true);
+  });
+  it('is empty / is not empty', () => {
+    expect(evalCondition(null, 'is empty', undefined)).toBe(true);
+    expect(evalCondition('', 'is empty', undefined)).toBe(true);
+    expect(evalCondition('x', 'is empty', undefined)).toBe(false);
+    expect(evalCondition('x', 'is not empty', undefined)).toBe(true);
+  });
+});
+
+describe('evalConditionalRules', () => {
+  const columns = ['State', 'Count'];
+
+  it('colors a row when a numeric threshold passes (>=)', () => {
+    const rules: ConditionalRule[] = [
+      { type: 'condition', color: 'red', applyTo: 'row', conditions: [{ column: 'Count', operator: '>=', value: '500' }] },
+    ];
+    const hot = evalConditionalRules(rules, ['Texas', 700], columns);
+    expect(hot).toMatchObject({ color: 'red', applyTo: 'row' });
+    const cold = evalConditionalRules(rules, ['Ohio', 100], columns);
+    expect(cold).toBeUndefined();
+  });
+
+  it('matches a string equality condition', () => {
+    const rules: ConditionalRule[] = [
+      { type: 'condition', color: 'blue', conditions: [{ column: 'State', operator: '==', value: 'Texas' }] },
+    ];
+    expect(evalConditionalRules(rules, ['Texas', 1], columns)?.color).toBe('blue');
+    expect(evalConditionalRules(rules, ['Ohio', 1], columns)).toBeUndefined();
+  });
+
+  it('matches "is empty" on a null cell', () => {
+    const rules: ConditionalRule[] = [
+      { type: 'condition', color: 'yellow', conditions: [{ column: 'State', operator: 'is empty' }] },
+    ];
+    expect(evalConditionalRules(rules, [null, 1], columns)?.color).toBe('yellow');
+    expect(evalConditionalRules(rules, ['Texas', 1], columns)).toBeUndefined();
+  });
+
+  it('last matching rule wins (Fabric precedence)', () => {
+    const rules: ConditionalRule[] = [
+      { type: 'condition', color: 'yellow', applyTo: 'row', conditions: [{ column: 'Count', operator: '>=', value: '100' }] },
+      { type: 'condition', color: 'red', applyTo: 'row', conditions: [{ column: 'Count', operator: '>=', value: '500' }] },
+    ];
+    expect(evalConditionalRules(rules, ['Texas', 700], columns)?.color).toBe('red');   // both match → last (red)
+    expect(evalConditionalRules(rules, ['Ohio', 250], columns)?.color).toBe('yellow'); // only first matches
+  });
+
+  it('color-by-value gradient: midpoint differs from the endpoints', () => {
+    const rules: ConditionalRule[] = [
+      { type: 'value', column: 'Count', theme: 'traffic-lights', minValue: 0, maxValue: 100 },
+    ];
+    const lo = evalConditionalRules(rules, ['a', 0], columns);
+    const mid = evalConditionalRules(rules, ['a', 50], columns);
+    const hi = evalConditionalRules(rules, ['a', 100], columns);
+    expect(lo?.bg).toBeDefined();
+    expect(mid?.bg).toBeDefined();
+    expect(hi?.bg).toBeDefined();
+    expect(mid!.bg).not.toBe(lo!.bg);
+    expect(mid!.bg).not.toBe(hi!.bg);
+    // traffic-lights low→high is red→yellow→green; midpoint is the yellow stop.
+    expect(mid!.bg).toBe('rgb(247, 180, 0)');
+  });
+
+  it('reverseColors flips the gradient ends', () => {
+    const fwd = evalConditionalRules([{ type: 'value', column: 'Count', theme: 'traffic-lights', minValue: 0, maxValue: 100 }], ['a', 0], columns);
+    const rev = evalConditionalRules([{ type: 'value', column: 'Count', theme: 'traffic-lights', minValue: 0, maxValue: 100, reverseColors: true }], ['a', 0], columns);
+    expect(rev!.bg).not.toBe(fwd!.bg);
+  });
+
+  it('returns undefined when no rules', () => {
+    expect(evalConditionalRules(undefined, ['a', 1], columns)).toBeUndefined();
+    expect(evalConditionalRules([], ['a', 1], columns)).toBeUndefined();
+  });
+});
+
+describe('gradientColor', () => {
+  it('clamps t and produces a readable fg', () => {
+    const c = gradientColor('traffic-lights', 2);
+    expect(c.bg).toBe('rgb(16, 124, 16)'); // clamped to high stop (green)
+    expect(['#1b1b1b', '#ffffff']).toContain(c.fg);
+  });
+});
+
+describe('sanitizeModel — baseQueries', () => {
   it('coerces base queries and drops empty-kql entries', () => {
     const m = sanitizeModel({ baseQueries: [
       { id: 'bq1', name: 'Filtered', kql: 'T | where x == 1' },
