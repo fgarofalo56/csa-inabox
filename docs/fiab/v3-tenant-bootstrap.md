@@ -273,6 +273,35 @@ scripts/csa-loom/grant-cost-monitoring-rbac.sh [subscriptionId ...]   # default:
 Idempotent; requires az logged in as Owner / User Access Administrator on the sub.
 (Granted live on 363ef5d1-…-bf8c 2026-06-06.)
 
+## Stream Analytics Query Builder — Query Tester grant {#asa-query-tester}
+
+The Eventstream **transform-node builder** (`stream-analytics-job` editor →
+**Query Builder** / **Test** tabs) compiles guided filter/aggregate/window/join
+operations to SAQL and validates / runs them through the ASA control plane. The
+Compile and Test Query operations are **subscription/location-scoped** RP actions
+(`Microsoft.StreamAnalytics/locations/{CompileQuery,TestQuery,SampleInput}/action`),
+which sit ABOVE the DLZ resource group — so the RG-scoped *Stream Analytics
+Contributor* grant from `landing-zone/stream-analytics.bicep` does **not**
+authorize them. Grant the Console UAMI the built-in **Stream Analytics Query
+Tester** role at subscription scope (one-time):
+
+```bash
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Stream Analytics Query Tester" \
+  --scope /subscriptions/<sub>
+# role id: 1ec5b3c1-b17e-4e25-8312-2acb3c3c5abf
+```
+
+Until granted, the editor's **Compile**/**Run** actions surface an honest error
+naming this role — the rest of the builder (guided config + live SAQL preview)
+stays fully functional.
+
+**Run test (sample output rows)** additionally needs a place for ASA to write
+the test output: set `loomAsaTestWriteUri` (admin-plane param →
+`LOOM_ASA_TEST_WRITE_URI`) to a blob **container SAS URL** with write+read.
+Without it, **Run test** honest-gates while **Compile** (validation) still works.
+
 ## Loom Connections (Key Vault-backed source credentials)
 
 Loom **Connections** (`/connections`) let users register a data-source connection

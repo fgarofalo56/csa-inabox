@@ -14,6 +14,20 @@
 //   - Diagnostic settings → standardized Loom LAW
 //   - RBAC: Loom Console UAMI → "Stream Analytics Contributor"
 //
+// Query Builder (Compile / Test Query):
+//   The Eventstream transform-node builder validates and runs generated SAQL
+//   via the subscription/location-scoped RP actions
+//   Microsoft.StreamAnalytics/locations/{CompileQuery,TestQuery,SampleInput}/action.
+//   Those are ABOVE this RG, so the RG-scoped Contributor grant below does NOT
+//   authorize them. Grant the Console UAMI the built-in role "Stream Analytics
+//   Query Tester" (1ec5b3c1-b17e-4e25-8312-2acb3c3c5abf) at SUBSCRIPTION scope
+//   as a one-time tenant action (see docs/fiab/v3-tenant-bootstrap.md). Until
+//   then the editor's Compile/Run surfaces an honest error naming this role.
+//   The "Run test" sample-output path additionally needs a blob container SAS
+//   write URI — set LOOM_ASA_TEST_WRITE_URI (admin-plane/main.bicep param
+//   loomAsaTestWriteUri); without it the Run action shows an honest infra-gate
+//   while Compile (validation) stays fully functional.
+//
 // Enabled by setting `enableStreamAnalytics=true` in the parent
 // landing-zone main.bicep. Default is FALSE so existing deployments
 // don't accidentally provision streaming compute they don't need.

@@ -35,9 +35,10 @@ import {
   Input,
   Dropdown,
   Option,
-  Textarea,
   Label,
   Field,
+  SpinButton,
+  Divider,
   tokens,
   makeStyles,
   shorthands,
@@ -47,51 +48,44 @@ import {
   Delete20Regular,
 } from '@fluentui/react-icons';
 import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import {
+  compileToSaql,
+  type SourceKind,
+  type TransformKind,
+  type SinkKind,
+  type AggregateSpec,
+  type AsaAggregateFunc,
+  type AsaWindowType,
+  type AsaWindowUnit,
+  type AsaJoinType,
+  type SourceNode,
+  type TransformNode,
+  type SinkNode,
+  type PipelineConfig,
+} from '@/lib/azure/asa-query-compiler';
 
 // ============================================================
-// Types
+// Types — node shapes live in the SAQL compiler module (re-exported here so
+// existing importers of '@/lib/components/eventstream/visual-designer' keep
+// working). The compiler is the single source of truth for the transform
+// model so the guided builder and the generated SAQL never drift.
 // ============================================================
 
-export type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka';
-export type TransformKind = 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join';
-export type SinkKind = 'kusto' | 'lakehouse' | 'eventhub' | 'reflex' | 'derivedStream';
-
-export interface SourceNode {
-  kind: SourceKind;
-  name: string;
-  namespace?: string;
-  consumerGroup?: string;
-  iotHub?: string;
-  connectionString?: string;
-  topic?: string;
-}
-
-export interface TransformNode {
-  kind: TransformKind;
-  name: string;
-  expression?: string;
-  columns?: string[];
-  groupBy?: string[];
-  window?: string;
-}
-
-export interface SinkNode {
-  kind: SinkKind;
-  name: string;
-  database?: string;
-  table?: string;
-  lakehouseId?: string;
-  workspaceId?: string;
-  reflexId?: string;
-}
-
-export interface PipelineConfig {
-  sources?: SourceNode[];
-  source?: SourceNode; // legacy single-source
-  transforms?: TransformNode[];
-  sink?: SinkNode;
-  sinks?: SinkNode[];
-}
+export type {
+  SourceKind,
+  TransformKind,
+  SinkKind,
+  AggregateSpec,
+  AsaAggregateFunc,
+  AsaWindowType,
+  AsaWindowUnit,
+  AsaJoinType,
+  SourceNode,
+  TransformNode,
+  SinkNode,
+  PipelineConfig,
+};
 
 export type SelectedNode =
   | { type: 'source'; idx: number }
@@ -310,8 +304,9 @@ export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
         )}
 
         {selected?.type === 'transform' && transforms[selected.idx] && (
-          <TransformInspector
+          <AsaTransformInspector
             value={transforms[selected.idx]}
+            sources={sources}
             onChange={(patch) => updateTransform(selected.idx, patch)}
             onDelete={deleteSelected}
           />
@@ -543,68 +538,334 @@ function SourceInspector({
   );
 }
 
-function TransformInspector({
+// ---- small helpers shared by the guided transform builder ----
+const TRANSFORM_KINDS: { value: TransformKind; label: string }[] = [
+  { value: 'filter', label: 'Filter' },
+  { value: 'aggregate', label: 'Aggregate' },
+  { value: 'group-by', label: 'Group by' },
+  { value: 'window', label: 'Window' },
+  { value: 'project', label: 'Project' },
+  { value: 'join', label: 'Join' },
+  { value: 'union', label: 'Union' },
+];
+const AGG_FUNCS: AsaAggregateFunc[] = ['AVG', 'SUM', 'COUNT', 'MIN', 'MAX'];
+const WINDOW_TYPES: AsaWindowType[] = ['Tumbling', 'Hopping', 'Sliding', 'Session', 'Snapshot'];
+const WINDOW_UNITS: AsaWindowUnit[] = ['second', 'minute', 'hour', 'day'];
+
+function csvToArr(s: string): string[] {
+  return s.split(',').map((x) => x.trim()).filter(Boolean);
+}
+function arrToCsv(a?: string[]): string {
+  return (a || []).join(', ');
+}
+
+/** Repeating aggregate-spec editor (func / field / alias rows). */
+function AggregateRows({
   value,
+  onChange,
+}: {
+  value: AggregateSpec[];
+  onChange: (next: AggregateSpec[]) => void;
+}) {
+  const rows = value || [];
+  const update = (i: number, patch: Partial<AggregateSpec>) =>
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const add = () => onChange([...rows, { func: 'AVG', field: '', alias: '' }]);
+  const remove = (i: number) => onChange(rows.filter((_, j) => j !== i));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Label size="small">Aggregations</Label>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <Dropdown
+            style={{ minWidth: 84 }}
+            value={r.func}
+            selectedOptions={[r.func]}
+            onOptionSelect={(_: unknown, d: any) => update(i, { func: (d.optionValue as AsaAggregateFunc) || 'AVG' })}
+            aria-label={`Aggregation ${i + 1} function`}
+          >
+            {AGG_FUNCS.map((f) => (
+              <Option key={f} value={f}>{f}</Option>
+            ))}
+          </Dropdown>
+          <Input
+            style={{ minWidth: 0, flex: 1 }}
+            placeholder={r.func === 'COUNT' ? '* (or field)' : 'field'}
+            value={r.field}
+            onChange={(_: unknown, d: any) => update(i, { field: d.value })}
+            aria-label={`Aggregation ${i + 1} field`}
+          />
+          <Input
+            style={{ minWidth: 0, flex: 1 }}
+            placeholder="alias"
+            value={r.alias}
+            onChange={(_: unknown, d: any) => update(i, { alias: d.value })}
+            aria-label={`Aggregation ${i + 1} alias`}
+          />
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(i)} aria-label={`Remove aggregation ${i + 1}`} />
+        </div>
+      ))}
+      <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={add}>
+        Add aggregation
+      </Button>
+    </div>
+  );
+}
+
+/** Windowing sub-panel (type / size / unit / hop). */
+function WindowPanel({
+  value,
+  onChange,
+}: {
+  value: TransformNode;
+  onChange: (p: Partial<TransformNode>) => void;
+}) {
+  return (
+    <>
+      <Field label="Window type">
+        <Dropdown
+          value={value.windowType || ''}
+          selectedOptions={value.windowType ? [value.windowType] : []}
+          placeholder="None"
+          onOptionSelect={(_: unknown, d: any) =>
+            onChange({ windowType: (d.optionValue as AsaWindowType) || undefined })
+          }
+        >
+          <Option value="">None</Option>
+          {WINDOW_TYPES.map((w) => (
+            <Option key={w} value={w}>{w}</Option>
+          ))}
+        </Dropdown>
+      </Field>
+      {value.windowType && value.windowType !== 'Snapshot' && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Field label="Size" style={{ flex: 1 }}>
+            <SpinButton
+              min={1}
+              value={value.windowSize ?? 30}
+              onChange={(_: unknown, d: any) =>
+                onChange({ windowSize: d.value ?? Number(d.displayValue) ?? 30 })
+              }
+              aria-label="Window size"
+            />
+          </Field>
+          <Field label="Unit" style={{ flex: 1 }}>
+            <Dropdown
+              value={value.windowUnit || 'second'}
+              selectedOptions={[value.windowUnit || 'second']}
+              onOptionSelect={(_: unknown, d: any) =>
+                onChange({ windowUnit: (d.optionValue as AsaWindowUnit) || 'second' })
+              }
+            >
+              {WINDOW_UNITS.map((u) => (
+                <Option key={u} value={u}>{u}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+        </div>
+      )}
+      {(value.windowType === 'Hopping' || value.windowType === 'Session') && (
+        <Field
+          label={value.windowType === 'Hopping' ? 'Hop size' : 'Max duration'}
+          hint={value.windowType === 'Hopping' ? 'How far each window advances' : 'Session max duration'}
+        >
+          <SpinButton
+            min={1}
+            value={value.hopSize ?? value.windowSize ?? 10}
+            onChange={(_: unknown, d: any) => onChange({ hopSize: d.value ?? Number(d.displayValue) ?? 10 })}
+            aria-label="Hop size"
+          />
+        </Field>
+      )}
+    </>
+  );
+}
+
+/**
+ * AsaTransformInspector — guided builder for one Eventstream transform node.
+ *
+ * Every operation (filter / aggregate / group-by / window / join / union) is
+ * configured through dropdowns, number spinners and field lists. The ONLY
+ * freeform inputs are the single-expression Monaco slots (WHERE / HAVING /
+ * JOIN ON) — the allowed 1:1 builder exception per no-freeform-config.md.
+ * The whole SAQL is generated by compileToSaql() and previewed live; it is
+ * never hand-edited here.
+ */
+export function AsaTransformInspector({
+  value,
+  sources,
   onChange,
   onDelete,
 }: {
   value: TransformNode;
+  sources: SourceNode[];
   onChange: (p: Partial<TransformNode>) => void;
   onDelete: () => void;
 }) {
+  const previewSaql = useMemo(() => {
+    const src: SourceNode = sources[0] || { kind: 'eventhub', name: 'input' };
+    const allSrc = sources.length ? sources : [src];
+    return compileToSaql(allSrc, [value], [{ kind: 'kusto', name: 'output' }]);
+  }, [value, sources]);
+
+  const isAgg = value.kind === 'aggregate' || value.kind === 'group-by' || value.kind === 'window';
+
   return (
-    <>
-      <Label weight="semibold">Transform</Label>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
+      <Label weight="semibold">Transform · {value.kind}</Label>
       <Field label="Name">
         <Input value={value.name} onChange={(_: unknown, d: any) => onChange({ name: d.value })} />
       </Field>
-      <Field label="Kind">
+      <Field label="Operation">
         <Dropdown
-          value={value.kind}
+          value={TRANSFORM_KINDS.find((k) => k.value === value.kind)?.label || value.kind}
           selectedOptions={[value.kind]}
-          onOptionSelect={(_: unknown, d: any) =>
-            onChange({ kind: (d.optionValue as TransformKind) || 'filter' })
-          }
+          onOptionSelect={(_: unknown, d: any) => onChange({ kind: (d.optionValue as TransformKind) || 'filter' })}
         >
-          <Option value="filter">Filter</Option>
-          <Option value="aggregate">Aggregate</Option>
-          <Option value="group-by">Group by</Option>
-          <Option value="project">Project</Option>
-          <Option value="union">Union</Option>
-          <Option value="join">Join</Option>
+          {TRANSFORM_KINDS.map((k) => (
+            <Option key={k.value} value={k.value}>{k.label}</Option>
+          ))}
         </Dropdown>
       </Field>
-      <Field
-        label={
-          value.kind === 'filter'
-            ? 'Filter expression (KQL where clause)'
-            : value.kind === 'aggregate'
-              ? 'Aggregate (KQL summarize)'
-              : 'Expression'
-        }
-        hint={
-          value.kind === 'filter'
-            ? 'e.g. event_type == "click"'
-            : value.kind === 'aggregate'
-              ? 'e.g. count() by tenant'
-              : ''
-        }
-      >
-        <Textarea
-          value={value.expression || ''}
-          onChange={(_: unknown, d: any) => onChange({ expression: d.value })}
-          rows={3}
-        />
-      </Field>
+
+      {/* ---- FILTER ---- */}
+      {value.kind === 'filter' && (
+        <Field label="WHERE condition" hint="e.g. temperature > 30 AND deviceId = 'sensor-A'">
+          <MonacoTextarea
+            value={value.expression || ''}
+            onChange={(v) => onChange({ expression: v })}
+            language="sql"
+            height={72}
+            lineNumbers={false}
+            ariaLabel="WHERE condition"
+          />
+        </Field>
+      )}
+
+      {/* ---- AGGREGATE / GROUP-BY / WINDOW ---- */}
+      {isAgg && (
+        <>
+          <Field label="Timestamp column (TIMESTAMP BY)" hint="Event-time column used for windowing">
+            <Input
+              value={value.timestampBy || ''}
+              placeholder="eventTime"
+              onChange={(_: unknown, d: any) => onChange({ timestampBy: d.value })}
+            />
+          </Field>
+          <Field label="GROUP BY columns" hint="Comma-separated">
+            <Input
+              value={arrToCsv(value.groupBy)}
+              placeholder="deviceId, region"
+              onChange={(_: unknown, d: any) => onChange({ groupBy: csvToArr(d.value) })}
+            />
+          </Field>
+          <AggregateRows value={value.aggregates || []} onChange={(next) => onChange({ aggregates: next })} />
+          <Field label="Also project columns" hint="Comma-separated (optional)">
+            <Input
+              value={arrToCsv(value.selectFields)}
+              onChange={(_: unknown, d: any) => onChange({ selectFields: csvToArr(d.value) })}
+            />
+          </Field>
+          <Divider />
+          <WindowPanel value={value} onChange={onChange} />
+          <Field label="HAVING (optional)" hint="Filter on aggregates, e.g. AVG(temperature) > 30">
+            <MonacoTextarea
+              value={value.havingExpression || ''}
+              onChange={(v) => onChange({ havingExpression: v })}
+              language="sql"
+              height={56}
+              lineNumbers={false}
+              ariaLabel="HAVING expression"
+            />
+          </Field>
+        </>
+      )}
+
+      {/* ---- PROJECT ---- */}
+      {value.kind === 'project' && (
+        <Field label="Columns to keep" hint="Comma-separated; blank = all (*)">
+          <Input
+            value={arrToCsv(value.selectFields)}
+            placeholder="deviceId, temperature, eventTime"
+            onChange={(_: unknown, d: any) => onChange({ selectFields: csvToArr(d.value) })}
+          />
+        </Field>
+      )}
+
+      {/* ---- JOIN ---- */}
+      {value.kind === 'join' && (
+        <>
+          <Field label="Join with stream">
+            <Dropdown
+              value={value.joinSource || ''}
+              selectedOptions={value.joinSource ? [value.joinSource] : []}
+              placeholder={sources.length > 1 ? 'Select a stream' : 'Add a second source first'}
+              onOptionSelect={(_: unknown, d: any) => onChange({ joinSource: d.optionValue as string })}
+            >
+              {sources.map((srcOpt) => (
+                <Option key={srcOpt.name} value={srcOpt.name}>{srcOpt.name}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+          <Field label="Join type">
+            <Dropdown
+              value={value.joinType || 'INNER'}
+              selectedOptions={[value.joinType || 'INNER']}
+              onOptionSelect={(_: unknown, d: any) => onChange({ joinType: (d.optionValue as AsaJoinType) || 'INNER' })}
+            >
+              <Option value="INNER">INNER</Option>
+              <Option value="LEFT OUTER">LEFT OUTER</Option>
+            </Dropdown>
+          </Field>
+          <Field label="ON condition" hint="e.g. L.deviceId = R.deviceId (L = left, R = right)">
+            <MonacoTextarea
+              value={value.joinOn || ''}
+              onChange={(v) => onChange({ joinOn: v })}
+              language="sql"
+              height={56}
+              lineNumbers={false}
+              ariaLabel="JOIN ON condition"
+            />
+          </Field>
+          <Field label="Within (seconds)" hint="DATEDIFF temporal bound (max 604800 = 7 days)">
+            <SpinButton
+              min={0}
+              max={604800}
+              value={value.joinDurationSeconds ?? 60}
+              onChange={(_: unknown, d: any) =>
+                onChange({ joinDurationSeconds: d.value ?? Number(d.displayValue) ?? 60 })
+              }
+              aria-label="Join duration seconds"
+            />
+          </Field>
+        </>
+      )}
+
+      {/* ---- UNION ---- */}
+      {value.kind === 'union' && (
+        <Caption1>UNION merges all upstream sources into one stream. No extra configuration is required.</Caption1>
+      )}
+
+      <Divider />
+      <Label size="small">Generated SAQL (preview)</Label>
+      <MonacoTextarea
+        value={previewSaql}
+        onChange={() => {}}
+        language="sql"
+        height={120}
+        readOnly
+        ariaLabel="Generated SAQL preview"
+      />
+
       <Button
         icon={<Delete20Regular />}
         appearance="subtle"
         onClick={onDelete}
-        style={{ marginTop: 'auto' }}
+        style={{ marginTop: 4 }}
       >
         Remove transform
       </Button>
-    </>
+    </div>
   );
 }
 
