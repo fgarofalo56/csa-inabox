@@ -904,6 +904,15 @@ print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
 type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
 
+/** A row from /api/azure/resources (IoT Hub / Event Hub namespace picker). */
+interface DcSourceRow { id: string; name: string; resourceGroup?: string; subscriptionId?: string; location?: string }
+/** A row from GET /api/items/kql-database/[id]/data-connections. */
+interface DcConnectionRow { name?: string; kind?: string; tableName?: string; consumerGroup?: string; dataFormat?: string; provisioningState?: string; source?: string }
+
+// ADX-supported data formats offered by the wizard. RAW is intentionally
+// excluded — IoT Hub data connections do not support it (per ADX docs).
+const DC_FORMATS = ['MULTIJSON', 'JSON', 'CSV', 'TSV', 'PSV', 'SCSV', 'SOHSV', 'TXT', 'TSVE', 'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE'];
+
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [info, setInfo] = useState<KqlDbInfo | null>(null);
@@ -924,6 +933,28 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
   // Ingest wizard
   const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
+
+  // ── Data-connection wizard (Event Hub / IoT Hub → ADX) ──────────────────
+  // Azure-native parity for a Fabric Eventhouse data connection. Works with NO
+  // Fabric workspace bound — streams device-to-cloud / event messages into a
+  // target table via a real Microsoft.Kusto data connection.
+  const [dcOpen, setDcOpen] = useState(false);
+  const [dcKind, setDcKind] = useState<'iothub' | 'eventhub'>('iothub');
+  const [dcSources, setDcSources] = useState<DcSourceRow[] | null>(null);
+  const [dcSourcesErr, setDcSourcesErr] = useState<string | null>(null);
+  const [dcSourcesLoading, setDcSourcesLoading] = useState(false);
+  const [dcSelectedSourceId, setDcSelectedSourceId] = useState('');
+  const [dcPolicies, setDcPolicies] = useState<{ name: string; rights?: string }[]>([]);
+  const [dcPolicyNote, setDcPolicyNote] = useState<string | null>(null);
+  const [dcPolicy, setDcPolicy] = useState('iothubowner');
+  const [dcConsumerGroup, setDcConsumerGroup] = useState('$Default');
+  const [dcFormat, setDcFormat] = useState('MULTIJSON');
+  const [dcTable, setDcTable] = useState('');
+  const [dcEhEntity, setDcEhEntity] = useState(''); // Event Hub entity name (eventhub kind only)
+  const [dcBusy, setDcBusy] = useState(false);
+  const [dcError, setDcError] = useState<string | null>(null);
+  const [dcSuccess, setDcSuccess] = useState<string | null>(null);
+  const [dcExisting, setDcExisting] = useState<DcConnectionRow[] | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -1051,6 +1082,164 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
 
+  // ── Data-connection wizard handlers ─────────────────────────────────────
+  const ARM_TYPE_BY_KIND: Record<'iothub' | 'eventhub', string> = {
+    iothub: 'Microsoft.Devices/IotHubs',
+    eventhub: 'Microsoft.EventHub/namespaces',
+  };
+
+  // List the existing data connections on this database (real ARM REST).
+  const loadDcExisting = useCallback(async () => {
+    if (!id || id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/data-connections`);
+      const j = await r.json();
+      setDcExisting(j.ok ? (j.connections ?? []) : []);
+    } catch {
+      setDcExisting([]);
+    }
+  }, [id]);
+
+  // Discover IoT Hubs / Event Hub namespaces via Resource Graph (per-user RBAC).
+  const discoverDcSources = useCallback(async (kind: 'iothub' | 'eventhub') => {
+    setDcSourcesLoading(true);
+    setDcSources(null);
+    setDcSourcesErr(null);
+    setDcSelectedSourceId('');
+    setDcPolicies([]);
+    setDcPolicyNote(null);
+    try {
+      const r = await fetch(`/api/azure/resources?type=${encodeURIComponent(ARM_TYPE_BY_KIND[kind])}`);
+      const j = await r.json();
+      const rows: DcSourceRow[] = Array.isArray(j.resources) ? j.resources : [];
+      if (!j.ok || rows.length === 0) {
+        const noun = kind === 'iothub' ? 'IoT Hub (Microsoft.Devices/IotHubs)' : 'Event Hubs namespace (Microsoft.EventHub/namespaces)';
+        setDcSourcesErr(
+          j.error ||
+          `No ${noun} found in the subscriptions visible to Loom. Provision the resource ` +
+          `(or grant the Loom identity Reader access at the management-group scope) to enable this connection.`,
+        );
+        setDcSources([]);
+      } else {
+        setDcSources(rows);
+      }
+    } catch (e: any) {
+      setDcSourcesErr(e?.message || String(e));
+      setDcSources([]);
+    } finally {
+      setDcSourcesLoading(false);
+    }
+  }, []);
+
+  const openDcWizard = useCallback(() => {
+    setDcOpen(true);
+    setDcKind('iothub');
+    setDcError(null);
+    setDcSuccess(null);
+    setDcConsumerGroup('$Default');
+    setDcFormat('MULTIJSON');
+    setDcPolicy('iothubowner');
+    setDcTable('');
+    discoverDcSources('iothub');
+    loadDcExisting();
+  }, [discoverDcSources, loadDcExisting]);
+
+  const onDcKindChange = useCallback((kind: 'iothub' | 'eventhub') => {
+    setDcKind(kind);
+    setDcError(null);
+    setDcSuccess(null);
+    setDcFormat(kind === 'iothub' ? 'MULTIJSON' : 'JSON');
+    discoverDcSources(kind);
+  }, [discoverDcSources]);
+
+  // When an IoT Hub is picked, fetch its shared-access policy names.
+  const onDcSourceChange = useCallback(async (sourceId: string) => {
+    setDcSelectedSourceId(sourceId);
+    setDcPolicies([]);
+    setDcPolicyNote(null);
+    if (dcKind !== 'iothub' || !sourceId) return;
+    try {
+      const r = await fetch(`/api/azure/iothub/policies?iotHubId=${encodeURIComponent(sourceId)}`);
+      const j = await r.json();
+      const list = (j.ok ? j.policies : j.fallback) ?? [];
+      setDcPolicies(list);
+      if (!j.ok && j.error) setDcPolicyNote(j.error);
+      // Prefer a ServiceConnect policy for ADX ingestion.
+      const preferred = list.find((p: any) => /service/i.test(p.name)) || list.find((p: any) => /iothubowner/i.test(p.name)) || list[0];
+      if (preferred) setDcPolicy(preferred.name);
+    } catch (e: any) {
+      setDcPolicyNote(e?.message || String(e));
+      setDcPolicies([{ name: 'iothubowner' }, { name: 'service' }]);
+      setDcPolicy('iothubowner');
+    }
+  }, [dcKind]);
+
+  const submitDc = useCallback(async () => {
+    setDcError(null);
+    setDcSuccess(null);
+    if (!dcSelectedSourceId) { setDcError(dcKind === 'iothub' ? 'Select an IoT Hub' : 'Select an Event Hubs namespace'); return; }
+    if (!dcTable.trim()) { setDcError('Target table is required'); return; }
+    let payload: Record<string, unknown>;
+    if (dcKind === 'iothub') {
+      if (!dcPolicy) { setDcError('Select a shared access policy'); return; }
+      payload = {
+        kind: 'iothub',
+        iotHubResourceId: dcSelectedSourceId,
+        sharedAccessPolicyName: dcPolicy,
+        consumerGroup: dcConsumerGroup || '$Default',
+        dataFormat: dcFormat,
+        tableName: dcTable.trim(),
+      };
+    } else {
+      // Event Hub: the picker selects a NAMESPACE; the operator names the event
+      // hub entity inside it. Compose the full eventhubs child resource id.
+      if (!dcEhEntity.trim()) { setDcError('Event Hub entity name is required'); return; }
+      payload = {
+        kind: 'eventhub',
+        eventHubResourceId: `${dcSelectedSourceId}/eventhubs/${dcEhEntity.trim()}`,
+        consumerGroup: dcConsumerGroup || '$Default',
+        dataFormat: dcFormat,
+        tableName: dcTable.trim(),
+      };
+    }
+    setDcBusy(true);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setDcError(j.error || 'Failed to create data connection');
+      } else {
+        setDcSuccess(`Data connection "${j.connectionName}" — ${j.provisioningState || 'Creating'}. Device-to-cloud messages will land in ${dcTable.trim()}.`);
+        await loadDcExisting();
+      }
+    } catch (e: any) {
+      setDcError(e?.message || String(e));
+    } finally {
+      setDcBusy(false);
+    }
+  }, [dcKind, dcSelectedSourceId, dcPolicy, dcConsumerGroup, dcFormat, dcTable, dcEhEntity, id, loadDcExisting]);
+
+  const deleteDc = useCallback(async (connectionName?: string) => {
+    if (!connectionName) return;
+    setDcBusy(true);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ connectionName }),
+      });
+      const j = await r.json();
+      if (!j.ok) setDcError(j.error || 'Delete failed');
+      else await loadDcExisting();
+    } catch (e: any) {
+      setDcError(e?.message || String(e));
+    } finally {
+      setDcBusy(false);
+    }
+  }, [id, loadDcExisting]);
+
   const ribbon: RibbonTab[] = useMemo(() => {
     return [
       { id: 'home', label: 'Home', groups: [
@@ -1069,13 +1258,16 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             el?.focus();
           } },
         ]},
+        { label: 'Connections', actions: [
+          { label: 'Add data connection', onClick: openDcWizard },
+        ]},
         { label: 'Manage', actions: [
           { label: 'Data policies', onClick: () => { setKql('.show database policy caching\n.show database policy retention'); } },
           { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring requires Fabric-managed cluster (LOOM_KUSTO_FABRIC_MANAGED=true)' },
         ]},
       ]},
     ];
-  }, [openWizard]);
+  }, [openWizard, openDcWizard]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1299,6 +1491,150 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setWizardKind(null)} disabled={wizSubmitting}>Cancel</Button>
                   <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : 'Create'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* ── Data-connection wizard (Event Hub / IoT Hub → ADX) ─────────── */}
+          <Dialog open={dcOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setDcOpen(false); }}>
+            <DialogSurface style={{ maxWidth: 620 }}>
+              <DialogBody>
+                <DialogTitle>New data connection (Microsoft.Kusto/dataConnections)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <Caption1>
+                      Stream events into a table via a real ADX data connection. Azure-native — no Fabric
+                      workspace required. The ADX cluster managed identity must be able to read the source’s
+                      keys (IoT Hub Contributor for IoT Hub; Event Hubs Data Receiver for Event Hub).
+                    </Caption1>
+
+                    <Field label="Source type">
+                      <Select
+                        value={dcKind}
+                        onChange={(_: unknown, d: any) => onDcKindChange(d.value as 'iothub' | 'eventhub')}
+                      >
+                        <option value="iothub">IoT Hub (device-to-cloud)</option>
+                        <option value="eventhub">Event Hub</option>
+                      </Select>
+                    </Field>
+
+                    {dcSourcesLoading && (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Spinner size="tiny" /> <Caption1>Discovering {dcKind === 'iothub' ? 'IoT Hubs' : 'Event Hubs namespaces'}…</Caption1>
+                      </div>
+                    )}
+
+                    {/* Honest-gate: no source resource visible to Loom. */}
+                    {!dcSourcesLoading && dcSourcesErr && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>{dcKind === 'iothub' ? 'No IoT Hub available' : 'No Event Hubs namespace available'}</MessageBarTitle>
+                          {dcSourcesErr}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    {!dcSourcesLoading && dcSources && dcSources.length > 0 && (
+                      <Field label={dcKind === 'iothub' ? 'IoT Hub' : 'Event Hubs namespace'}>
+                        <Select
+                          value={dcSelectedSourceId}
+                          onChange={(_: unknown, d: any) => onDcSourceChange(d.value)}
+                        >
+                          <option value="">— select —</option>
+                          {dcSources.map((srcRow) => (
+                            <option key={srcRow.id} value={srcRow.id}>
+                              {srcRow.name}{srcRow.resourceGroup ? ` (${srcRow.resourceGroup})` : ''}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    )}
+
+                    {/* Event Hub entity name (namespace picker selects the namespace only). */}
+                    {dcKind === 'eventhub' && dcSelectedSourceId && (
+                      <Field label="Event Hub entity name">
+                        <Input value={dcEhEntity} onChange={(_: unknown, d: any) => setDcEhEntity(d.value)} placeholder="telemetry" />
+                      </Field>
+                    )}
+
+                    {/* IoT Hub shared-access policy (ServiceConnect required for ADX). */}
+                    {dcKind === 'iothub' && dcSelectedSourceId && (
+                      <>
+                        <Field label="Shared access policy">
+                          <Select value={dcPolicy} onChange={(_: unknown, d: any) => setDcPolicy(d.value)}>
+                            {dcPolicies.length === 0 && <option value="iothubowner">iothubowner</option>}
+                            {dcPolicies.map((p) => (
+                              <option key={p.name} value={p.name}>
+                                {p.name}{/service|iothubowner/i.test(p.name) ? ' — recommended for ADX' : ''}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        {dcPolicyNote && (
+                          <MessageBar intent="info"><MessageBarBody>{dcPolicyNote}</MessageBarBody></MessageBar>
+                        )}
+                      </>
+                    )}
+
+                    {dcSelectedSourceId && (
+                      <>
+                        <Field label="Consumer group">
+                          <Input value={dcConsumerGroup} onChange={(_: unknown, d: any) => setDcConsumerGroup(d.value)} placeholder="$Default" />
+                        </Field>
+                        <Field label="Data format">
+                          <Select value={dcFormat} onChange={(_: unknown, d: any) => setDcFormat(d.value)}>
+                            {DC_FORMATS.map((f) => <option key={f} value={f}>{f}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Target table">
+                          <Input value={dcTable} onChange={(_: unknown, d: any) => setDcTable(d.value)} placeholder="DeviceEvents" />
+                        </Field>
+                      </>
+                    )}
+
+                    {dcError && <MessageBar intent="error"><MessageBarBody>{dcError}</MessageBarBody></MessageBar>}
+                    {dcSuccess && <MessageBar intent="success"><MessageBarBody>{dcSuccess}</MessageBarBody></MessageBar>}
+
+                    {/* Existing connections on this database (real ARM list). */}
+                    {dcExisting && dcExisting.length > 0 && (
+                      <div>
+                        <Subtitle2>Existing connections ({dcExisting.length})</Subtitle2>
+                        <Table size="extra-small" aria-label="Existing data connections" style={{ marginTop: 6 }}>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHeaderCell>Name</TableHeaderCell>
+                              <TableHeaderCell>Kind</TableHeaderCell>
+                              <TableHeaderCell>Table</TableHeaderCell>
+                              <TableHeaderCell>State</TableHeaderCell>
+                              <TableHeaderCell />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {dcExisting.map((c) => (
+                              <TableRow key={c.name}>
+                                <TableCell>{c.name}</TableCell>
+                                <TableCell>{c.kind}</TableCell>
+                                <TableCell>{c.tableName}</TableCell>
+                                <TableCell>{c.provisioningState}</TableCell>
+                                <TableCell>
+                                  <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                                    disabled={dcBusy} onClick={() => deleteDc(c.name)} aria-label={`Delete ${c.name}`} />
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setDcOpen(false)} disabled={dcBusy}>Close</Button>
+                  <Button appearance="primary" onClick={submitDc}
+                    disabled={dcBusy || !dcSelectedSourceId || !dcTable.trim()}>
+                    {dcBusy ? 'Creating…' : 'Create connection'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
