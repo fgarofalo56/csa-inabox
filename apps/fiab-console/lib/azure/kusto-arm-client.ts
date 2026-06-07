@@ -393,6 +393,8 @@ export async function createIotHubDataConnection(
   }
   return shapeDataConnection(await r.json());
 }
+
+export async function deleteDataConnection(database: string, name: string): Promise<void> {
   const cfg = readKustoArmConfig();
   const r = await callArm(
     `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
