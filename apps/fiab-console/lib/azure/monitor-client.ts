@@ -541,7 +541,17 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
   'microsoft.kusto/clusters': [
     { metric: 'CPU', aggregation: 'Average', label: 'CPU %' },
     { metric: 'IngestionUtilization', aggregation: 'Average', label: 'Ingestion util %' },
+    { metric: 'CacheUtilizationFactor', aggregation: 'Average', label: 'Cache util %' },
+    { metric: 'TotalNumberOfConcurrentQueries', aggregation: 'Average', label: 'Concurrent queries' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
     { metric: 'KeepAlive', aggregation: 'Average', label: 'Keep-alive' },
+    // Eventhouse overview panel — ingestion + query health + throttling.
+    { metric: 'IngestionLatencyInSeconds', aggregation: 'Average', label: 'Ingest latency (s)' },
+    { metric: 'IngestionVolumeInMB', aggregation: 'Total', label: 'Ingested volume (MB)' },
+    { metric: 'TotalNumberOfThrottledCommands', aggregation: 'Total', label: 'Throttled commands' },
+    { metric: 'QueryDuration', aggregation: 'Average', label: 'Query duration (ms)' },
+    { metric: 'TotalNumberOfThrottledQueries', aggregation: 'Total', label: 'Throttled queries' },
   ],
   'microsoft.synapse/workspaces': [
     { metric: 'IntegrationPipelineRunsEnded', aggregation: 'Total', label: 'Pipeline runs ended' },
@@ -567,6 +577,17 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
   'microsoft.cognitiveservices/accounts': [
     { metric: 'TotalCalls', aggregation: 'Total', label: 'Total calls' },
     { metric: 'TotalTokens', aggregation: 'Total', label: 'Total tokens' },
+  ],
+  // Azure Stream Analytics streaming jobs — the headline health metrics the
+  // ASA portal Overview surfaces (SU% utilization, watermark delay, backlog).
+  // Metrics are only emitted while the job is Running.
+  // https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-streamanalytics-streamingjobs-metrics
+  'microsoft.streamanalytics/streamingjobs': [
+    { metric: 'ResourceUtilization', aggregation: 'Average', label: 'SU % Utilization' },
+    { metric: 'OutputWatermarkDelaySeconds', aggregation: 'Maximum', label: 'Watermark Delay (s)' },
+    { metric: 'InputEventsSourcesBacklogged', aggregation: 'Maximum', label: 'Backlogged Events' },
+    { metric: 'InputEvents', aggregation: 'Total', label: 'Input Events' },
+    { metric: 'OutputEvents', aggregation: 'Total', label: 'Output Events' },
   ],
 };
 
