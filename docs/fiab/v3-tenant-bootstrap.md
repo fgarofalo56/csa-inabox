@@ -216,3 +216,221 @@ and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`
 - The two Graph app-roles are **Graph-plane** grants and intentionally cannot be
   expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
   the admin-consent click above.
+
+## PostgreSQL in-database query (Entra auth)
+
+The unified SQL editor's **Query** tab and schema browser run real SQL against a
+PostgreSQL flexible server over the `pg` wire protocol, authenticating with a
+Microsoft Entra access token (no stored password). One-time setup:
+
+1. Connect to the server as its PostgreSQL **Entra admin** and register the
+   console identity as a PG principal:
+
+   ```sql
+   SELECT * FROM pgaadauth_create_principal('<console-uami-name>', false, false);
+   -- then grant it the privileges it needs, e.g.:
+   GRANT CONNECT ON DATABASE <db> TO "<console-uami-name>";
+   GRANT USAGE ON SCHEMA public TO "<console-uami-name>";
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO "<console-uami-name>";
+   ```
+
+2. Set `LOOM_POSTGRES_AAD_USER` to that principal name (`loomPostgresAadUser`
+   param in `admin-plane/main.bicep`, already wired to the console app env), e.g.:
+
+   ```bash
+   az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
+     --set-env-vars LOOM_POSTGRES_AAD_USER='<console-uami-name>'
+   ```
+
+Until it's set, the PG Query tab shows an honest setup gate (ARM inventory,
+provisioning, databases, and firewall are already live without it). Gov clouds:
+override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
+
+### Bicep sync
+
+- `LOOM_POSTGRES_AAD_USER`: `platform/fiab/bicep/modules/admin-plane/main.bicep`
+  (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
+  is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
+
+## Cost Management + Diagnostics (Console UAMI subscription grants)
+
+Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
+bicep can't express them):
+
+- **Cost Management Reader** — the `/monitor` Cost surface queries
+  `Microsoft.CostManagement` across every CSA Loom subscription. Without it a sub
+  returns 403 and the Cost UI honest-gates it.
+- **Monitoring Contributor** — the "diagnostics on by default" sweep writes
+  `microsoft.insights/diagnosticSettings` on resources across the estate. Without
+  it the sweep 403s per resource.
+
+Run once per subscription the console should see:
+
+```bash
+scripts/csa-loom/grant-cost-monitoring-rbac.sh [subscriptionId ...]   # default: current az sub
+```
+
+Idempotent; requires az logged in as Owner / User Access Administrator on the sub.
+(Granted live on 363ef5d1-…-bf8c 2026-06-06.)
+
+## Loom Connections (Key Vault-backed source credentials)
+
+Loom **Connections** (`/connections`) let users register a data-source connection
+once; any secret (password / connection string / account key / SPN secret) is
+written to **Key Vault** and only a reference is stored. Reused by mirroring,
+ADF / Synapse linked services, and datasets.
+
+Wiring (auto on deploy):
+- `LOOM_KEY_VAULT_URI` → console env (`admin-plane/main.bicep`, from the keyvault
+  module output).
+- The Console UAMI is granted **Key Vault Secrets Officer** on the vault
+  (`keyvault.bicep`, `consolePrincipalId` param).
+
+For an existing deployment, set the env + grant once:
+```bash
+az containerapp update --name <loom-console> -g <loom-admin-rg> \
+  --set-env-vars "LOOM_KEY_VAULT_URI=https://<vault>.vault.azure.net/"
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets Officer" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>
+```
+(Granted live on kv-loom-… 2026-06-06.)
+
+## Delta Sharing shortcuts (cross-tenant) {#delta-sharing-shortcuts}
+
+A **Delta Sharing** lakehouse shortcut (Lakehouse editor → Shortcuts → New
+shortcut → *Delta Sharing (cross-tenant)*) virtualizes a table a partner shares
+with you over the open Delta Sharing protocol — no Fabric / Power BI dependency.
+The share owner gives you a **credential file** (open-sharing profile JSON:
+`shareCredentialsVersion`, `endpoint`, `bearerToken`, `expirationTime`) via an
+activation link. Store the raw JSON as a **Key Vault secret** and name it in the
+wizard; Loom validates the bearer token against the share server on create
+(`GET <endpoint>/shares`) and again on **Test/Retry**. A `401`/`403` ⇒ the token
+is expired/invalid — the shortcut shows the **Broken** badge; update the KV
+secret with a fresh credential file and click **Retry** (or press **F11** on the
+selected row) to restore it.
+
+No new Azure resources or env vars are required — the Console UAMI already holds
+**Key Vault Secrets Officer** on the admin-plane vault (see above), which is all
+a **Files** Delta Sharing shortcut needs (the credential is validated and the
+profile is stored in the registry for notebook reads via
+`delta_sharing.SharingClient`).
+
+A **Tables** Delta Sharing shortcut additionally registers a Databricks Unity
+Catalog table over the `deltaSharing` Spark provider, which requires the
+Databricks engine (`LOOM_DATABRICKS_HOSTNAME`) plus a **UC Volume** to hold the
+credential file. Create the volume once as a metastore admin in the Databricks
+workspace:
+
+```sql
+CREATE CATALOG IF NOT EXISTS loom;
+CREATE SCHEMA  IF NOT EXISTS loom.loom_shortcuts;
+CREATE VOLUME  IF NOT EXISTS loom.loom_shortcuts.loom_shortcut_files;
+-- Grant the Console UAMI (workspace service principal) write to the volume:
+GRANT WRITE VOLUME, READ VOLUME ON VOLUME loom.loom_shortcuts.loom_shortcut_files TO `<console-uami-app-id>`;
+```
+
+Override the volume path with `LOOM_DELTA_SHARING_VOLUME=<catalog>.<schema>.<volume>`
+on the Console if you keep shortcut credentials in a different governed volume.
+If the volume is absent, a Tables Delta Sharing shortcut honest-gates
+(`delta_sharing_needs_uc_volume`) with the exact `CREATE VOLUME` remediation; a
+Files Delta Sharing shortcut works without Databricks entirely.
+
+## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
+
+The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a
+Consumption Logic App + Office 365 Outlook connection deployed by
+`platform/fiab/bicep/modules/integration/approval-logicapp.bicep` (wired into the
+DLZ landing-zone as module `approvalLogicApp`). Bicep creates the
+`office365-loom-approval` connection but **cannot** perform the interactive OAuth
+consent — that is a one-time admin action.
+
+### Why a one-time step is required
+
+The Office 365 Outlook managed connector authenticates as a **licensed mailbox**
+via delegated OAuth. There is no service-principal / managed-identity path for
+`/approvalmail/$subscriptions`, so a human with a licensed mailbox must authorize
+the connection once. Until then the `Send_approval_email` action returns `401`
+and the Approval activity surfaces a clear error.
+
+### Step 1 — Authorize the connection
+
+1. Portal → the DLZ resource group → open Logic App `logic-loom-approval-<region>`.
+2. **Logic app designer** → select the **Send_approval_email** action →
+   **Change connection** → **Add new** → sign in with a licensed Office 365
+   mailbox (the "from" sender for approval emails).
+3. **GCC-High / IL5:** choose the **AzureUSGovernment** authentication endpoint
+   (`login.microsoftonline.us`) and confirm `AZURE_CLOUD=AzureUSGovernment` is set
+   on the Console (admin-plane sets this automatically for GCC-High / IL5).
+
+### Step 2 — Confirm Console wiring
+
+The Console reads the Logic App via `LOOM_APPROVAL_LOGIC_APP_NAME`
+(default `logic-loom-approval-<region>`) and `LOOM_APPROVAL_LOGIC_APP_RG`
+(defaults to `LOOM_DLZ_RG`). For an existing deployment:
+```bash
+az containerapp update --name <loom-console> -g <loom-admin-rg> \
+  --set-env-vars "LOOM_APPROVAL_LOGIC_APP_NAME=logic-loom-approval-<region>" \
+                 "LOOM_APPROVAL_LOGIC_APP_RG=<dlz-rg>"
+```
+
+### Step 3 — Verify
+
+In a pipeline, add an **Approval (Logic App)** activity, declare a `string`
+parameter `approverEmail`, click **Fetch trigger URL** (populates the activity
+`url`), Save + Publish, then Run. An approval email arrives; **Approve**
+continues the pipeline, **Reject** fails the branch.
+
+### Bicep sync
+
+`approval-logicapp.bicep` deploys the workflow + O365 connection + Logic App
+Contributor grant for the Console UAMI (so the BFF can call `listCallbackUrl`).
+`admin-plane/main.bicep` exposes `loomApprovalLogicAppName` /
+`loomApprovalLogicAppRg` as env vars. Only the OAuth consent above is manual.
+
+## Reference Lakehouse — cross-account RBAC {#reference-lakehouse-cross-account-rbac}
+
+Loom's **Reference Lakehouses** federation (lakehouse explorer → **References →
++**) lets a primary lakehouse browse other in-workspace lakehouses side-by-side,
+**read-only**. Reads use **pass-through RBAC**: the Console UAMI reads the
+referenced lakehouse's ADLS Gen2 containers with its own managed identity.
+
+- **Same-account references (default):** no action needed. In-workspace
+  lakehouses share the primary LOOM ADLS Gen2 account, on which the Console UAMI
+  already holds **Storage Blob Data Contributor** (a superset of Reader). Add a
+  reference, expand it, and browse/preview immediately.
+- **Cross-account references:** when a referenced lakehouse declares its own
+  storage account (`state.storageAccount`), grant the Console UAMI **Storage
+  Blob Data Reader** (`2a2b9908-6ea1-4ae2-8e65-a410df84e7d1`) on that account
+  (or a single container). Until granted, the reference shows an error icon +
+  the exact remediation tooltip in the explorer (honest gate, per
+  `.claude/rules/no-vaporware.md`):
+
+```bash
+# Grant the Console UAMI read on a referenced (cross-account) storage account:
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Reader" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<account>
+
+# (Optional) scope to a single container instead of the whole account:
+#   .../storageAccounts/<account>/blobServices/default/containers/<container>
+```
+
+No new bicep resource ships for this — the referenced account is a **runtime**
+choice (which lakehouse the user adds), not a deploy-time input, so the grant is
+an operator action exactly like cross-account Lakehouse **shortcuts**. The
+reference set itself is stored on the primary lakehouse's Cosmos `items` doc
+(`state.referencedLakehouseIds`) — no new Cosmos container, no new env var.
+
+For **previews** of a cross-account reference, the **Synapse Serverless** MI
+(used by OPENROWSET) must also hold Storage Blob Data Reader on the referenced
+account — same `az role assignment create` with the Synapse workspace MI's
+object id.
+
+**Sovereign clouds (GCC / GCC-High / IL5):** the ADLS DFS host is hard-coded to
+`*.dfs.core.windows.net` in `adls-client.ts` (a pre-existing, separately-tracked
+limitation). Until a `LOOM_STORAGE_ENDPOINT_SUFFIX` is introduced, only
+**same-account** references are supported in sovereign clouds; cross-account
+references there are blocked until the DFS host is parameterized.

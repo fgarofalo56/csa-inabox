@@ -1,150 +1,99 @@
-# Tutorial 07 — Marketplace data product publishing
+# Tutorial 07 — Publish & discover data products
 
-Publish your Silver-tier Delta table as a data product to the org-
-internal Marketplace so other workspaces / DLZs can request access.
-**15 minutes.**
-
-> **Note:** Org-internal Marketplace pane lands in **v1.1**. For v1,
-> data product publishing is via Loom CLI + Console catalog. This
-> tutorial covers both paths.
+Share data across the platform using the three shipped surfaces: the **API
+marketplace**, the **Unified catalog**, and **data product templates**.
+**20 minutes.**
 
 ## Prerequisites
 
 - Workspace with `noaa_silver_daily` table from Tutorial 02
-- Member of `Loom Domain Stewards` group (or workspace Admin)
-- Another workspace in a different DLZ to request access from
-  (for testing)
+- Workspace Admin (or a steward role) to publish
 
-## Steps
+There is no marketplace CLI and no YAML data-product manifest. The flows
+below are the real, shipped UI surfaces.
 
-### 1. Author the data product manifest
+---
 
-Create `data-product.yaml` (Git-friendly):
+## Surface A — Publish a table as an API
 
-```yaml
-id: weather-daily
-name: NOAA Weather Daily
-description: |
-  NOAA daily weather observations, Silver tier. Cleaned, partitioned
-  by date, includes temperature in Celsius and metadata about station.
-owner: <your-email>
-classification: Public
-domain: weather
+Expose a lakehouse/warehouse table as a managed API via APIM.
 
-assets:
-  - type: delta-table
-    workspace: <your-workspace-id>
-    lakehouse: <your-lakehouse>
-    table: noaa_silver_daily
-    sharingProtocol: delta-sharing
+### 1. Open the source item
 
-  - type: semantic-model
-    workspace: <your-workspace-id>
-    name: noaa-semantic-model
-    sharingMode: read-only
+Left nav → **Workspaces** → open your workspace → open the lakehouse or
+warehouse holding `noaa_silver_daily`.
 
-refreshCadence: daily
-slaHours: 24
-contact: weather-team@org.com
+### 2. Publish as an API
 
-sampleQueries:
-  - language: sql
-    query: |
-      SELECT YEAR(date), AVG(temperature_c)
-      FROM noaa_silver_daily
-      GROUP BY YEAR(date)
-```
+In the item's **Weave** menu → **Publish as an API**
+(`POST /api/thread/publish-as-api`). Loom creates an APIM API product from
+a Synapse Serverless view (or Databricks SQL endpoint) over the table.
 
-### 2. Publish via CLI (v1)
+### 3. Subscribe and try it
 
-```bash
-loom-marketplace publish \
-  --workspace <your-workspace-id> \
-  --manifest data-product.yaml
-```
+Left nav → **API marketplace** (`/api-marketplace`). The published APIM
+products and APIs are listed. From a product you can **Try it** in-browser,
+copy the subscription key, or **Use as source** to wire the API into a Data
+Agent or a mini-app.
 
-This:
-- Validates the manifest
-- Registers the data product in the org-Marketplace Cosmos store
-- Generates a Delta Sharing share for the Delta tables
-- Indexes the manifest in Azure AI Search for discoverability
+---
 
-Output: data product ID (e.g., `weather-daily-2026-05-22-abc123`)
+## Surface B — Discover & request data assets
 
-### 3. Verify in Console Catalog
+### 4. Browse the Unified catalog
 
-Open Loom Console → **Catalog**. Filter by `domain: weather`. You see
-the new data product with:
-- Title, description, owner, classification
-- Asset list (Delta table + semantic model)
-- Sample queries
-- "Request Access" button
+Left nav → **Unified catalog** (`/catalog`). It indexes data assets across
+Purview (Gov) or Unity Catalog (Commercial). Filter to find your table
+(e.g. by `domain: weather` if you tagged it in
+[Tutorial 02](02-first-lakehouse.md) §11).
 
-### 4. Request access from another workspace
+### 5. Request access
 
-Sign in to Loom Console as a user in a different workspace / DLZ.
+Click **Request access** on an asset. This triggers the underlying
+access-policy request — a Purview data-access policy request (Gov) or a UC
+entitlement request (Commercial). The approval workflow lives in those
+governance systems, not in the Loom Console.
 
-Open **Catalog → Marketplace** (or Catalog filter by data-product).
-Find `NOAA Weather Daily`. Click **Request Access**.
+---
 
-Fill the request:
-- Workspace requesting access
-- Reason / use case
-- Duration (default 90 days)
+## Surface C — Spawn a data product from a template
 
-Submit. Request enters approval queue.
+### 6. Create a Data product template item
 
-### 5. Approve as Steward
+Open your workspace → **New item** → category **Data Engineering** → **Data
+product template**. The Data Product Template editor opens and loads the
+curated template grid (`GET /api/items/data-product-template`).
 
-As the data product owner / Steward:
-- Console "Marketplace → Pending Requests"
-- Review request
-- Approve or deny
+### 7. Pick a template
 
-On approval:
-- Delta Sharing grant created for requesting workspace
-- Requesting workspace's catalog adapter picks up the shared table
-  within 5 min
-- Requesting workspace can now query `weather-daily` via its native
-  catalog (UC / Purview / Atlas)
+Select a template to see its components, description, and estimated monthly
+cost.
 
-### 6. Verify cross-workspace access
+### 8. Spawn into a workspace
 
-In the requesting workspace, open **Lakehouse** pane. Click
-**Shared with me** (v1.1) or use SQL:
-
-```sql
--- Commercial / GCC (UC)
-SELECT * FROM `external_share`.`weather`.`noaa_silver_daily` LIMIT 10
-
--- Gov-IL4 (Purview-mediated)
-SELECT * FROM `partner_shares`.`weather_team`.`noaa_silver_daily` LIMIT 10
-```
-
-Returns shared data.
-
-### 7. Audit
-
-Both publisher + requester see the access event in:
-- Console "Monitoring → Activity → Cross-Workspace Sharing"
-- Sentinel (Gov) — for compliance review
+Choose a target workspace and a display name, then click **Spawn into
+workspace** (POSTs `{ workspaceId, displayName }` to
+`POST /api/items/data-product-template/<slug>/instantiate`). On success you
+land on the new **Data Product Instance** editor, which lists the spawned
+component items and their status/health.
 
 ## What's next
 
 - [Federal Data Mesh use case](../use-cases/federal-data-mesh.md) —
-  multi-domain marketplace patterns
-- [Workspace RBAC](../governance/workspace-rbac.md) — managing
-  cross-workspace access
+  multi-domain sharing patterns
+- [Workspace RBAC](../governance/workspace-rbac.md) — managing access
 - [Catalog](../governance/catalog.md) — full catalog architecture
 
 ## Cleanup
 
-- Revoke access: Console "Marketplace → My Products → Revoke"
-- Unpublish: `loom-marketplace unpublish --product weather-daily`
+- API: delete the published API product from the source item's Weave menu
+  (or the API marketplace) if your deployment supports it
+- Template instance: delete the Data Product Instance item from the
+  workspace tree (right-click → Delete)
 
 ## Troubleshooting
 
-- Cross-workspace query fails: verify Delta Sharing grant active +
-  requester workspace catalog adapter has refreshed
-- Manifest validation fails: check YAML schema; `loom-marketplace
-  validate` for detail
+- "Publish as an API" gated: provision/grant the APIM service the action
+  reports
+- Asset not in the catalog: confirm Purview/UC scanning has indexed the
+  source, then refresh

@@ -24,9 +24,9 @@ import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 import {
   Spinner, Button, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Caption1, Body1, Subtitle2, Badge, makeStyles, tokens,
 } from '@fluentui/react-components';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import {
   ArrowSync20Regular, Open16Regular, FolderOpen24Regular, BookOpen24Regular,
 } from '@fluentui/react-icons';
@@ -113,6 +113,18 @@ export default function CatalogDomainsPage() {
   const collections = data?.collections ?? [];
   const terms = data?.glossaryTerms ?? [];
   const unified = data?.unifiedCatalog;
+
+  const collectionColumns: LoomColumn<Collection>[] = [
+    { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <Body1><strong>{c.name}</strong></Body1> },
+    { key: 'friendlyName', label: 'Friendly name', sortable: true, filterable: true, getValue: (c) => c.friendlyName || '—', render: (c) => c.friendlyName || '—' },
+    { key: 'parentCollection', label: 'Parent', sortable: true, filterable: true, getValue: (c) => c.parentCollection || 'root', render: (c) => c.parentCollection || <Badge appearance="tint" size="small">root</Badge> },
+    { key: 'description', label: 'Description', sortable: false, filterable: true, getValue: (c) => c.description || '—', render: (c) => c.description || '—' },
+  ];
+  const termColumns: LoomColumn<GlossaryTerm>[] = [
+    { key: 'name', label: 'Term', sortable: true, filterable: true, getValue: (t) => t.name || t.guid, render: (t) => <Body1><strong>{t.name || t.guid}</strong></Body1> },
+    { key: 'status', label: 'Status', sortable: true, filterable: true, width: 130, getValue: (t) => t.status || '—', render: (t) => t.status ? <Badge appearance="tint" size="small" color={t.status === 'Approved' ? 'success' : 'brand'}>{t.status}</Badge> : '—' },
+    { key: 'longDescription', label: 'Description', sortable: false, filterable: true, getValue: (t) => t.longDescription || '—', render: (t) => <span className={s.termDesc}>{t.longDescription || '—'}</span> },
+  ];
 
   return (
     <CatalogShell sectionTitle="Domains" sectionBadge="Purview Data Map">
@@ -203,32 +215,12 @@ export default function CatalogDomainsPage() {
               equivalent of a domain. They group data sources, scans, and assets and govern who can see them.
             </Caption1>
 
-            {collections.length === 0 ? (
-              <Caption1 className={s.empty}>
-                No collections returned. Register a data source in the Scan plane to populate the root collection.
-              </Caption1>
-            ) : (
-              <Table aria-label="Purview collections" size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Name</TableHeaderCell>
-                    <TableHeaderCell>Friendly name</TableHeaderCell>
-                    <TableHeaderCell>Parent</TableHeaderCell>
-                    <TableHeaderCell>Description</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {collections.map((c) => (
-                    <TableRow key={c.name}>
-                      <TableCell><Body1><strong>{c.name}</strong></Body1></TableCell>
-                      <TableCell>{c.friendlyName || '—'}</TableCell>
-                      <TableCell>{c.parentCollection || <Badge appearance="tint" size="small">root</Badge>}</TableCell>
-                      <TableCell>{c.description || '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            <LoomDataTable<Collection>
+              columns={collectionColumns}
+              rows={collections}
+              getRowId={(c) => c.name}
+              empty="No collections returned. Register a data source in the Scan plane to populate the root collection."
+            />
           </section>
 
           {/* Glossary card */}
@@ -244,34 +236,12 @@ export default function CatalogDomainsPage() {
               from the catalog&apos;s Glossary surface; they read live via the Apache Atlas 2.2 API.
             </Caption1>
 
-            {terms.length === 0 ? (
-              <Caption1 className={s.empty}>
-                No glossary terms yet. Create one from the catalog Glossary surface to anchor shared vocabulary.
-              </Caption1>
-            ) : (
-              <Table aria-label="Purview glossary terms" size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Term</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Description</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {terms.map((t) => (
-                    <TableRow key={t.guid}>
-                      <TableCell><Body1><strong>{t.name || t.guid}</strong></Body1></TableCell>
-                      <TableCell>
-                        {t.status
-                          ? <Badge appearance="tint" size="small" color={t.status === 'Approved' ? 'success' : 'brand'}>{t.status}</Badge>
-                          : '—'}
-                      </TableCell>
-                      <TableCell><span className={s.termDesc}>{t.longDescription || '—'}</span></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            <LoomDataTable<GlossaryTerm>
+              columns={termColumns}
+              rows={terms}
+              getRowId={(t) => t.guid}
+              empty="No glossary terms yet. Create one from the catalog Glossary surface to anchor shared vocabulary."
+            />
           </section>
         </>
       )}

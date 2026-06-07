@@ -30,12 +30,15 @@ import {
   Input, Textarea, Dropdown, Option, Field, Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
+  Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, Play20Regular, Copy20Regular,
   Key20Regular, Add20Regular, Apps20Regular,
-  ArrowLeft20Regular,
+  ArrowLeft20Regular, MoreHorizontal20Regular, Delete20Regular, Rename20Regular,
+  Branch20Regular, Open16Regular, Code20Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -139,6 +142,25 @@ export function ApiMarketplace() {
   const [subTarget, setSubTarget] = useState<{ kind: 'product' | 'api'; id: string; name: string } | null>(null);
   const [subBusy, setSubBusy] = useState(false);
   const [subMsg, setSubMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // catalog filters (beyond search)
+  const [accessFilter, setAccessFilter] = useState<'all' | 'open' | 'subscription'>('all');
+
+  // subscription management
+  const [subActionMsg, setSubActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<SubscriptionSummary | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  // "Use this API" drawer (code samples + mini-app builder)
+  const [useSub, setUseSub] = useState<SubscriptionSummary | null>(null);
+  const [useKeys, setUseKeys] = useState<{ primaryKey?: string; secondaryKey?: string } | null>(null);
+  const [sampleLang, setSampleLang] = useState<'curl' | 'python' | 'javascript'>('curl');
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([]);
+  const [miniWs, setMiniWs] = useState('');
+  const [miniName, setMiniName] = useState('');
+  const [miniBusy, setMiniBusy] = useState(false);
+  const [miniMsg, setMiniMsg] = useState<{ intent: 'success' | 'error'; text: string; link?: string; linkLabel?: string } | null>(null);
 
   // ---------------- loaders ----------------
 
@@ -267,6 +289,102 @@ export function ApiMarketplace() {
     } catch (e: any) { setKeyCache((p) => ({ ...p, [sid]: { primaryKey: `(error: ${e?.message})` } })); }
   }, []);
 
+  // ---------------- subscription management ----------------
+  const renameSub = useCallback(async () => {
+    if (!renameTarget || !renameValue.trim()) return;
+    setSubActionMsg(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(renameTarget.name)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: renameValue.trim() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setRenameOpen(false); setSubActionMsg({ intent: 'success', text: 'Subscription renamed.' }); loadSubscriptions();
+    } catch (e: any) { setSubActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+  }, [renameTarget, renameValue, loadSubscriptions]);
+
+  const setSubState = useCallback(async (sub: SubscriptionSummary, state: 'active' | 'suspended' | 'cancelled') => {
+    setSubActionMsg(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setSubActionMsg({ intent: 'success', text: `Subscription ${state}.` }); loadSubscriptions();
+    } catch (e: any) { setSubActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+  }, [loadSubscriptions]);
+
+  const deleteSub = useCallback(async (sub: SubscriptionSummary) => {
+    if (!confirm(`Delete subscription "${sub.displayName || sub.name}"? This revokes its keys and cannot be undone.`)) return;
+    setSubActionMsg(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setSubActionMsg({ intent: 'success', text: 'Subscription deleted.' }); loadSubscriptions();
+    } catch (e: any) { setSubActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+  }, [loadSubscriptions]);
+
+  const regenKey = useCallback(async (sub: SubscriptionSummary, which: 'primary' | 'secondary') => {
+    setSubActionMsg(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys/regenerate?which=${which}`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setKeyCache((p) => ({ ...p, [sub.name]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
+      if (useSub?.name === sub.name) setUseKeys({ primaryKey: j.primaryKey, secondaryKey: j.secondaryKey });
+      setSubActionMsg({ intent: 'success', text: `${which === 'primary' ? 'Primary' : 'Secondary'} key regenerated.` });
+    } catch (e: any) { setSubActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+  }, [useSub]);
+
+  // Open the "Use this API" drawer for a subscription: reveal keys + load workspaces.
+  const openUse = useCallback(async (sub: SubscriptionSummary) => {
+    setUseSub(sub); setUseKeys(keyCache[sub.name] || null); setMiniMsg(null);
+    setMiniName(`${sub.displayName || sub.name} mini-app`);
+    if (!keyCache[sub.name]) {
+      try {
+        const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys`, { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok) { setUseKeys({ primaryKey: j.primaryKey, secondaryKey: j.secondaryKey }); setKeyCache((p) => ({ ...p, [sub.name]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } })); }
+      } catch { /* keys optional in the drawer */ }
+    }
+    try {
+      const r = await fetch('/api/loom/workspaces', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) { setWorkspaces(j.workspaces || []); if ((j.workspaces || []).length) setMiniWs(j.workspaces[0].id); }
+    } catch { /* workspace list optional */ }
+  }, [keyCache]);
+
+  // Which API a subscription's scope points at (for code samples + mini-app).
+  const subApi = useMemo(() => {
+    if (!useSub?.scope) return null;
+    const m = useSub.scope.match(/\/apis\/([^/]+)$/);
+    if (!m) return null; // product- or all-APIs-scoped: no single API to target
+    const apiName = decodeURIComponent(m[1]);
+    const all = [...products.flatMap((p) => p.apis), ...apis];
+    return all.find((a) => (a.name || a.id) === apiName) || { id: apiName, name: apiName } as ApiSummary;
+  }, [useSub, products, apis]);
+
+  const buildMiniApp = useCallback(async () => {
+    if (!subApi || !miniWs) return;
+    setMiniBusy(true); setMiniMsg(null);
+    try {
+      const r = await fetch('/api/marketplace/mini-app', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: miniWs, apiId: subApi.name || subApi.id, apiName: subApi.displayName || subApi.name,
+          gatewayUrl: service?.gatewayUrl || '', apiPath: subApi.path || '', appName: miniName.trim(),
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setMiniMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setMiniMsg({ intent: 'success', text: j.message, link: j.link, linkLabel: j.linkLabel });
+    } catch (e: any) { setMiniMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setMiniBusy(false); }
+  }, [subApi, miniWs, miniName, service]);
+
   // ---------------- filtering ----------------
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -283,9 +401,13 @@ export function ApiMarketplace() {
       if (seen.has(k)) continue;
       seen.add(k); allApis.push(a);
     }
-    const apisF = allApis.filter(matchA);
+    const matchAccess = (a: ApiSummary) =>
+      accessFilter === 'all'
+        ? true
+        : accessFilter === 'open' ? !a.subscriptionRequired : !!a.subscriptionRequired;
+    const apisF = allApis.filter((a) => matchA(a) && matchAccess(a));
     return { productsF, apisF };
-  }, [products, apis, query]);
+  }, [products, apis, query, accessFilter]);
 
   const copy = (text: string) => { navigator.clipboard?.writeText(text).catch(() => {}); };
 
@@ -348,7 +470,32 @@ export function ApiMarketplace() {
         );
       },
     },
-  ], [keyCache, revealKeys, s.keysCell, s.keyLine]);
+    {
+      key: 'actions', label: 'Actions', width: 200, sortable: false, filterable: false,
+      render: (r) => (
+        <div className={s.metaRow} onClick={(e) => e.stopPropagation()}>
+          <Button size="small" appearance="primary" icon={<Branch20Regular />} onClick={() => openUse(r)}>Use this API</Button>
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label="More actions" />
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItem icon={<Rename20Regular />} onClick={() => { setRenameTarget(r); setRenameValue(r.displayName || r.name); setRenameOpen(true); }}>Rename</MenuItem>
+                <MenuItem icon={<Key20Regular />} onClick={() => regenKey(r, 'primary')}>Regenerate primary key</MenuItem>
+                <MenuItem icon={<Key20Regular />} onClick={() => regenKey(r, 'secondary')}>Regenerate secondary key</MenuItem>
+                <MenuDivider />
+                {(r.state || '').toLowerCase() === 'suspended'
+                  ? <MenuItem onClick={() => setSubState(r, 'active')}>Activate</MenuItem>
+                  : <MenuItem onClick={() => setSubState(r, 'suspended')}>Suspend</MenuItem>}
+                <MenuItem icon={<Delete20Regular />} onClick={() => deleteSub(r)}>Delete</MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        </div>
+      ),
+    },
+  ], [keyCache, revealKeys, s.keysCell, s.keyLine, s.metaRow, openUse, regenKey, setSubState, deleteSub]);
 
   // ---------------- render ----------------
   return (
@@ -462,7 +609,23 @@ export function ApiMarketplace() {
               </Section>
 
               {/* APIs */}
-              <Section title={`APIs${filtered.apisF.length ? ` (${filtered.apisF.length})` : ''}`}>
+              <Section
+                title={`APIs${filtered.apisF.length ? ` (${filtered.apisF.length})` : ''}`}
+                actions={
+                  <Field label="Access" orientation="horizontal">
+                    <Dropdown
+                      style={{ minWidth: 150 }}
+                      value={accessFilter === 'all' ? 'All' : accessFilter === 'open' ? 'Open (no key)' : 'Subscription required'}
+                      selectedOptions={[accessFilter]}
+                      onOptionSelect={(_, d) => setAccessFilter((d.optionValue as 'all' | 'open' | 'subscription') || 'all')}
+                    >
+                      <Option value="all">All</Option>
+                      <Option value="open">Open (no key)</Option>
+                      <Option value="subscription">Subscription required</Option>
+                    </Dropdown>
+                  </Field>
+                }
+              >
                 {filtered.apisF.length === 0 ? (
                   <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
                     {apis.length === 0 && products.every((p) => p.apis.length === 0)
@@ -667,6 +830,7 @@ export function ApiMarketplace() {
           actions={<Button icon={<ArrowSync20Regular />} onClick={loadSubscriptions}>Refresh</Button>}
         >
           {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
+          {subActionMsg && <MessageBar intent={subActionMsg.intent}><MessageBarBody>{subActionMsg.text}</MessageBarBody></MessageBar>}
           {!subs.error && (
             <LoomDataTable<SubscriptionSummary>
               ariaLabel="Subscriptions"
@@ -707,6 +871,110 @@ export function ApiMarketplace() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Rename subscription dialog */}
+      <Dialog open={renameOpen} onOpenChange={(_, d) => setRenameOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Rename subscription</DialogTitle>
+            <DialogContent>
+              <Field label="Display name">
+                <Input value={renameValue} onChange={(_, d) => setRenameValue(d.value)} />
+              </Field>
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
+              <Button appearance="primary" icon={<Rename20Regular />} onClick={renameSub} disabled={!renameValue.trim()}>Save</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* "Use this API" drawer — code samples + mini-app builder */}
+      <Drawer type="overlay" position="end" open={!!useSub} onOpenChange={(_, d) => { if (!d.open) setUseSub(null); }} style={{ width: '520px', maxWidth: '94vw' }}>
+        <DrawerHeader>
+          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={() => setUseSub(null)} aria-label="Close" />}>
+            Use {useSub?.displayName || useSub?.name}
+          </DrawerHeaderTitle>
+        </DrawerHeader>
+        <DrawerBody>
+          {useSub && (() => {
+            const base = subApi && service?.gatewayUrl ? `${service.gatewayUrl.replace(/\/+$/, '')}/${(subApi.path || '').replace(/^\/+/, '')}` : (service?.gatewayUrl || '<gateway>');
+            const key = useKeys?.primaryKey || '<your-subscription-key>';
+            const samples: Record<string, string> = {
+              curl: `curl "${base}/" \\\n  -H "Ocp-Apim-Subscription-Key: ${key}"`,
+              python: `import requests\nBASE = "${base}"\nr = requests.get(f"{BASE}/", headers={"Ocp-Apim-Subscription-Key": "${key}"})\nr.raise_for_status()\nprint(r.json())`,
+              javascript: `const res = await fetch("${base}/", {\n  headers: { "Ocp-Apim-Subscription-Key": "${key}" },\n});\nconsole.log(await res.json());`,
+            };
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+                <div className={s.fieldBlock}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Gateway base URL</Caption1>
+                  <Body1><code>{base}</code></Body1>
+                </div>
+                {!subApi && (
+                  <MessageBar intent="info"><MessageBarBody>This subscription is scoped to a product or all-APIs. Code samples use the gateway root; pick a specific API operation in the Catalog for full paths.</MessageBarBody></MessageBar>
+                )}
+
+                <div className={s.fieldBlock}>
+                  <div className={s.metaRow}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Subscription key</Caption1>
+                    {useKeys?.primaryKey && <Button size="small" icon={<Copy20Regular />} onClick={() => copy(useKeys.primaryKey!)}>Copy</Button>}
+                    {useSub && <Button size="small" icon={<Key20Regular />} onClick={() => regenKey(useSub, 'primary')}>Regenerate</Button>}
+                  </div>
+                  <Body1><code>{useKeys?.primaryKey ? `${useKeys.primaryKey.slice(0, 10)}…` : '(hidden)'}</code></Body1>
+                </div>
+
+                <div className={s.fieldBlock}>
+                  <div className={s.metaRow}>
+                    <Subtitle2>Call it from code</Subtitle2>
+                    <TabList selectedValue={sampleLang} onTabSelect={(_, d) => setSampleLang(d.value as 'curl' | 'python' | 'javascript')} size="small">
+                      <Tab value="curl">cURL</Tab>
+                      <Tab value="python">Python</Tab>
+                      <Tab value="javascript">JavaScript</Tab>
+                    </TabList>
+                    <Button size="small" icon={<Copy20Regular />} onClick={() => copy(samples[sampleLang])}>Copy</Button>
+                  </div>
+                  <div className={s.code} role="region" aria-label="Code sample">{samples[sampleLang]}</div>
+                </div>
+
+                {/* Mini-app builder */}
+                <div className={s.fieldBlock}>
+                  <Subtitle2><Code20Regular /> Build a mini-app</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Scaffold a Loom Notebook pre-wired to call this API (Python client + the API’s operations + a starter analysis cell) — an analyst-ready mini-app you can build on.
+                  </Caption1>
+                  <Field label="Workspace" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <Dropdown
+                      placeholder={workspaces.length ? 'Select a workspace' : 'No workspaces'}
+                      value={workspaces.find((w) => w.id === miniWs)?.name || ''}
+                      selectedOptions={miniWs ? [miniWs] : []}
+                      onOptionSelect={(_, d) => setMiniWs(d.optionValue || '')}
+                    >
+                      {workspaces.map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Mini-app name">
+                    <Input value={miniName} onChange={(_, d) => setMiniName(d.value)} />
+                  </Field>
+                  <Button appearance="primary" icon={<Add20Regular />} disabled={!subApi || !miniWs || miniBusy} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }} onClick={buildMiniApp}>
+                    {miniBusy ? 'Building…' : 'Build mini-app'}
+                  </Button>
+                  {!subApi && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Pick an API-scoped subscription to build a mini-app.</Caption1>}
+                  {miniMsg && (
+                    <MessageBar intent={miniMsg.intent} style={{ marginTop: tokens.spacingVerticalS }}>
+                      <MessageBarBody>
+                        {miniMsg.text}
+                        {miniMsg.link && <> <a href={miniMsg.link} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{miniMsg.linkLabel} <Open16Regular /></a></>}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </DrawerBody>
+      </Drawer>
     </div>
   );
 }

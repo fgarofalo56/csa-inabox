@@ -78,3 +78,43 @@ params + 403 message (#610) · Network→Admin + all-PE hosts file (#611).
 - No-vaporware (real backend or honest Fluent gate); no scaffold claims without
   live verification; docs-as-source-of-truth per batch; never bake side-convo /
   my clarifying questions into the product UI ([[no-questions-in-product]]).
+
+## 2026-06-06 batch (operator live stress-test + harness drain)
+
+Shipped + live (console 34/34 GREEN throughout):
+
+**Thread / Weave fabric** — PR5 *Build a Power BI model*, PR3 *Publish as an API*,
+PR4 *edge graph + Lineage* (`/thread`), shared `warehouse-tables` discovery.
+Weave is mounted in the universal editor chrome (every data item).
+
+**Governance** — Purview page web-3.0; access-policy enforcement extended to
+**warehouse (Synapse SQL role)** + **KQL (ADX database role)** with symmetric
+revoke; Data Catalog **detail drawer + request-access + lineage**; OneLake item
+panel shows **real Azure-native** endorsement/sensitivity/classifications (killed
+the static Purview gate); **Purview auto-onboard + auto-classify** on item create
+(Atlas entity + classification tags, idempotent typedefs); Unified Catalog
+**OneLake source → Azure-native Loom workspaces** (Fabric opt-in only); **lineage
+focus** (`?focusId=` scopes to the selected object).
+
+**A+ edges** — Managed Instance editor real schema reads over the PE; **Azure SQL
+mirroring Azure-native** (sp_change_feed CDC, no Fabric gate) + Unified-editor
+Mirroring tab; **Power BI Deployment Pipelines** navigator; **PostgreSQL
+in-database query** (pg + Entra token).
+
+**Connections + mirroring** — **Loom Connections** (Key Vault-backed creds, 5
+auth methods) [[connections]]; **mirrored-database create wizard** (web-3.0,
+per-source, consumes Connections).
+
+**UI** — task-018 sweep: catalog / classifications / sensitivity / scans /
+policies / data-quality / domains tables → sortable `LoomDataTable`.
+
+**Ops/CI** — Cost Management Reader + Monitoring Contributor + KV Secrets Officer
++ Purview Data Curator granted live (+ bootstrap scripts); Bicep Lint job timeout
+15→30m; app-install gateway-timeout honest message; Copilot build-assist tool fixes.
+
+### Still open
+- "Self-Modification Pipeline" promote error — needs the surface/URL to locate.
+- Mirroring backend: feed KV connection creds into the live mirror (Fabric
+  connection/gateway-limited; needs the no-Fabric mirroring reframe or live verify).
+- Purview scan-based discovery (register sources + scan runs) — beyond per-item tagging.
+- Live-Azure tasks: install all 21 use-case apps, scale-by-SKU verify, RTI ADX seeding.

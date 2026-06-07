@@ -18,13 +18,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button, Input, Field, Dropdown, Option,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular, Play20Regular, Dismiss24Regular } from '@fluentui/react-icons';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 
@@ -146,6 +146,22 @@ export default function GovernanceScansPage() {
     } catch (e: any) { setActionErr(e?.message || String(e)); }
   }
 
+  const sourceColumns: LoomColumn<Source>[] = [
+    { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (src) => src.name, render: (src) => <strong>{src.name}</strong> },
+    { key: 'kind', label: 'Kind', sortable: true, filterable: true, getValue: (src) => src.kind || '—', render: (src) => <Badge appearance="outline" size="small">{src.kind || '—'}</Badge> },
+    { key: 'endpoint', label: 'Endpoint', sortable: true, filterable: true, getValue: (src) => src.endpoint || '—', render: (src) => <code style={{ fontSize: 11 }}>{src.endpoint || '—'}</code> },
+    { key: 'collectionId', label: 'Collection', sortable: true, filterable: true, getValue: (src) => src.collectionId || '—', render: (src) => src.collectionId || '—' },
+    {
+      key: 'actions', label: '', sortable: false, filterable: false, width: 160,
+      render: (src) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <Button size="small" appearance="subtle" onClick={() => openScans(src)}>Scans</Button>
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeSource(src.name)}>Remove</Button>
+        </span>
+      ),
+    },
+  ];
+
   return (
     <GovernanceShell sectionTitle="Scans & sources" sectionBadge="Data Map">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
@@ -182,31 +198,12 @@ export default function GovernanceScansPage() {
       )}
 
       {live && !loading && (sources?.length ?? 0) > 0 && (
-        <Table aria-label="Registered data sources">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Kind</TableHeaderCell>
-              <TableHeaderCell>Endpoint</TableHeaderCell>
-              <TableHeaderCell>Collection</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(sources || []).map((src) => (
-              <TableRow key={src.id}>
-                <TableCell><strong>{src.name}</strong></TableCell>
-                <TableCell><Badge appearance="outline" size="small">{src.kind || '—'}</Badge></TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{src.endpoint || '—'}</code></TableCell>
-                <TableCell>{src.collectionId || '—'}</TableCell>
-                <TableCell>
-                  <Button size="small" appearance="subtle" onClick={() => openScans(src)}>Scans</Button>
-                  <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeSource(src.name)}>Remove</Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <LoomDataTable
+          columns={sourceColumns}
+          rows={sources || []}
+          getRowId={(src: any) => src.id}
+          empty="No data sources registered yet."
+        />
       )}
 
       {/* Register source dialog */}

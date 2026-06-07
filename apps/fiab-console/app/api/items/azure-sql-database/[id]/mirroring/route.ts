@@ -1,8 +1,9 @@
 /**
  * POST /api/items/azure-sql-database/[id]/mirroring
- *   body { server, database, fabricMirrorEndpoint? } — toggle Fabric mirror.
- *   Honest about runtime: returns NotConfigured unless
- *   LOOM_AZURE_SQL_MIRRORING_LIVE=true.
+ *   body { server, database } — enable Azure-native change replication.
+ *   Runs the real `sys.sp_change_feed_enable_db` (Azure-native CDC, NO Microsoft
+ *   Fabric); a permission/feature error surfaces verbatim as state:'Error'.
+ *   Downstream copy → ADLS Bronze Delta is ADF CDC / the Loom mirroring engine.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

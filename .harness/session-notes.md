@@ -376,3 +376,131 @@ postgres + #655 auto-mount) or task-017/018 UI. Continue down the ledger.
 
 **Next:** more task-018 page slices (Home/Browse/Monitor), or operator picks a
 heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
+
+### task-014 — Azure SQL mirroring Azure-native (replace Fabric-mirror gate) ✅ (PR # pending)
+- `enableMirroring` (azure-sql-client) rewritten Azure-native: dropped the
+  `LOOM_AZURE_SQL_MIRRORING_LIVE` Fabric-mirror gate + "Fabric deferred" framing;
+  now runs the REAL `sys.sp_change_feed_enable_db` (Azure-native CDC) on the
+  explicit toggle, idempotent, honest real error if not db_owner/unsupported tier.
+  MirroringConfig gains backend:'azure-native-cdc' + note (downstream → ADLS
+  Bronze Delta via ADF CDC / Synapse Link / Loom mirroring engine, no Fabric).
+- mirroring route doc reframed; dead AzureSqlDatabaseEditor mirroring text fixed.
+- The LIVE editor (UnifiedSqlDatabaseEditor) had NO mirroring surface — added a
+  **Mirroring tab** (azure-sql family) that POSTs the route + shows the config.
+- tsc clean on touched code (pre-existing untyped-`mssql`-import error tolerated by
+  ignoreBuildErrors; not mine).
+
+**Next:** task-015 (Power BI/PP navigators + import/export) or task-016 remainder
+(geo/graph + #655), then 017/018 UI, 019-021 live, 022 docs.
+
+### task-015 (slice) — Power BI Deployment Pipelines navigator ✅ (PR # pending)
+- Built the deferred powerbi-tree "Deployment pipelines" node (was a static
+  "coming" gate): real Power BI REST — `listPipelines` + `getPipelineStages` +
+  `deployPipelineAll` in powerbi-client; new tenant-scoped route
+  `/api/powerbi/pipelines` (GET list+stages, POST deployAll). Tree node
+  lazy-loads on expand, lists pipelines → Dev/Test/Prod stages (+ bound
+  workspace), with a Promote (deployAll 0→1 / 1→2) action per stage; honest SP
+  gate / verbatim 401-403. tsc clean.
+- task-015 stays `todo`: the Power Platform **import/export** (solution
+  import/export vs maker-portal hand-off) remains.
+
+**Next:** task-015 PP import/export, task-016 remainder, 017/018 UI, 022 docs.
+
+## Operator-driven feature requests (2026-06-06, live stress-test) — QUEUE
+The operator is exercising the live console and forwarding gaps to fix durably:
+1. ✅ Cost Mgmt Reader + Monitoring Contributor grants (#748) — done live+bootstrap.
+2. ✅ Copilot build-assist tool bugs (#747).
+3. ✅ App-install gateway-timeout message (#746).
+4. ⏳ Mirroring **wizard** + KV-backed **Connections** (auth types so no
+   "token-identified principal" login errors). FOUNDATION shipped this PR:
+   - `lib/azure/kv-secrets-client.ts` (KV REST put/get/delete secrets),
+     `lib/azure/connections-store.ts` (+ `connections` Cosmos container), CRUD
+     route `/api/connections`, reusable `ConnectionBuilder` dialog, `/connections`
+     page + nav. Secrets → Key Vault, only secretRef in Cosmos. 5 auth methods
+     (entra-mi / sql-password / connection-string / account-key / service-principal).
+   - Bicep-synced: keyvault.bicep grants UAMI **Key Vault Secrets Officer**;
+     main.bicep adds `LOOM_KEY_VAULT_URI` env. Granted + env set LIVE on
+     loom-console (kv-loom-m56yejezt7bjo). Documented in v3-tenant-bootstrap.md.
+   - REMAINING: the per-source-type **mirrored-database creation wizard** (web-3.0,
+     consumes Connections) + wire Connections into ADF/Synapse linked services.
+5. ⏳ Purview auto-governance: everything auto-registers/scans/classifies; kill the
+   "Set LOOM_PURVIEW_ACCOUNT + grant Data Curator" gate via deploy/bootstrap +
+   auto-onboard on item create. NOT STARTED.
+6. ⏳ Unified Catalog "OneLake (Fabric)" tab shows a real Fabric workspace
+   ('fabric-csa-dev') — should be Azure-native/Loom workspaces (no-fabric). NOT STARTED.
+7. ⏳ Verify Weave + Lineage actually work end-to-end. NOT STARTED.
+
+**Next:** mirroring wizard (consume Connections), then Purview auto-gov, OneLake-tab
+reframe, Weave/Lineage verification.
+
+### Unified Catalog OneLake (Fabric) tab → Azure-native (no-fabric) ✅ (PR # pending)
+- The catalog "OneLake (Fabric)" Browse tab + federated-search "onelake" source
+  listed REAL Fabric workspaces (fabric-csa-dev). Rebackended both to the
+  caller's OWN Loom workspaces+items (Cosmos, via listOwnedWorkspaces/
+  listAllOwnedItems) as the DEFAULT; real Fabric OneLake is opt-in only
+  (LOOM_LAKEHOUSE_BACKEND=fabric). Relabeled tab "OneLake (Fabric)" → "Loom
+  workspaces" (now first + default tab); federated source label → "Loom
+  workspaces"; shell subtitle reworded (Fabric opt-in). Browse leaf → /items/<slug>/<id>.
+  tsc clean.
+
+### Mirroring create WIZARD (web-3.0 + Connections) ✅ (PR # pending)
+- Redesigned the "Create mirrored database" dialog (was plain Caption1+Input, "looks
+  like shit") into a modern 3-step wizard: (1) source-type **icon cards** w/ per-source
+  accent colors + hover lift + selected ring; (2) **Connection & auth** — pick a
+  Loom Connection (filtered to compatible types per source) or **+ New connection**
+  (mounts ConnectionBuilder), KV-backed auth so the source accepts the login (fixes
+  the "token-identified principal" error) + server/db auto-fill from the connection +
+  Verify; (3) name + review summary. create POST now sends sourceType + connectionId.
+- REMAINING: backend consumption (persist connectionId on the item + feed the KV
+  creds into the Fabric mirroring config — Fabric uses its own connection/gateway
+  model, a deeper wiring). The mirrored-database item is still Fabric-based (separate
+  no-fabric reframe). tsc clean.
+
+### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
+- Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
+  **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm
+  install FAILS on this repo, "Cannot read properties of null (reading 'matches')").
+- `postgres-flex-client.ts`: replaced the `queryGateReason`/`isPostgresQueryLive`
+  honest-gate stubs with REAL `executePostgresQuery(fqdn, db, sql)` — `pg` Client,
+  Entra token as password (scope https://ossrdbms-aad.database.azure.com/.default,
+  Gov override via LOOM_POSTGRES_AAD_SCOPE), SSL, 30s statement timeout, lazy
+  `await import('pg')`. New `postgresQueryGate()` honest-gates when
+  LOOM_POSTGRES_AAD_USER unset (names the one-time pgaadauth_create_principal setup).
+- Query route `/api/items/postgres-flexible-server/[id]/query` now resolves the
+  server FQDN (getServer) + runs real SQL (was a 501 stub). The unified editor
+  ALREADY POSTed here (Query tab + schema browser) — no editor wiring needed;
+  updated the stale admin note (LOOM_POSTGRES_QUERY_LIVE → LOOM_POSTGRES_AAD_USER).
+- Bicep-sync: `loomPostgresAadUser` param + LOOM_POSTGRES_AAD_USER env in
+  admin-plane/main.bicep; documented in docs/fiab/v3-tenant-bootstrap.md. NOTE:
+  bicep-touching PR adds the slow "Bicep Lint" required check.
+- tsc clean on touched code (pre-existing px noise only). LIVE-VERIFY (operator):
+  set LOOM_POSTGRES_AAD_USER + register the principal in PG; query attempts real
+  exec and surfaces the real PG error otherwise.
+- task-016 stays `todo` (geo/graph deferred edges + #655 notebook abfss
+  auto-mount remain — both need live Spark/ADF to verify).
+
+**Next:** task-018 page slices, or geo/graph (task-016 remainder), or operator
+picks a live-Azure item (CDC mirroring, app-installs 019-021).
+
+### task-018 (slice 2) — Governance classifications + sensitivity → LoomDataTable ✅ (PR # pending)
+- Converted /governance/classifications "Applied classifications" table and
+  /governance/sensitivity "Labeled items" table from raw Fluent `<Table>` to the
+  shared **LoomDataTable** (sortable/filterable/resizable + standard empty state).
+  Sensitivity keeps its label-distribution card filter (rows reflect the picked
+  label). Open links stopPropagation. tsc clean.
+- task-018 still `todo`. Remaining raw-table pages: governance/scans,
+  governance/policies, governance/insights, workspaces, + high-traffic Home/Browse/Monitor.
+
+### task-018 (slices 3-5) — more LoomDataTable conversions ✅ (PRs #742/#743 merged, +1 pending)
+- #742 governance/scans (Registered data sources, with Scans/Remove row actions).
+- #743 governance/policies (list, with enabled Switch + Delete + enforcement badge).
+- pending: catalog/data-quality (rules list, with Edit/Delete actions).
+- All: raw `<Table>` → shared LoomDataTable (sortable/filterable/resizable);
+  interactive cells preserved via render columns + stopPropagation. tsc clean;
+  console live-GREEN 34/34 across the batch.
+- governance/insights was already on LoomDataTable. Remaining raw tables:
+  catalog/{domains,metastores,[source]/[id]}, workspaces (selection checkboxes —
+  needs care), + high-traffic Home/Browse/Monitor (bespoke layouts).
+- GOTCHA reminder: after merging a PR I `git checkout main`; must create the NEXT
+  feature branch BEFORE editing or commits land on local main (happened once on
+  #742 — recovered via `git branch <new>` + `git reset --hard origin/main`).

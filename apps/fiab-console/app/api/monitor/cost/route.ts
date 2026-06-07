@@ -13,6 +13,10 @@ import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-cli
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// The multi-sub CostManagement aggregation (now parallelized) can still take a
+// while under throttling; raise the per-invocation budget above the platform
+// default so it completes server-side rather than being cut to a 504.
+export const maxDuration = 120;
 
 const TIMEFRAMES: CostTimeframe[] = ['MonthToDate', 'BillingMonthToDate', 'TheLastMonth', 'Last7Days', 'Last30Days'];
 

@@ -19,10 +19,29 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 
-const ARM_SCOPE = 'https://management.azure.com/.default';
 const API = '2018-06-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+// ARM endpoint is sovereign-cloud aware. Default = Commercial (unchanged
+// behavior). GCC-High / IL5 deployments set AZURE_CLOUD (or LOOM_ARM_ENDPOINT)
+// so every ADF call below — including export-read and import-upsert — targets
+// the correct ARM host instead of management.azure.com.
+function armBase(): string {
+  const explicit = process.env.LOOM_ARM_ENDPOINT;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
+    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
+    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
+    default:                  return 'https://management.azure.com';
+  }
+}
+const ARM_BASE = armBase();
+const ARM_SCOPE = `${ARM_BASE}/.default`;
+// Bare ARM host (no scheme) for the few call sites that build their own URL
+// string. Derived from ARM_BASE so the sovereign-cloud selection above is the
+// single source of truth (Commercial / GCC-High / IL5 all honored).
+const ARM_HOST = ARM_BASE.replace(/^https?:\/\//, '');
+
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),
@@ -41,7 +60,7 @@ function rg():  string { return required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
 function base(): string {
-  return `https://management.azure.com/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+  return `${ARM_BASE}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
 }
 
 /**
@@ -296,6 +315,171 @@ export async function listPipelineRuns(
 }
 
 // ============================================================
+// Log Analytics fallback — queries the typed ADFPipelineRun /
+// ADFActivityRun tables when LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set.
+//
+// ADF's native monitoring API (queryPipelineRuns / queryActivityruns,
+// used above) enforces a 45-day maximum retention window — a run older
+// than that returns ZERO rows even though it happened. Log Analytics keeps
+// the diagnostic logs for the full workspace retention (90 days default,
+// up to 730), so this is the Output-pane fallback for "where did my older
+// runs go?".
+//
+// The query endpoint is cloud-aware via LOOM_LOG_ANALYTICS_ENDPOINT:
+//   Commercial / GCC: https://api.loganalytics.azure.com  (default)
+//   GCC-High / IL5  : https://api.loganalytics.us         (Azure Government)
+// (Note: ods.opinsights.azure.us is the *ingestion* host — the query API
+//  is api.loganalytics.us.) Same credential chain as the ARM calls above.
+//
+// Requires adf.bicep's diagnosticSettings to run in Dedicated
+// (logAnalyticsDestinationType: 'Dedicated') mode so logs land in the typed
+// tables rather than the legacy AzureDiagnostics catch-all.
+// ============================================================
+
+const LA_ENDPOINT_ADF =
+  process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
+const LA_SCOPE_ADF = `${LA_ENDPOINT_ADF}/.default`;
+
+/**
+ * Honest config gate for the LA fallback. Returns the workspace GUID when
+ * LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set, or null so the route can skip the
+ * fallback (and the native ADF result — possibly empty — stands) instead of
+ * erroring.
+ */
+export function adfLogAnalyticsWorkspace(): string | null {
+  const v = process.env.LOOM_ADF_LOG_ANALYTICS_WORKSPACE;
+  return v && v.trim() ? v.trim() : null;
+}
+
+interface LaTable {
+  name?: string;
+  columns?: Array<{ name: string; type?: string }>;
+  rows?: unknown[][];
+}
+interface LaQueryResponse { tables?: LaTable[]; error?: { message?: string } }
+
+/** Escape a single-quoted KQL string literal (double the quote). */
+function kqlStr(v: string): string {
+  return v.replace(/'/g, "''");
+}
+
+async function laQuery(workspaceGuid: string, kql: string): Promise<LaQueryResponse> {
+  const tok = await credential.getToken(LA_SCOPE_ADF);
+  if (!tok?.token) throw new Error('Failed to acquire Log Analytics token');
+  const url = `${LA_ENDPOINT_ADF}/v1/workspaces/${encodeURIComponent(workspaceGuid)}/query`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      prefer: 'wait=60',
+    },
+    body: JSON.stringify({ query: kql }),
+  });
+  const text = await r.text();
+  let json: LaQueryResponse | null = null;
+  try { json = text ? (JSON.parse(text) as LaQueryResponse) : null; } catch { /* non-JSON */ }
+  if (!r.ok) {
+    throw new Error(`Log Analytics query failed ${r.status}: ${json?.error?.message || text}`);
+  }
+  return json || {};
+}
+
+/** Build a {columnName -> rowIndex} accessor from the first table. */
+function laAccessor(json: LaQueryResponse): { rows: unknown[][]; idx: (name: string) => number } {
+  const table = (json.tables || [])[0];
+  const cols = (table?.columns || []).map((c) => c.name);
+  return {
+    rows: table?.rows || [],
+    idx: (name: string) => cols.indexOf(name),
+  };
+}
+
+/**
+ * List recent pipeline runs from Log Analytics (ADFPipelineRun table).
+ * Backs the Output-pane fallback when ADF's native 45-day window is empty.
+ */
+export async function listPipelineRunsFromLA(
+  workspaceGuid: string,
+  pipelineName: string,
+): Promise<AdfPipelineRun[]> {
+  const kql = `
+ADFPipelineRun
+| where PipelineName == '${kqlStr(pipelineName)}'
+| summarize arg_max(TimeGenerated, *) by RunId
+| order by Start desc
+| take 50
+| project RunId, PipelineName, Status, Start, End, ErrorCode, ErrorMessage, Parameters
+`.trim();
+  const json = await laQuery(workspaceGuid, kql);
+  const { rows, idx } = laAccessor(json);
+  return rows.map((row) => {
+    const startStr = (row[idx('Start')] as string | null) || undefined;
+    const endStr = (row[idx('End')] as string | null) || undefined;
+    const startMs = startStr ? new Date(startStr).getTime() : 0;
+    const endMs = endStr ? new Date(endStr).getTime() : 0;
+    const errMsg = (row[idx('ErrorMessage')] as string | null) || undefined;
+    return {
+      runId: row[idx('RunId')] as string,
+      pipelineName: row[idx('PipelineName')] as string,
+      status: (row[idx('Status')] || undefined) as AdfPipelineRun['status'],
+      runStart: startStr,
+      runEnd: endStr,
+      durationInMs: startMs && endMs ? endMs - startMs : undefined,
+      message: errMsg,
+      // invokedBy is not exposed in the resource-specific ADFPipelineRun table.
+      invokedBy: undefined,
+    } as AdfPipelineRun;
+  });
+}
+
+/**
+ * List per-activity output for a single run from Log Analytics
+ * (ADFActivityRun table). Backs the Output-pane drill-down fallback for
+ * runs older than ADF's 45-day native window.
+ */
+export async function listActivityRunsFromLA(
+  workspaceGuid: string,
+  runId: string,
+): Promise<AdfActivityRun[]> {
+  const kql = `
+ADFActivityRun
+| where PipelineRunId == '${kqlStr(runId)}'
+| summarize arg_max(TimeGenerated, *) by ActivityRunId
+| order by Start desc
+| project ActivityRunId, ActivityName, ActivityType, Status, Start, End, ErrorCode, ErrorMessage, Input, Output
+`.trim();
+  const json = await laQuery(workspaceGuid, kql);
+  const { rows, idx } = laAccessor(json);
+  const parseJson = (v: unknown): unknown => {
+    if (!v || typeof v !== 'string') return undefined;
+    try { return JSON.parse(v); } catch { return v; }
+  };
+  return rows.map((row) => {
+    const startStr = (row[idx('Start')] as string | null) || undefined;
+    const endStr = (row[idx('End')] as string | null) || undefined;
+    const startMs = startStr ? new Date(startStr).getTime() : 0;
+    const endMs = endStr ? new Date(endStr).getTime() : 0;
+    const errCode = (row[idx('ErrorCode')] as string | null) || undefined;
+    const errMsg = (row[idx('ErrorMessage')] as string | null) || undefined;
+    return {
+      activityRunId: row[idx('ActivityRunId')] as string,
+      activityName: row[idx('ActivityName')] as string,
+      activityType: row[idx('ActivityType')] as string,
+      pipelineRunId: runId,
+      status: (row[idx('Status')] || undefined) as AdfActivityRun['status'],
+      activityRunStart: startStr,
+      activityRunEnd: endStr,
+      durationInMs: startMs && endMs ? endMs - startMs : undefined,
+      input: parseJson(row[idx('Input')]),
+      output: parseJson(row[idx('Output')]),
+      error: errCode || errMsg ? { errorCode: errCode, message: errMsg } : undefined,
+    } as AdfActivityRun;
+  });
+}
+
+// ============================================================
 // Datasets
 // ============================================================
 
@@ -398,6 +582,119 @@ export async function deleteDataFlow(name: string): Promise<void> {
 }
 
 // ============================================================
+// Power Query (Wrangling) Data Flows — the Azure-native backend for
+// Dataflow Gen2 (Power Query Online). The Fabric "RefreshDataflow"
+// activity does not exist in ADF's ARM schema; ADF instead models a
+// Power Query mashup as a `WranglingDataFlow` resource that a pipeline
+// invokes via an `ExecuteWranglingDataflow` activity. ADF compiles the
+// M script to a Data Flow script and runs it on the Spark IR. This is
+// what backs the no-Fabric Dataflow Gen2 editor.
+//
+// Refs (grounded in @azure/arm-datafactory + Microsoft Learn):
+//   - WranglingDataFlow.typeProperties = { sources[], script, documentLocale }
+//   - ExecuteWranglingDataflowActivity.typeProperties = {
+//       dataFlow, integrationRuntime, compute, sinks{}, queries[] }
+//   - PowerQuerySinkMapping = { queryName, dataflowSinks[] }
+// ============================================================
+
+/** A Power Query source binding (maps a query name to a dataset). */
+export interface WranglingSource {
+  /** Query name in the M script that reads from this source. */
+  name: string;
+  /** ADF dataset the query reads from (omit for inline/literal sources). */
+  datasetName?: string;
+}
+
+/** A Power Query sink binding (maps an output query name to a dataset). */
+export interface WranglingSink {
+  /** The output query whose result is written. */
+  queryName: string;
+  /** Unique sink name within the activity. */
+  sinkName: string;
+  /** ADF dataset the result is written to (ADLS Parquet/CSV or Azure SQL). */
+  datasetName: string;
+}
+
+/**
+ * Idempotently publish a `WranglingDataFlow` resource carrying the authored
+ * Power Query (M) mashup. `sources` binds query names to datasets when the M
+ * reads from a connector; an inline `#table(...)` query needs no source.
+ */
+export async function upsertWranglingDataFlow(
+  name: string,
+  mScript: string,
+  sources: WranglingSource[] = [],
+): Promise<AdfDataFlow> {
+  return upsertDataFlow(name, {
+    name,
+    properties: {
+      type: 'WranglingDataFlow',
+      typeProperties: {
+        sources: sources.map((s) => ({
+          name: s.name,
+          ...(s.datasetName
+            ? { dataset: { referenceName: s.datasetName, type: 'DatasetReference' } }
+            : {}),
+        })),
+        script: mScript,
+        documentLocale: 'en-US',
+      },
+    },
+  });
+}
+
+/**
+ * Run a published `WranglingDataFlow` by materialising a single-activity
+ * wrapper pipeline (`loom-pq-run-<df>`) with one `ExecuteWranglingDataflow`
+ * activity, then triggering it. The output query → sink dataset mapping is
+ * carried on the activity's `queries[]`/`sinks{}` so the same pipeline can be
+ * reused on every run. Returns the runId + the wrapper pipeline name.
+ */
+export async function runWranglingDataFlow(
+  dataFlowName: string,
+  sinks: WranglingSink[] = [],
+  opts?: { computeType?: string; coreCount?: number },
+): Promise<{ runId: string; pipelineName: string }> {
+  const pipelineName = `loom-pq-run-${dataFlowName}`;
+  const sinkRef = (s: WranglingSink) => ({
+    name: s.sinkName,
+    dataset: { referenceName: s.datasetName, type: 'DatasetReference' },
+  });
+  const activity = {
+    name: 'RunDataflow',
+    type: 'ExecuteWranglingDataflow',
+    dependsOn: [],
+    typeProperties: {
+      dataFlow: { referenceName: dataFlowName, type: 'DataFlowReference' },
+      integrationRuntime: {
+        referenceName: 'AutoResolveIntegrationRuntime',
+        type: 'IntegrationRuntimeReference',
+      },
+      compute: { computeType: opts?.computeType || 'General', coreCount: opts?.coreCount ?? 8 },
+      ...(sinks.length
+        ? {
+            sinks: Object.fromEntries(sinks.map((s) => [s.sinkName, sinkRef(s)])),
+            queries: sinks.map((s) => ({
+              queryName: s.queryName,
+              dataflowSinks: [sinkRef(s)],
+            })),
+          }
+        : {}),
+    },
+  };
+  await upsertPipeline(pipelineName, {
+    name: pipelineName,
+    properties: {
+      description: `Loom Power Query (Dataflow Gen2) run for ${dataFlowName}`,
+      activities: [activity],
+      annotations: ['loom', 'dataflow-gen2'],
+    },
+  });
+  const run = await runPipeline(pipelineName);
+  return { runId: run.runId, pipelineName };
+}
+
+// ============================================================
 // Triggers
 // ============================================================
 
@@ -414,6 +711,12 @@ export interface AdfTrigger {
       pipelineReference: { referenceName: string; type: 'PipelineReference' };
       parameters?: Record<string, unknown>;
     }>;
+    // Tumbling-window triggers reference a SINGLE pipeline (singular `pipeline`)
+    // rather than the `pipelines[]` array used by schedule/event triggers.
+    pipeline?: {
+      pipelineReference: { referenceName: string; type: 'PipelineReference' };
+      parameters?: Record<string, unknown>;
+    };
     annotations?: unknown[];
     typeProperties?: Record<string, unknown>;
   };
@@ -591,7 +894,7 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
 // ============================================================
 
 function externalBase(subscriptionId: string, resourceGroup: string, factoryName: string): string {
-  return `https://management.azure.com/subscriptions/${encodeURIComponent(subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(factoryName)}`;
+  return `https://${ARM_HOST}/subscriptions/${encodeURIComponent(subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(factoryName)}`;
 }
 
 export interface MountedFactoryRef {

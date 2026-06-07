@@ -30,11 +30,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, Skeleton, SkeletonItem,
+  Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Caption1, Subtitle2, Body1,
   makeStyles, tokens, Text,
 } from '@fluentui/react-components';
 import {
-  ArrowSync20Regular, Play20Regular,
+  ArrowSync20Regular, Play20Regular, ShieldTask20Regular, Copy20Regular,
+  Open16Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
+import { portalLink as defenderPortalLink, portalSteps, powershellScript, canAutoRemediate } from '@/lib/azure/defender-remediation';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -61,6 +64,13 @@ interface Gate { missing: string[]; message: string }
 
 const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
+  code: {
+    width: '100%', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground1,
+  },
   // KPI stat cards
   stats: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
@@ -131,13 +141,23 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security' | 'maintenance';
+
+const TAB_KEYS: TabKey[] = ['overview', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'alerts', 'cost', 'security', 'maintenance'];
 
 export function MonitorPane() {
   const styles = useStyles();
   const [tab, setTab] = useState<TabKey>('overview');
   const [unauth, setUnauth] = useState(false);
   const onUnauth = useCallback(() => setUnauth(true), []);
+
+  // Deep-link support: /monitor?tab=maintenance (used by the Delta-maintenance
+  // job toast). Runs once on mount.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && (TAB_KEYS as string[]).includes(t)) setTab(t as TabKey);
+  }, []);
 
   return (
     <div>
@@ -156,6 +176,7 @@ export function MonitorPane() {
         <Tab value="alerts">Alerts</Tab>
         <Tab value="cost">Cost</Tab>
         <Tab value="security">Security</Tab>
+        <Tab value="maintenance">Maintenance</Tab>
       </TabList>
 
       {/* Only the active tab mounts → its fetch only fires when shown. */}
@@ -168,6 +189,7 @@ export function MonitorPane() {
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
       {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
       {tab === 'security' && <SecurityTab onUnauth={onUnauth} />}
+      {tab === 'maintenance' && <MaintenanceTab onUnauth={onUnauth} />}
     </div>
   );
 }
@@ -932,6 +954,116 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Maintenance — Delta Lake OPTIMIZE / VACUUM / ZORDER BY jobs (Synapse Spark)
+// ---------------------------------------------------------------------------
+
+interface MaintenanceJob {
+  id: string;
+  container: string;
+  tableName: string;
+  pool: string;
+  ops: string[];
+  sessionId: number;
+  statementId?: number;
+  state: 'starting' | 'submitting' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  detail?: string;
+  submittedAt: string;
+  updatedAt: string;
+  submittedBy: string;
+}
+
+function maintBadge(state: string) {
+  const s = (state || '').toLowerCase();
+  if (s === 'succeeded') return <Badge color="success" appearance="filled">Succeeded</Badge>;
+  if (s === 'failed') return <Badge color="danger" appearance="filled">Failed</Badge>;
+  if (s === 'running') return <Badge color="brand" appearance="filled">Running</Badge>;
+  if (s === 'cancelled') return <Badge color="subtle" appearance="filled">Cancelled</Badge>;
+  return <Badge color="informative" appearance="outline">{state || 'starting'}</Badge>;
+}
+
+function MaintenanceTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [jobs, setJobs] = useState<MaintenanceJob[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setJobs(null); setErr(null);
+    fetch('/api/lakehouse/maintenance').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setJobs([]); return; }
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to load maintenance jobs'); setJobs([]); return; }
+      setJobs(j.jobs || []);
+    }).catch((e) => { if (alive) { setErr(String(e)); setJobs([]); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
+  const kpis = useMemo(() => {
+    const j = jobs ?? [];
+    const running = j.filter((x) => x.state === 'running' || x.state === 'starting' || x.state === 'submitting').length;
+    const succeeded = j.filter((x) => x.state === 'succeeded').length;
+    const failed = j.filter((x) => x.state === 'failed').length;
+    return [
+      { label: 'Jobs', value: j.length, accent: undefined as string | undefined },
+      { label: 'In progress', value: running, accent: undefined },
+      { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
+      { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
+    ];
+  }, [jobs, styles]);
+
+  const columns: LoomColumn<MaintenanceJob>[] = useMemo(() => [
+    { key: 'tableName', label: 'Table', width: 220, render: (j) => `${j.container}/${j.tableName}` },
+    { key: 'ops', label: 'Operations', width: 280, render: (j) => (j.ops || []).join(', ') },
+    { key: 'pool', label: 'Spark pool', width: 150, render: (j) => j.pool },
+    { key: 'state', label: 'Status', width: 130, filterable: true, render: (j) => maintBadge(j.state) },
+    { key: 'submittedAt', label: 'Submitted', width: 180, getValue: (j) => new Date(j.submittedAt).getTime(), render: (j) => new Date(j.submittedAt).toLocaleString() },
+    { key: 'submittedBy', label: 'Submitted by', width: 200, render: (j) => j.submittedBy },
+    { key: 'detail', label: 'Result', width: 320, render: (j) => j.detail ?? '—' },
+  ], []);
+
+  return (
+    <div>
+      <Section
+        title="Delta table maintenance"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 12 }}>
+          OPTIMIZE / VACUUM / ZORDER BY jobs submitted from a lakehouse editor and run on Synapse Spark. Refreshing
+          advances each job by polling its Livy session — a cold Spark pool takes a couple minutes to warm up before
+          the statement runs.
+        </Caption1>
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {jobs === null ? (
+          <StatCardSkeleton />
+        ) : (
+          <div className={styles.stats}>
+            {kpis.map((k) => (
+              <div key={k.label} className={styles.stat}>
+                <span className={styles.statLabel}>{k.label}</span>
+                <span className={`${styles.statValue} ${k.accent ?? ''}`}>{k.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Jobs">
+        <LoomDataTable
+          columns={columns}
+          rows={jobs ?? []}
+          getRowId={(r) => r.id}
+          loading={jobs === null}
+          empty="No Delta maintenance jobs yet. Open a lakehouse, go to the Tables tab, and choose Maintain on a table."
+          ariaLabel="Delta maintenance jobs"
+        />
+      </Section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Alerts — Azure Monitor metric-alert rules
 // ---------------------------------------------------------------------------
 
@@ -1067,7 +1199,21 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     fetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
-      const j = await r.json();
+      // Read text first: a gateway 502/504 returns an HTML error page, not JSON,
+      // so r.json() would throw the cryptic "Unexpected token '<'". Surface an
+      // honest, actionable message instead.
+      const body = await r.text();
+      let j: any;
+      try { j = JSON.parse(body); }
+      catch {
+        if (r.status === 504 || r.status === 502 || r.status === 503) {
+          setErr('The Cost Management query timed out at the gateway. Azure cost queries can be slow under throttling across multiple subscriptions — wait a moment and retry, or narrow the timeframe (e.g. Last 7 days).');
+        } else {
+          setErr(`Cost service returned a non-JSON response (HTTP ${r.status}).`);
+        }
+        setData(null);
+        return;
+      }
       if (j.gate) { setGate(j.gate); setData(null); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load cost'); setData(null); return; }
       setData(j.data as CostSummary);
@@ -1222,7 +1368,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
 }
 
 // ── Security (Defender for Cloud — M5 + action-required) ─────────────────────
-interface DefenderRec { id: string; name: string; status: string; severity: string; resource?: string; remediation?: string; category?: string; }
+interface DefenderRec { id: string; name: string; status: string; severity: string; resource?: string; remediation?: string; category?: string; assessmentName?: string; resourceId?: string; policyDefinitionId?: string; portalLink?: string; implementationEffort?: string; userImpact?: string; }
 interface DefenderAlertRow { id: string; name: string; severity: string; status: string; description?: string; resource?: string; time?: string; }
 interface DefenderData {
   secureScore: { current: number; max: number; percentage: number } | null;
@@ -1231,6 +1377,7 @@ interface DefenderData {
   highSeverityCount: number;
   alerts: DefenderAlertRow[];
   portalUrl: string;
+  subscriptionId?: string;
 }
 
 function sevBadge(sev: string) {
@@ -1246,6 +1393,30 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // Remediation drawer (Portal steps / PowerShell / Fix via Loom).
+  const [remRec, setRemRec] = useState<DefenderRec | null>(null);
+  const [remTab, setRemTab] = useState<'portal' | 'powershell' | 'loom'>('portal');
+  const [remBusy, setRemBusy] = useState(false);
+  const [remResult, setRemResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const copy = (t: string) => { try { void navigator.clipboard?.writeText(t); } catch { /* noop */ } };
+  const openRemediate = useCallback((rec: DefenderRec) => {
+    setRemRec(rec); setRemTab('portal'); setRemResult(null);
+  }, []);
+  const runLoomFix = useCallback(async (rec: DefenderRec) => {
+    setRemBusy(true); setRemResult(null);
+    try {
+      const r = await fetch('/api/monitor/defender/remediate', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ policyDefinitionId: rec.policyDefinitionId, resourceId: rec.resourceId, name: rec.name }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j.gate) { setRemResult({ ok: false, message: j.gate.message || 'Auto-fix unavailable — use the Portal steps or PowerShell.' }); return; }
+      if (!j.ok) { setRemResult({ ok: false, message: j.error || `Remediation failed (HTTP ${r.status}).` }); return; }
+      setRemResult({ ok: true, message: j.message || 'Remediation started.' });
+    } catch (e: any) { setRemResult({ ok: false, message: e?.message || String(e) }); }
+    finally { setRemBusy(false); }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -1275,8 +1446,14 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
     { key: 'name', label: 'Recommendation', width: 320, render: (r) => <strong>{r.name}</strong> },
     { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
     { key: 'resource', label: 'Resource', width: 180, render: (r) => r.resource || '—' },
-    { key: 'remediation', label: 'Action / resolution', width: 420, render: (r) => r.remediation || '—' },
-  ], []);
+    { key: 'remediation', label: 'Action / resolution', width: 340, render: (r) => r.remediation || '—' },
+    {
+      key: 'fix', label: 'Remediate', width: 130, sortable: false, filterable: false,
+      render: (r) => r.status === 'Unhealthy'
+        ? <Button size="small" appearance="primary" icon={<ShieldTask20Regular />} onClick={(e) => { e.stopPropagation(); openRemediate(r); }}>Remediate</Button>
+        : <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>Healthy</Caption1>,
+    },
+  ], [openRemediate]);
   const alertColumns: LoomColumn<DefenderAlertRow>[] = useMemo(() => [
     { key: 'name', label: 'Alert', width: 300, render: (r) => <strong>{r.name}</strong> },
     { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
@@ -1346,6 +1523,75 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
           ariaLabel="Defender security alerts"
         />
       </Section>
+
+      {/* Remediation drawer — Portal steps / PowerShell / Fix via Loom */}
+      <Drawer type="overlay" position="end" open={!!remRec} onOpenChange={(_, d) => { if (!d.open) setRemRec(null); }} style={{ width: '560px', maxWidth: '94vw' }}>
+        <DrawerHeader>
+          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss24Regular />} onClick={() => setRemRec(null)} aria-label="Close" />}>
+            Remediate
+          </DrawerHeaderTitle>
+        </DrawerHeader>
+        <DrawerBody>
+          {remRec && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {sevBadge(remRec.severity)}
+                <Subtitle2>{remRec.name}</Subtitle2>
+              </div>
+              {(remRec.implementationEffort || remRec.userImpact) && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  {remRec.implementationEffort ? `Effort: ${remRec.implementationEffort}` : ''}
+                  {remRec.implementationEffort && remRec.userImpact ? ' · ' : ''}
+                  {remRec.userImpact ? `User impact: ${remRec.userImpact}` : ''}
+                </Caption1>
+              )}
+
+              <TabList selectedValue={remTab} onTabSelect={(_, d) => setRemTab(d.value as 'portal' | 'powershell' | 'loom')}>
+                <Tab value="portal">Portal steps</Tab>
+                <Tab value="powershell">PowerShell</Tab>
+                <Tab value="loom" icon={<ShieldTask20Regular />}>Fix via Loom</Tab>
+              </TabList>
+
+              {remTab === 'portal' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {portalSteps({ name: remRec.name, severity: remRec.severity, assessmentName: remRec.assessmentName, remediation: remRec.remediation, portalLink: remRec.portalLink }).map((st, i) => (
+                      <li key={i}><Body1>{st}</Body1></li>
+                    ))}
+                  </ol>
+                  <a href={defenderPortalLink({ name: remRec.name, assessmentName: remRec.assessmentName, portalLink: remRec.portalLink })} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Open in the Defender portal <Open16Regular />
+                  </a>
+                </div>
+              )}
+
+              {remTab === 'powershell' && (() => {
+                const script = powershellScript({ name: remRec.name, severity: remRec.severity, assessmentName: remRec.assessmentName, resourceId: remRec.resourceId, policyDefinitionId: remRec.policyDefinitionId, remediation: remRec.remediation, subscriptionId: data?.subscriptionId });
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                    <div><Button size="small" icon={<Copy20Regular />} onClick={() => copy(script)}>Copy script</Button></div>
+                    <div className={styles.code} role="region" aria-label="PowerShell remediation script">{script}</div>
+                  </div>
+                );
+              })()}
+
+              {remTab === 'loom' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  {canAutoRemediate({ name: remRec.name, policyDefinitionId: remRec.policyDefinitionId })
+                    ? <Body1>This recommendation is policy-backed. Loom can start a real Azure Policy remediation task that re-evaluates compliance and applies the fix to the affected resources.</Body1>
+                    : <MessageBar intent="info"><MessageBarBody>This recommendation has no auto-remediation policy. Use the <strong>Portal steps</strong> or run the <strong>PowerShell</strong> — those fully resolve it.</MessageBarBody></MessageBar>}
+                  <div>
+                    <Button appearance="primary" icon={<ShieldTask20Regular />} disabled={remBusy || !canAutoRemediate({ name: remRec.name, policyDefinitionId: remRec.policyDefinitionId })} onClick={() => runLoomFix(remRec)}>
+                      {remBusy ? 'Starting…' : 'Fix via Loom'}
+                    </Button>
+                  </div>
+                  {remResult && <MessageBar intent={remResult.ok ? 'success' : 'warning'}><MessageBarBody>{remResult.message}</MessageBarBody></MessageBar>}
+                </div>
+              )}
+            </div>
+          )}
+        </DrawerBody>
+      </Drawer>
     </div>
   );
 }

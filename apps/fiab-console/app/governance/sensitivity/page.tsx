@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Distribution { label: string; count: number; }
 interface LabeledItem { id: string; displayName: string; itemType: string; workspaceName?: string; label: string; }
@@ -77,6 +77,22 @@ export default function SensitivityPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
+
+  const itemColumns: LoomColumn<LabeledItem>[] = [
+    { key: 'displayName', label: 'Item', sortable: true, filterable: true, getValue: (it) => it.displayName, render: (it) => <strong>{it.displayName}</strong> },
+    { key: 'itemType', label: 'Type', sortable: true, filterable: true, getValue: (it) => it.itemType },
+    { key: 'workspaceName', label: 'Workspace', sortable: true, filterable: true, getValue: (it) => it.workspaceName || '—', render: (it) => it.workspaceName || '—' },
+    { key: 'label', label: 'Label', sortable: true, filterable: true, getValue: (it) => it.label, render: (it) => <Badge appearance="filled" color={labelColor(it.label)} size="small">{it.label}</Badge> },
+    {
+      key: 'open', label: '', sortable: false, filterable: false, width: 90,
+      render: (it) => (
+        <a href={`/items/${it.itemType}/${it.id}`} onClick={(e) => e.stopPropagation()}
+           style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+          Open <Open16Regular />
+        </a>
+      ),
+    },
+  ];
 
   return (
     <GovernanceShell sectionTitle="Sensitivity labels">
@@ -149,39 +165,12 @@ export default function SensitivityPage() {
             Labeled items ({(selectedLabel ? data.items.filter((i) => i.label === selectedLabel) : data.items).length})
             {selectedLabel && <Button size="small" appearance="subtle" onClick={() => setSelectedLabel(null)} style={{ marginLeft: 8 }}>Clear filter ({selectedLabel})</Button>}
           </Subtitle2>
-          {(selectedLabel ? data.items.filter((i) => i.label === selectedLabel) : data.items).length === 0 ? (
-            <div className={s.empty}>No items have a sensitivity label yet.</div>
-          ) : (
-            <Table aria-label="Labeled items">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Item</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Workspace</TableHeaderCell>
-                  <TableHeaderCell>Label</TableHeaderCell>
-                  <TableHeaderCell></TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(selectedLabel ? data.items.filter((i) => i.label === selectedLabel) : data.items).map((it) => (
-                  <TableRow key={it.id}>
-                    <TableCell><strong>{it.displayName}</strong></TableCell>
-                    <TableCell>{it.itemType}</TableCell>
-                    <TableCell>{it.workspaceName || '—'}</TableCell>
-                    <TableCell>
-                      <Badge appearance="filled" color={labelColor(it.label)} size="small">{it.label}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <a href={`/items/${it.itemType}/${it.id}`}
-                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                        Open <Open16Regular />
-                      </a>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <LoomDataTable<LabeledItem>
+            columns={itemColumns}
+            rows={selectedLabel ? data.items.filter((i) => i.label === selectedLabel) : data.items}
+            getRowId={(it) => it.id}
+            empty="No items have a sensitivity label yet."
+          />
         </>
       )}
     </GovernanceShell>

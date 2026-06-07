@@ -27,11 +27,41 @@ import {
   synapseConfigGate, listNotebooks, upsertNotebook, deleteNotebook,
   type SynapseNotebook,
 } from '@/lib/azure/synapse-artifacts-client';
+import { uploadFile } from '@/lib/azure/adls-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
+
+/**
+ * Best-effort .ipynb backup of the published notebook to ADLS silver, so the
+ * notebook artifact is also durable in the Loom data lake (the no-fabric-
+ * dependency "notebook persisted in Cosmos + ADLS" requirement). Non-fatal:
+ * the Synapse publish is the source of truth, so an ADLS failure (silver not
+ * provisioned, missing role) never blocks the save — it returns a status the
+ * UI surfaces. Requires LOOM_SILVER_URL + the Console UAMI holding Storage
+ * Blob Data Contributor on the DLZ data-lake account (the same access the
+ * lakehouse provisioner uses; granted by the post-deploy bootstrap step
+ * "Grant Console UAMI Storage Blob Data Contributor on DLZ"). Path:
+ * loom/notebooks/<workspace>/<name>.ipynb
+ */
+async function adlsBackup(name: string, properties: SynapseNotebook['properties']):
+  Promise<{ ok: true; path: string } | { ok: false; skipped?: boolean; error?: string }> {
+  const ws = process.env.LOOM_SYNAPSE_WORKSPACE;
+  if (!process.env.LOOM_SILVER_URL || !ws) {
+    return { ok: false, skipped: true };
+  }
+  const path = `loom/notebooks/${ws}/${name}.ipynb`;
+  try {
+    const body = Buffer.from(JSON.stringify(properties, null, 2), 'utf-8');
+    await uploadFile('silver', path, body, 'application/x-ipynb+json');
+    return { ok: true, path: `silver/${path}` };
+  } catch (e: any) {
+    console.warn('[synapse-notebook] ADLS backup failed (non-fatal):', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
 
 function gate() {
   const g = synapseConfigGate();
@@ -73,7 +103,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: strin
   }
   try {
     const saved = await upsertNotebook(name, { name, properties });
-    return NextResponse.json({ ok: true, notebook: { name: saved.name } });
+    const backup = await adlsBackup(name, properties);
+    return NextResponse.json({ ok: true, notebook: { name: saved.name }, adlsBackup: backup });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

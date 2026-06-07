@@ -133,7 +133,7 @@ export function ConnectSourceDialog({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          fabricWorkspaceId: workspaceId,
+          workspaceId,
           displayName: displayName.trim(),
           sourceType: picked.sourceType,
           sourceName: picked.id,
@@ -149,7 +149,7 @@ export function ConnectSourceDialog({
       setSuccess(
         j.accepted
           ? `Eventstream creation accepted (long-running). It will appear in All data streams shortly.`
-          : `Connected. Created Fabric Eventstream ${j.fabricEventstreamId || ''}.`,
+          : `Connected. Created eventstream "${displayName.trim()}" — open it to wire processing + destinations.`,
       );
       onConnected?.();
     } catch (e: any) {
@@ -175,10 +175,10 @@ export function ConnectSourceDialog({
                 <Field label="Eventstream name" required>
                   <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} />
                 </Field>
-                <Field label="Fabric workspace" required
-                  hint="Eventstreams are created in a Fabric workspace the Console UAMI can write to.">
+                <Field label="Workspace" required
+                  hint="The Loom workspace to create the eventstream in (Azure-native — Event Hubs backed).">
                   <select
-                    aria-label="Fabric workspace"
+                    aria-label="Workspace"
                     value={workspaceId}
                     onChange={(e) => setWorkspaceId(e.target.value)}
                     style={{ padding: '6px 8px', borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke1}` }}

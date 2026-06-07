@@ -26,7 +26,7 @@ import {
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const API = '2020-03-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
       new ManagedIdentityCredential({ clientId: uamiClientId }),

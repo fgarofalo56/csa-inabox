@@ -6,11 +6,21 @@
  *
  * When no runId is supplied, returns the most recent N pipeline runs as
  * { runs: [...] } so the Output pane can render the "last N runs" table.
+ *
+ * Log Analytics fallback: ADF's native monitoring API only retains 45 days of
+ * run history. When the native query returns no rows and
+ * LOOM_ADF_LOG_ANALYTICS_WORKSPACE is configured, we fall back to the typed
+ * ADFPipelineRun / ADFActivityRun tables in Log Analytics (full workspace
+ * retention). `source: 'log-analytics'` / `laFallback: true` tell the UI to
+ * show the historical-runs banner.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import { listActivityRuns, listPipelineRuns } from '@/lib/azure/adf-client';
+import {
+  listActivityRuns, listPipelineRuns,
+  listActivityRunsFromLA, listPipelineRunsFromLA, adfLogAnalyticsWorkspace,
+} from '@/lib/azure/adf-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -38,10 +48,19 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     }
 
     if (runId) {
-      const activities = await listActivityRuns(runId);
+      let activities = await listActivityRuns(runId);
+      let source: 'adf' | 'log-analytics' = 'adf';
+      const laWs = adfLogAnalyticsWorkspace();
+      if (activities.length === 0 && laWs) {
+        try {
+          const la = await listActivityRunsFromLA(laWs, runId);
+          if (la.length > 0) { activities = la; source = 'log-analytics'; }
+        } catch { /* LA unavailable — keep the honest (empty) ADF result */ }
+      }
       return NextResponse.json({
         ok: true,
         runId,
+        source,
         activities: activities.map((a) => ({
           id: a.activityRunId,
           name: a.activityName,
@@ -59,16 +78,25 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     }
 
     // No runId — return the last N pipeline runs for this pipeline.
-    const runs = await listPipelineRuns(adfName);
+    let runs = await listPipelineRuns(adfName);
+    let laFallback = false;
+    const laWs = adfLogAnalyticsWorkspace();
+    if (runs.length === 0 && laWs) {
+      try {
+        const la = await listPipelineRunsFromLA(laWs, adfName);
+        if (la.length > 0) { runs = la; laFallback = true; }
+      } catch { /* LA unavailable — keep the honest (empty) ADF result */ }
+    }
     return NextResponse.json({
       ok: true,
+      laFallback,
       runs: runs.map((r) => ({
         runId: r.runId,
         status: r.status,
         start: r.runStart,
         end: r.runEnd,
         durationMs: r.durationInMs,
-        invokedBy: r.invokedBy?.invokedByType || 'Manual',
+        invokedBy: r.invokedBy?.invokedByType || (laFallback ? 'Historical (Log Analytics)' : 'Manual'),
         message: r.message || null,
       })),
     });

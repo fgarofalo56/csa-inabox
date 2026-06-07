@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export function jerr(error: string, status = 500, code?: string) {
@@ -73,6 +74,48 @@ export async function listOwnedItems(itemType: string, tenantId: string): Promis
   return owned;
 }
 
+/**
+ * List ALL items the tenant owns, across every type — optionally filtered to a
+ * single workspace. Used by the Copilot `item_list` tool when no specific type
+ * is given (the model often asks for "all"). Mirrors listOwnedItems' ownership
+ * resolution.
+ */
+export async function listAllOwnedItems(tenantId: string, workspaceId?: string): Promise<WorkspaceItem[]> {
+  const items = await itemsContainer();
+  const query = workspaceId
+    ? { query: 'SELECT * FROM c WHERE c.workspaceId = @w', parameters: [{ name: '@w', value: workspaceId }] }
+    : { query: 'SELECT * FROM c', parameters: [] as { name: string; value: string }[] };
+  const { resources } = await items.items.query<WorkspaceItem>(query).fetchAll();
+  if (resources.length === 0) return [];
+  const ws = await workspacesContainer();
+  const owned: WorkspaceItem[] = [];
+  const wsCache = new Map<string, boolean>();
+  for (const it of resources) {
+    let isOwned = wsCache.get(it.workspaceId);
+    if (isOwned === undefined) {
+      try {
+        const { resource } = await ws.item(it.workspaceId, tenantId).read<Workspace>();
+        isOwned = !!resource && resource.tenantId === tenantId;
+      } catch { isOwned = false; }
+      wsCache.set(it.workspaceId, isOwned);
+    }
+    if (isOwned) owned.push(it);
+  }
+  return owned;
+}
+
+/** List the tenant's workspaces (id + name + description). */
+export async function listOwnedWorkspaces(tenantId: string): Promise<Array<{ id: string; name: string; description?: string }>> {
+  const ws = await workspacesContainer();
+  const { resources } = await ws.items
+    .query<Workspace>({
+      query: 'SELECT * FROM c WHERE c.tenantId = @t',
+      parameters: [{ name: '@t', value: tenantId }],
+    })
+    .fetchAll();
+  return (resources || []).map((w: any) => ({ id: w.id, name: w.name, description: w.description }));
+}
+
 /** Create a new item under a tenant-owned workspace. */
 export async function createOwnedItem(
   session: SessionPayload,
@@ -111,6 +154,9 @@ export async function createOwnedItem(
   const { resource } = await items.items.create<WorkspaceItem>(item);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
+  // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
+  // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
+  void autoOnboardToPurview(resource!, session.claims.oid);
   return { ok: true, item: resource! };
 }
 
