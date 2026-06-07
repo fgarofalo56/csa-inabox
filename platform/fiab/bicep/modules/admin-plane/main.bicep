@@ -139,6 +139,9 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Synapse SQL endpoint suffix for the live Tables catalog row-count path. Commercial = azuresynapse.net (default); Azure Government (GCC / GCC-High / IL5) = azuresynapse.us. Leave empty for Commercial.')
+param loomSynapseSqlSuffix string = ''
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -150,6 +153,15 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
+
+@description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
+param loomParamKeyVaultUri string = ''
+
+@description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
+param loomParamAppConfigEndpoint string = ''
+
+@description('Loom HDInsight cluster linked-service name (backs the four ADF HDInsight pipeline activities — Hive/Spark/MapReduce/Streaming). Empty leaves the editor honest-gated until an Azure HDInsight linked service is registered in the factory.')
+param loomHdinsightLinkedService string = ''
 
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
@@ -314,6 +326,23 @@ param loomLakehouseBackend string = 'adls'
 @description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
+
+// ---------------------------------------------------------------------
+// Copy Job watermark control table (F14 — Fabric Copy job parity)
+// ---------------------------------------------------------------------
+
+@description('FQDN of the Azure SQL server holding the copy-job watermark control table (dbo.copy_watermark), e.g. sql-loom-ctrl.database.windows.net. Empty = incremental copy surfaces an honest-gate MessageBar; full copy still works.')
+param loomCopyJobControlSqlServer string = ''
+
+@description('Database name for the copy-job watermark control table.')
+param loomCopyJobControlSqlDb string = 'loom-control'
+
+@description('Deploy the copy-job control table + stored procedure (and grant the ADF factory + console UAMI) via a deployment script. Requires loomCopyJobControlSqlServer set and the console UAMI configured as an Entra admin on that SQL server.')
+param copyJobControlEnabled bool = false
+
+@description('Dataflow Gen2 (Power Query) backend selector. Default: adf (Azure-native WranglingDataFlow on ADF Spark — no Fabric). fabric is opt-in and additionally requires LOOM_DEFAULT_FABRIC_WORKSPACE.')
+@allowed(['adf', 'fabric'])
+param loomDataflowBackend string = 'adf'
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -510,6 +539,28 @@ module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlSe
 }
 
 // =====================================================================
+// 8b. Copy Job watermark control table (F14) — dbo.copy_watermark +
+// dbo.usp_write_watermark in the control SQL DB, plus grants for the ADF
+// factory MI + console UAMI. Opt-in; the console also self-heals the DDL.
+// =====================================================================
+
+module copyJobControl 'copy-job-control.bicep' = if (copyJobControlEnabled && !empty(loomCopyJobControlSqlServer)) {
+  name: 'copy-job-control'
+  params: {
+    sqlServerFqdn: loomCopyJobControlSqlServer
+    sqlDatabase: loomCopyJobControlSqlDb
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
+    consoleUamiName: identity.outputs.uamiConsoleName
+    adfFactoryName: loomAdfName
+    azureCloud: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud'
+    location: location
+    complianceTags: complianceTags
+  }
+}
+
+
+// =====================================================================
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
@@ -651,12 +702,47 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
+            // ADF Output-pane Log Analytics fallback — runs older than ADF's
+            // 45-day native monitoring window are queried from the typed
+            // ADFPipelineRun / ADFActivityRun tables in this workspace. Separate
+            // env var (same workspace GUID) so operators can repoint the ADF
+            // history fallback at a dedicated operational workspace without
+            // touching the /monitor Logs (KQL) tab.
+            { name: 'LOOM_ADF_LOG_ANALYTICS_WORKSPACE', value: monitoring.outputs.lawCustomerId }
+            // Cloud-aware Log Analytics QUERY endpoint. Commercial/GCC use the
+            // public host; GCC-High / IL5 (Azure Government) use api.loganalytics.us.
+            // Read by adf-client.ts (ADF fallback) + monitor-client.ts (Logs tab).
+            { name: 'LOOM_LOG_ANALYTICS_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Synapse SQL endpoint suffix — Commercial defaults to azuresynapse.net
+            // in synapse-sql-client.ts; gov clouds set azuresynapse.us here.
+            { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
+            // F4: schedule-time pipeline parameter overrides. KV defaults to the
+            // admin-plane vault (Console UAMI already has Secrets Officer there);
+            // point at a separate vault by overriding loomParamKeyVaultUri and
+            // granting the Console identity "Key Vault Secrets User" on it.
+            { name: 'LOOM_PARAM_KEYVAULT', value: !empty(loomParamKeyVaultUri) ? loomParamKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // App Configuration source for parameter overrides. Empty disables
+            // the App Config path; set to an App Configuration endpoint and grant
+            // the Console identity "App Configuration Data Reader" to enable.
+            { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Copy Job (F14) — watermark control table address. When the server
+            // is unset, incremental copy surfaces an honest-gate MessageBar and
+            // full copy still works; see data/copy-job-control.bicep.
+            { name: 'LOOM_COPYJOB_CONTROL_SQL_SERVER', value: loomCopyJobControlSqlServer }
+            { name: 'LOOM_COPYJOB_CONTROL_SQL_DB', value: loomCopyJobControlSqlDb }
+            // HDInsight pipeline activities (Hive/Spark/MapReduce/Streaming) —
+            // names the AzureHDInsight linked service in the factory. Exposed
+            // both server-side and as NEXT_PUBLIC_* so activity-catalog.ts can
+            // pre-fill the cluster reference for new activities. Empty leaves
+            // the four activities honest-gated (MessageBar names this var).
+            { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
+            { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
             { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
@@ -739,6 +825,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
@@ -751,6 +838,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+            // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
+            // card: when set, the BFF uploads a sample CSV to landing/samples and
+            // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
+            // storage account (same as LOOM_ADLS_ACCOUNT). Only emitted when an
+            // ADLS account is configured, so the card's honest gate fires
+            // otherwise. Requires the ADF factory MSI to hold Storage Blob Data
+            // Contributor (granted in landing-zone/adf.bicep).
+            { name: 'LOOM_SAMPLE_ADLS', value: loomStorageAccount }
           ] : [],
           // ----------------------------------------------------------------
           // Unified Catalog federation + admin-security env wiring.

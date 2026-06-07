@@ -42,6 +42,7 @@ import {
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
+  ArrowDownload20Regular, ArrowUpload20Regular, AppsList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
@@ -50,7 +51,10 @@ import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/can
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
+import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
+import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
+import type { PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
 } from '@/lib/components/pipeline/activity-catalog';
@@ -232,6 +236,21 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
+  // F4: which schedule-time parameter sources the deployment has configured.
+  const [paramSources, setParamSources] = useState<{ kvAvailable: boolean; appConfigAvailable: boolean }>(
+    { kvAvailable: false, appConfigAvailable: false },
+  );
+
+  // "Practice with sample data" landing-card state. Seeds real ADLS + runs a
+  // real ADF copy pipeline — honest gate when LOOM_SAMPLE_ADLS is unset.
+  const [seeding, setSeeding] = useState(false);
+  const [seedErr, setSeedErr] = useState<string | null>(null);
+  const [seedErrIntent, setSeedErrIntent] = useState<'warning' | 'error'>('error');
+
+  // ── Import / Export / Template gallery (F3 + F28) ──
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ============ Loaders ============
   const loadList = useCallback(async (wsId: string) => {
@@ -275,7 +294,10 @@ export function DataPipelineEditor({ item, id }: Props) {
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}/triggers?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
-      if (j.ok) setTriggers(j.triggers || []);
+      if (j.ok) {
+        setTriggers(j.triggers || []);
+        if (j.paramSources) setParamSources(j.paramSources);
+      }
     } catch { /* keep last */ }
   }, []);
 
@@ -574,15 +596,131 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
+  // "Practice with sample data" — seed real ADLS Gen2 with a sample CSV, create
+  // + run an ADF copy pipeline, then navigate to the generated pipeline item and
+  // surface its Output tab. No simulated success: an honest MessageBar renders
+  // the precise infra gate when LOOM_SAMPLE_ADLS / ADF is unset.
+  const practiceWithSampleData = useCallback(async () => {
+    setSeedErr(null);
+    if (!workspaceId) {
+      setSeedErr('Select a workspace first (dropdown above) before seeding sample data.');
+      setSeedErrIntent('warning');
+      return;
+    }
+    setSeeding(true);
+    try {
+      const r = await fetch('/api/items/data-pipeline/practice-seed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setSeedErr(j.gate?.remediation || j.gate?.reason || j.error || 'Seeding failed');
+        setSeedErrIntent(j.gate ? 'warning' : 'error');
+        return;
+      }
+      // Navigate to the generated pipeline and surface its real run in Output.
+      setPipelineId(j.pipelineId);
+      setTopTab('output');
+      await loadList(workspaceId);
+      dispatchToast(
+        <Toast><ToastTitle>Sample data seeded · run {String(j.runId || '').slice(0, 8)} queued</ToastTitle></Toast>,
+        { intent: 'success' },
+      );
+    } catch (e: any) {
+      setSeedErr(e?.message || String(e));
+      setSeedErrIntent('error');
+    } finally { setSeeding(false); }
+  }, [workspaceId, dispatchToast, loadList]);
+
+  // ── Export: GET the packaged .zip and trigger a browser download ──
+  const exportPipeline = useCallback(async () => {
+    if (!workspaceId || !pipelineId) return;
+    try {
+      const r = await fetch(
+        `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/export?workspaceId=${encodeURIComponent(workspaceId)}`,
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({} as any));
+        dispatchToast(<Toast><ToastTitle>Export failed: {j.error || r.statusText}</ToastTitle></Toast>, { intent: 'error' });
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(spec.name || 'pipeline').replace(/[^\w\s-]/g, '_')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      dispatchToast(<Toast><ToastTitle>Exported.</ToastTitle></Toast>, { intent: 'success' });
+    } catch (e: any) {
+      dispatchToast(<Toast><ToastTitle>Export error: {e?.message || e}</ToastTitle></Toast>, { intent: 'error' });
+    }
+  }, [workspaceId, pipelineId, spec.name, dispatchToast]);
+
+  // ── Import: POST the .zip; on success reload the list and select it ──
+  const importPipeline = useCallback(async (file: File) => {
+    if (!workspaceId) return;
+    setImportErr(null);
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const r = await fetch(
+        `/api/items/data-pipeline/import?workspaceId=${encodeURIComponent(workspaceId)}&displayName=${encodeURIComponent(file.name.replace(/\.zip$/i, ''))}`,
+        { method: 'POST', body: form },
+      );
+      const j = await r.json().catch(() => ({ ok: false, error: r.statusText }));
+      if (!j.ok) {
+        setImportErr(j.error || 'import failed');
+        dispatchToast(<Toast><ToastTitle>Import failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+        return;
+      }
+      await loadList(workspaceId);
+      if (j.pipeline?.id) setPipelineId(j.pipeline.id);
+      dispatchToast(
+        <Toast><ToastTitle>Imported &ldquo;{j.pipeline?.displayName}&rdquo;
+          {j.gate ? ` (Loom only — ${j.gate.reason})` : j.adfPublished ? ' and published to ADF.' : '.'}
+        </ToastTitle></Toast>,
+        { intent: j.gate ? 'warning' : 'success' },
+      );
+    } catch (e: any) {
+      setImportErr(e?.message || String(e));
+      dispatchToast(<Toast><ToastTitle>Import error: {e?.message || e}</ToastTitle></Toast>, { intent: 'error' });
+    }
+  }, [workspaceId, loadList, dispatchToast]);
+
+  // ── Template gallery: instantiate the selected spec onto the canvas ──
+  const instantiateTemplate = useCallback((templateSpec: PipelineSpec, t: PipelineTemplate) => {
+    patchSpec(() => ({
+      ...templateSpec,
+      name: `${templateSpec.name || t.id}_${Date.now().toString(36)}`,
+    }));
+    setSelectedActivity(null);
+    setTopTab('pipeline');
+    dispatchToast(
+      <Toast><ToastTitle>Template &ldquo;{t.title}&rdquo; loaded — wire in linked services and datasets, then Save.</ToastTitle></Toast>,
+      { intent: 'info' },
+    );
+  }, [dispatchToast]);
+
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
-  const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
+  // paramBindings carry per-parameter value sources (direct / Key Vault / App
+  // Config); the BFF route resolves KV/App Config server-side at creation time.
+  const createTriggerWith = useCallback(async (
+    name: string,
+    properties: Record<string, unknown>,
+    paramBindings: Record<string, ParamBinding>,
+  ) => {
     if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), properties }),
+        body: JSON.stringify({ name: name.trim(), properties, parameterBindings: paramBindings }),
       });
       const j = await r.json();
       if (!j.ok) { setTriggerErr(j.error || 'create failed'); return; }
@@ -641,6 +779,11 @@ export function DataPipelineEditor({ item, id }: Props) {
         { label: 'Delete', actions: [
           { label: 'Delete', icon: <Delete20Regular />, onClick: canDelete ? del : undefined, disabled: !canDelete },
         ]},
+        { label: 'Import / Export', actions: [
+          { label: 'Export', icon: <ArrowDownload20Regular />, onClick: pipelineId ? exportPipeline : undefined, disabled: !pipelineId, title: 'Download this pipeline as a .zip (pipeline-content.json)' },
+          { label: 'Import', icon: <ArrowUpload20Regular />, onClick: workspaceId ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId, title: 'Import a pipeline from a .zip' },
+          { label: 'Templates', icon: <AppsList20Regular />, onClick: () => setGalleryOpen(true), title: 'Open the curated template gallery' },
+        ]},
       ],
     },
     {
@@ -668,6 +811,7 @@ export function DataPipelineEditor({ item, id }: Props) {
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
+    exportPipeline,
   ]);
 
   // ============ Render ============
@@ -729,13 +873,100 @@ export function DataPipelineEditor({ item, id }: Props) {
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
 
           {!pipelineId && (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Design your pipeline below — drag activities from the palette onto the canvas and wire them
-                up. To <strong>Save / Validate / Run</strong> against the live Fabric backing, pick a workspace
-                and pipeline from the left rail (or click <strong>New pipeline</strong> in the ribbon).
-              </MessageBarBody>
-            </MessageBar>
+            <div>
+              {seedErr && (
+                <MessageBar intent={seedErrIntent} style={{ marginBottom: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Practice with sample data</MessageBarTitle>
+                    {seedErr}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                <MessageBarBody>
+                  Design your pipeline below — drag activities from the palette onto the canvas and wire them
+                  up. To <strong>Save / Validate / Run</strong> against the live backing, pick a workspace
+                  and pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
+                </MessageBarBody>
+              </MessageBar>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 12,
+              }}>
+                {/* Card: Start with a blank canvas */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  style={{
+                    cursor: canCreate ? 'pointer' : 'not-allowed',
+                    opacity: canCreate ? 1 : 0.6,
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={canCreate ? () => setCreateOpen(true) : undefined}
+                  onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
+                >
+                  <Add20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Subtitle2>Start with blank canvas</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Create an empty pipeline and drag activities from the palette.
+                    {!canCreate ? ' Select a workspace first.' : ''}
+                  </Caption1>
+                </div>
+
+                {/* Card: Practice with sample data (real ADLS seed + ADF run) */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-busy={seeding}
+                  style={{
+                    cursor: seeding ? 'default' : 'pointer',
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={seeding ? undefined : practiceWithSampleData}
+                  onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
+                >
+                  {seeding
+                    ? <Spinner size="extra-small" label="Seeding ADLS…" />
+                    : <CloudArrowUp20Regular style={{ color: tokens.colorBrandForeground1 }} />}
+                  <Subtitle2>Practice with sample data</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Seed a real CSV to ADLS Gen2, run an auto-generated copy pipeline,
+                    and see live Output rows — no mock data.
+                  </Caption1>
+                </div>
+
+                {/* Card: Templates gallery — opens the real curated gallery */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  style={{
+                    cursor: 'pointer',
+                    padding: 18,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    borderRadius: 8,
+                    backgroundColor: tokens.colorNeutralBackground1,
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                  onClick={() => setGalleryOpen(true)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
+                >
+                  <AppsList20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Subtitle2>Templates gallery</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Curated templates: incremental copy, metadata-driven, ForEach patterns.
+                  </Caption1>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Visual designer always renders so the canvas + palette are
@@ -790,6 +1021,8 @@ export function DataPipelineEditor({ item, id }: Props) {
                         parameters={parameters}
                         variables={variables}
                         layout="dock"
+                        pipelineId={pipelineId}
+                        workspaceId={workspaceId}
                         onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
                         onDelete={() => { if (selected) deleteActivity(selected.name); }}
                       />
@@ -1023,8 +1256,37 @@ export function DataPipelineEditor({ item, id }: Props) {
             open={scheduleOpen}
             onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
             onCreate={createTriggerWith}
+            pipelineParams={parameters}
+            kvAvailable={paramSources.kvAvailable}
+            appConfigAvailable={paramSources.appConfigAvailable}
             busy={triggerBusy}
             error={triggerErr}
+          />
+
+          {/* Hidden file input for Import (.zip) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importPipeline(f);
+              e.target.value = '';  // reset so the same file can be re-selected
+            }}
+          />
+
+          {importErr && (
+            <MessageBar intent="error">
+              <MessageBarBody>Import failed: {importErr}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          {/* Template gallery flyout */}
+          <TemplateGalleryFlyout
+            open={galleryOpen}
+            onOpenChange={setGalleryOpen}
+            onSelect={instantiateTemplate}
           />
         </div>
       }
