@@ -919,6 +919,9 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizSource, setWizSource] = useState(''); // table name (mv source / update policy source)
   const [wizQuery, setWizQuery] = useState(''); // MV query / function body / update policy query
   const [wizArgs, setWizArgs] = useState(''); // function arg list, e.g. "x:long"
+  const [wizBackfill, setWizBackfill] = useState(false); // MV: .create async materialized-view with (backfill=true)
+  // Live source-table picker for the MV wizard — fetched from /api/adx/tables.
+  const [wizTables, setWizTables] = useState<string[]>([]);
   const [wizError, setWizError] = useState<string | null>(null);
   const [wizSubmitting, setWizSubmitting] = useState(false);
   const [wizSuccess, setWizSuccess] = useState<string | null>(null);
@@ -981,7 +984,21 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizardKind(k); setWizError(null); setWizSuccess(null);
     setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
     setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
-  }, []);
+    setWizBackfill(false);
+    // MV + ingest + update-policy wizards need a live source-table picker —
+    // pull the real table list off the bound ADX/Eventhouse cluster.
+    if ((k === 'mv' || k === 'ingest' || k === 'update-policy') && id && id !== 'new') {
+      setWizTables([]);
+      fetch(`/api/adx/tables?id=${encodeURIComponent(id)}`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (j?.ok && Array.isArray(j.tables)) {
+            setWizTables(j.tables.map((t: { name: string }) => t.name).filter(Boolean));
+          }
+        })
+        .catch(() => { /* picker falls back to free-text via info.tables */ });
+    }
+  }, [id]);
 
   // Issue a `.create` mgmt command via the existing query route (POST is the
   // same; mgmt commands starting with `.` are auto-routed to /v1/rest/mgmt).
@@ -1000,9 +1017,33 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         break;
       case 'mv':
         if (!wizSource || !wizQuery) { setWizError('Source table + query required'); return; }
-        // .create materialized-view NAME on table SRC { QUERY }
-        mgmtCmd = `.create materialized-view ${wizName} on table ${wizSource} { ${wizQuery} }`;
-        break;
+        // Materialized views go through the dedicated /api/adx/materialized-views
+        // route so the backfill toggle maps to `.create async materialized-view
+        // with (backfill=true)`. Short-circuit the generic /query path below.
+        setWizSubmitting(true);
+        try {
+          const res = await fetch(`/api/adx/materialized-views?id=${encodeURIComponent(id)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: wizName, sourceTable: wizSource, query: wizQuery, backfill: wizBackfill }),
+          });
+          const jj = await res.json();
+          if (!jj.ok) {
+            setWizError(jj.error || 'Command failed');
+          } else {
+            setWizSuccess(
+              wizBackfill
+                ? `Backfill started async (operation row returned). Track with .show materialized-views / .show operations. Refreshing…`
+                : `Materialized view '${jj.name}' created. ${jj.rowCount ?? 0} rows. Refreshing…`,
+            );
+            await load();
+            setTimeout(() => { setWizardKind(null); }, 600);
+          }
+        } catch (e: any) {
+          setWizError(e?.message || String(e));
+        } finally {
+          setWizSubmitting(false);
+        }
+        return;
       case 'function':
         // .create function NAME(args) { body }
         mgmtCmd = `.create-or-alter function with (folder = "Loom", docstring = "Created via CSA Loom") ${wizName}(${wizArgs}) { ${wizQuery} }`;
@@ -1049,7 +1090,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setWizSubmitting(false);
     }
-  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizBackfill, wizIngestFile, id, load]);
 
   const ribbon: RibbonTab[] = useMemo(() => {
     return [
@@ -1248,16 +1289,47 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         <Textarea value={wizSchema} onChange={(_: unknown, d: any) => setWizSchema(d.value)} rows={3} style={{ fontFamily: 'Consolas, monospace' }} />
                       </>
                     )}
-                    {wizardKind === 'mv' && (
+                    {wizardKind === 'mv' && (() => {
+                      // Source-table picker: live cluster tables preferred, fall
+                      // back to the bound item's declared tables. De-duped.
+                      const srcNames = Array.from(new Set([
+                        ...wizTables,
+                        ...((info?.tables || []).map((t) => t.name)),
+                      ].filter(Boolean)));
+                      return (
                       <>
                         <Caption1>View name</Caption1>
                         <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events_daily" />
                         <Caption1>Source table</Caption1>
-                        <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events" />
-                        <Caption1>Query (one row per group key)</Caption1>
-                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
+                        {srcNames.length > 0 ? (
+                          <Select value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} aria-label="Source table">
+                            <option value="">Select a source table…</option>
+                            {srcNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </Select>
+                        ) : (
+                          <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events" />
+                        )}
+                        <Caption1>Aggregation query (must end in summarize — one row per group key)</Caption1>
+                        <MonacoTextarea
+                          value={wizQuery}
+                          onChange={setWizQuery}
+                          language="kql"
+                          height={180}
+                          ariaLabel="Materialized view KQL query"
+                        />
+                        <Switch
+                          label="Backfill from existing data (.create async materialized-view with (backfill=true))"
+                          checked={wizBackfill}
+                          onChange={(_: unknown, d: any) => setWizBackfill(!!d.checked)}
+                        />
+                        {wizBackfill && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            Runs asynchronously over the source table&apos;s existing records. Large tables may take minutes to hours; the view stays unavailable for query until the backfill completes. Track with <code>.show materialized-views</code> / <code>.show operations</code>.
+                          </Caption1>
+                        )}
                       </>
-                    )}
+                      );
+                    })()}
                     {wizardKind === 'function' && (
                       <>
                         <Caption1>Function name</Caption1>

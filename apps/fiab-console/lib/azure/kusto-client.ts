@@ -20,6 +20,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
+import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
 
 const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || 'https://adx-csa-loom-shared.eastus2.kusto.windows.net';
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
@@ -454,17 +455,30 @@ export async function dropFunction(db: string, name: string): Promise<KustoQuery
   return executeMgmtCommand(db, `.drop function ${name} ifexists`);
 }
 
-/** `.create materialized-view NAME on table SRC { query }`. */
+/**
+ * `buildCreateMaterializedViewCommand` (pure command builder) lives in the
+ * dependency-free `kusto-mv-command` module and is re-exported here for
+ * callers that import from `kusto-client`. `createMaterializedView` is the
+ * runtime entry point.
+ */
+export { buildCreateMaterializedViewCommand };
+
+/**
+ * `.create [async] materialized-view [with (backfill=true)] NAME on table SRC { query }`.
+ *
+ * When `opts.backfill` is true the view is created over the source table's
+ * existing data. Per ADX/Eventhouse rules a backfilling create MUST be `async`
+ * (the mgmt endpoint returns an operation row rather than blocking until the
+ * backfill finishes — track it with `.show operations`).
+ */
 export async function createMaterializedView(
   db: string, name: string, sourceTable: string, query: string,
+  opts?: { backfill?: boolean },
 ): Promise<KustoQueryResult> {
   if (!sourceTable.trim() || !query.trim()) {
     throw new KustoError('createMaterializedView: source table and query are required', 400);
   }
-  return executeMgmtCommand(
-    db,
-    `.create materialized-view ${name} on table ${qName(sourceTable.trim())} { ${query.trim()} }`,
-  );
+  return executeMgmtCommand(db, buildCreateMaterializedViewCommand(name, sourceTable, query, opts));
 }
 
 /** `.drop materialized-view NAME ifexists`. */
