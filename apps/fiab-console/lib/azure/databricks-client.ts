@@ -1477,3 +1477,52 @@ export async function deleteRepo(repoId: number): Promise<void> {
   await asJsonOrThrow<unknown>(res, 'deleteRepo');
 }
 
+// ------------------------------------------------------------
+// Unity Catalog Volumes — file I/O (Databricks Files API)
+//
+// Used by Delta Sharing Tables shortcuts: the open-sharing credential file
+// (profile JSON) must live on a path the workspace can read so the
+// `delta_sharing` Spark provider can authenticate against the share server.
+// A UC Volume file at /Volumes/<cat>/<schema>/<volume>/<file> is the modern,
+// UC-governed location for this (DBFS is legacy). API: PUT/DELETE /api/2.0/fs/files.
+// Learn: https://learn.microsoft.com/azure/databricks/files/volumes
+// ------------------------------------------------------------
+
+/**
+ * Write text content to a file in a UC Volume via the Databricks Files API
+ * (`PUT /api/2.0/fs/files/<path>`). The path must be a UC Volume file path
+ * (`/Volumes/<catalog>/<schema>/<volume>/<file>`). Uses a raw-body request
+ * (not dbxFetch, which forces application/json) so the bytes land verbatim.
+ */
+export async function writeUcVolumesFile(volumePath: string, content: string): Promise<void> {
+  const token = await dbxToken();
+  const res = await fetch(
+    `https://${host()}/api/2.0/fs/files${volumePath.startsWith('/') ? '' : '/'}${volumePath}?overwrite=true`,
+    {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body: content,
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`writeUcVolumesFile failed for ${volumePath}: HTTP ${res.status} — ${(await res.text()).slice(0, 300)}`);
+  }
+}
+
+/**
+ * Delete a file from a UC Volume via the Databricks Files API
+ * (`DELETE /api/2.0/fs/files/<path>`). Best-effort: a 404 (already gone) is not
+ * an error. Used to clean up a Delta Sharing credential file when a shortcut is
+ * deleted. Never touches the shared source data.
+ */
+export async function deleteUcVolumesFile(volumePath: string): Promise<void> {
+  const token = await dbxToken();
+  const res = await fetch(
+    `https://${host()}/api/2.0/fs/files${volumePath.startsWith('/') ? '' : '/'}${volumePath}`,
+    { method: 'DELETE', headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`deleteUcVolumesFile failed for ${volumePath}: HTTP ${res.status}`);
+  }
+}
+

@@ -64,23 +64,29 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 | # | Synapse Studio capability | Loom | Where / backend |
 |---|---|---|---|
-| B1 | Add code cell | ✅ built | `addCell('code')` (toolbar + per-cell) |
+| B1 | Add code cell | ✅ built | `addCell('code')` (toolbar, ribbon, between-cell adders) |
 | B2 | Add markdown cell | ✅ built | `addCell('markdown')` |
-| B3 | Per-cell language: PySpark / Spark(Scala) / Spark SQL / SparkR (%% magics) | ✅ built | cell language dropdown → KIND_TO_MONACO; magic detected on open |
+| B3 | Per-cell language: PySpark / Spark(Scala) / Spark SQL / SparkR (%% magics) | ✅ built | cell language dropdown → KIND_TO_MONACO; magic round-trips on save/open |
+| B3a | **Notebook default language** | ✅ built | toolbar "Language" dropdown → new cells inherit `defaultLang` |
 | B4 | Move cell up / down | ✅ built | `moveCell(±1)` |
 | B5 | Delete cell | ✅ built | `deleteCell` (≥1 enforced) |
 | B6 | Markdown edit ⇄ render toggle | ✅ built | NotebookCellView md edit/view + double-click |
 | B7 | Monaco editor with syntax highlight | ✅ built | `MonacoTextarea` per cell |
-| B8 | .NET for Spark **C# (%%csharp)** cell | ❌ MISSING | 4 kinds only (no C#) |
+| B8 | .NET for Spark **C# (%%csharp)** cell | ✅ built | 5th `CellKind` `csharp`; `%%csharp` magic round-trip; Monaco `csharp` |
 | B9 | IntelliSense / code completion | ⚠️ partial | Monaco baseline only; no Spark-aware completion |
-| B10 | Cell-level **clone / cut / paste / collapse** | ❌ MISSING | move/delete only |
+| B10 | Cell-level **duplicate / collapse** | ✅ built | per-cell "…" menu → `duplicateCell`; collapse chevron → `collapsed` (jupyter.source_hidden) |
+| B10a | **Insert cell between cells** (hover adder) | ✅ built | `<CellAdder>` before first + after each cell → `addCell(…, 'before'/'after')` |
 | B11 | Cell **status indicator** (step-by-step) + duration summary | ⚠️ partial | running spinner + ok/error output; no per-step timeline |
+| B12 | **Parameters cell** (papermill/ADF `tags:["parameters"]`) | ✅ built | "…" menu toggle + ribbon "Parameters cell"; single-cell enforced; `parameters` badge; tag round-trips in IPYNB |
+| B13 | **Outline** (markdown headings → click-to-scroll nav) | ✅ built | left-panel Outline (`outline` useMemo) → `scrollIntoView` on `cell-<id>` |
+| B14 | **Copilot cell edges** (NL→code, explain, fix-error) | ✅ built | per-cell Ask Copilot / Explain / Fix → `POST /api/notebook/[id]/assist` → AOAI `chat` deployment (`resolveAoaiTarget`), grounded in T2 lakehouse schema; honest `no_aoai` gate. No Fabric Copilot dependency |
 
 ### C. Compute attach & session
 
 | # | Synapse Studio capability | Loom | Where / backend |
 |---|---|---|---|
 | C1 | **Attach to** a Big Data (Spark) pool | ✅ built | Attach dropdown → `GET /api/items/synapse-spark-pool/list` (ARM) |
+| C1a | **Attach environment** (Spark configuration) | ✅ built | Environment dropdown → `GET /api/synapse/environments` (dev-plane `sparkconfigurations`); persisted as `metadata.a365ComputeOptions` |
 | C2 | Live session state badge (none/starting/idle/busy) | ✅ built | `sessionState` badge; warmed session reused across cells via `POST /api/notebook/[id]/session` |
 | C3 | Cold-start warm-up (poll session to idle, then submit) | ✅ built | session POST + GET poll loop on non-idle state |
 | C4 | **Configure session** pane (executors, size, timeout) / `%%configure` | ✅ built | `%%configure` cell parsed → merged into next `createLivySession` (driver/executor cores, numExecutors, conf) |
@@ -107,42 +113,54 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | # | Capability | Loom | Where / backend |
 |---|---|---|---|
 | E1 | Honest infra-gate when workspace unset | ✅ built | MessageBar naming `LOOM_SYNAPSE_WORKSPACE` + Synapse Artifact Publisher role + bicep path |
+| E2 | **ADLS .ipynb backup** (notebook durable in Cosmos + ADLS) | ✅ built | Save → `PUT …/[name]` writes `silver/loom/notebooks/<ws>/<name>.ipynb` (non-fatal; status surfaced in the save banner) |
 
 ---
 
-## Coverage tally
+## Coverage tally (post-F15 authoring update, 2026-06-06)
 
-- **built ✅: 19**
+- **built ✅: 30**
 - **partial ⚠️: 6**
 - **honest-gate ⚠️: 1**
-- **MISSING ❌: 11**
+- **MISSING ❌: 7**
 
-## Honest grade: **B**
+## Honest grade: **B+**
 
-This is a genuine, **production-grade** Spark-notebook authoring surface — a real
-1:1 with the core Develop-hub workflow: list/create/open/save(publish)/delete on
-the Synapse artifact REST, a multi-cell IPYNB editor with per-cell %% language
-magics, Attach-to-pool against real ARM Big Data pools, and **real Livy execution**
-(create session → submit statement → poll → render output) reusing the warm session
-across cells with keepalive + kill-on-unmount. **F16** closed the biggest gaps:
-**`display(df)` rich output** (df table grid, HTML, image), **`%%configure`** session
-tuning, and **session lifecycle** (keepalive + kill). Databricks is a real opt-in
-backend (Execution Context API) — Synapse Livy stays the Azure-native default. **No
-vaporware** — Spark code actually runs.
+This is now a genuine, **production-grade** Synapse-Studio notebook surface that
+combines **full authoring parity (F15)** with **real per-cell Spark execution
+(F16)**.
 
-Held to **B** (not A) by `ui-parity.md`'s completeness bar: no interactive
-**chart builder** over `display(df)` (table/HTML/image render, but not the Vega chart
-UI), no **variable explorer**, no in-toolbar **restart/stop/cancel** button (kill is
-automatic), no **Spark progress bar or Spark-UI drill-in**, no **`%run`**, no **C#
-cell**, and no **Studio Git/Publish shell**.
+F15 lifted the **authoring surface**: all five languages (PySpark / Scala /
+Spark SQL / SparkR / .NET-C#) with magic-header round-trip, a **notebook default
+language**, **insert-between** cell adders, **duplicate** and **collapse**, a
+**parameters cell** (papermill/ADF tag, single-cell enforced), a left-panel
+**Outline**, **Copilot cell edges**, and an **environment** (Spark configuration)
+attach alongside the Spark-pool attach. Saving publishes to the Synapse artifact
+REST **and** backs the `.ipynb` up to ADLS silver.
 
-## Highest-value gaps to build first
+F16 closed the biggest execution gaps: **real Livy execution** (create session →
+submit statement → poll → render output) reusing the warm session across cells
+with keepalive + kill-on-unmount, **`display(df)` rich output** (df table grid,
+HTML, image), **`%%configure`** session tuning, and **session lifecycle**.
+Databricks is a real opt-in backend (Execution Context API) — Synapse Livy stays
+the Azure-native default and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+**No vaporware** — every control hits a real backend; Spark code actually runs;
+the environment picker and ADLS backup degrade honestly when unconfigured.
+
+Held to **B+** (not A) by `ui-parity.md`'s completeness bar: no interactive
+**chart builder** over `display(df)` (table/HTML/image render, but not the Vega
+chart UI), no **variable explorer** (D8), no **run-above/below** (D6), no
+in-toolbar **restart/stop/cancel** button (kill is automatic), no **Spark
+progress bar / Spark-UI drill-in** (C6), no **`%run`** (D9), no **mssparkutils**
+helpers (D10), and no **Studio Git/Publish shell** (A7).
+
+## Highest-value gaps to build next (T17 + beyond)
 
 1. **`display(df)` table + chart builder** (D7) — the defining output surface.
 2. **Configure-session pane / `%%configure`** (C4) + **restart/stop/cancel** (C5).
 3. **Variable explorer** (D8) and **run-above/below** (D6).
 4. **Spark progress bar + Spark-UI deep link** (C6).
-5. **`%run` cross-notebook** (D9) and **C# cell** (B8).
+5. **`%run` cross-notebook** (D9).
 6. **Studio Git/Publish shell** (A7) — shared with the broader Synapse parity work.
 
 ## Backend per control
@@ -155,27 +173,41 @@ cell**, and no **Studio Git/Publish shell**.
 | Save / Publish | `PUT /api/synapse/notebooks/[name]` | Notebook create-or-update |
 | Delete notebook | `DELETE /api/synapse/notebooks/[name]` | Notebook delete |
 | Attach-pool list | `GET /api/items/synapse-spark-pool/list` | ARM `Microsoft.Synapse/workspaces/bigDataPools` |
+| Attach-environment list | `GET /api/synapse/environments` | dev-plane `GET /sparkconfigurations` (api 2020-12-01) |
+| ADLS .ipynb backup | `PUT /api/synapse/notebooks/[name]` (folded) | `adls-client.uploadFile` → `silver/loom/notebooks/<ws>/<name>.ipynb` |
+| Copilot edge (generate/explain/fix) | `POST /api/notebook/[id]/assist` | AOAI chat-completions on the Foundry `chat` deployment (`cognitiveservices.azure.com` scope), schema-grounded |
 | Create / reuse session | `POST /api/notebook/[id]/session` | Livy `POST …/sessions` (or reuse via `GET …/sessions/{id}`) |
 | Keepalive + state poll | `GET /api/notebook/[id]/session` | Livy `PUT …/sessions/{id}/keepalive` + `GET …/sessions/{id}` |
 | Kill session | `DELETE /api/notebook/[id]/session` | Livy `DELETE …/sessions/{id}` |
 | Run cell (submit) | `POST /api/notebook/[id]/execute` | Livy create-statement (magic-stripped; %%configure intercepted) |
 | Run cell (poll) | `GET /api/notebook/[id]/execute?pool=&sessionId=&stmtId=` | Livy `GET …/statements/{id}` → `normalizeLivyOutput` |
 | Databricks opt-in (cluster list) | `GET /api/admin/scaling/databricks-cluster` | Databricks `/api/2.0/clusters/list` |
-| Legacy run cell | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement (kept for the artifact-name path) |
+| Legacy run cell (submit) | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement (kept for the artifact-name path) |
+| Legacy run cell (poll) | `GET …/run-cell?pool=&session=&stmt=` | Livy get statement |
 
 ## Bicep / env sync
 
-- Env var consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name) — gate
-  MessageBar names it explicitly. Optional: **`LOOM_NOTEBOOK_BACKEND`** (`synapse`
-  default / `databricks` opt-in), **`LOOM_CLOUD_TIER`** (`IL5` blocks the Databricks
+- Env vars consumed: **`LOOM_SYNAPSE_WORKSPACE`** (Synapse workspace name) — gate
+  MessageBar names it explicitly — and **`LOOM_SILVER_URL`** (ADLS silver
+  container URL for the `.ipynb` backup, emitted by the DLZ deploy into the
+  console app env). Optional: **`LOOM_NOTEBOOK_BACKEND`** (`synapse` default /
+  `databricks` opt-in), **`LOOM_CLOUD_TIER`** (`IL5` blocks the Databricks
   opt-in), **`LOOM_DATABRICKS_HOSTNAME`** (required only when backend=databricks).
-  All three wired in `platform/fiab/bicep/modules/admin-plane/main.bicep`.
-- Role: the Loom Console UAMI needs the Synapse data-plane role **Synapse Compute
-  Operator** at the Spark-pool scope to submit Livy sessions/statements. Granted by
-  `consoleSparkSubmitRoleScript` in `platform/fiab/bicep/modules/landing-zone/synapse.bicep`
-  (`az synapse role assignment create --role "Synapse Compute Operator"`).
-- IL5: set `sparkPoolIsolatedCompute=true` (same module) to enable compute isolation
-  on `loompool`; the `peDev` private endpoint is required in GCC-High/IL5.
+  All wired in `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- Roles: the Loom Console UAMI needs **Synapse Artifact Publisher** on the
+  workspace (artifact writes) plus the data-plane role **Synapse Compute
+  Operator** at the Spark-pool scope to submit Livy sessions/statements —
+  granted by `consoleSparkSubmitRoleScript` in
+  `platform/fiab/bicep/modules/landing-zone/synapse.bicep`
+  (`az synapse role assignment create --role "Synapse Compute Operator"`). The
+  `.ipynb` ADLS backup additionally needs the Console UAMI to hold **Storage
+  Blob Data Contributor** on the DLZ data-lake account — granted idempotently by
+  the post-deploy bootstrap step *"Grant Console UAMI Storage Blob Data
+  Contributor on DLZ"* in `.github/workflows/csa-loom-post-deploy-bootstrap.yml`.
+  The backup is non-fatal, so a missing grant never blocks publish.
+- IL5: set `sparkPoolIsolatedCompute=true` (same module) to enable compute
+  isolation on `loompool`; the `peDev` private endpoint is required in
+  GCC-High/IL5.
 - No new Cosmos container.
 
 ## Verification
