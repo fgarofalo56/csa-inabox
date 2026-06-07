@@ -81,6 +81,7 @@ export type MonacoLanguage =
   | 'javascript'
   | 'typescript'
   | 'yaml'
+  | 'markdown'
   | 'plaintext';
 
 export interface MonacoTextareaProps {
@@ -126,6 +127,7 @@ function mapLanguage(lang?: MonacoLanguage): string {
     case 'graphql': return 'graphql';
     case 'javascript': return 'javascript';
     case 'typescript': return 'typescript';
+    case 'markdown': return 'markdown';
     default: return 'plaintext';
   }
 }

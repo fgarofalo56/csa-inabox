@@ -1,11 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, Caption1, Select, Spinner, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Badge, Button, Caption1, Select, Spinner, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import {
   Play16Regular, Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
   LockClosed16Regular, LockClosed16Filled, Copy16Regular,
-  ArrowMaximize16Regular, ArrowMinimize16Regular,
+  ArrowMaximize16Regular, ArrowMinimize16Regular, Lightbulb16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
@@ -112,12 +112,77 @@ export interface CodeCellProps {
   onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /**
+   * WebSocket path for the Pylance/pylsp bridge (e.g. `/api/notebook/<id>/lsp`),
+   * or null when the bridge is not enabled in this deployment. When set and the
+   * cell is a Python flavour, Monaco gets real pyright/pylsp completions + hover.
+   */
+  lspWsUrl?: string | null;
 }
 
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: CodeCellProps) {
+const PY_LANGS = new Set<NotebookCellLang>(['python', 'pyspark']);
+
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, lspWsUrl }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  // 'off' = no bridge / non-Python; 'connecting'|'ready'|'error' track the LSP.
+  const [lspState, setLspState] = useState<'off' | 'connecting' | 'ready' | 'error'>('off');
+  const lspDisposeRef = useRef<null | (() => void)>(null);
+  const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
+
+  const lang = (cell.lang || 'pyspark') as NotebookCellLang;
+  const lspEligible = !!lspWsUrl && PY_LANGS.has(lang);
+  // Bumped when Monaco mounts so the attach effect re-runs (refs don't trigger effects).
+  const [editorReady, setEditorReady] = useState(0);
+
+  const detachLsp = useCallback(() => {
+    lspDisposeRef.current?.();
+    lspDisposeRef.current = null;
+  }, []);
+
+  // Attach / re-attach the pylsp language client whenever the cell becomes an
+  // eligible (Python + bridge-available) cell with a mounted Monaco editor, and
+  // tear it down otherwise. Keyed on lspEligible + lspWsUrl so switching a cell
+  // to Python after mount, or the bridge appearing, both attach correctly.
+  useEffect(() => {
+    if (!lspEligible || !editorRef.current || !monacoRef.current || typeof window === 'undefined') {
+      detachLsp();
+      setLspState('off');
+      return;
+    }
+    detachLsp();
+    setLspState('connecting');
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${proto}://${window.location.host}${lspWsUrl}`;
+    let cancelled = false;
+    // @ts-ignore — plain-JS LSP client, excluded from the TS program.
+    import('@/lib/lsp/notebook-lsp-client.mjs')
+      .then((mod) => {
+        if (cancelled) return;
+        const dispose = mod.attachPylsp({
+          editor: editorRef.current, monaco: monacoRef.current, wsUrl, language: 'python',
+          fileUri: `inmemory://loom/cell-${cell.id}.py`,
+        });
+        lspDisposeRef.current = dispose;
+        dispose.onStatus?.((st: { state: string }) => {
+          if (cancelled) return;
+          setLspState(st.state === 'ready' ? 'ready' : st.state === 'error' || st.state === 'disconnected' ? 'error' : 'connecting');
+        });
+      })
+      .catch(() => { if (!cancelled) setLspState('error'); });
+    return () => { cancelled = true; detachLsp(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lspEligible, lspWsUrl, cell.id, editorReady, detachLsp]);
+
+  // Capture the Monaco editor + namespace once mounted; bump the flag so the
+  // attach effect runs (refs alone don't re-trigger effects).
+  const handleMonacoReady = useCallback((editor: any, monaco: any) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+    setEditorReady((n) => n + 1);
+  }, []);
 
   // ESC dismisses the maximized state.
   useEffect(() => {
@@ -159,6 +224,26 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
           {LANG_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
+        {lspEligible && (
+          <Tooltip
+            content={
+              lspState === 'ready' ? 'Pylance IntelliSense connected — real pyright completions & hover'
+              : lspState === 'connecting' ? 'Connecting to the Python language server…'
+              : lspState === 'error' ? 'Language server unavailable — Monaco built-in completions only'
+              : 'IntelliSense'
+            }
+            relationship="label"
+          >
+            <Badge
+              appearance="outline"
+              size="small"
+              color={lspState === 'ready' ? 'success' : lspState === 'error' ? 'danger' : 'informative'}
+              icon={<Lightbulb16Regular />}
+            >
+              {lspState === 'ready' ? 'Pylance' : lspState === 'connecting' ? 'Pylance…' : 'IntelliSense'}
+            </Badge>
+          </Tooltip>
+        )}
         <div className={s.spacer} />
         <Button
           size="small"
@@ -190,6 +275,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         minHeight={80}
         ariaLabel={`Code cell ${cell.id}`}
         className={mergeClasses(locked && s.editorLocked)}
+        onReady={handleMonacoReady}
       />
       {cell.output && (
         <div className={mergeClasses(
