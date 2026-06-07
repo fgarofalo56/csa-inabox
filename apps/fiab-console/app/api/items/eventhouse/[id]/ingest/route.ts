@@ -44,6 +44,16 @@ const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
+// Cloud-aware ARM base. Commercial → management.azure.com (default); Gov
+// (GCC-High / IL5) sets LOOM_ARM_ENDPOINT=https://management.usgovcloudapi.net
+// via bicep. Mirrors adf-client / azure-sql-client.
+const ARM_BASE = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/+$/, '');
+
+// .ingest formats accepted from the Get-Data wizard's Format dropdown. 'auto'
+// lets ADX infer from the extension; anything else is passed through verbatim
+// in a `with (format=...)` clause.
+const INGEST_FORMATS = new Set(['csv', 'tsv', 'json', 'multijson', 'parquet', 'orc', 'avro', 'psv', 'scsv']);
+
 function sanitizeId(s: string, max = 200): string {
   return String(s || '').trim().slice(0, max);
 }
@@ -189,12 +199,12 @@ async function handleEventHub(_id: string, body: any): Promise<NextResponse> {
   const location = process.env.LOOM_KUSTO_LOCATION || 'eastus2';
   if (!sub) return NextResponse.json({ ok: false, error: 'LOOM_SUBSCRIPTION_ID env var not set' }, { status: 503 });
 
-  const armToken = await credential.getToken('https://management.azure.com/.default');
+  const armToken = await credential.getToken(`${ARM_BASE}/.default`);
   if (!armToken?.token) return NextResponse.json({ ok: false, error: 'failed to acquire ARM token' }, { status: 401 });
 
   const connName = `${table}-eh-${eventHubName}`.slice(0, 40).replace(/[^A-Za-z0-9_-]/g, '-');
   const url =
-    `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}` +
+    `${ARM_BASE}/subscriptions/${sub}/resourceGroups/${rg}` +
     `/providers/Microsoft.Kusto/clusters/${cluster}/databases/${encodeURIComponent(database)}` +
     `/dataConnections/${encodeURIComponent(connName)}?api-version=2023-08-15`;
   const payload = {
@@ -243,10 +253,15 @@ async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
   if (!/^(abfss|https):\/\//i.test(path)) {
     return NextResponse.json({ ok: false, error: 'oneLakePath must be abfss:// or https:// URL' }, { status: 400 });
   }
+  // Optional explicit format from the wizard's Format dropdown. 'auto' (or
+  // unset) lets ADX infer from the URL extension; a recognized format is
+  // emitted as a `with (format=...)` clause.
+  const fmt = String(body?.format || 'auto').toLowerCase();
+  const formatClause = fmt !== 'auto' && INGEST_FORMATS.has(fmt) ? ` with (format='${fmt}')` : '';
   // .ingest into table T (h'<url>') ; storage authn is via the cluster's
   // managed identity. If the cluster's MI doesn't have RBAC on the path,
   // ADX will return a clear error which we surface.
-  const command = `.ingest into table ["${table}"] (h'${path.replace(/'/g, "\\'")}')`;
+  const command = `.ingest into table ["${table}"] (h'${path.replace(/'/g, "\\'")}')${formatClause}`;
   try {
     const result = await executeMgmtCommand(database, command);
     return NextResponse.json({

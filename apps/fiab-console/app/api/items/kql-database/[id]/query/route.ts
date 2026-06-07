@@ -25,6 +25,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   try {
     const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
+
+    // Follower (database-shortcut) databases are strictly read-only. Block any
+    // write/control command before it reaches ADX so the user gets a clear
+    // message instead of a raw cluster rejection. Queries (no leading dot) and
+    // read-only `.show` commands still pass through.
+    if (item?.state?.isFollower) {
+      const lower = kql.toLowerCase();
+      const writeCmd = /^\.(create|drop|ingest|alter|purge|append|set|set-or-append|set-or-replace|move|rename|merge|clear|delete|enable|disable|cancel|export|attach|detach|replace|add|execute database script)\b/;
+      if (writeCmd.test(lower)) {
+        return NextResponse.json({
+          ok: false,
+          error:
+            'This KQL database is a read-only follower (database shortcut). Write operations ' +
+            '(.create, .drop, .ingest, .alter, .purge, etc.) are blocked. Run queries against ' +
+            'the follower, or switch to the leader database to write data.',
+        }, { status: 403 });
+      }
+    }
+
     const database = (body?.db && String(body.db)) || resolveDatabase(item);
     const isMgmt = kql.startsWith('.');
     const result = isMgmt

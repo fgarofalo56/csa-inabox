@@ -241,7 +241,7 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 | F2 | MISSING ❌ | No cluster Overview blade (state/metrics/URIs grid) |
 | F3 | MISSING ❌ | **No Stop / Start cluster** |
 | F4 | MISSING ❌ | **No scale-up (vertical / SKU change)** in this surface |
-| F5 | MISSING ❌ | **No scale-out / autoscale rules** in this surface. (NOTE: a separate admin-scaling surface + `kusto-arm-client.ts` exists repo-wide, but is not part of the ADX/KQL editor parity here) |
+| F5 | partial ⚠️ | **Optimized auto-scale now built** in the Eventhouse editor (Manage › Auto-scale): enable switch + min/max instance SpinButtons → `PATCH /api/items/eventhouse/[id]/policies` → real ARM `PATCH Microsoft.Kusto/clusters` `properties.optimizedAutoscale {isEnabled,minimum,maximum,version:1}` (`kusto-arm-client.ts:updateKustoClusterAutoscale`). Honest warning gate on Dev/Basic SKUs (ARM rejects the field). **Custom autoscale rules** (metric-driven) still MISSING |
 | F6 | built ✅ | Create DB → Eventhouse "New KQL database" → `POST /api/items/eventhouse/[id]/database` → ARM `PUT Microsoft.Kusto/clusters/{c}/databases/{d}` (real). **No delete-DB** in UI |
 | F7 | MISSING ❌ | No cluster-permission (AllDatabasesAdmin/Viewer/Monitor) management UI |
 | F8 | MISSING ❌ | No database-permission (Admin/User/Viewer/Ingestor/Monitor `.add database … `) management UI |
@@ -284,6 +284,7 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 | Ingest Event Hub | `POST …/ingest` (kind=eventhub) | ARM `PUT …/dataConnections/{n}` (gated env) |
 | Ingest OneLake path | `POST …/ingest` (kind=onelake) | `.ingest into table (h'<path>')` |
 | Data policies | `POST /api/items/eventhouse/[id]/policies` | `.alter database policy caching/retention` (+ OneLakeAvailability gated) |
+| Optimized auto-scale | `PATCH /api/items/eventhouse/[id]/policies` | ARM `PATCH Microsoft.Kusto/clusters` `properties.optimizedAutoscale {isEnabled,minimum,maximum,version}` (honest 422 on Dev/Basic SKU) |
 | Dashboard model + run | `/api/items/kql-dashboard/[id]` (GET/PUT/?run), `/run`, `/param-values` | Cosmos persist + real `/v1/rest/query` per tile |
 | Queryset save/run | `/api/items/kql-queryset/[id]`, `/run` | Cosmos persist + real `/v1/rest/query` |
 
@@ -293,7 +294,7 @@ All routes session-guard, apply the `LOOM_KUSTO_CLUSTER_URI` config gate (honest
 
 ## Honest gaps summary (highest value first)
 
-1. **Cluster lifecycle entirely absent in this surface** — no Stop/Start (F3), no scale-up (F4), no scale-out/autoscale (F5), no Overview/metrics (F2), no create/delete cluster (F1/F12). These are core portal verbs and are the biggest parity hole. (A separate `kusto-arm-client.ts` + admin-scaling surface exists in the repo but is not surfaced in the ADX editor.)
+1. **Cluster lifecycle mostly absent in this surface** — no Stop/Start (F3), no scale-up (F4), no Overview/metrics (F2), no create/delete cluster (F1/F12). **Optimized auto-scale (F5) is now built** (Eventhouse › Manage › Auto-scale → real ARM `optimizedAutoscale` PATCH, honest Dev/Basic-SKU gate); custom metric-driven autoscale rules remain a hole. These portal verbs are still the biggest parity gap.
 2. **Permissions management missing** — no cluster (F7) or database (F8) RBAC principal assignment UI; the live UAMI runs as AllDatabasesAdmin and there's no way to grant/revoke from Loom.
 3. ~~Results grid is a static table~~ — **largely RESOLVED (PR #545).** `KustoResultsGrid` now does sort (B2), per-column filter (B3), in-grid search+highlight (B6), and column statistics (B7). Still missing: group-by (B4), pivot (B5), cell-selection→filter (B8), full data-profile pane (B9).
 4. **Export/share partly built** — CSV download (C3) + copy-as-TSV (C2) now built in the grid; still no Open-in-Excel (C4) / Query-to-Power-BI (C5) / share-link (C6).

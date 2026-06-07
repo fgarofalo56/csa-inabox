@@ -69,6 +69,23 @@ export interface DashboardParam {
   value?: string | string[];
 }
 
+/**
+ * Per-tile drill-through wiring. Fabric Real-Time Dashboards expose
+ * "drillthroughs" under a visual's Interactions: selecting a value in a
+ * visual maps a result column to a dashboard parameter, which re-filters the
+ * (target) page. Loom is single-page, so the parameter injection stays on the
+ * current page — clicking a value sets `paramName` to the value in `column`
+ * and re-runs every tile (cross-filter), matching the documented behavior.
+ * Grounded in Microsoft Learn: dashboard-parameters#use-drillthroughs-as-
+ * dashboard-parameters.
+ */
+export interface DashTileDrillthrough {
+  /** Column name from the tile's query result to extract on click. */
+  column: string;
+  /** The dashboard parameter `variableName` to inject the clicked value into. */
+  paramName: string;
+}
+
 export interface DashboardTile {
   title: string;
   kql: string;
@@ -80,6 +97,8 @@ export interface DashboardTile {
   /** Grid geometry — column span 1..12, row height in grid units. */
   w?: number;
   h?: number;
+  /** Drill-through: clicking a result value sets a dashboard parameter. */
+  drillthrough?: DashTileDrillthrough;
 }
 
 export interface DashboardModel {
@@ -318,6 +337,14 @@ export function sanitizeModel(input: any): DashboardModel {
           database: t?.database ? String(t.database).slice(0, 200) : undefined,
           w: clampInt(t?.w, 1, 12),
           h: clampInt(t?.h, 1, 8),
+          drillthrough:
+            t?.drillthrough?.column != null && t?.drillthrough?.paramName != null &&
+            String(t.drillthrough.column).trim() && String(t.drillthrough.paramName).trim()
+              ? {
+                  column: String(t.drillthrough.column).slice(0, 80),
+                  paramName: String(t.drillthrough.paramName).slice(0, 80),
+                }
+              : undefined,
         }))
         .filter((t: DashboardTile) => t.kql.length > 0 && t.kql.length <= 65_536)
         .slice(0, 100)

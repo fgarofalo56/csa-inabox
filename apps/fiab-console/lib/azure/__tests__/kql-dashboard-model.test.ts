@@ -209,3 +209,36 @@ describe('sanitizeModel', () => {
     expect(m.dataSources[0]).toMatchObject({ id: 's1', name: 'Src', database: 'd1' });
   });
 });
+
+describe('sanitizeModel — drillthrough', () => {
+  it('preserves a valid drillthrough definition', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '_state' } }],
+    });
+    expect(m.tiles[0].drillthrough).toEqual({ column: 'State', paramName: '_state' });
+  });
+  it('drops drillthrough when column is empty', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: '', paramName: '_state' } }],
+    });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('drops drillthrough when paramName is empty', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '' } }],
+    });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('leaves drillthrough undefined when absent', () => {
+    const m = sanitizeModel({ tiles: [{ title: 'T', kql: 'print 1', viz: 'table' }] });
+    expect(m.tiles[0].drillthrough).toBeUndefined();
+  });
+  it('truncates column and paramName to 80 chars', () => {
+    const long = 'x'.repeat(100);
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: long, paramName: long } }],
+    });
+    expect(m.tiles[0].drillthrough!.column).toHaveLength(80);
+    expect(m.tiles[0].drillthrough!.paramName).toHaveLength(80);
+  });
+});

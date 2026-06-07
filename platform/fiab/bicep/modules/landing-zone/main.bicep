@@ -53,6 +53,9 @@ param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
 @description('Admin Plane ADX cluster RG')
 param adminPlaneAdxClusterRgName string
 
+@description('ADX cluster system-assigned MI principal ID (from admin-plane adx-cluster.bicep output clusterPrincipalId). Threaded to eventhubs.bicep to grant Azure Event Hubs Data Receiver on the namespace so KQL-database Event Hub data connections work without SAS. Empty skips the grant (BYO/existing cluster: bootstrap the grant manually — see docs/fiab/v3-tenant-bootstrap.md).')
+param adxClusterPrincipalId string = ''
+
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
@@ -197,6 +200,7 @@ module eventhubs 'eventhubs.bicep' = {
     privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
+    adxClusterPrincipalId: adxClusterPrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
