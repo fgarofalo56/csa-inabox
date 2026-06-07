@@ -17,6 +17,20 @@ describe('KqlDatabaseEditor', () => {
 
   beforeEach(() => {
     const m = installFetchMock({
+      '/api/items/kql-database/kqldb-fixture/schema-graph': () => ({
+        ok: true,
+        database: 'loomdb-default',
+        nodes: [
+          { id: 'table:Events', kind: 'table', name: 'Events', columns: [{ name: 'ts', type: 'datetime' }] },
+          { id: 'mv:EventsDaily', kind: 'materialized-view', name: 'EventsDaily', sourceTable: 'Events' },
+          { id: 'function:fn_recent', kind: 'function', name: 'fn_recent', parameters: '(days:int)' },
+        ],
+        edges: [
+          { from: 'mv:EventsDaily', to: 'table:Events', type: 'mv-source' },
+          { from: 'function:fn_recent', to: 'table:Events', type: 'function-ref' },
+        ],
+        counts: { tables: 1, materializedViews: 1, functions: 1, shortcuts: 0, edges: 2 },
+      }),
       '/api/items/kql-database/kqldb-fixture/query': () => ({
         ok: true,
         database: 'loomdb-default',
@@ -74,5 +88,72 @@ describe('KqlDatabaseEditor', () => {
   it('skips the DB fetch when id is "new" (pre-save gate)', () => {
     render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="new" />);
     expect(calls.filter((c) => c.url.endsWith('/api/items/kql-database/new')).length).toBe(0);
+  });
+
+  it('Ingestion mapping wizard opens from the ribbon, builds the grid, and POSTs to /api/adx/ingestion-mappings', async () => {
+    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
+
+    // Ribbon action (surfaced as a <button> by the chrome stub) opens the wizard.
+    fireEvent.click(screen.getByRole('button', { name: 'Ingestion mapping' }));
+    expect(await screen.findByText('New ingestion mapping')).toBeInTheDocument();
+
+    // Step 1 — name + format; the target table defaults to the first DB table.
+    fireEvent.change(screen.getByPlaceholderText('EventMapping'), { target: { value: 'EventMapping' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    // Step 2 — a column-map grid row exists; fill the target column then create.
+    const col = await screen.findByLabelText('Target column for row 1');
+    fireEvent.change(col, { target: { value: 'ts' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mapping' }));
+    await waitFor(() => {
+      const post = calls.find((c) => c.url.includes('/api/adx/ingestion-mappings') && c.init?.method === 'POST');
+      expect(post).toBeTruthy();
+      const sent = JSON.parse(String(post!.init!.body));
+      expect(sent.name).toBe('EventMapping');
+      expect(sent.kind).toBe('csv');
+      expect(JSON.parse(sent.mapping)[0].Column).toBe('ts');
+    });
+  });
+
+  it('Get data wizard ingests with format + ingestionMappingReference', async () => {
+    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get data' }));
+    expect(await screen.findByText(/Get data — ingest a file/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('events'), { target: { value: 'Events' } });
+    fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'json' } });
+    fireEvent.change(screen.getByPlaceholderText('EventMapping'), { target: { value: 'EventMapping' } });
+    const file = new File(['{"ts":"2026-01-01T00:00:00Z"}'], 'sample.json', { type: 'application/json' });
+    fireEvent.change(screen.getByLabelText('File to ingest'), { target: { files: [file] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    await waitFor(() => {
+      const post = calls.find((c) =>
+        c.url.includes('/api/items/kql-database/kqldb-fixture/query') &&
+        c.init?.method === 'POST' &&
+        String(c.init?.body).includes('ingestionMappingReference'));
+      expect(post).toBeTruthy();
+      const kql = JSON.parse(String(post!.init!.body)).kql as string;
+      expect(kql).toContain("format='json'");
+      expect(kql).toContain("ingestionMappingReference='EventMapping'");
+    });
+  });
+
+  it('Diagram tab fetches schema-graph and renders entity nodes', async () => {
+    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: /diagram/i }));
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/schema-graph'))).toBe(true);
+    });
+    // The canvas renders the real entity names returned by the schema-graph route.
+    await waitFor(() => {
+      expect(screen.getByText('EventsDaily')).toBeInTheDocument();
+      expect(screen.getByText('fn_recent')).toBeInTheDocument();
+    });
   });
 });
