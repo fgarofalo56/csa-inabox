@@ -103,7 +103,7 @@ export async function GET() {
         code: 'not_configured',
         error: 'No subscription configured for cross-subscription stream discovery.',
         hint: 'Set LOOM_SUBSCRIPTION_ID (and optionally LOOM_EXTRA_SUBSCRIPTIONS) so the RTI hub can enumerate Event Hubs, IoT Hubs, and ADX clusters via Azure Resource Graph. The Console UAMI also needs Reader at the subscription scope.',
-        bicep: 'platform/fiab/bicep/modules/admin-plane/scaling-rbac.bicep',
+        bicep: 'platform/fiab/bicep/modules/admin-plane/rti-hub-rbac.bicep',
       },
       { status: 503 },
     );
