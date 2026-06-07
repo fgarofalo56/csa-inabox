@@ -98,6 +98,24 @@ resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   }
 }
 
+// Console UAMI → AzureML Data Scientist on the Foundry Hub workspace so the BFF
+// can call listMlWorkspaces / listModels / listModelVersions / getModel /
+// registerModelVersion / createOnlineEndpoint (foundry-client.ts) AND read MLflow
+// experiment tracking (mlflow-client.ts searchRuns / getMetricHistory). Without
+// this grant the ml-model + ml-experiment editors 403 on a clean deploy.
+// Role f6c7c914-8db3-469d-8ca1-694a8f32e121 = AzureML Data Scientist.
+resource hubConsoleDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: foundryHub
+  name: guid(foundryHub.id, consolePrincipalId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'f6c7c914-8db3-469d-8ca1-694a8f32e121')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Private endpoint to the Hub
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${foundryHub.name}'

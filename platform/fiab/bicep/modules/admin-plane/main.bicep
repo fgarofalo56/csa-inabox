@@ -183,6 +183,12 @@ param loomSynapseHostSuffix string = ''
 @description('Synapse SQL endpoint suffix for the live Tables catalog row-count path. Commercial = azuresynapse.net (default); Azure Government (GCC / GCC-High / IL5) = azuresynapse.us. Leave empty for Commercial.')
 param loomSynapseSqlSuffix string = ''
 
+@description('Azure Machine Learning workspace name for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → mlflow-client.ts falls back to LOOM_FOUNDRY_NAME (the AI Foundry hub workspace). Set explicitly when pointing at a dedicated AML workspace (deploy-planner mlWorkspaceEnabled or BYO); requires the Console UAMI AzureML Data Scientist on that workspace.')
+param loomAmlWorkspace string = ''
+
+@description('Resource group of the AML workspace for MLflow tracking. Empty → mlflow-client.ts falls back to LOOM_FOUNDRY_RG.')
+param loomAmlRg string = ''
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -1152,6 +1158,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
+            // MLflow experiment-tracking target (ml-experiment "Runs & metrics" tab,
+            // mlflow-client.ts). When empty, it falls back to LOOM_FOUNDRY_NAME /
+            // LOOM_FOUNDRY_REGION / LOOM_FOUNDRY_RG (the AI Foundry hub workspace —
+            // itself a Microsoft.MachineLearningServices/workspaces, so tracking works
+            // OOTB). Set loomAmlWorkspace / loomAmlRg to point at a dedicated AML
+            // workspace (deploy-planner mlWorkspaceEnabled or BYO). Requires the Console
+            // UAMI AzureML Data Scientist on the target workspace (ai-foundry.bicep
+            // hubConsoleDataScientist for the hub; az role assignment for a BYO/DP one).
+            { name: 'LOOM_AML_WORKSPACE', value: loomAmlWorkspace }
+            { name: 'LOOM_AML_RG',        value: loomAmlRg }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. The dedicated Agent Service account
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
