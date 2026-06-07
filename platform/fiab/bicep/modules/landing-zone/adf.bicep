@@ -55,6 +55,28 @@ resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
   }
 }
 
+// ---------------------------------------------------------------------
+// HDInsight pipeline activities (F17) — Hive / Spark / MapReduce / Streaming
+//
+// ADF natively executes all four HDInsight activity types at this factory's
+// api-version (2018-06-01); no extra factory config is required to *run* them.
+// They target an `AzureHDInsight` linked service that names a cluster. The
+// cluster is NOT provisioned here — HDInsight clusters are long-lived and
+// cost-significant, so they are stood up out-of-band by the operator. To wire
+// the activities up:
+//   1. Provision (or reuse) an Azure HDInsight cluster, VNet-injected into the
+//      spoke so this private-only factory can reach it.
+//   2. In the Loom console: Manage -> Linked services -> New -> Azure HDInsight,
+//      pointing at that cluster.
+//   3. Set the admin-plane param `loomHdinsightLinkedService` (env vars
+//      LOOM_HDINSIGHT_LINKED_SERVICE + NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE)
+//      to that linked-service name so new activities pre-fill the cluster.
+//   When unset, the four activities render fully but show an honest MessageBar
+//   gate naming LOOM_HDINSIGHT_LINKED_SERVICE (no Fabric dependency anywhere).
+//   For on-demand HDInsight clusters, also grant the Console UAMI the
+//   "HDInsight Cluster Operator" role on the cluster resource.
+// ---------------------------------------------------------------------
+
 // =====================================================================
 // Private endpoint
 // =====================================================================

@@ -15,6 +15,19 @@
 import type { PipelineActivity } from './types';
 
 /**
+ * Pre-fill the AzureHDInsight linked-service reference for new HDInsight
+ * activities. NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE is set by the
+ * deployment (admin-plane bicep) and exposed client-side so the four
+ * HDInsight activity templates stamp the cluster reference automatically.
+ * When unset, the reference is left blank and activity-forms.tsx surfaces an
+ * honest MessageBar gate naming LOOM_HDINSIGHT_LINKED_SERVICE.
+ */
+function hdiCluster(): string {
+  return (typeof process !== 'undefined'
+    && process.env?.NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE) || '';
+}
+
+/**
  * Palette groups — match the Fabric / ADF "Activities" sidebar exactly:
  *   - Move & transform : Copy data, Dataflow Gen2, Mapping data flow, Lookup,
  *                        Get metadata, Delete
@@ -220,6 +233,91 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       name, type: 'SqlServerStoredProcedure', dependsOn: [],
       typeProperties: { storedProcedureName: '', storedProcedureParameters: {} },
       linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
+    }),
+  },
+
+  // ---------- HDInsight family (F17) ----------
+  // ADF natively supports all four HDInsight activity types at api-version
+  // 2018-06-01 (the version adf-client.ts targets), so they save, validate,
+  // and run end-to-end against the deployed factory. Each activity carries a
+  // top-level `linkedServiceName` referencing an AzureHDInsight linked
+  // service (the cluster). hdiCluster() pre-fills that reference from
+  // NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE; when it is unset
+  // activity-forms.tsx renders an honest MessageBar gate naming
+  // LOOM_HDINSIGHT_LINKED_SERVICE. No Fabric dependency — pure ADF + an
+  // operator-registered Azure HDInsight cluster.
+  {
+    key: 'HDInsightHive', label: 'HDInsight Hive',
+    description: 'Execute a Hive query (.hql) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightHive', namePrefix: 'HiveActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightHive', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        scriptLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        scriptPath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
+    }),
+  },
+  {
+    key: 'HDInsightSpark', label: 'HDInsight Spark',
+    description: 'Run a Spark program (.py or .jar) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightSpark', namePrefix: 'SparkActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightSpark', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        sparkJobLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        rootPath: '',
+        entryFilePath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+      },
+    }),
+  },
+  {
+    key: 'HDInsightMapReduce', label: 'HDInsight MapReduce',
+    description: 'Run a MapReduce JAR on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightMapReduce', namePrefix: 'MapReduceActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightMapReduce', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        className: '',
+        jarLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        jarFilePath: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
+    }),
+  },
+  {
+    key: 'HDInsightStreaming', label: 'HDInsight Streaming',
+    description: 'Execute a Hadoop Streaming job (mapper + reducer) on an HDInsight cluster.',
+    category: 'orchestration', type: 'HDInsightStreaming', namePrefix: 'StreamingActivity',
+    color: '#c05c1f', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'HDInsightStreaming', dependsOn: [],
+      linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        mapper: '',
+        reducer: '',
+        combiner: '',
+        fileLinkedService: { referenceName: '', type: 'LinkedServiceReference' },
+        filePaths: [],
+        input: '',
+        output: '',
+        getDebugInfo: 'Failure',
+        arguments: [],
+        defines: {},
+      },
     }),
   },
 
