@@ -206,6 +206,9 @@ param loomEventHubRg string = ''
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
 
+@description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
+param loomExtraSubscriptions string = ''
+
 @description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
 param loomAlertRg string = ''
 
@@ -799,6 +802,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // RTI hub catalog (/rti-hub -> GET /api/rti-hub) - additional
+            // subscription ids (comma-separated) to include in the Azure
+            // Resource Graph stream discovery alongside LOOM_SUBSCRIPTION_ID.
+            // Empty = discover the deployment subscription only. The Console
+            // UAMI needs Reader at each subscription's scope (granted at sub
+            // scope in platform/fiab/bicep/main.bicep).
+            { name: 'LOOM_EXTRA_SUBSCRIPTIONS', value: loomExtraSubscriptions }
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these
