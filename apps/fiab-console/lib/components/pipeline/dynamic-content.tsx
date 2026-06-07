@@ -20,14 +20,19 @@ import {
   Button, Input, Textarea, Field, Caption1, Body1Strong,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   SearchBox, Accordion, AccordionItem, AccordionHeader, AccordionPanel,
+  Spinner, MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Flash20Regular, Code16Regular } from '@fluentui/react-icons';
+import { Flash20Regular, Code16Regular, Play20Regular } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   EXPRESSION_CATEGORIES, SYSTEM_VARIABLES, allFunctionNames,
   type ExprFunction,
 } from './expression-functions';
+import {
+  detectSampleInputs, evaluateExpression,
+  type EvalContext, type EvalResult,
+} from './evaluate-expression';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
@@ -53,6 +58,26 @@ const useStyles = makeStyles({
   },
   itemName: { fontFamily: 'Consolas, monospace', fontSize: '12px', color: tokens.colorNeutralForeground1 },
   itemDesc: { color: tokens.colorNeutralForeground3, fontSize: '11px' },
+  sampleSection: {
+    display: 'flex', flexDirection: 'column', gap: '6px',
+    padding: '8px',
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+  },
+  evalPanel: {
+    display: 'flex', flexDirection: 'column', gap: '4px',
+    padding: '8px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+  },
+  evalResult: {
+    fontFamily: 'Consolas, monospace', fontSize: '11px',
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    margin: 0, maxHeight: '160px', overflow: 'auto',
+  },
 });
 
 export interface ExpressionFieldProps {
@@ -72,6 +97,10 @@ export interface ExpressionFieldProps {
   /** Exclude the current activity from the activity-output list. */
   selfName?: string;
   disabled?: boolean;
+  /** Pipeline item id — lets Evaluate pre-fill sample values from the last run. */
+  pipelineId?: string;
+  /** Workspace id — used by the Evaluate pre-fill API call. */
+  workspaceId?: string;
 }
 
 function isExpression(v: string): boolean {
@@ -81,15 +110,21 @@ function isExpression(v: string): boolean {
 export function ExpressionField({
   label, hint, value, onChange, placeholder, multiline, required,
   parameters = [], variables = [], activities = [], selfName, disabled,
+  pipelineId, workspaceId,
 }: ExpressionFieldProps) {
   const s = useStyles();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [search, setSearch] = useState('');
+  const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
+  const [evalBusy, setEvalBusy] = useState(false);
+  const [sampleValues, setSampleValues] = useState<Record<string, string>>({});
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
 
-  const openBuilder = useCallback(() => { setDraft(value || ''); setSearch(''); setOpen(true); }, [value]);
+  const openBuilder = useCallback(() => {
+    setDraft(value || ''); setSearch(''); setEvalResult(null); setOpen(true);
+  }, [value]);
 
   // Insert a token at the cursor (or append) in the Monaco draft.
   const insertToken = useCallback((token: string) => {
@@ -146,6 +181,79 @@ export function ExpressionField({
   }, []);
 
   const commit = useCallback(() => { onChange(draft); setOpen(false); }, [draft, onChange]);
+
+  // Which run-time-only tokens in the draft need a manual sample value.
+  const sampleInputs = useMemo(
+    () => detectSampleInputs(draft, parameters.map((p) => p.name), variables.map((v) => v.name)),
+    [draft, parameters, variables],
+  );
+
+  // Evaluate the draft expression. Client-side resolver for params / vars /
+  // functions / system vars; optionally pre-fills activity outputs + run
+  // system vars from the LAST real ADF run via the /evaluate route.
+  const handleEvaluate = useCallback(async () => {
+    setEvalBusy(true);
+    setEvalResult(null);
+
+    const paramCtx: Record<string, unknown> = {};
+    for (const p of parameters) {
+      paramCtx[p.name] = sampleValues[`param__${p.name}`] !== undefined
+        ? sampleValues[`param__${p.name}`] : p.defaultValue;
+    }
+    const varCtx: Record<string, unknown> = {};
+    for (const v of variables) {
+      varCtx[v.name] = sampleValues[`var__${v.name}`] !== undefined
+        ? sampleValues[`var__${v.name}`] : v.defaultValue;
+    }
+    // Unknown params/vars detected in the expression (not on the pipeline).
+    for (const si of sampleInputs) {
+      const raw = sampleValues[si.key];
+      if (raw === undefined) continue;
+      if (si.kind === 'parameter') paramCtx[si.name] = raw;
+      if (si.kind === 'variable') varCtx[si.name] = raw;
+    }
+
+    const actCtx: Record<string, unknown> = {};
+    for (const si of sampleInputs) {
+      if (si.kind !== 'activityOutput') continue;
+      const raw = sampleValues[si.key];
+      if (raw === undefined || raw === '') continue;
+      try { actCtx[si.name] = JSON.parse(raw); } catch { actCtx[si.name] = raw; }
+    }
+
+    const sysVarsCtx: EvalContext['systemVars'] = {};
+    for (const f of ['RunId', 'Pipeline', 'DataFactory', 'TriggerTime', 'TriggerName', 'TriggerId', 'TriggerType', 'GroupId'] as const) {
+      const raw = sampleValues[`sysvar__${f}`];
+      if (raw) sysVarsCtx[f] = raw;
+    }
+
+    // Optional enhancement: pull the last real run's outputs to fill any blanks.
+    if (pipelineId && workspaceId) {
+      try {
+        const r = await fetch(
+          `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/evaluate?workspaceId=${encodeURIComponent(workspaceId)}`,
+          { method: 'POST' },
+        );
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok && j.suggestedSampleValues) {
+          const { activityOutputs = {}, systemVars = {} } = j.suggestedSampleValues;
+          for (const [name, output] of Object.entries(activityOutputs)) {
+            if (actCtx[name] === undefined && !sampleValues[`activity__${name}__output`]) actCtx[name] = output;
+          }
+          for (const [k, v] of Object.entries(systemVars)) {
+            if (!sysVarsCtx[k as keyof typeof sysVarsCtx]) (sysVarsCtx as any)[k] = v;
+          }
+        }
+      } catch { /* network error — fall through to user-provided values only */ }
+    }
+
+    const ctx: EvalContext = {
+      parameters: paramCtx, variables: varCtx, systemVars: sysVarsCtx, activityOutputs: actCtx,
+    };
+    setEvalResult(evaluateExpression(draft, ctx));
+    setEvalBusy(false);
+  }, [draft, parameters, variables, sampleInputs, sampleValues, pipelineId, workspaceId]);
+
 
   // Filtered palette sections.
   const q = search.trim().toLowerCase();
@@ -284,11 +392,57 @@ export function ExpressionField({
                     ariaLabel="Expression editor"
                   />
                   <Caption1 className={s.exprPreview}>{draft || '(empty)'}</Caption1>
+
+                  {sampleInputs.length > 0 && (
+                    <div className={s.sampleSection}>
+                      <Caption1><strong>Sample values</strong> — provide values for run-time-only tokens (Fabric F9 parity).</Caption1>
+                      {sampleInputs.map((si) => (
+                        <Field key={si.key} label={si.label} size="small">
+                          <Input
+                            size="small"
+                            value={sampleValues[si.key] ?? ''}
+                            placeholder={si.kind === 'activityOutput' ? '{"rowsCopied": 42}' : '(sample value)'}
+                            onChange={(_, d) => setSampleValues((prev) => ({ ...prev, [si.key]: d.value }))}
+                          />
+                        </Field>
+                      ))}
+                    </div>
+                  )}
+
+                  {evalResult && (
+                    <div className={s.evalPanel}>
+                      {evalResult.error ? (
+                        <MessageBar intent="error">
+                          <MessageBarBody>Could not evaluate: {evalResult.error}</MessageBarBody>
+                        </MessageBar>
+                      ) : (
+                        <>
+                          <Caption1><strong>Result</strong></Caption1>
+                          <pre className={s.evalResult}>{evalResult.valueStr}</pre>
+                          {evalResult.unresolvedTokens.length > 0 && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>
+                                No value supplied for: {evalResult.unresolvedTokens.join(', ')}. Enter sample values above and Evaluate again.
+                              </MessageBarBody>
+                            </MessageBar>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button
+                appearance="secondary"
+                icon={evalBusy ? <Spinner size="tiny" /> : <Play20Regular />}
+                disabled={evalBusy || !draft.trim()}
+                onClick={handleEvaluate}
+              >
+                Evaluate
+              </Button>
               <Button appearance="primary" onClick={commit}>OK</Button>
             </DialogActions>
           </DialogBody>

@@ -27,13 +27,14 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 18 | **New semantic model** (DirectLake over Delta) | Home ribbon |
 | 19 | **Share** the lakehouse | Home ribbon → Share |
 | 20 | **Reference (secondary) lakehouse** is read-only — write commands gray out | Explorer "Add lakehouses" |
+| 21 | **Reference / add another lakehouse** to the explorer for read-only side-by-side browse + preview; primary distinguished; writes blocked on references | Lakehouse explorer "Add lakehouse" (reference lakehouses) |
 
 ## Loom coverage
 
 | # | Status | Notes |
 |---|---|---|
-| 1 | ✅ | Tables + Files tabs/tree rendered |
-| 2 | ✅ | ADLS Gen2 tree via lakehouse API |
+| 1 | ✅ | Tables + Files tabs/tree rendered. The **Tables** tree is the live Delta catalog (real `_delta_log` scan), grouped by schema, with Delta/non-Delta icons and broken/empty status badges. |
+| 2 | ✅ | ADLS Gen2 tree via lakehouse API. Tables tab additionally renders a per-schema grid: format, status (ok/broken/empty), Delta version, row count, size, last-modified — all from the live scan. |
 | 3 | ✅ | New folder + upload wired (`canFileAction`) |
 | 4 | ✅ | `preview` tab — sample rows |
 | 5 | ✅ | `Query this file` → SQL tab, runs through serverless `/query` |
@@ -52,9 +53,11 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 18 | ⚠️ (honest-gate) | `New semantic model` opens a `MessageBar intent="warning"` dialog: Fabric DirectLake needs a Power BI/Fabric capacity (no Azure-native 1:1), documents the Synapse-Serverless + Power BI Desktop path, and offers an in-app "Open SQL endpoint" action. Strictly opt-in via `LOOM_LAKEHOUSE_BACKEND=fabric`; never gates the default Azure-native lakehouse. |
 | 19 | ✅ (built) | `Share` dialog grants Entra principals container-scope RBAC via the existing `/api/lakehouse/permissions` POST (Storage Blob Data Reader/Contributor/Owner). Real ARM role assignment — no Fabric/Power BI workspace. |
 | 20 | ✅ (built) | `isReferenceLakehouse = state.isReference === true` drives `writeBlocked`; Refresh, Get data, Settings disable with a "Read-only — reference lakehouse" tooltip. Analyze data, Preview, Query, Permissions, Share (read/admin) stay enabled, matching Fabric. |
+| 21 | ✅ (built) | **Reference Lakehouses federation (F8).** Left explorer shows the **primary lakehouse (bold)** plus a **References** section; the **+** picker lists in-workspace lakehouses (from Cosmos `items`) and adds them via `/api/lakehouse/references` (persisted on `state.referencedLakehouseIds` — no new container). Each reference is an expandable tree node (containers → real ADLS files via the **read-only** `/api/lakehouse/references/paths` route). Selecting a reference file runs a real OPENROWSET preview through the account-scoped `/api/lakehouse/preview?...&account=` route (pass-through RBAC). **Write actions (Upload / New folder / Delete) render disabled with a Tooltip** in the reference pane — there is no write BFF route for references, so the disable is enforced, not cosmetic. Unreachable references (UAMI lacks Storage Blob Data Reader) show an error icon + the exact remediation tooltip. Zero Fabric dependency — same-account refs use the primary LOOM ADLS account; cross-account refs use the lakehouse's `state.storageAccount`. |
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
+- **Live Tables catalog** → `GET /api/lakehouse/tables` → `synapse-catalog-client.scanLakehouseTables`: ADLS Gen2 directory scan of each container's `Tables/` dir + `_delta_log` read for Delta detection / latest commit version / status, parquet-byte size aggregation, and optional Synapse Serverless `OPENROWSET COUNT(*)` row counts (`rowCounts=true`). Row counts are `null` — never a fabricated 0 — when Serverless is offline. No Fabric / OneLake dependency. Requires the Console UAMI hold **Storage Blob Data Reader** on the lakehouse storage account (granted by `synapse-storage-rbac.bicep` via the `consolePrincipalId` param). Honest-empty `{ ok: true, tables: [], gate }` when no `LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL` is set.
 - T-SQL query → Synapse serverless TDS (`executeQuery` / `serverlessTarget`) via `/api/items/lakehouse/[id]/query`.
 - Download → ADLS `readToBuffer` (`downloadFile`) via `/api/lakehouse/download`.
 - Context-menu commands → reuse the above backends (no separate / dead paths).
@@ -63,5 +66,6 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 - Get data / Analyze data menus → client-side `router.push` to existing item editors (`/items/dataflow|data-pipeline|notebook|copy-job/new`) + tab switches (`setTab('sql'|'shortcuts')`); upload/shortcut reuse the existing ADLS/wizard handlers. No new BFF route.
 - Share → existing `/api/lakehouse/permissions` POST (ARM `Microsoft.Authorization/roleAssignments` at the container scope) — same backend the Permissions dialog uses.
 - New semantic model → no backend (intentional honest-gate). DirectLake is Fabric-capacity-only and strictly opt-in; the dialog points to the Synapse-Serverless + Power BI Desktop Azure-native path.
+- Reference Lakehouses (F8) → `/api/lakehouse/references` (GET list + workspace picker, POST add/remove) over Cosmos `items` (`state.referencedLakehouseIds`, validated to the same workspace to prevent reference-injection); `/api/lakehouse/references/paths` (GET only — read-only ADLS `listPaths` with optional `state.storageAccount`); read-only preview via `/api/lakehouse/preview?...&account=` (account-scoped OPENROWSET, validated `^[a-z0-9]{3,24}$`). Cross-account references require the Console UAMI to hold **Storage Blob Data Reader** on the referenced storage account — see `docs/fiab/v3-tenant-bootstrap.md#reference-lakehouse-cross-account-rbac`. Same-account references work out of the box (the UAMI already holds Storage Blob Data Contributor on the primary LOOM ADLS account).
 
 Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**

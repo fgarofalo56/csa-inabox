@@ -33,11 +33,29 @@ export interface SynapseTarget {
   cacheKey: string;
 }
 
+/**
+ * Cloud-aware Synapse SQL endpoint domain suffix.
+ *   - Commercial + GCC (AZURE_CLOUD=AzureCloud / unset): sql.azuresynapse.net
+ *   - GCC-High + IL5 (AZURE_CLOUD=AzureUSGovernment):     sql.azuresynapse.usgovcloudapi.net
+ *
+ * AZURE_CLOUD is set per-boundary by admin-plane/main.bicep, mirroring the
+ * privatelink DNS zone suffix that network.bicep provisions, so the serverless
+ * FQDN resolves through the right private endpoint in every sovereign cloud.
+ * Grounded in the Azure Government endpoint mapping:
+ *   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
+ */
+export function getSynapseSqlSuffix(): string {
+  return process.env.AZURE_CLOUD === 'AzureUSGovernment'
+    ? 'sql.azuresynapse.usgovcloudapi.net'
+    : 'sql.azuresynapse.net';
+}
+
 export function dedicatedTarget(): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
+  const suffix = getSynapseSqlSuffix();
   return {
-    server: `${ws}.sql.azuresynapse.net`,
+    server: `${ws}.${suffix}`,
     database: pool,
     cacheKey: `dedicated:${ws}:${pool}`,
   };
@@ -45,8 +63,9 @@ export function dedicatedTarget(): SynapseTarget {
 
 export function serverlessTarget(database = 'master'): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
+  const suffix = getSynapseSqlSuffix();
   return {
-    server: `${ws}-ondemand.sql.azuresynapse.net`,
+    server: `${ws}-ondemand.${suffix}`,
     database,
     cacheKey: `serverless:${ws}:${database}`,
   };
