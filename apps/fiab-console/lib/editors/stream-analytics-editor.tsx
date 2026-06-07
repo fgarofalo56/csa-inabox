@@ -35,6 +35,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { MetricChart } from '@/lib/components/monitor/metric-chart';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
 // can reference inline setState / save / loadList / setTab state.)
@@ -71,6 +72,26 @@ interface AsaInput { name: string; type: string; serialization?: string; }
 interface AsaOutput { name: string; type: string; }
 interface AsaFunction { name: string; type?: string; binding?: string; }
 
+interface AsaMetricSeries {
+  name: string;
+  unit?: string;
+  aggregation?: string;
+  points: { timeStamp: string; value: number | null }[];
+}
+
+// REST metric name → display label + tile unit. Mirrors the Azure Monitor
+// supported-metrics catalog for Microsoft.StreamAnalytics/streamingjobs and
+// the METRIC_CATALOG entry in monitor-client.ts.
+const METRIC_META: Record<string, { label: string; unit: string }> = {
+  ResourceUtilization: { label: 'SU % Utilization', unit: '%' },
+  OutputWatermarkDelaySeconds: { label: 'Watermark Delay', unit: 's' },
+  InputEventsSourcesBacklogged: { label: 'Backlogged Events', unit: '' },
+  InputEvents: { label: 'Input Events', unit: '' },
+  OutputEvents: { label: 'Output Events', unit: '' },
+};
+function metricLabel(name: string) { return METRIC_META[name]?.label || name; }
+function metricUnit(name: string) { return METRIC_META[name]?.unit ?? ''; }
+
 const STARTER_QUERY = `-- Stream Analytics Query (SAQL — SQL-like over time-windowed streams)
 -- Tumbling-window average per device, every 30 seconds.
 
@@ -97,6 +118,9 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<AsaMetricSeries[] | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
   // Track dirty state via ref so async loadDetail callbacks (triggered by
   // refresh / setState polling) don't clobber user edits made between the
   // request firing and the response arriving. Mirrors the notebook patchCell
@@ -139,6 +163,8 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   // When switching jobs, force-load (user expects buffer to reset to that
   // job's persisted query). On other refreshes we respect dirty edits.
   useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
+  // Auto-load live metrics when the Monitoring tab is opened for a job.
+  useEffect(() => { if (tab === 'monitoring' && selected) loadMetrics(selected); }, [tab, selected, loadMetrics]);
 
   const save = useCallback(async () => {
     if (!selected) return;
@@ -161,6 +187,42 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     } finally { setBusy(false); }
   }, [selected, query]);
 
+  const loadMetrics = useCallback(async (name: string) => {
+    if (!name) return;
+    setMetricsLoading(true); setMetricsError(null);
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(name)}/metrics`);
+      const j = await r.json();
+      if (!j.ok) { setMetricsError(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'Failed to load metrics')); setMetrics(null); return; }
+      setMetrics(j.metrics || []);
+    } catch (e: any) { setMetricsError(e?.message || String(e)); setMetrics(null); }
+    finally { setMetricsLoading(false); }
+  }, []);
+
+  // ASA start/stop is async on the ARM side — the POST returns 202 immediately
+  // but the job state transitions over 60–180s. Poll getJob until it reaches
+  // the target state (or we exhaust attempts), updating the status receipt and
+  // the live metric tiles as it lands. Mirrors the Azure portal "Starting…"
+  // → "Running" transition.
+  const pollJobState = useCallback(async (name: string, target: RegExp, maxAttempts = 24) => {
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((res) => setTimeout(res, 8000)); // 8s between polls
+      try {
+        const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(name)}`);
+        const j = await r.json();
+        if (!j.ok) return;
+        setJob(j.job);
+        const st = j.job?.jobState || j.job?.state || '';
+        if (target.test(st)) {
+          setStatus(`Job is now ${st} at ${new Date().toLocaleTimeString()}`);
+          // Refresh tiles once the job is Running so real SU%/backlog appear.
+          if (/Running|Started/i.test(st)) loadMetrics(name);
+          return;
+        }
+      } catch { /* transient; keep polling */ }
+    }
+  }, [loadMetrics]);
+
   const setState = useCallback(async (action: 'start' | 'stop') => {
     if (!selected) return;
     setBusy(true); setStatus(null); setError(null);
@@ -170,11 +232,14 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
         body: JSON.stringify({ action }),
       });
       const j = await r.json();
-      if (!j.ok) { setError(j.error || `${action} failed`); return; }
-      setStatus(`${action === 'start' ? 'Starting' : 'Stopping'}…`);
-      setTimeout(() => loadDetail(selected), 3000);
+      if (!j.ok) { setError(j.error || `${action} failed`); setHint(j.hint || null); return; }
+      setStatus(`${action === 'start' ? 'Starting' : 'Stopping'}… (ARM accepted; polling for state)`);
+      // Reflect the transitional state immediately, then poll to the target.
+      await loadDetail(selected);
+      const target = action === 'start' ? /Running|Started/i : /Stopped/i;
+      void pollJobState(selected, target);
     } finally { setBusy(false); }
-  }, [selected, loadDetail]);
+  }, [selected, loadDetail, pollJobState]);
 
   const dirty = query !== origQuery;
   // Keep ref in sync so async callbacks see the latest dirty state.
@@ -193,9 +258,12 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   }, [selected, dirty, busy, save]);
 
   const jobState = job?.jobState || job?.state || '—';
+  // ASA's running state is reported as "Running" (older API flavors say
+  // "Started"); accept both so the badge turns green and Start disables.
+  const isRunning = /Running|Started/i.test(jobState);
   const stateColor: 'success' | 'warning' | 'danger' | 'subtle' =
-    /Started/i.test(jobState) ? 'success' :
-    /Starting|Stopping/i.test(jobState) ? 'warning' :
+    isRunning ? 'success' :
+    /Starting|Stopping|Restarting|Scaling/i.test(jobState) ? 'warning' :
     /Failed|Degraded/i.test(jobState) ? 'danger' : 'subtle';
 
   // Ribbon — Start / Stop / Refresh / Save wire to inline handlers; topology
@@ -203,7 +271,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Job', actions: [
-        { label: 'Start', onClick: !busy && selected && !/Started/i.test(jobState) ? () => setState('start') : undefined, disabled: busy || !selected || /Started/i.test(jobState), title: /Started/i.test(jobState) ? 'Job already started' : (!selected ? 'Select a job first' : undefined) },
+        { label: 'Start', onClick: !busy && selected && !isRunning ? () => setState('start') : undefined, disabled: busy || !selected || isRunning, title: isRunning ? 'Job already running' : (!selected ? 'Select a job first' : undefined) },
         { label: 'Stop', onClick: !busy && selected && !/Stopped/i.test(jobState) ? () => setState('stop') : undefined, disabled: busy || !selected || /Stopped/i.test(jobState), title: /Stopped/i.test(jobState) ? 'Job already stopped' : (!selected ? 'Select a job first' : undefined) },
         { label: 'Refresh', onClick: () => { loadList(); if (selected) loadDetail(selected); } },
       ]},
@@ -217,7 +285,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
         { label: 'Functions', onClick: () => setTab('functions') },
       ]},
     ]},
-  ], [busy, selected, jobState, setState, loadList, loadDetail, dirty, save]);
+  ], [busy, selected, jobState, isRunning, setState, loadList, loadDetail, dirty, save]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -241,7 +309,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
             {job && <Badge appearance="filled" color={stateColor}>{jobState}</Badge>}
             {job?.streamingUnits != null && <Badge appearance="outline">{job.streamingUnits} SU</Badge>}
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { loadList(); if (selected) loadDetail(selected); }}>Refresh</Button>
-            <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || /Started/i.test(jobState)} onClick={() => setState('start')}>Start</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || isRunning} onClick={() => setState('start')}>Start</Button>
             <Button appearance="outline" icon={<Pause20Regular />} disabled={busy || !selected || /Stopped/i.test(jobState)} onClick={() => setState('stop')}>Stop</Button>
             <Button appearance="outline" icon={<Save20Regular />} disabled={busy || !selected || !dirty} onClick={save}>{busy ? 'Saving…' : 'Save query'}</Button>
           </div>
@@ -323,12 +391,47 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'monitoring' && (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <Subtitle2>Job summary</Subtitle2>
-              <Caption1 style={{ display: 'block', marginTop: 4 }}>State: <strong>{jobState}</strong></Caption1>
-              <Caption1 style={{ display: 'block' }}>Last output event time: {job?.lastOutputEventTime || '—'}</Caption1>
-              <Caption1 style={{ display: 'block' }}>SKU: {job?.sku || '—'}</Caption1>
-              <Caption1 style={{ display: 'block' }}>Streaming Units: {job?.streamingUnits ?? '—'}</Caption1>
+              <div>
+                <Caption1 style={{ display: 'block', marginTop: 4 }}>State: <strong>{jobState}</strong></Caption1>
+                <Caption1 style={{ display: 'block' }}>Last output event time: {job?.lastOutputEventTime || '—'}</Caption1>
+                <Caption1 style={{ display: 'block' }}>SKU: {job?.sku || '—'}</Caption1>
+                <Caption1 style={{ display: 'block' }}>Streaming Units: {job?.streamingUnits ?? '—'}</Caption1>
+              </div>
+
+              {!/Running|Started/i.test(jobState) && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    Azure Monitor only emits Stream Analytics metrics while the job is in the
+                    Running state. Start the job to see live SU %, watermark delay, and event counts.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Subtitle2>Live metrics (last 1 hour, 5-minute grain)</Subtitle2>
+                <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
+                  onClick={() => loadMetrics(selected)} disabled={metricsLoading || !selected}>
+                  {metricsLoading ? 'Loading…' : 'Refresh'}
+                </Button>
+              </div>
+
+              {metricsError && (
+                <MessageBar intent="error"><MessageBarBody>{metricsError}</MessageBarBody></MessageBar>
+              )}
+              {metricsLoading && !metrics && <Spinner size="tiny" label="Loading metrics…" />}
+
+              {metrics && metrics.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+                  {metrics.map((m) => (
+                    <MetricChart key={m.name} title={metricLabel(m.name)} unit={metricUnit(m.name) || m.unit} points={m.points} />
+                  ))}
+                </div>
+              )}
+              {metrics && metrics.length === 0 && !metricsError && (
+                <Caption1>No metric series returned for this job in the selected window.</Caption1>
+              )}
             </div>
           )}
         </div>
