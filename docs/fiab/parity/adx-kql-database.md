@@ -87,6 +87,7 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Tables** — drop | ✅ | `DELETE /api/adx/tables?name=` → `.drop table T ifexists` |
 | **Functions** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/functions` → `.show functions` / `.create-or-alter function NAME(args){body}` / `.drop function` |
 | **Materialized views** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/materialized-views` → `.show materialized-views` / `.create materialized-view NAME on table SRC {query}` / `.drop materialized-view` |
+| **Materialized views** — backfill on create | ✅ | Backfill toggle in the create wizard → `POST .../materialized-views {backfill:true}` → `.create async materialized-view with (backfill=true) NAME on table SRC {query}`; receipt notes the async operation. Source-table picker + monaco-kusto KQL body in the KqlDatabaseEditor ribbon wizard. |
 | **Ingestion mappings** — list / count / drop | ✅ | `GET/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.drop <table\|database> … ingestion <kind> mapping "N"` |
 | **Ingestion mappings** — New **mapping wizard** (format + auto-detect grid) | ✅ | Two-step `IngestionMappingWizardDialog` (`ingestion-mapping-wizard.tsx`): format selector (CSV/TSV/PSV/JSON/Parquet/Avro/ORC), upload a sample file → client-side `detectSchema` populates a source→column→datatype grid (Ordinal for tabular, `$.path` for JSON/ORC/Parquet, Field for Avro), `POST /api/adx/ingestion-mappings` → `.create-or-alter table T ingestion <kind> mapping "N" 'json'`. On create, injects a `.show table T ingestion mappings` + test-`.ingest` snippet into the editor. Wire format grounded in Learn (`kusto/management/mappings`) |
 | **Get data** — ingest a file with format + mapping reference | ✅ | KQL-database ribbon **Data → Get data** wizard: format selector + optional `ingestionMappingReference`; small text files (≤5 MB) → real `.ingest inline into table T with (format=…, ingestionMappingReference=…)`; Parquet/Avro/ORC → generates the real `.ingest into … from @'blob'` command template (inline unsupported for binary) |
@@ -120,7 +121,7 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
 | Function create | `POST /api/adx/functions` | `createFunction` | `.create-or-alter function … N(args){body}` |
 | Function drop | `DELETE /api/adx/functions` | `dropFunction` | `.drop function N ifexists` |
 | MViews list | `GET /api/adx/materialized-views` | `listMaterializedViews` | `.show materialized-views` |
-| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create materialized-view N on table ["SRC"] {query}` |
+| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create [async] materialized-view [with (backfill=true)] N on table ["SRC"] {query}` |
 | MView drop | `DELETE /api/adx/materialized-views` | `dropMaterializedView` | `.drop materialized-view N ifexists` |
 | Mappings list | `GET /api/adx/ingestion-mappings` | `listIngestionMappings` | `.show ingestion mappings` |
 | Mapping create | `POST /api/adx/ingestion-mappings` | `createIngestionMapping` | `.create-or-alter table ["T"] ingestion <kind> mapping "N" 'json'` |

@@ -10,15 +10,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   loadKustoItem, saveItemState, resolveDatabase, defaultDatabase, KustoError,
+  laConfigGate, laProxyClusterUri, laWorkspaceName,
 } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type QuerySourceType = 'adx' | 'log-analytics' | 'app-insights';
+const SOURCE_TYPES: QuerySourceType[] = ['adx', 'log-analytics', 'app-insights'];
+
 interface SavedQuery {
   title: string;
   kql: string;
   database?: string;
+  /** Cross-service source binding. Absent / 'adx' → native ADX. */
+  sourceType?: QuerySourceType;
 }
 
 function sanitizeQueries(input: any): SavedQuery[] {
@@ -28,6 +34,9 @@ function sanitizeQueries(input: any): SavedQuery[] {
       title: String(q?.title || 'Untitled').slice(0, 200),
       kql: String(q?.kql || ''),
       database: q?.database ? String(q.database) : undefined,
+      sourceType: SOURCE_TYPES.includes(q?.sourceType) && q.sourceType !== 'adx'
+        ? (q.sourceType as QuerySourceType)
+        : undefined,
     }))
     .filter((q) => q.kql.length > 0 && q.kql.length <= 65_536)
     .slice(0, 200);
@@ -55,6 +64,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
           title: String(q?.name || q?.title || 'Query'),
           kql: String(q?.kql || ''),
           database: q?.database ? String(q.database) : undefined,
+          sourceType: SOURCE_TYPES.includes(q?.sourceType) && q.sourceType !== 'adx'
+            ? (q.sourceType as QuerySourceType)
+            : undefined,
         }))
         .filter((q: SavedQuery) => q.kql.length > 0);
     }
@@ -64,6 +76,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       database: resolveDatabase(item),
       defaultDatabase: defaultDatabase(),
       queries,
+      // Cross-service source binder — the editor uses these to render the
+      // honest gate and auto-populate the cluster() proxy KQL snippet without
+      // a second round-trip.
+      laGate: laConfigGate(),
+      laProxyUri: laProxyClusterUri(),
+      laWorkspaceName: laWorkspaceName(),
     });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
