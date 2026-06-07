@@ -57,9 +57,9 @@ For the ADX web UI / Fabric KQL database schema tree, each object type exposes a
 | # | ADX/Fabric object | Capabilities in the real UI |
 |---|-------------------|------------------------------|
 | 1 | **Tables** | list w/ count + row count + size, New (column schema builder / `.create table`), open (take 100), drop, table schema |
-| 2 | **Functions** | list w/ count, New (args + body / `.create-or-alter function`), open (invoke), drop |
+| 2 | **Functions** | list w/ count, New + **Edit** (params grid `name:type` + KQL body / `.create-or-alter function`), open (invoke), drop |
 | 3 | **Materialized views** | list w/ count, New (source table + aggregation query / `.create materialized-view`), open, drop |
-| 4 | **Ingestion mappings** | list w/ count (csv/json/avro/parquet/orc/w3clogfile), New (`.create-or-alter … mapping`), drop |
+| 4 | **Ingestion mappings** | list w/ count (csv/tsv/psv/json/avro/parquet/orc), **New mapping wizard** (format selector + sample-file schema auto-detect + source→column→datatype grid / `.create-or-alter … mapping`), drop |
 | 5 | **Database schema** | view the flat schema (`.show database schema [as json]`) |
 | 6 | **Continuous export** | list jobs (`.show continuous-exports`), create over an external table, enable/disable, drop |
 | 7 | **Update policies** | per-table transform-on-ingest (`.alter table T policy update`) |
@@ -85,9 +85,12 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Tables** — New (schema builder textarea) | ✅ | `POST /api/adx/tables` → `.create table T (col:type, …)` |
 | **Tables** — open (take 100) | ✅ | row click loads `["T"] \| take 100` into the editor |
 | **Tables** — drop | ✅ | `DELETE /api/adx/tables?name=` → `.drop table T ifexists` |
-| **Functions** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/functions` → `.show functions` / `.create-or-alter function NAME(args){body}` / `.drop function` |
+| **Functions** — list / count / open / **create + edit + drop** | ✅ | structured stored-function editor (name field, **params grid** `name:type` with a typed dropdown, **Monaco KQL body**, save + delete, success receipt) owned by `KqlDatabaseEditor`, opened from the ribbon (New → Function) and the navigator's per-row **Edit** action. `GET/POST/DELETE /api/adx/functions` → `.show functions` (Body surfaced for edit) / `.create-or-alter function NAME(args){body}` / `.drop function` |
 | **Materialized views** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/materialized-views` → `.show materialized-views` / `.create materialized-view NAME on table SRC {query}` / `.drop materialized-view` |
-| **Ingestion mappings** — list / count / create / drop | ✅ | `GET/POST/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.create-or-alter table T ingestion <kind> mapping "N" 'json'` / `.drop <table\|database> … ingestion <kind> mapping "N"` |
+| **Materialized views** — backfill on create | ✅ | Backfill toggle in the create wizard → `POST .../materialized-views {backfill:true}` → `.create async materialized-view with (backfill=true) NAME on table SRC {query}`; receipt notes the async operation. Source-table picker + monaco-kusto KQL body in the KqlDatabaseEditor ribbon wizard. |
+| **Ingestion mappings** — list / count / drop | ✅ | `GET/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.drop <table\|database> … ingestion <kind> mapping "N"` |
+| **Ingestion mappings** — New **mapping wizard** (format + auto-detect grid) | ✅ | Two-step `IngestionMappingWizardDialog` (`ingestion-mapping-wizard.tsx`): format selector (CSV/TSV/PSV/JSON/Parquet/Avro/ORC), upload a sample file → client-side `detectSchema` populates a source→column→datatype grid (Ordinal for tabular, `$.path` for JSON/ORC/Parquet, Field for Avro), `POST /api/adx/ingestion-mappings` → `.create-or-alter table T ingestion <kind> mapping "N" 'json'`. On create, injects a `.show table T ingestion mappings` + test-`.ingest` snippet into the editor. Wire format grounded in Learn (`kusto/management/mappings`) |
+| **Get data** — ingest a file with format + mapping reference | ✅ | KQL-database ribbon **Data → Get data** wizard: format selector + optional `ingestionMappingReference`; small text files (≤5 MB) → real `.ingest inline into table T with (format=…, ingestionMappingReference=…)`; Parquet/Avro/ORC → generates the real `.ingest into … from @'blob'` command template (inline unsupported for binary) |
 | **Database schema** — show full schema | ✅ | branch row loads `.show database schema` into the editor; `GET /api/adx/overview` also returns `.show database schema as json` |
 | **Continuous export** — list (read-only) | ✅ | `GET /api/adx/overview` → `.show continuous-exports`; status badge (running/disabled/last-result) |
 | **Continuous export** — create / enable / disable / drop | ⚠️ | honest "coming" row — authoring needs an external table + Database Admin (`.create-or-alter continuous-export over (T) to ExternalTable <\| query`); listed read-only above |
@@ -118,7 +121,7 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
 | Function create | `POST /api/adx/functions` | `createFunction` | `.create-or-alter function … N(args){body}` |
 | Function drop | `DELETE /api/adx/functions` | `dropFunction` | `.drop function N ifexists` |
 | MViews list | `GET /api/adx/materialized-views` | `listMaterializedViews` | `.show materialized-views` |
-| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create materialized-view N on table ["SRC"] {query}` |
+| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create [async] materialized-view [with (backfill=true)] N on table ["SRC"] {query}` |
 | MView drop | `DELETE /api/adx/materialized-views` | `dropMaterializedView` | `.drop materialized-view N ifexists` |
 | Mappings list | `GET /api/adx/ingestion-mappings` | `listIngestionMappings` | `.show ingestion mappings` |
 | Mapping create | `POST /api/adx/ingestion-mappings` | `createIngestionMapping` | `.create-or-alter table ["T"] ingestion <kind> mapping "N" 'json'` |

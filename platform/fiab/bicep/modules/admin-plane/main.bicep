@@ -114,6 +114,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
+param adxEnableOptimizedAutoscale bool = false
+
+@description('ADX optimized auto-scale minimum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMinimum int = 2
+
+@description('ADX optimized auto-scale maximum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMaximum int = 10
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -200,6 +213,9 @@ param loomAsaSub string = ''
 @description('Default ASA job name the Eventstream editor pre-fills for "Push destinations to ASA". Matches the starter job from modules/landing-zone/stream-analytics.bicep (asa-loom-<domain>-<region>). Editable in the UI.')
 param loomAsaJobName string = 'asa-loom-default-${location}'
 
+@description('Azure region for Stream Analytics jobs created on demand from the Eventstream canvas (POST /api/items/eventstream/{id}/provision). Defaults to the deployment region; falls back to LOOM_LOCATION then eastus in the client.')
+param loomAsaLocation string = location
+
 @description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
 param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
@@ -209,11 +225,26 @@ param loomEventHubRg string = ''
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
 
+@description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
+param loomIotHubResourceId string = ''
+
 @description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
 param loomAlertRg string = ''
 
+@description('ARM management endpoint. Empty defaults to https://management.azure.com (Commercial). Set to https://management.usgovcloudapi.net for GCC-High / IL5.')
+param loomArmEndpoint string = ''
+
+@description('ARM token scope. Empty defaults to <ARM endpoint>/.default. Override only for sovereign clouds where the audience differs.')
+param loomArmScope string = ''
+
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
+
+@description('ADLS Gen2 storage account name for ADX continuous-export (Delta / OneLake-style availability). Backs LOOM_RTI_EXPORT_ADLS and grants the ADX cluster MI Storage Blob Data Contributor. Defaults to loomStorageAccount when empty.')
+param loomRtiExportAdls string = ''
+
+@description('Resource group of the ADX continuous-export ADLS account. Empty defaults to this deployment RG.')
+param loomRtiExportAdlsRg string = ''
 
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
@@ -618,8 +649,35 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   params: {
     location: location
     skuName: adxSkuName
+    enableOptimizedAutoscale: adxEnableOptimizedAutoscale
+    autoscaleMinimum: adxAutoscaleMinimum
+    autoscaleMaximum: adxAutoscaleMaximum
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
+    // Console UAMI → Monitoring Contributor on the cluster (alert rules + diagnostics).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Continuous-export: grant cluster MI Storage Blob Data Contributor on the DLZ ADLS account.
+    // Empty when loomStorageAccount is unset → grant is skipped → wizard shows honest gate.
+    adlsAccountName: loomStorageAccount
+    adlsAccountRg: loomDlzRg
+    // EH data connections: grant cluster MI Azure Event Hubs Data Receiver on the DLZ EH namespace.
+    // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
+    ehNamespaceName: loomEventHubNamespace
+    ehNamespaceRg: !empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg
+  }
+}
+
+// Continuous-export (Delta → ADLS Gen2) RBAC: grant the new ADX cluster's
+// system-assigned MI Storage Blob Data Contributor on the export account so
+// OneLake-style availability works Azure-native (no Fabric workspace). Deployed
+// at the storage account's RG (DLZ lake account is commonly in a different RG).
+module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && !empty(!empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount)) {
+  name: 'adx-export-rbac'
+  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : resourceGroup().name)
+  params: {
+    exportAdlsAccountName: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount
+    clusterPrincipalId: adxCluster!.outputs.clusterPrincipalId
   }
 }
 
@@ -728,6 +786,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
             // shortcut examples resolve to a non-existent host (ENOTFOUND).
             { name: 'LOOM_ADLS_ACCOUNT', value: loomStorageAccount }
+            // ADLS Gen2 account for ADX continuous-export (Delta / OneLake-style
+            // availability). When unset, the eventhouse Export dialog shows an
+            // honest gate. Defaults to the lake account (same MI grant).
+            { name: 'LOOM_RTI_EXPORT_ADLS', value: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
@@ -791,18 +853,44 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
-            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
+            // Azure-native Activator (lib/azure/activator-monitor.ts) creates
+            // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
+            // to THIS admin RG — the same RG where monitoring.bicep grants the
+            // Console UAMI "Monitoring Contributor" (749f88ad…). Override to land
+            // alerts elsewhere AND grant the role on that RG.
+            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : resourceGroup().name }
+            // Region stamped into the scheduledQueryRule + actionGroup ARM bodies.
+            // Defaults to the deployment location so Gov (usgov*) deployments do
+            // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
+            { name: 'LOOM_ALERT_LOCATION', value: location }
+            // ARM endpoint / scope overrides for sovereign clouds (GCC-High / IL5).
+            // Empty on Commercial → monitor-client.ts falls back to
+            // https://management.azure.com. Set both for Azure Government.
+            { name: 'LOOM_ARM_ENDPOINT', value: loomArmEndpoint }
+            { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override
             // when ASA lives in a different RG / sub than the DLZ.
             { name: 'LOOM_ASA_RG', value: loomAsaRg }
             { name: 'LOOM_ASA_SUB', value: loomAsaSub }
             { name: 'NEXT_PUBLIC_LOOM_ASA_JOB_NAME', value: loomAsaJobName }
+            // Region for ASA jobs the Eventstream canvas provisions on demand.
+            { name: 'LOOM_ASA_LOCATION', value: loomAsaLocation }
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            { name: 'LOOM_IOT_HUB_RESOURCE_ID', value: loomIotHubResourceId }
+            // Full ARM resource id of the Event Hubs namespace — consumed by the
+            // eventhouse ingest route to wire an ADX → Event Hub data connection
+            // (Get-Data wizard, streaming source). Derived from the same
+            // namespace/RG/sub the navigator uses (RG/sub fall back to the DLZ).
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}' }
+            // Cloud-aware ARM base. Commercial → management.azure.com (default);
+            // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
+            // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
+            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these
@@ -831,6 +919,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Each prefers a reused existing<Service> (any RG/sub) over the
             // provisioned module output, and is '' when neither → honest gate.
             { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
+            // Data Management (ingestion) endpoint — REQUIRED for `.purge table
+            // records` (GDPR erasure); the engine endpoint rejects purge. Prefer
+            // the ARM clusterDataIngestionUri; for a reused cluster derive the
+            // ingest-* host. kusto-client falls back to prepending `ingest-` to
+            // the cluster URI when this is unset.
+            { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
@@ -838,6 +932,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // RTI — continuous-export destination. Points at the same DLZ ADLS
+            // account as LOOM_ADLS_ACCOUNT. Empty → the export-to-ADLS wizard
+            // shows a Fluent MessageBar naming LOOM_RTI_EXPORT_ADLS (no-vaporware.md).
+            { name: 'LOOM_RTI_EXPORT_ADLS',    value: loomStorageAccount }
+            // RTI — queued / one-click ingestion endpoint (Get Data wizard). For a
+            // provisioned cluster this is the ARM dataIngestionUri; for a reused
+            // cluster the ingest-<name> host is reconciled post-deploy alongside
+            // LOOM_KUSTO_CLUSTER_URI by patch-navigator-env.sh. Empty when ADX off.
+            { name: 'LOOM_KUSTO_DATA_INGESTION_URI', value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
+            // Sovereign-cloud ARM endpoint for Azure Monitor metrics calls (e.g.
+            // the Eventhouse Capacity/throttle panel). Empty = public cloud
+            // (https://management.azure.com). Operators in GCC-High / IL5 set
+            // 'https://management.usgovcloudapi.net'. Read by monitor-client.ts.
+            { name: 'LOOM_ARM_ENDPOINT',       value: '' }
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
@@ -1002,6 +1110,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
             { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // AOAI token audience by cloud (public: cognitiveservices.azure.com,
+            // Gov: cognitiveservices.azure.us). Derived from the ARM environment()
+            // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
+            // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
+            { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
@@ -1195,6 +1308,13 @@ output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId
 output uamiActivatorId string = identity.outputs.uamiActivatorId
 output uamiActivatorPrincipalId string = identity.outputs.uamiActivatorPrincipalId
+
+// ADX cluster system-assigned MI principal ID — threaded to the DLZ
+// landing-zone module so eventhubs.bicep can grant it Azure Event Hubs Data
+// Receiver (required for KQL-database Event Hub data connections). Empty when
+// ADX is disabled or a BYO existing cluster is used (then bootstrap the grant
+// manually — see docs/fiab/v3-tenant-bootstrap.md).
+output adxClusterPrincipalId string = (adxEnabled && empty(existingAdxClusterName)) ? adxCluster!.outputs.clusterPrincipalId : ''
 output uamiMirroringId string = identity.outputs.uamiMirroringId
 output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 
