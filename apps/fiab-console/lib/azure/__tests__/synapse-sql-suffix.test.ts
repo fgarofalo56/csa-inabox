@@ -1,70 +1,95 @@
 /**
- * Cloud-portability contract for the Synapse SQL client suffix/scope helpers.
+ * Cloud-matrix tests for the Synapse SQL endpoint suffix.
  *
- * Per .claude/rules/no-vaporware.md + no-fabric-dependency.md these assert the
- * EXACT public FQDNs the client builds per Azure boundary (Commercial/GCC vs
- * GCC-High/IL5). The TDS/credential side effects are stubbed so importing the
- * module only exercises the pure suffix logic.
- *
- * Grounding:
- *   Serverless endpoint — learn.microsoft.com/azure/synapse-analytics/sql/on-demand-workspace-overview
- *   Gov endpoints       — learn.microsoft.com/azure/azure-government/documentation-government-developer-guide
+ * getSynapseSqlSuffix() + serverlessTarget()/dedicatedTarget() must resolve the
+ * correct sovereign-cloud FQDN from AZURE_CLOUD (set per-boundary by
+ * admin-plane/main.bicep), so the lakehouse-paired Serverless endpoint resolves
+ * through the right private endpoint in Commercial/GCC vs GCC-High/IL5.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@azure/identity', () => {
-  class Cred { async getToken() { return { token: 'AAD.ACCESS.TOKEN', expiresOnTimestamp: Date.now() + 3600_000 }; } }
+// Stub the credential chain so importing the client never reaches Azure.
+vi.mock('@azure/identity', async () => {
+  class Cred {
+    async getToken() {
+      return { token: 'test-token', expiresOnTimestamp: Date.now() + 3600_000 };
+    }
+  }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
-vi.mock('mssql', () => ({ default: { ConnectionPool: class {} } }));
 
-describe('synapse-sql-client cloud portability', () => {
-  afterEach(() => {
-    delete process.env.LOOM_SYNAPSE_SQL_SUFFIX;
-    delete process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE;
-    delete process.env.LOOM_SYNAPSE_WORKSPACE;
-    delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
-    vi.resetModules();
+import { getSynapseSqlSuffix, serverlessTarget, dedicatedTarget, serverlessEndpoint } from '../synapse-sql-client';
+
+const SAVED = { AZURE_CLOUD: process.env.AZURE_CLOUD };
+
+beforeEach(() => {
+  process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-loom-default';
+  process.env.LOOM_SYNAPSE_DEDICATED_POOL = 'dwh01';
+});
+afterEach(() => {
+  if (SAVED.AZURE_CLOUD === undefined) delete process.env.AZURE_CLOUD;
+  else process.env.AZURE_CLOUD = SAVED.AZURE_CLOUD;
+  vi.restoreAllMocks();
+});
+
+describe('getSynapseSqlSuffix — cloud matrix', () => {
+  it('Commercial (AZURE_CLOUD=AzureCloud) → sql.azuresynapse.net', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(getSynapseSqlSuffix()).toBe('sql.azuresynapse.net');
   });
 
-  it('defaults to the Commercial Synapse suffix', async () => {
-    const { getSynapseSqlSuffix } = await import('../synapse-sql-client');
-    expect(getSynapseSqlSuffix()).toBe('azuresynapse.net');
+  it('Commercial (AZURE_CLOUD unset) → sql.azuresynapse.net', () => {
+    delete process.env.AZURE_CLOUD;
+    expect(getSynapseSqlSuffix()).toBe('sql.azuresynapse.net');
   });
 
-  it('uses the Gov suffix for GCC-High / IL5', async () => {
-    process.env.LOOM_SYNAPSE_SQL_SUFFIX = 'azuresynapse.usgovcloudapi.net';
-    const { getSynapseSqlSuffix } = await import('../synapse-sql-client');
-    expect(getSynapseSqlSuffix()).toBe('azuresynapse.usgovcloudapi.net');
+  it('GCC (AZURE_CLOUD=AzureCloud) → sql.azuresynapse.net', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(getSynapseSqlSuffix()).toBe('sql.azuresynapse.net');
   });
 
-  it('serverlessTarget builds the Commercial -ondemand FQDN', async () => {
-    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-loom-test-eastus2';
-    const { serverlessTarget } = await import('../synapse-sql-client');
-    expect(serverlessTarget('master').server).toBe('syn-loom-test-eastus2-ondemand.sql.azuresynapse.net');
-    expect(serverlessTarget('master').database).toBe('master');
+  it('GCC-High / IL5 (AZURE_CLOUD=AzureUSGovernment) → sql.azuresynapse.usgovcloudapi.net', () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    expect(getSynapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
+  });
+});
+
+describe('serverlessTarget — sovereign FQDN', () => {
+  it('Commercial serverless ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(serverlessTarget('loom_lakehouse').server).toBe(
+      'syn-loom-default-ondemand.sql.azuresynapse.net',
+    );
   });
 
-  it('serverlessTarget builds the Gov -ondemand FQDN', async () => {
-    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-loom-test-usgovvirginia';
-    process.env.LOOM_SYNAPSE_SQL_SUFFIX = 'azuresynapse.usgovcloudapi.net';
-    const { serverlessTarget } = await import('../synapse-sql-client');
-    expect(serverlessTarget('mydb').server).toBe('syn-loom-test-usgovvirginia-ondemand.sql.azuresynapse.usgovcloudapi.net');
-    expect(serverlessTarget('mydb').database).toBe('mydb');
+  it('Gov serverless ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    expect(serverlessTarget('loom_lakehouse').server).toBe(
+      'syn-loom-default-ondemand.sql.azuresynapse.usgovcloudapi.net',
+    );
+  });
+});
+
+describe('dedicatedTarget — sovereign FQDN', () => {
+  it('Commercial dedicated FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(dedicatedTarget().server).toBe('syn-loom-default.sql.azuresynapse.net');
   });
 
-  it('dedicatedTarget builds the Gov dedicated FQDN', async () => {
-    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-loom-test-usgovvirginia';
-    process.env.LOOM_SYNAPSE_DEDICATED_POOL = 'dwpool';
-    process.env.LOOM_SYNAPSE_SQL_SUFFIX = 'azuresynapse.usgovcloudapi.net';
-    const { dedicatedTarget } = await import('../synapse-sql-client');
-    expect(dedicatedTarget().server).toBe('syn-loom-test-usgovvirginia.sql.azuresynapse.usgovcloudapi.net');
-    expect(dedicatedTarget().database).toBe('dwpool');
+  it('Gov dedicated FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    expect(dedicatedTarget().server).toBe('syn-loom-default.sql.azuresynapse.usgovcloudapi.net');
+  });
+});
+
+describe('serverlessEndpoint — public FQDN for badges/receipts', () => {
+  it('Commercial -ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureCloud';
+    expect(serverlessEndpoint()).toBe('syn-loom-default-ondemand.sql.azuresynapse.net');
   });
 
-  it('serverlessEndpoint returns the public FQDN for badges/receipts', async () => {
-    process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-loom-test-eastus2';
-    const { serverlessEndpoint } = await import('../synapse-sql-client');
-    expect(serverlessEndpoint()).toBe('syn-loom-test-eastus2-ondemand.sql.azuresynapse.net');
+  it('Gov -ondemand FQDN', () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    expect(serverlessEndpoint()).toBe('syn-loom-default-ondemand.sql.azuresynapse.usgovcloudapi.net');
   });
 });

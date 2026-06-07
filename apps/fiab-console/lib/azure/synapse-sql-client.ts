@@ -15,16 +15,6 @@ import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredenti
 import sql from 'mssql';
 
 /**
- * Synapse SQL public FQDN suffix — cloud-portable.
- *   Commercial / GCC : azuresynapse.net
- *   GCC-High / IL5   : azuresynapse.usgovcloudapi.net
- * Set via `LOOM_SYNAPSE_SQL_SUFFIX` (admin-plane bicep wires it per boundary).
- */
-export function getSynapseSqlSuffix(): string {
-  return process.env.LOOM_SYNAPSE_SQL_SUFFIX || 'azuresynapse.net';
-}
-
-/**
  * TDS AAD token scope — cloud-portable.
  *   Commercial / GCC : https://database.windows.net/.default
  *   GCC-High / IL5   : https://database.usgovcloudapi.net/.default
@@ -51,12 +41,29 @@ export interface SynapseTarget {
   cacheKey: string;
 }
 
+/**
+ * Cloud-aware Synapse SQL endpoint domain suffix.
+ *   - Commercial + GCC (AZURE_CLOUD=AzureCloud / unset): sql.azuresynapse.net
+ *   - GCC-High + IL5 (AZURE_CLOUD=AzureUSGovernment):     sql.azuresynapse.usgovcloudapi.net
+ *
+ * AZURE_CLOUD is set per-boundary by admin-plane/main.bicep, mirroring the
+ * privatelink DNS zone suffix that network.bicep provisions, so the serverless
+ * FQDN resolves through the right private endpoint in every sovereign cloud.
+ * Grounded in the Azure Government endpoint mapping:
+ *   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
+ */
+export function getSynapseSqlSuffix(): string {
+  return process.env.AZURE_CLOUD === 'AzureUSGovernment'
+    ? 'sql.azuresynapse.usgovcloudapi.net'
+    : 'sql.azuresynapse.net';
+}
+
 export function dedicatedTarget(): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
   const suffix = getSynapseSqlSuffix();
   return {
-    server: `${ws}.sql.${suffix}`,
+    server: `${ws}.${suffix}`,
     database: pool,
     cacheKey: `dedicated:${ws}:${pool}`,
   };
@@ -66,7 +73,7 @@ export function serverlessTarget(database = 'master'): SynapseTarget {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const suffix = getSynapseSqlSuffix();
   return {
-    server: `${ws}-ondemand.sql.${suffix}`,
+    server: `${ws}-ondemand.${suffix}`,
     database,
     cacheKey: `serverless:${ws}:${database}`,
   };
@@ -74,7 +81,7 @@ export function serverlessTarget(database = 'master'): SynapseTarget {
 
 /** Public Serverless endpoint FQDN for the env-bound workspace (UI badges / receipts). */
 export function serverlessEndpoint(): string {
-  return `${required('LOOM_SYNAPSE_WORKSPACE')}-ondemand.sql.${getSynapseSqlSuffix()}`;
+  return `${required('LOOM_SYNAPSE_WORKSPACE')}-ondemand.${getSynapseSqlSuffix()}`;
 }
 
 function required(key: string): string {

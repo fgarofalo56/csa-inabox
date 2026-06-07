@@ -25,6 +25,9 @@ import {
   listTriggers, upsertTrigger, startTrigger, stopTrigger, deleteTrigger,
   type AdfTrigger,
 } from '@/lib/azure/adf-client';
+import {
+  resolveParamBindings, paramSourceAvailability, type ParamBinding,
+} from '@/lib/azure/trigger-param-resolver';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -48,13 +51,14 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   if (!workspaceId) return err('workspaceId required', 400);
   try {
     const adfName = await getAdfName(ctx.params.id, workspaceId);
-    if (!adfName) return NextResponse.json({ ok: true, triggers: [] });
+    if (!adfName) return NextResponse.json({ ok: true, triggers: [], paramSources: paramSourceAvailability() });
     const all = await listTriggers();
     const mine = all.filter((t) =>
       (t.properties?.pipelines || []).some((p) => p.pipelineReference?.referenceName === adfName),
     );
     return NextResponse.json({
       ok: true,
+      paramSources: paramSourceAvailability(),
       triggers: mine.map((t) => ({
         name: t.name,
         type: t.properties?.type,
@@ -73,22 +77,34 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
-  const body = await req.json().catch(() => null) as { name?: string; properties?: AdfTrigger['properties'] } | null;
+  const body = await req.json().catch(() => null) as {
+    name?: string;
+    properties?: AdfTrigger['properties'];
+    parameterBindings?: Record<string, ParamBinding>;
+  } | null;
   if (!body?.name || !body?.properties) return err('body must be { name, properties }', 400);
   try {
     const adfName = await getAdfName(ctx.params.id, workspaceId);
     if (!adfName) return err('Pipeline has no ADF backing — save first', 409);
     const type = body.properties.type || 'ScheduleTrigger';
     const pipelineRef = { referenceName: adfName, type: 'PipelineReference' as const };
+    // Resolve the per-parameter value bindings (direct / Key Vault / App Config)
+    // into plain literals. KV/App Config reads happen here, server-side, at
+    // trigger-creation time (snapshot semantics). Errors (missing env var, 403)
+    // surface verbatim with the right status — no mock fallback.
+    const resolvedParams = await resolveParamBindings(body.parameterBindings);
     // Wire the trigger to this pipeline if the caller didn't already. Tumbling
     // window triggers reference a SINGLE pipeline under `pipeline` (singular);
     // schedule/event triggers use the `pipelines[]` array.
     const props: any = { ...body.properties, type };
     if (type === 'TumblingWindowTrigger') {
       if (!props.pipeline) props.pipeline = { pipelineReference: pipelineRef, parameters: {} };
+      props.pipeline.parameters = { ...(props.pipeline.parameters || {}), ...resolvedParams };
       delete props.pipelines;
     } else if (!(props.pipelines && props.pipelines.length > 0)) {
-      props.pipelines = [{ pipelineReference: pipelineRef, parameters: {} }];
+      props.pipelines = [{ pipelineReference: pipelineRef, parameters: { ...resolvedParams } }];
+    } else {
+      props.pipelines[0].parameters = { ...(props.pipelines[0].parameters || {}), ...resolvedParams };
     }
     const wired: AdfTrigger = { name: body.name, properties: props };
     const trigger = await upsertTrigger(body.name, wired);

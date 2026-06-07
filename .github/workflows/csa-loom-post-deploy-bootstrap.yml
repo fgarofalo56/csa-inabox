@@ -384,6 +384,26 @@ jobs:
             echo "No Foundry storage in $ADMIN_RG — skipping"
           fi
 
+      - name: Grant Console UAMI Storage Blob Data Contributor on DLZ (lakehouse writes + notebook .ipynb backup)
+        # The Console UAMI writes Delta files (lakehouse provisioner) AND backs up
+        # published Synapse notebooks as .ipynb into ADLS silver/loom/notebooks/
+        # (synapse-notebook PUT route → adls-client.uploadFile). Both need Storage
+        # Blob Data Contributor on the DLZ data-lake account. Idempotent.
+        run: |
+          DLZ_STG=$(az storage account list -g $DLZ_RG --query "[?contains(name,'dls') || contains(name,'lake') || contains(name,'adls')].id" -o tsv | head -1)
+          [ -z "$DLZ_STG" ] && DLZ_STG=$(az storage account list -g $DLZ_RG --query "[0].id" -o tsv)
+          if [ -n "$DLZ_STG" ]; then
+            echo "DLZ data-lake storage: $DLZ_STG"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$DLZ_STG" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No data-lake storage in $DLZ_RG — skipping"
+          fi
+
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
         run: |
           CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
