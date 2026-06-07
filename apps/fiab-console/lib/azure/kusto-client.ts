@@ -20,6 +20,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
+import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
 
 const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || 'https://adx-csa-loom-shared.eastus2.kusto.windows.net';
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
@@ -257,6 +258,83 @@ export async function listDatabases(): Promise<Array<{ name: string; prettyName?
     prettyName: prettyIdx >= 0 ? (row[prettyIdx] as string) : undefined,
     persistentStorage: storIdx >= 0 ? (row[storIdx] as string) : undefined,
   }));
+}
+
+/**
+ * Per-database summary for the Databases browser (tile + list views).
+ * Sourced from a single `.show databases details` bulk call.
+ */
+export interface KustoDatabaseSummary {
+  name: string;
+  prettyName?: string;
+  persistentStorage?: string;
+  /** TotalSize bytes → MB. */
+  totalSizeMb?: number;
+  /** RetentionPolicy.SoftDeletePeriod (timespan days component). */
+  retentionDays?: number;
+  /** CachingPolicy.DataHotSpan (timespan days component). */
+  hotCacheDays?: number;
+  /** NumberOfTables. */
+  tableCount?: number;
+}
+
+/**
+ * `.show databases details` — one bulk control command against NetDefaultDB
+ * that returns size, retention, caching, and table count for every database
+ * on the cluster. Used by the Databases browser so each tile/row shows real
+ * size + retention without a per-database round trip.
+ *
+ * Grounded in Microsoft Learn (`.show databases details`): returns
+ * DatabaseName, PrettyName, PersistentStorage, TotalSize (bytes),
+ * RetentionPolicy (JSON), CachingPolicy (JSON), NumberOfTables.
+ */
+export async function listDatabasesWithDetails(): Promise<KustoDatabaseSummary[]> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show databases details');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('DatabaseName');
+  const prettyIdx = idx('PrettyName');
+  const storIdx = idx('PersistentStorage');
+  const sizeIdx = idx('TotalSize');
+  const retIdx = idx('RetentionPolicy');
+  const cacheIdx = idx('CachingPolicy');
+  const tabIdx = idx('NumberOfTables');
+
+  // Timespan-days parser: SoftDeletePeriod/DataHotSpan look like "365.00:00:00"
+  // (days.hh:mm:ss). The leading integer before the first '.' is the day count.
+  // A pure-time value ("06:00:00") has ':' in its head segment, so days = 0.
+  function parseTimespanDays(raw: unknown): number | undefined {
+    if (typeof raw !== 'string' || !raw) return undefined;
+    const head = raw.split('.')[0];
+    if (head.includes(':')) return 0;
+    const days = parseInt(head, 10);
+    return Number.isFinite(days) ? days : undefined;
+  }
+
+  function policyDays(policy: unknown, key: 'SoftDeletePeriod' | 'DataHotSpan'): number | undefined {
+    if (typeof policy !== 'string' || !policy) return undefined;
+    try {
+      const p = JSON.parse(policy);
+      return parseTimespanDays(p?.[key]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return r.rows.map((row) => {
+    const sizeRaw = sizeIdx >= 0 ? row[sizeIdx] : undefined;
+    const sizeNum = typeof sizeRaw === 'number' ? sizeRaw : Number(sizeRaw);
+    const tabRaw = tabIdx >= 0 ? row[tabIdx] : undefined;
+    const tabNum = typeof tabRaw === 'number' ? tabRaw : Number(tabRaw);
+    return {
+      name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+      prettyName: prettyIdx >= 0 ? (row[prettyIdx] as string) || undefined : undefined,
+      persistentStorage: storIdx >= 0 ? (row[storIdx] as string) || undefined : undefined,
+      totalSizeMb: Number.isFinite(sizeNum) ? sizeNum / (1024 * 1024) : undefined,
+      retentionDays: retIdx >= 0 ? policyDays(row[retIdx], 'SoftDeletePeriod') : undefined,
+      hotCacheDays: cacheIdx >= 0 ? policyDays(row[cacheIdx], 'DataHotSpan') : undefined,
+      tableCount: Number.isFinite(tabNum) ? tabNum : undefined,
+    };
+  });
 }
 
 /** `.show tables` for a given database. */
@@ -550,6 +628,59 @@ export async function showDatabasePolicies(db: string): Promise<KustoDatabasePol
   return out;
 }
 
+export interface KustoUpdatePolicyEntry {
+  IsEnabled: boolean;
+  Source: string;
+  Query: string;
+  IsTransactional: boolean;
+  PropagateIngestionProperties: boolean;
+}
+
+/**
+ * `.alter table ["<target>"] policy update @'[...]'` — set the table update
+ * policy (transform-on-ingest ETL). `policies` is the serialized array of
+ * policy objects; each fires the `Query` (a stored function call or inline KQL
+ * over the `Source` table) whenever data lands in `Source`, routing the
+ * transformed rows into `<target>`. Uses the `@'...'` verbatim-string form so
+ * the embedded JSON only needs single-quote escaping (same pattern as
+ * {@link createIngestionMapping}). Real Kusto control command — no mocks.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/alter-table-update-policy-command
+ */
+export async function setTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+  policies: KustoUpdatePolicyEntry[],
+): Promise<KustoQueryResult> {
+  const escaped = JSON.stringify(policies).replace(/'/g, "\\'");
+  return executeMgmtCommand(
+    db,
+    `.alter table ${qName(targetTable)} policy update @'${escaped}'`,
+  );
+}
+
+/**
+ * `.show table ["<target>"] policy update` — read the table's update policy.
+ * Returns the parsed policy plus the raw JSON string Kusto reports back (the
+ * "receipt" confirming the cluster accepted the config), or null when the
+ * command returns no rows. Mirrors {@link showDatabasePolicies} in shape.
+ *
+ * @see https://learn.microsoft.com/azure/data-explorer/kusto/management/show-table-update-policy-command
+ */
+export async function showTableUpdatePolicy(
+  db: string,
+  targetTable: string,
+): Promise<{ policy: unknown; raw: string } | null> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(targetTable)} policy update`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { policy = raw; }
+  return { policy, raw };
+}
+
 /** `.show database <db> schema as json` — flat read-only schema object. */
 export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
   const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);
@@ -564,6 +695,31 @@ export async function createTable(db: string, name: string, schema: string): Pro
   const cols = schema.trim();
   if (!cols) throw new KustoError('createTable: schema is required (e.g. "ts:datetime, value:long")', 400);
   return executeMgmtCommand(db, `.create table ${qName(name)} (${cols})`);
+}
+
+/**
+ * `.alter-merge table T (schema)` — ADDITIVE schema change. New columns are
+ * appended; existing columns and their data are preserved. This is the safe
+ * "add column" path used by the schema designer's ALTER flow. (A full
+ * `.alter table` replaces the schema and drops omitted columns with data loss,
+ * so it is intentionally NOT exposed.) Requires Table Admin.
+ * Grounded in Microsoft Learn: `.alter-merge table` command.
+ */
+export async function alterMergeTable(db: string, name: string, schema: string): Promise<KustoQueryResult> {
+  const cols = schema.trim();
+  if (!cols) throw new KustoError('alterMergeTable: schema is required (e.g. "newcol:string")', 400);
+  return executeMgmtCommand(db, `.alter-merge table ${qName(name)} (${cols})`);
+}
+
+/**
+ * `.show table T cslschema` — returns the table's schema as a CSL string
+ * (`col:type,col:type`) for pre-populating the schema designer's ALTER grid.
+ */
+export async function getTableCslSchema(db: string, table: string): Promise<string> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} cslschema`);
+  if (!r.rows.length) return '';
+  const schemaIdx = r.columns.findIndex((c) => /schema/i.test(c));
+  return String(r.rows[0][schemaIdx >= 0 ? schemaIdx : 1] ?? '');
 }
 
 /** `.drop table T ifexists`. */
@@ -588,17 +744,30 @@ export async function dropFunction(db: string, name: string): Promise<KustoQuery
   return executeMgmtCommand(db, `.drop function ${name} ifexists`);
 }
 
-/** `.create materialized-view NAME on table SRC { query }`. */
+/**
+ * `buildCreateMaterializedViewCommand` (pure command builder) lives in the
+ * dependency-free `kusto-mv-command` module and is re-exported here for
+ * callers that import from `kusto-client`. `createMaterializedView` is the
+ * runtime entry point.
+ */
+export { buildCreateMaterializedViewCommand };
+
+/**
+ * `.create [async] materialized-view [with (backfill=true)] NAME on table SRC { query }`.
+ *
+ * When `opts.backfill` is true the view is created over the source table's
+ * existing data. Per ADX/Eventhouse rules a backfilling create MUST be `async`
+ * (the mgmt endpoint returns an operation row rather than blocking until the
+ * backfill finishes — track it with `.show operations`).
+ */
 export async function createMaterializedView(
   db: string, name: string, sourceTable: string, query: string,
+  opts?: { backfill?: boolean },
 ): Promise<KustoQueryResult> {
   if (!sourceTable.trim() || !query.trim()) {
     throw new KustoError('createMaterializedView: source table and query are required', 400);
   }
-  return executeMgmtCommand(
-    db,
-    `.create materialized-view ${name} on table ${qName(sourceTable.trim())} { ${query.trim()} }`,
-  );
+  return executeMgmtCommand(db, buildCreateMaterializedViewCommand(name, sourceTable, query, opts));
 }
 
 /** `.drop materialized-view NAME ifexists`. */

@@ -35,18 +35,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
-  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea,
+  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea, Switch,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, ArrowSync16Regular, Delete16Regular,
+  Add20Regular, ArrowSync16Regular, Delete16Regular, Edit16Regular,
   DocumentTable20Regular, Table20Regular, MathFormula20Regular,
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
+import {
+  ColumnGridDesigner, toKustoSchema, parseKustoSchema,
+} from './column-grid-designer';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 248 },
@@ -77,12 +80,18 @@ export interface AdxDatabaseTreeProps {
   itemId: string;
   /** Load a query into the editor when a leaf is opened (e.g. `["T"] | take 100`). */
   onOpenQuery?: (kql: string) => void;
+  /** Open the parent's schema designer in ALTER mode for an existing table.
+   *  When omitted the tree hides the per-table "Edit schema" affordance. */
+  onAlterTable?: (tableName: string) => void;
+  /** Open the parent's drop-confirm flow for a table. When omitted the tree
+   *  falls back to its own inline confirm dialog. */
+  onDropTable?: (tableName: string) => void;
   /** Increment to force a refresh from the parent (e.g. after an external create). */
   refreshKey?: number;
 }
 
 /** A typed, ADX/Fabric-faithful KQL database object navigator. */
-export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxDatabaseTreeProps) {
+export function AdxDatabaseTree({ itemId, onOpenQuery, onAlterTable, onDropTable, refreshKey = 0 }: AdxDatabaseTreeProps) {
   const s = useStyles();
 
   const idq = `id=${encodeURIComponent(itemId)}`;
@@ -113,10 +122,14 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const [cSchema, setCSchema] = useState('ts:datetime, tenant:string, value:long');
   const [cSource, setCSource] = useState('');
   const [cQuery, setCQuery] = useState('');
+  const [cBackfill, setCBackfill] = useState(false);
   const [cArgs, setCArgs] = useState('');
   const [cKind, setCKind] = useState('json');
   const [cMapping, setCMapping] = useState('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // ---- inline drop-confirm dialog (used when the parent doesn't own drop) ----
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) { setGate({ missing: body.missing }); return true; }
@@ -158,7 +171,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const openCreate = useCallback((g: CreatableGroup) => {
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCSchema('ts:datetime, tenant:string, value:long');
-    setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs('');
+    setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs(''); setCBackfill(false);
     setCKind('json'); setCMapping('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   }, [tables]);
 
@@ -170,7 +183,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
       let route = TABLES; let payload: any = {};
       if (createGroup === 'table') { route = TABLES; payload = { name, schema: cSchema }; }
       else if (createGroup === 'function') { route = FUNCTIONS; payload = { name, args: cArgs, body: cQuery }; }
-      else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery }; }
+      else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery, backfill: cBackfill }; }
       else if (createGroup === 'mapping') { route = MAPPINGS; payload = { name, kind: cKind, table: cSource, mapping: cMapping }; }
       const res = await fetch(route, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
@@ -185,7 +198,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
+  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cBackfill, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
 
   const del = useCallback(async (route: string, query: string) => {
     setBusy(true); setError(null);
@@ -311,7 +324,10 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         {typeof t.totalRowCount === 'number' && <Caption1>{t.totalRowCount.toLocaleString()} rows</Caption1>}
                         <Tooltip content="Take 100" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`["${t.name}"]\n| take 100`)} aria-label={`Query ${t.name}`} /></Tooltip>
-                        <Tooltip content="Drop table" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(TABLES, `name=${encodeURIComponent(t.name)}`)} aria-label={`Drop ${t.name}`} /></Tooltip>
+                        {onAlterTable && (
+                          <Tooltip content="Edit schema (.alter-merge table)" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} disabled={busy} onClick={() => onAlterTable(t.name)} aria-label={`Edit schema of ${t.name}`} /></Tooltip>
+                        )}
+                        <Tooltip content="Drop table" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => { if (onDropTable) onDropTable(t.name); else setDropTarget(t.name); }} aria-label={`Drop ${t.name}`} /></Tooltip>
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -471,7 +487,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Update policies', '.alter table T policy update — transform-on-ingest pipelines; authored from the KQL database ribbon (New → Update policy), not from this navigator yet.'],
                 ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
                 ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
                 ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
@@ -491,6 +506,39 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
         </Tree>
       </div>
 
+      {/* Inline drop-confirm dialog (fallback when the parent doesn't own drop) */}
+      <Dialog open={dropTarget !== null} onOpenChange={(_, d) => { if (!d.open) setDropTarget(null); }}>
+        <DialogSurface style={{ maxWidth: 480 }}>
+          <DialogBody>
+            <DialogTitle>Drop table {dropTarget}?</DialogTitle>
+            <DialogContent>
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>This cannot be undone</MessageBarTitle>
+                  Permanently deletes <strong>{dropTarget}</strong> and all its data via{' '}
+                  <code>.drop table [&quot;{dropTarget}&quot;] ifexists</code>.
+                </MessageBarBody>
+              </MessageBar>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDropTarget(null)} disabled={busy}>Cancel</Button>
+              <Button
+                appearance="primary"
+                disabled={busy}
+                onClick={async () => {
+                  const name = dropTarget;
+                  if (!name) return;
+                  setDropTarget(null);
+                  await del(TABLES, `name=${encodeURIComponent(name)}`);
+                }}
+              >
+                {busy ? 'Dropping…' : 'Drop table'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
       {/* Create dialog */}
       <Dialog open={createGroup !== null} onOpenChange={(_, d) => { if (!d.open) setCreateGroup(null); }}>
         <DialogSurface style={{ maxWidth: 560 }}>
@@ -508,8 +556,12 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                 </Field>
 
                 {createGroup === 'table' && (
-                  <Field label="Schema (col:type, col:type, …)">
-                    <Textarea value={cSchema} onChange={(_, d) => setCSchema(d.value)} rows={3} style={{ fontFamily: 'Consolas, monospace' }} />
+                  <Field label="Columns" required>
+                    <ColumnGridDesigner
+                      columns={parseKustoSchema(cSchema)}
+                      onChange={(cols) => setCSchema(toKustoSchema(cols))}
+                      disabled={busy}
+                    />
                   </Field>
                 )}
 
@@ -538,6 +590,18 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                     </Field>
                     <Field label="Query (one row per group key)">
                       <Textarea value={cQuery} onChange={(_, d) => setCQuery(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
+                    </Field>
+                    <Field label="Backfill from existing data">
+                      <Switch
+                        label="async .create materialized-view with (backfill=true) — processes the source table's existing records"
+                        checked={cBackfill}
+                        onChange={(_, d) => setCBackfill(!!d.checked)}
+                      />
+                      {cBackfill && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Large tables may take minutes to hours; the view is unavailable for query until the backfill completes. Track with <code>.show operations</code>.
+                        </Caption1>
+                      )}
                     </Field>
                   </>
                 )}
