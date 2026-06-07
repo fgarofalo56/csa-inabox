@@ -44,12 +44,14 @@ import {
   ChevronRight16Regular, Copy16Regular, MoreHorizontal16Regular,
   Save20Regular, Code16Regular, TextDescription16Regular,
   Eye16Regular, Edit16Regular, TextBulletListTree20Regular,
-  Sparkle16Regular, Wrench16Regular, Info16Regular,
+  Sparkle16Regular, Sparkle16Filled, Wrench16Regular, Info16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
+import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
 
@@ -1002,6 +1004,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                     canDown={i < cells.length - 1}
                     notebookId={id}
                     schemaContext={clientSchemaContext}
+                    priorCells={cells.slice(0, i).filter((pc) => pc.type === 'code').slice(-3).map((pc) => pc.source)}
                     onFocus={() => setActiveCell(c.id)}
                     onChange={(patch) => patchCell(c.id, patch)}
                     onRun={() => runCell(c.id)}
@@ -1090,7 +1093,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 // ── Single cell view ──────────────────────────────────────────────────────────
 function NotebookCellView(props: {
   cell: EditorCell; active: boolean; canRun: boolean; canUp: boolean; canDown: boolean;
-  notebookId: string; schemaContext?: string;
+  notebookId: string; schemaContext?: string; priorCells?: string[];
   onFocus: () => void; onChange: (patch: Partial<EditorCell>) => void; onRun: () => void;
   onDelete: () => void; onUp: () => void; onDown: () => void;
   onDuplicate: () => void; onToggleParameters: () => void; onToggleCollapsed: () => void;
@@ -1098,6 +1101,25 @@ function NotebookCellView(props: {
   const s = useStyles();
   const { cell, active } = props;
   const [mdEditing, setMdEditing] = useState(!cell.source);
+  const [completionEnabled, toggleCompletion] = useInlineCompleteToggle();
+
+  // Live context for the ghost-text inline-completion provider.
+  const inlineCtxRef = useRef<InlineCompletionContext>({
+    enabled: completionEnabled, locked: false, lang: cell.lang,
+    priorCells: props.priorCells || [], schemaContext: props.schemaContext,
+  });
+  useEffect(() => {
+    inlineCtxRef.current = {
+      enabled: completionEnabled, locked: false, lang: cell.lang,
+      priorCells: props.priorCells || [], schemaContext: props.schemaContext,
+    };
+  }, [completionEnabled, cell.lang, props.priorCells, props.schemaContext]);
+  const inlineDisposeRef = useRef<{ dispose(): void } | null>(null);
+  const handleEditorReady = useCallback((editor: any, monaco: any) => {
+    inlineDisposeRef.current?.dispose();
+    inlineDisposeRef.current = registerInlineCompletion(editor, monaco, () => inlineCtxRef.current);
+  }, []);
+  useEffect(() => () => inlineDisposeRef.current?.dispose(), []);
 
   // Shared move/duplicate/delete cluster used by both cell kinds.
   const actions = (
@@ -1236,6 +1258,14 @@ function NotebookCellView(props: {
             Explain
           </Button>
         </Tooltip>
+        <Tooltip content={completionEnabled
+          ? 'AI inline completion: on — pause typing for a gray ghost suggestion, Tab to accept'
+          : 'AI inline completion: off'} relationship="label">
+          <Button size="small" appearance={completionEnabled ? 'primary' : 'subtle'}
+            icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
+            onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
+            aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'} />
+        </Tooltip>
         {out?.status === 'error' && (
           <Tooltip content="Fix the error in this cell" relationship="label">
             <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
@@ -1256,7 +1286,8 @@ function NotebookCellView(props: {
         </div>
       ) : (
         <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })}
-          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} ariaLabel={`${cell.lang} code cell`} />
+          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} ariaLabel={`${cell.lang} code cell`}
+          onReady={handleEditorReady} />
       )}
 
       {/* Inline NL prompt for generate mode */}

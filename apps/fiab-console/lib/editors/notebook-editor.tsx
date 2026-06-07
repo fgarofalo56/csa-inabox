@@ -175,6 +175,17 @@ export function NotebookEditor({ item, id }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
 
+  // Schema hint for inline code completion (ghost text): the attached
+  // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
+  // real items this notebook is bound to (no Fabric dependency).
+  const inlineSchemaContext = useMemo(() => {
+    if (!attachedSources.length) return undefined;
+    const lines = attachedSources.map(
+      (a) => `${a.kind} "${a.displayName}"${a.isDefault ? ' (default)' : ''}`,
+    );
+    return `Attached data sources:\n${lines.join('\n')}`;
+  }, [attachedSources]);
+
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
     if (!computeId && cp.computes.length) {
@@ -1156,6 +1167,8 @@ export function NotebookEditor({ item, id }: Props) {
                         onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
+                        priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
+                        schemaContext={inlineSchemaContext}
                         notebookId={notebookId}
                         onInsertBelow={(newCell) => {
                           setCells(prev => {

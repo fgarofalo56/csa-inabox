@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge, Button, Caption1, Input, MessageBar, MessageBarBody, Popover,
   PopoverSurface, PopoverTrigger, Select, Spinner, makeStyles, mergeClasses, tokens,
@@ -8,11 +8,14 @@ import {
 import {
   Play16Regular, Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
   LockClosed16Regular, LockClosed16Filled, Copy16Regular,
-  ArrowMaximize16Regular, ArrowMinimize16Regular, Sparkle16Regular,
+  ArrowMaximize16Regular, ArrowMinimize16Regular,
+  Sparkle16Regular, Sparkle16Filled,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
+import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CopilotPane } from './copilot-pane';
 
 const useStyles = makeStyles({
@@ -117,6 +120,10 @@ export interface CodeCellProps {
   onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Sources of up to 3 preceding cells (oldest first) for ghost-text grounding. */
+  priorCells?: string[];
+  /** Lakehouse / notebook schema hint forwarded to inline completion. */
+  schemaContext?: string;
   /** Notebook item id — when present (with onInsertBelow) the in-cell Copilot
    *  button is shown. Absent in the legacy scratchpad pane, where it stays hidden. */
   notebookId?: string;
@@ -129,10 +136,11 @@ export interface CodeCellProps {
  * popover with slash commands; the result is inserted as a new cell below.
  * Slash parsing + result-cell construction live in ./copilot-commands.
  */
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, notebookId, onInsertBelow }: CodeCellProps) {
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown, priorCells, schemaContext, notebookId, onInsertBelow }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [completionEnabled, toggleCompletion] = useInlineCompleteToggle();
   const [copilotOpen, setCopilotOpen] = useState(false);
 
   // In-cell Copilot popover state (distinct from the full CopilotPane above).
@@ -142,6 +150,27 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const [copilotHint, setCopilotHint] = useState<string | null>(null);
   const copilotEnabled = !!notebookId && !!onInsertBelow;
+
+  const locked = !!cell.locked;
+
+  // Live context for the inline-completion provider (read on each invocation).
+  const ctxRef = useRef<InlineCompletionContext>({
+    enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
+    priorCells: priorCells || [], schemaContext,
+  });
+  useEffect(() => {
+    ctxRef.current = {
+      enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
+      priorCells: priorCells || [], schemaContext,
+    };
+  }, [completionEnabled, locked, cell.lang, priorCells, schemaContext]);
+
+  const disposeRef = useRef<{ dispose(): void } | null>(null);
+  const handleEditorReady = useCallback((editor: any, monaco: any) => {
+    disposeRef.current?.dispose();
+    disposeRef.current = registerInlineCompletion(editor, monaco, () => ctxRef.current);
+  }, []);
+  useEffect(() => () => disposeRef.current?.dispose(), []);
 
   // ESC dismisses the maximized state.
   useEffect(() => {
@@ -214,7 +243,6 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
   const toggleLock = () => onChange({ ...cell, locked: !cell.locked });
 
   const exec = cell.executionCount ? `[${cell.executionCount}]` : '[ ]';
-  const locked = !!cell.locked;
 
   const shell = (
     <div
@@ -308,6 +336,14 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         <div className={s.spacer} />
         <Button
           size="small"
+          appearance={completionEnabled ? 'primary' : 'subtle'}
+          icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
+          onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
+          aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'}
+          title={completionEnabled ? 'AI inline completion: on — pause typing for a ghost suggestion, Tab to accept' : 'AI inline completion: off'}
+        />
+        <Button
+          size="small"
           appearance={locked ? 'primary' : 'subtle'}
           icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
           onClick={(e) => { e.stopPropagation(); toggleLock(); }}
@@ -336,6 +372,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         minHeight={80}
         ariaLabel={`Code cell ${cell.id}`}
         className={mergeClasses(locked && s.editorLocked)}
+        onReady={handleEditorReady}
       />
       {cell.output && (
         <>
