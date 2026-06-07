@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular, ArrowUpload20Regular,
+  History20Regular, ArrowUpload20Regular, Library20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +31,7 @@ import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { EnvironmentPanel, type AmlEnvironmentLite } from '@/lib/components/notebook/environment-panel';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 // Ribbon is now built dynamically inside the component so each action can
@@ -172,6 +173,13 @@ export function NotebookEditor({ item, id }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
 
+  // Library & Environment management: attached AML Environment + custom .jar/.whl
+  // libraries (Azure-native 1:1 for the Fabric notebook Environment).
+  const [attachedAmlEnv, setAttachedAmlEnv] = useState<{ name: string; version: string } | null>(null);
+  const [customLibraries, setCustomLibraries] = useState<string[]>([]);
+  const [amlEnvs, setAmlEnvs] = useState<AmlEnvironmentLite[]>([]);
+  const [envPanelOpen, setEnvPanelOpen] = useState(false);
+
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
     if (!computeId && cp.computes.length) {
@@ -304,6 +312,9 @@ export function NotebookEditor({ item, id }: Props) {
       }
       // Phase 2: attached data sources.
       setAttachedSources(Array.isArray(j.definition?.attachedSources) ? j.definition.attachedSources : []);
+      // Library & Environment: attached AML env + custom libraries.
+      setAttachedAmlEnv(j.definition?.attachedAmlEnv || null);
+      setCustomLibraries(Array.isArray(j.definition?.customLibraries) ? j.definition.customLibraries : []);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -321,6 +332,18 @@ export function NotebookEditor({ item, id }: Props) {
     if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
   }, [workspaceId, notebookId, loadDetail, loadJobs]);
 
+  // Load the AML environment catalog once so the ribbon selector can list real
+  // environments. Honest gate: a 503 (no AML workspace) leaves the list empty —
+  // the selector shows "No environment attached" and the Manage panel explains.
+  const loadAmlEnvs = useCallback(async () => {
+    try {
+      const r = await fetch('/api/aml/environments');
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.environments)) setAmlEnvs(j.environments);
+    } catch { /* selector stays empty; Manage panel surfaces the error */ }
+  }, []);
+  useEffect(() => { void loadAmlEnvs(); }, [loadAmlEnvs]);
+
   const save = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
@@ -336,7 +359,7 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources } }),
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries } }),
       });
       const j = await r.json();
       if (!j.ok) {
@@ -350,7 +373,7 @@ export function NotebookEditor({ item, id }: Props) {
       setDetailErr(e?.message || String(e));
       setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries]);
 
   // Ctrl+S / Cmd+S to save when there are unsaved changes.
   useEffect(() => {
@@ -715,6 +738,49 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
 
+  // Library & Environment: install a package inline. Append a new code cell with
+  // `%pip install <pkg>` and run it on the live session via the same run path
+  // (Task 3 execute). The magic installs into the running Livy/Databricks
+  // session; the next `import <pkg>` cell then works. Real backend, no stub.
+  const installPipPackage = useCallback((pkg: string) => {
+    if (!workspaceId || !notebookId) { setRunMsg('Open a notebook before installing packages.'); return; }
+    if (!computeId) { setRunMsg('Pick a compute target before installing packages.'); return; }
+    const cell: NotebookCell = { ...emptyCell('code', 'pyspark'), source: `%pip install ${pkg}` };
+    setCells(prev => [...prev, cell]);
+    setActiveCellId(cell.id);
+    setEnvPanelOpen(false);
+    // Defer so the cell is committed to state before runCell's patchCell runs.
+    setTimeout(() => { void runCell(cell); }, 0);
+  }, [workspaceId, notebookId, computeId, runCell]);
+
+  // Attach/detach an AML environment from the compact ribbon selector. Persists
+  // to Cosmos via the attach route (instant) and mirrors local state.
+  const selectAmlEnv = useCallback(async (envName: string) => {
+    if (!workspaceId || !notebookId) return;
+    if (!envName) {
+      try {
+        await fetch('/api/aml/environments?action=detach', {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ notebookId, workspaceId }),
+        });
+      } catch { /* non-fatal */ }
+      setAttachedAmlEnv(null);
+      return;
+    }
+    const env = amlEnvs.find(e => e.name === envName);
+    setRunMsg(`Attaching environment ${envName}…`);
+    try {
+      const r = await fetch('/api/aml/environments?action=attach', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ notebookId, workspaceId, envName, envVersion: env?.latestVersion }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRunMsg(`Attach failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`); return; }
+      setAttachedAmlEnv(j.attachedAmlEnv);
+      setRunMsg(`Attached ${j.attachedAmlEnv.name}:${j.attachedAmlEnv.version}.`);
+    } catch (e: any) { setRunMsg(`Attach failed: ${e?.message || e}`); }
+  }, [workspaceId, notebookId, amlEnvs]);
+
   // Build the Fabric-parity ribbon with real handlers. Previously these were
   // decorative labels with no onClick — the Ribbon component auto-disables
   // un-wired actions, which gave the user two visually-identical Save buttons
@@ -740,6 +806,9 @@ export function NotebookEditor({ item, id }: Props) {
         ]},
         { label: 'Workspace', actions: [
           { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
+        ]},
+        { label: 'Environment', actions: [
+          { label: 'Manage environment', onClick: notebookId ? () => setEnvPanelOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
       { id: 'insert', label: 'Insert', groups: [
@@ -876,6 +945,31 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {/* Library & Environment: compact AML environment selector (Fabric ribbon parity). */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+              <Caption1>Environment (libraries)</Caption1>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Select
+                  aria-label="AML environment"
+                  style={{ flex: 1 }}
+                  value={attachedAmlEnv?.name || ''}
+                  onChange={(_, d) => selectAmlEnv(d.value)}
+                  disabled={!notebookId}
+                >
+                  <option value="">No environment attached</option>
+                  {amlEnvs.map((e) => (
+                    <option key={e.name} value={e.name}>{e.name}{e.latestVersion ? `:${e.latestVersion}` : ''}</option>
+                  ))}
+                </Select>
+                <Button
+                  appearance="outline"
+                  icon={<Library20Regular />}
+                  disabled={!notebookId}
+                  title="Manage environment — libraries, packages, custom .jar"
+                  onClick={() => setEnvPanelOpen(true)}
+                >Manage</Button>
+              </div>
+            </div>
             {/* Import a desktop notebook file directly into this workspace. */}
             <input
               ref={fileInputRef}
@@ -937,6 +1031,28 @@ export function NotebookEditor({ item, id }: Props) {
             computeId={computeId}
             onRerun={run}
           />
+
+          {/* Library & Environment management dialog */}
+          <Dialog open={envPanelOpen} onOpenChange={(_, d) => setEnvPanelOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 640 }}>
+              <DialogBody>
+                <DialogContent>
+                  <EnvironmentPanel
+                    notebookId={notebookId}
+                    workspaceId={workspaceId}
+                    attached={attachedAmlEnv}
+                    customLibraries={customLibraries}
+                    onAttached={(env) => { setAttachedAmlEnv(env); void loadAmlEnvs(); }}
+                    onJarsChanged={setCustomLibraries}
+                    onPipInstall={installPipPackage}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setEnvPanelOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* Phase 2: Attach Lakehouse modal */}
           <Dialog open={attachOpen} onOpenChange={(_, d) => setAttachOpen(d.open)}>

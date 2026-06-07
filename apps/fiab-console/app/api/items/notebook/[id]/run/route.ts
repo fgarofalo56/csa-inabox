@@ -84,7 +84,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const stmtKind = statementKind();
     const sessKind = sessionKind(stmtKind);
-    if (tsqlMode()) {
+    // %pip install / %conda install are Spark/IPython magic commands that
+    // install libraries into the RUNNING interactive session (Synapse Livy with
+    // sessionLevelPackagesEnabled=true; Databricks PYTHON notebooks support them
+    // natively). The kernel accepts the magic verbatim inside a pyspark
+    // statement — no translation needed. We force pyspark so an inline %pip in a
+    // cell whose lang is sql/tsql/scala doesn't get mis-routed (and never trips
+    // the T-SQL guard below). The package is then importable in the next cell on
+    // the same reused session.
+    const isInlineInstall = /^\s*%(?:pip|conda)\s+install\b/.test(code.trim());
+    const effectiveStmtKind: 'pyspark' | 'spark' | 'sql' | 'sparkr' = isInlineInstall ? 'pyspark' : stmtKind;
+    const effectiveSessKind: 'pyspark' | 'spark' | 'sparkr' | 'sql' = isInlineInstall ? 'pyspark' : sessKind;
+    if (tsqlMode() && !isInlineInstall) {
       // T-SQL belongs to Synapse Dedicated / Serverless, not Spark — route
       // the user to the right editor instead of stalling on Livy.
       return NextResponse.json({
@@ -108,7 +119,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       let sessState = 'starting';
       let reused = false;
       const saved = state.sparkSession;
-      if (saved && saved.pool === pool && saved.kind === sessKind && typeof saved.id === 'number') {
+      if (saved && saved.pool === pool && saved.kind === effectiveSessKind && typeof saved.id === 'number') {
         try {
           const live = await getLivySession(pool, saved.id);
           if (['idle', 'busy', 'starting', 'not_started'].includes(live.state)) {
@@ -117,7 +128,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         } catch { /* stale/expired → fall through to create */ }
       }
       if (sessionId === undefined) {
-        const sess = await createLivySessionAsync(pool, sessKind);
+        const sess = await createLivySessionAsync(pool, effectiveSessKind);
         sessionId = sess.id; sessState = sess.state;
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
@@ -126,10 +137,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const items = await itemsContainer();
         const pendingRuns = { ...(state.pendingRuns || {}) };
-        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: stmtKind, cellId };
+        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId };
         await items.item(nb.id, workspaceId).replace({
           ...nb,
-          state: { ...state, pendingRuns, sparkSession: { pool, id: sessionId, kind: sessKind } },
+          state: { ...state, pendingRuns, sparkSession: { pool, id: sessionId, kind: effectiveSessKind } },
           updatedAt: new Date().toISOString(),
         } as WorkspaceItem);
       } catch { /* non-fatal — poll will fall back to state.code */ }
@@ -149,9 +160,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const clusterId = compute.slice('databricks:'.length);
       const { runOneTimeNotebook } = await import('@/lib/azure/databricks-client');
       const dbLang =
-        stmtKind === 'spark' ? 'SCALA' :
-        stmtKind === 'sql' ? 'SQL' :
-        stmtKind === 'sparkr' ? 'R' :
+        effectiveStmtKind === 'spark' ? 'SCALA' :
+        effectiveStmtKind === 'sql' ? 'SQL' :
+        effectiveStmtKind === 'sparkr' ? 'R' :
         'PYTHON';
       const runRes = await runOneTimeNotebook({
         clusterId,
