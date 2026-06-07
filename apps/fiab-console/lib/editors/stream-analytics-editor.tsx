@@ -28,9 +28,11 @@ import {
   Subtitle2, Caption1, Badge, Button, Spinner,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Field, Input, Select,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular } from '@fluentui/react-icons';
+import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular, Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -247,6 +249,93 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   // Keep ref in sync so async callbacks see the latest dirty state.
   dirtyRef.current = dirty;
 
+  // ── Add-output wizard ──────────────────────────────────────────────────
+  // Direct ASA-side destination authoring (the Eventstream editor offers a
+  // higher-level "Push to ASA" that maps designer sinks to these same specs).
+  type OutKind = 'kusto' | 'blob' | 'eventhub';
+  const [outOpen, setOutOpen] = useState(false);
+  const [outBusy, setOutBusy] = useState(false);
+  const [outErr, setOutErr] = useState<string | null>(null);
+  const [outKind, setOutKind] = useState<OutKind>('kusto');
+  const [outForm, setOutForm] = useState<Record<string, string>>({ name: 'output1' });
+  const setOF = (k: string, v: string) => setOutForm((p) => ({ ...p, [k]: v }));
+
+  const openAddOutput = useCallback(() => {
+    setOutErr(null);
+    setOutKind('kusto');
+    setOutForm({ name: 'output1', database: 'loomdb-default' });
+    setOutOpen(true);
+  }, []);
+
+  const submitOutput = useCallback(async () => {
+    if (!selected) { setOutErr('Select a job first.'); return; }
+    const f = outForm;
+    if (!f.name?.trim()) { setOutErr('Output alias is required.'); return; }
+    let spec: Record<string, any> = { name: f.name.trim() };
+    if (outKind === 'kusto') {
+      if (!f.table?.trim()) { setOutErr('Table is required.'); return; }
+      spec = {
+        ...spec,
+        datasourceType: 'Microsoft.Kusto/clusters/databases',
+        authenticationMode: 'Msi',
+        kustoClusterUrl: f.cluster?.trim() || '',
+        kustoDatabase: f.database?.trim() || 'loomdb-default',
+        kustoTable: f.table.trim(),
+      };
+      if (!spec.kustoClusterUrl) { setOutErr('Cluster URL is required.'); return; }
+    } else if (outKind === 'blob') {
+      if (!f.storageAccount?.trim()) { setOutErr('Storage account is required.'); return; }
+      if (!f.container?.trim()) { setOutErr('Container is required.'); return; }
+      spec = {
+        ...spec,
+        datasourceType: 'Microsoft.Storage/Blob',
+        authenticationMode: f.storageAccountKey ? 'ConnectionString' : 'Msi',
+        storageAccount: f.storageAccount.trim(),
+        storageAccountKey: f.storageAccountKey || undefined,
+        container: f.container.trim(),
+        pathPattern: f.pathPattern?.trim() || 'events/{date}/{time}',
+        serialization: 'Json',
+      };
+    } else {
+      if (!f.namespace?.trim()) { setOutErr('Event Hubs namespace is required.'); return; }
+      if (!f.eventHubName?.trim()) { setOutErr('Event Hub name is required.'); return; }
+      spec = {
+        ...spec,
+        datasourceType: 'Microsoft.EventHub/EventHub',
+        authenticationMode: f.sharedAccessPolicyKey ? 'ConnectionString' : 'Msi',
+        namespace: f.namespace.trim(),
+        eventHubName: f.eventHubName.trim(),
+        sharedAccessPolicyName: f.sharedAccessPolicyName || undefined,
+        sharedAccessPolicyKey: f.sharedAccessPolicyKey || undefined,
+        serialization: 'Json',
+      };
+    }
+    setOutBusy(true); setOutErr(null);
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/outputs`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(spec),
+      });
+      const j = await r.json();
+      if (!j.ok) { setOutErr(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'Create failed')); return; }
+      setOutOpen(false);
+      setStatus(`Output "${spec.name}" created at ${new Date().toLocaleTimeString()}`);
+      loadDetail(selected, { force: false });
+    } catch (e: any) { setOutErr(e?.message || String(e)); }
+    finally { setOutBusy(false); }
+  }, [selected, outForm, outKind, loadDetail]);
+
+  const deleteOutput = useCallback(async (outputName: string) => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/outputs?outputName=${encodeURIComponent(outputName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setError(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'Delete failed')); return; }
+      setStatus(`Output "${outputName}" deleted.`);
+      loadDetail(selected, { force: false });
+    } finally { setBusy(false); }
+  }, [selected, loadDetail]);
+
   // Ctrl/Cmd+S to save query when dirty + not busy. Matches notebook editor.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -327,6 +416,79 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
           {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
 
+          <Dialog open={outOpen} onOpenChange={(_, d) => setOutOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Add output</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <Field label="Output alias" required hint="Reference this in your SAQL as INTO [alias].">
+                      <Input value={outForm.name || ''} onChange={(_, d) => setOF('name', d.value)} />
+                    </Field>
+                    <Field label="Destination type" required>
+                      <Select value={outKind} onChange={(_, d) => setOutKind(d.value as OutKind)}>
+                        <option value="kusto">KQL Database / ADX (Microsoft.Kusto)</option>
+                        <option value="blob">Lakehouse / ADLS Gen2 (Microsoft.Storage/Blob)</option>
+                        <option value="eventhub">Event Hub (Microsoft.EventHub)</option>
+                      </Select>
+                    </Field>
+                    {outKind === 'kusto' && (
+                      <>
+                        <Field label="Cluster URL" required>
+                          <Input value={outForm.cluster || ''} placeholder="https://adx-csa-loom-shared.eastus2.kusto.windows.net" onChange={(_, d) => setOF('cluster', d.value)} />
+                        </Field>
+                        <Field label="Database" required>
+                          <Input value={outForm.database || ''} placeholder="loomdb-default" onChange={(_, d) => setOF('database', d.value)} />
+                        </Field>
+                        <Field label="Table" required hint="Must exist; schema must match query output columns. Auth: ASA managed identity (AllDatabasesIngestor).">
+                          <Input value={outForm.table || ''} placeholder="raw_events" onChange={(_, d) => setOF('table', d.value)} />
+                        </Field>
+                      </>
+                    )}
+                    {outKind === 'blob' && (
+                      <>
+                        <Field label="Storage account (ADLS Gen2)" required>
+                          <Input value={outForm.storageAccount || ''} placeholder="loomdatalake01" onChange={(_, d) => setOF('storageAccount', d.value)} />
+                        </Field>
+                        <Field label="Container / filesystem" required>
+                          <Input value={outForm.container || ''} placeholder="bronze" onChange={(_, d) => setOF('container', d.value)} />
+                        </Field>
+                        <Field label="Path pattern" hint="Files land under account/container/pathPattern.">
+                          <Input value={outForm.pathPattern || ''} placeholder="events/{date}/{time}" onChange={(_, d) => setOF('pathPattern', d.value)} />
+                        </Field>
+                        <Field label="Account key" hint="Leave blank to use the ASA managed identity (Storage Blob Data Contributor).">
+                          <Input type="password" value={outForm.storageAccountKey || ''} onChange={(_, d) => setOF('storageAccountKey', d.value)} />
+                        </Field>
+                      </>
+                    )}
+                    {outKind === 'eventhub' && (
+                      <>
+                        <Field label="Namespace" required>
+                          <Input value={outForm.namespace || ''} placeholder="loom-eventhub-ns" onChange={(_, d) => setOF('namespace', d.value)} />
+                        </Field>
+                        <Field label="Event Hub name" required>
+                          <Input value={outForm.eventHubName || ''} placeholder="transformed-events" onChange={(_, d) => setOF('eventHubName', d.value)} />
+                        </Field>
+                        <Field label="Shared access policy name" hint="Leave SAS blank to use the ASA managed identity (Event Hubs Data Sender).">
+                          <Input value={outForm.sharedAccessPolicyName || ''} onChange={(_, d) => setOF('sharedAccessPolicyName', d.value)} />
+                        </Field>
+                        <Field label="Shared access key">
+                          <Input type="password" value={outForm.sharedAccessPolicyKey || ''} onChange={(_, d) => setOF('sharedAccessPolicyKey', d.value)} />
+                        </Field>
+                      </>
+                    )}
+                    {outErr && <MessageBar intent="error"><MessageBarBody>{outErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setOutOpen(false)} disabled={outBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitOutput} disabled={outBusy}>{outBusy ? 'Creating…' : 'Create output'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+
           <div className={s.tabBar}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
               <Tab value="query">Query</Tab>
@@ -361,18 +523,36 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'outputs' && (
-            <div className={s.tableWrap}>
-              <Table size="small">
-                <TableHeader><TableRow>
-                  <TableHeaderCell>Alias</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {(job?.outputs || []).map(o => (
-                    <TableRow key={o.name}><TableCell>{o.name}</TableCell><TableCell>{o.type}</TableCell></TableRow>
-                  ))}
-                  {(!job?.outputs || job.outputs.length === 0) && <TableRow><TableCell colSpan={2}>No outputs defined.</TableCell></TableRow>}
-                </TableBody>
-              </Table>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className={s.toolbar}>
+                <Button appearance="primary" icon={<Add20Regular />} disabled={!selected} onClick={openAddOutput}>
+                  Add output
+                </Button>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  KQL Database (ADX), Lakehouse (ADLS Gen2), and Event Hub destinations — created via real ARM.
+                </Caption1>
+              </div>
+              <div className={s.tableWrap}>
+                <Table size="small">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Alias</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {(job?.outputs || []).map(o => (
+                      <TableRow key={o.name}>
+                        <TableCell>{o.name}</TableCell>
+                        <TableCell>{o.type}</TableCell>
+                        <TableCell>
+                          <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busy} onClick={() => deleteOutput(o.name)}>
+                            Delete
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {(!job?.outputs || job.outputs.length === 0) && <TableRow><TableCell colSpan={3}>No outputs defined. Click “Add output” to create a destination.</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
 

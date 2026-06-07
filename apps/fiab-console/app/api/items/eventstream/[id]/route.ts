@@ -140,6 +140,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       fabricEventstreamId: item.state?.fabricEventstreamId ?? null,
       fabricWorkspaceId: item.state?.fabricWorkspaceId ?? null,
       lastPublishedAt: item.state?.lastPublishedAt ?? null,
+      asaJobName: item.state?.asaJobName ?? null,
       config,
     });
   } catch (e: any) {
@@ -159,6 +160,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const saved = await saveItemState(item, {
       source: config.source ?? null,
       sink: config.sink ?? null,
+      // Persist the full multi-source / multi-sink arrays so the visual
+      // designer round-trips every node — and so the asa-sync route can map
+      // EVERY destination to an ASA output (not just the first sink).
       sources: config.sources ?? null,
       sinks: config.sinks ?? null,
       transforms: config.transforms ?? [],
@@ -166,8 +170,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: true, config: {
       source: saved.state?.source,
       sink: saved.state?.sink,
-      sources: saved.state?.sources,
-      sinks: saved.state?.sinks,
+      sources: saved.state?.sources ?? undefined,
+      sinks: saved.state?.sinks ?? undefined,
       transforms: saved.state?.transforms || [],
     } });
   } catch (e: any) {
