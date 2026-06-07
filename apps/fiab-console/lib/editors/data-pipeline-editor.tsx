@@ -930,19 +930,22 @@ export function DataPipelineEditor({ item, id }: Props) {
                   </Caption1>
                 </div>
 
-                {/* Card: Templates gallery (honest "coming soon", not a dead control) */}
+                {/* Card: Templates gallery — opens the real curated gallery */}
                 <div
+                  role="button"
+                  tabIndex={0}
                   style={{
+                    cursor: 'pointer',
                     padding: 18,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
                     borderRadius: 8,
                     backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.7,
+                    display: 'flex', flexDirection: 'column', gap: 6,
                   }}
+                  onClick={() => setGalleryOpen(true)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
                 >
-                  <Badge appearance="outline" color="informative" style={{ alignSelf: 'flex-start' }}>
-                    Coming soon
-                  </Badge>
+                  <AppsList20Regular style={{ color: tokens.colorBrandForeground1 }} />
                   <Subtitle2>Templates gallery</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Curated templates: incremental copy, metadata-driven, ForEach patterns.
