@@ -1,6 +1,6 @@
 /**
  * GET  /api/items/activator/[id]/rules?workspaceId=...
- * POST /api/items/activator/[id]/rules?workspaceId=...  body { name, condition?, action?, query?, sourceTable?, severity? }
+ * POST /api/items/activator/[id]/rules?workspaceId=...  body { name, condition?, action?, query?, sourceTable?, severity?, evaluationFrequency?, windowSize? }
  * POST /api/items/activator/[id]/rules?workspaceId=&trigger=<ruleId>   — trigger a rule run
  *
  * Backend (per .claude/rules/no-fabric-dependency.md): the DEFAULT is the
@@ -145,6 +145,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       query: typeof body?.query === 'string' ? body.query : undefined,
       sourceTable: typeof body?.sourceTable === 'string' ? body.sourceTable : undefined,
       severity: typeof body?.severity === 'number' ? body.severity : undefined,
+      evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : undefined,
+      windowSize: typeof body?.windowSize === 'string' ? body.windowSize : undefined,
     });
     // Persist onto the Cosmos item so the rule list survives reload.
     const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];

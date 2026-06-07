@@ -2942,6 +2942,13 @@ interface RuleLite {
   condition?: { operator?: string; value?: unknown };
   action?: { kind?: string; config?: Record<string, unknown> };
   state?: string; lastTriggered?: string;
+  // Azure Monitor (default) fields — MonitorRuleRecord shape.
+  query?: string;
+  severity?: number;
+  evaluationFrequency?: string;
+  windowSize?: string;
+  azureRuleName?: string;
+  backend?: 'azure-monitor' | 'fabric';
 }
 
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -2974,6 +2981,20 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
+  // ── Azure Monitor scheduled-query wizard (DEFAULT backend) ──
+  // Data source: a raw KQL query (Log Analytics) OR an Event Hub whose data is
+  // ingested into LA (the alert query then targets the hub's table).
+  const [sourceType, setSourceType] = useState<'kql' | 'eventhub'>('kql');
+  const [kqlQuery, setKqlQuery] = useState('');
+  const [sourceTable, setSourceTable] = useState('');
+  const [selectedHub, setSelectedHub] = useState('');
+  // Evaluation cadence (ISO-8601).
+  const [evalFreq, setEvalFreq] = useState('PT5M');
+  const [winSize, setWinSize] = useState('PT5M');
+  // Severity 0 (critical) – 4 (verbose); Warning is the portal default.
+  const [severity, setSeverity] = useState(2);
+  // Trigger-now result for inline feedback (rows + fired).
+  const [triggerResult, setTriggerResult] = useState<{ ruleId: string; fired: boolean; count: number } | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setLoading(true); setListErr(null);
@@ -3052,24 +3073,47 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       PowerAutomateFlow: { triggerUrl: actTarget },
     };
     const action = { kind: actKind, config: cfgByKind[actKind] || {} };
+    // The data-source picker decides what the Azure Monitor scheduled-query
+    // rule evaluates: a raw KQL query wins (verbatim), otherwise the condition
+    // builder composes KQL against the chosen source table (Event Hub-derived
+    // when the Event Hub source is selected).
+    const body: Record<string, unknown> = {
+      name: ruleName.trim(),
+      condition,
+      action,
+      severity,
+      evaluationFrequency: evalFreq,
+      windowSize: winSize,
+    };
+    if (sourceType === 'kql' && kqlQuery.trim()) {
+      body.query = kqlQuery.trim();
+      if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
+    } else if (sourceType === 'eventhub' && selectedHub) {
+      body.sourceTable = sourceTable.trim() || `${selectedHub}_CL`;
+    } else if (sourceTable.trim()) {
+      body.sourceTable = sourceTable.trim();
+    }
     try {
       const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: ruleName.trim(), condition, action }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setRuleErr(j.error || 'add rule failed'); }
-      else { setRuleOpen(false); setRuleName(''); loadRules(workspaceId, selectedId); }
+      if (!j.ok) { setRuleErr(j.error || j.gate?.remediation || 'add rule failed'); }
+      else { setRuleOpen(false); setRuleName(''); setKqlQuery(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, sourceType, kqlQuery, sourceTable, selectedHub, severity, evalFreq, winSize, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
+    setTriggerResult(null);
     const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
     const j = await r.json();
-    if (!j.ok) setRulesErr(j.error || 'trigger failed');
-    else loadRules(workspaceId, selectedId);
+    if (!j.ok) { setRulesErr(j.error || j.gate?.remediation || 'trigger failed'); return; }
+    // Azure-native trigger = run the rule's KQL now; report rows + whether it fired.
+    setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0) });
+    loadRules(workspaceId, selectedId);
   }, [workspaceId, selectedId, loadRules]);
 
   const canNewRule = !!selectedId && !!workspaceId;
@@ -3134,7 +3178,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="New reflex"
-        intro="An Activator (Reflex) watches a stream or KQL query and runs actions — Email, Teams, a pipeline, a notebook, or a Power Automate flow — when a rule's condition fires. Create it, then add rules and Start the reflex against the live Fabric Activator backend." />
+        intro="An Activator (Reflex) watches a KQL query or an Event Hub and runs actions — Email, Teams, a pipeline, a notebook, or a Power Automate flow — when a rule's condition fires. Create it, then add rules. The default backend is Azure Monitor: each rule becomes a real Microsoft.Insights scheduled-query alert rule — no Microsoft Fabric required." />
     );
   }
 
@@ -3192,7 +3236,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                   <DialogTrigger disableButtonEnhancement>
                     <Button size="small" appearance="outline" icon={<Add20Regular />}>New rule</Button>
                   </DialogTrigger>
-                  <DialogSurface>
+                  <DialogSurface style={{ maxWidth: 760 }}>
                     <DialogBody>
                       <DialogTitle>Add rule</DialogTitle>
                       <DialogContent>
@@ -3201,20 +3245,59 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                             <Input placeholder="e.g. Latency SLA breach" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} />
                           </Field>
 
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>DATA SOURCE</Caption1>
                           <div style={{ display: 'flex', gap: 8 }}>
-                            <Field label="Property" style={{ flex: 1 }}>
-                              <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
-                            </Field>
-                            <Field label="Operator" style={{ width: 180 }}>
-                              <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
-                                {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                            <Field label="Source type" style={{ width: 240 }}>
+                              <Select value={sourceType} onChange={(_: unknown, d: any) => setSourceType(d.value as 'kql' | 'eventhub')}>
+                                <option value="kql">KQL query (Log Analytics)</option>
+                                <option value="eventhub">Event Hub</option>
                               </Select>
                             </Field>
-                            <Field label="Value" style={{ width: 120 }}>
-                              <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                            <Field label="Source table (KQL table the condition targets)" style={{ flex: 1 }}>
+                              <Input placeholder="e.g. AppEvents_CL" value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} />
                             </Field>
                           </div>
+                          {sourceType === 'kql' && (
+                            <Field label="KQL query" hint="Verbatim query — alert fires when it returns ≥ 1 row. Leave empty to use the condition builder below.">
+                              <MonacoTextarea value={kqlQuery} onChange={setKqlQuery} language="kql" className={s.monaco} ariaLabel="Alert KQL query" />
+                            </Field>
+                          )}
+                          {sourceType === 'eventhub' && (
+                            <>
+                              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, maxHeight: 220, overflow: 'auto' }}>
+                                <EventHubsNamespaceTree onSelectEventHub={(hub) => { setSelectedHub(hub); setSourceTable(`${hub}_CL`); }} />
+                              </div>
+                              {selectedHub && (
+                                <>
+                                  <Caption1>Event hub selected: <strong>{selectedHub}</strong> → source table <code>{sourceTable || `${selectedHub}_CL`}</code></Caption1>
+                                  <MessageBar intent="warning">
+                                    <MessageBarBody>
+                                      Data from this Event Hub must flow into Log Analytics (via a data collection rule or an ADX data connection) before this alert can fire. The scheduled-query rule targets table <code>{sourceTable || `${selectedHub}_CL`}</code>.
+                                    </MessageBarBody>
+                                  </MessageBar>
+                                </>
+                              )}
+                            </>
+                          )}
+
+                          {!(sourceType === 'kql' && kqlQuery.trim()) && (
+                            <>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <Field label="Property" style={{ flex: 1 }}>
+                                  <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
+                                </Field>
+                                <Field label="Operator" style={{ width: 180 }}>
+                                  <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
+                                    {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                                  </Select>
+                                </Field>
+                                <Field label="Value" style={{ width: 120 }}>
+                                  <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                                </Field>
+                              </div>
+                            </>
+                          )}
 
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>THEN — action</Caption1>
                           <div style={{ display: 'flex', gap: 8 }}>
@@ -3243,8 +3326,34 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                               <Input value={actMessage} onChange={(_: unknown, d: any) => setActMessage(d.value)} />
                             </Field>
                           )}
+
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>EVALUATION</Caption1>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <Field label="Evaluation frequency" style={{ width: 200 }}>
+                              <Select value={evalFreq} onChange={(_: unknown, d: any) => setEvalFreq(d.value)}>
+                                {['PT1M', 'PT5M', 'PT15M', 'PT30M', 'PT1H', 'PT6H'].map((f) => <option key={f} value={f}>{f}</option>)}
+                              </Select>
+                            </Field>
+                            <Field label="Window size (≥ frequency)" style={{ width: 200 }}>
+                              <Select value={winSize} onChange={(_: unknown, d: any) => setWinSize(d.value)}>
+                                {['PT5M', 'PT10M', 'PT15M', 'PT30M', 'PT1H', 'P1D'].map((w) => <option key={w} value={w}>{w}</option>)}
+                              </Select>
+                            </Field>
+                            <Field label="Severity" style={{ width: 200 }}>
+                              <Select value={String(severity)} onChange={(_: unknown, d: any) => setSeverity(Number(d.value))}>
+                                <option value="0">0 — Critical</option>
+                                <option value="1">1 — Error</option>
+                                <option value="2">2 — Warning (default)</option>
+                                <option value="3">3 — Informational</option>
+                                <option value="4">4 — Verbose</option>
+                              </Select>
+                            </Field>
+                          </div>
+
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
-                            when {condProperty || '<property>'} {condOperator} {condValue || '<value>'} → {actKind}
+                            {sourceType === 'kql' && kqlQuery.trim()
+                              ? `KQL: ${kqlQuery.trim().slice(0, 80)}${kqlQuery.trim().length > 80 ? '…' : ''} → ${actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`
+                              : `${condProperty || (sourceTable || '<table>')} ${condOperator} ${condValue || '<value>'} → ${actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`}
                           </Caption1>
                           {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
                         </div>
@@ -3258,29 +3367,42 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                 </Dialog>
               </div>
               {rulesErr && <MessageBar intent="error"><MessageBarBody>{rulesErr}</MessageBarBody></MessageBar>}
+              {triggerResult && (
+                <MessageBar intent={triggerResult.fired ? 'success' : 'info'}>
+                  <MessageBarBody>
+                    Trigger '{triggerResult.ruleId}': {triggerResult.count} row(s) — {triggerResult.fired ? 'FIRED (the alert condition was met)' : 'no rows, would not fire'}.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               {rules.length === 0 ? (
-                <Caption1>No rules on this reflex (or Rules preview API not enabled in this tenant).</Caption1>
+                <Caption1>No rules on this reflex yet. Click “New rule” to create an Azure Monitor scheduled-query alert.</Caption1>
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Rules" size="small">
                     <TableHeader><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
-                      <TableHeaderCell>Object · Property</TableHeaderCell>
-                      <TableHeaderCell>Condition</TableHeaderCell>
+                      <TableHeaderCell>Backend</TableHeaderCell>
+                      <TableHeaderCell>Query / Condition</TableHeaderCell>
+                      <TableHeaderCell>Sev</TableHeaderCell>
+                      <TableHeaderCell>Freq / Window</TableHeaderCell>
                       <TableHeaderCell>Action</TableHeaderCell>
                       <TableHeaderCell>State</TableHeaderCell>
-                      <TableHeaderCell>Last triggered</TableHeaderCell>
                       <TableHeaderCell></TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
                       {rules.map((r) => (
                         <TableRow key={r.id}>
                           <TableCell>{r.name}</TableCell>
-                          <TableCell>{r.objectName || '—'} · {r.propertyName || '—'}</TableCell>
-                          <TableCell className={s.cell}>{r.condition ? `${r.condition.operator} ${fmtCell(r.condition.value)}` : '—'}</TableCell>
+                          <TableCell><Badge size="small" appearance="tint" color={r.backend === 'fabric' ? 'warning' : 'brand'}>{r.backend === 'fabric' ? 'Fabric' : 'Azure Monitor'}</Badge></TableCell>
+                          <TableCell className={s.cell}>
+                            {r.query
+                              ? r.query.replace(/\s+/g, ' ').slice(0, 60) + (r.query.length > 60 ? '…' : '')
+                              : (r.condition ? `${r.condition.operator || ''} ${fmtCell(r.condition.value)}`.trim() : '—')}
+                          </TableCell>
+                          <TableCell>{typeof r.severity === 'number' ? r.severity : '—'}</TableCell>
+                          <TableCell className={s.cell}>{(r.evaluationFrequency || '—')} / {(r.windowSize || '—')}</TableCell>
                           <TableCell className={s.cell}>{r.action?.kind || '—'}</TableCell>
                           <TableCell>{r.state || '—'}</TableCell>
-                          <TableCell className={s.cell}>{r.lastTriggered || '—'}</TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)}>Trigger</Button>
                           </TableCell>
