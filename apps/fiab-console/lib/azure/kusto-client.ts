@@ -691,6 +691,120 @@ export async function showDatabasePolicies(db: string): Promise<KustoDatabasePol
   return out;
 }
 
+// ============================================================
+// Cluster capacity policy + live capacity (Capacity / throttle panel).
+//
+// Grounded in Microsoft Learn (Kusto management commands):
+//   .show cluster policy capacity  — full capacity policy JSON (AllDatabasesMonitor)
+//   .show capacity                 — live slot utilization for every op type
+//   .alter-merge cluster policy capacity ```<json>``` — patch the policy (AllDatabasesAdmin)
+// The capacity policy object components: IngestionCapacity, ExportCapacity,
+// ExtentsMergeCapacity, ExtentsPartitionCapacity, MaterializedViewsCapacity,
+// QueryAccelerationCapacity, … (see capacity-policy doc).
+// ============================================================
+
+/** Allow-listed capacity-policy component names a Loom user may patch. */
+export const CAPACITY_POLICY_COMPONENTS = [
+  'IngestionCapacity',
+  'ExportCapacity',
+  'ExtentsMergeCapacity',
+  'ExtentsPartitionCapacity',
+  'MaterializedViewsCapacity',
+] as const;
+export type CapacityPolicyComponent = (typeof CAPACITY_POLICY_COMPONENTS)[number];
+
+/**
+ * `.show cluster policy capacity` — the full cluster capacity policy as a
+ * parsed JSON object (`{ IngestionCapacity: {…}, ExportCapacity: {…}, … }`).
+ * Requires AllDatabasesMonitor (the Console UAMI holds AllDatabasesAdmin which
+ * is a superset). Runs against NetDefaultDB like the other cluster-scope
+ * commands. The command returns a single row; the policy JSON lives in a
+ * "Policy" column (some cluster builds name it "PolicyText") — we scan the row
+ * for the cell that parses to a JSON object carrying a capacity component.
+ */
+export async function showClusterCapacityPolicy(): Promise<Record<string, unknown>> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show cluster policy capacity');
+  if (!r.rows.length) return {};
+  const row = r.rows[0];
+  // Prefer an explicitly named column.
+  const named = ['Policy', 'PolicyText', 'PolicyName'];
+  for (const colName of named) {
+    const idx = r.columns.indexOf(colName);
+    if (idx >= 0) {
+      const parsed = tryParsePolicy(row[idx]);
+      if (parsed) return parsed;
+    }
+  }
+  // Fallback: scan every cell for a JSON object that looks like a capacity policy.
+  for (const cell of row) {
+    const parsed = tryParsePolicy(cell);
+    if (parsed) return parsed;
+  }
+  return {};
+}
+
+function tryParsePolicy(cell: unknown): Record<string, unknown> | null {
+  if (typeof cell !== 'string') return null;
+  const t = cell.trim();
+  if (!t.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(t);
+    if (obj && typeof obj === 'object') return obj as Record<string, unknown>;
+  } catch { /* not the JSON cell */ }
+  return null;
+}
+
+export interface CapacitySlot {
+  resource: string;
+  total: number;
+  consumed: number;
+  remaining: number;
+  origin: string;
+}
+
+/**
+ * `.show capacity` — live slot utilization for every data-management operation
+ * type. Columns: Resource | Total | Consumed | Remaining | Origin. Requires
+ * Database User (the UAMI has it). Runs against NetDefaultDB (cluster scope).
+ */
+export async function showCapacitySlots(): Promise<CapacitySlot[]> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show capacity');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const resIdx = idx('Resource');
+  const totIdx = idx('Total');
+  const conIdx = idx('Consumed');
+  const remIdx = idx('Remaining');
+  const oriIdx = idx('Origin');
+  const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0);
+  return r.rows.map((row) => ({
+    resource: String(row[resIdx >= 0 ? resIdx : 0] ?? ''),
+    total: num(row[totIdx >= 0 ? totIdx : 1]),
+    consumed: num(row[conIdx >= 0 ? conIdx : 2]),
+    remaining: num(row[remIdx >= 0 ? remIdx : 3]),
+    origin: String(row[oriIdx >= 0 ? oriIdx : 4] ?? ''),
+  }));
+}
+
+/**
+ * `.alter-merge cluster policy capacity ```<json>``` ` — patch-merge one or
+ * more capacity-policy components into the existing policy (un-mentioned
+ * components are preserved). Requires AllDatabasesAdmin. `patch` keys MUST be
+ * allow-listed capacity component names. Returns the raw mgmt result (the new
+ * effective policy).
+ */
+export async function alterMergeCapacityPolicy(patch: Record<string, unknown>): Promise<KustoQueryResult> {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) throw new KustoError('alterMergeCapacityPolicy: patch must contain at least one capacity component', 400);
+  for (const k of keys) {
+    if (!(CAPACITY_POLICY_COMPONENTS as readonly string[]).includes(k)) {
+      throw new KustoError(`alterMergeCapacityPolicy: unsupported component "${k}"`, 400);
+    }
+  }
+  const json = JSON.stringify(patch);
+  const command = `.alter-merge cluster policy capacity \`\`\`${json}\`\`\``;
+  return executeMgmtCommand('NetDefaultDB', command);
+}
+
 export interface KustoUpdatePolicyEntry {
   IsEnabled: boolean;
   Source: string;

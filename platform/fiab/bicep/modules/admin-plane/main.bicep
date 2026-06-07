@@ -892,6 +892,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // Sovereign-cloud ARM endpoint for Azure Monitor metrics calls (e.g.
+            // the Eventhouse Capacity/throttle panel). Empty = public cloud
+            // (https://management.azure.com). Operators in GCC-High / IL5 set
+            // 'https://management.usgovcloudapi.net'. Read by monitor-client.ts.
+            { name: 'LOOM_ARM_ENDPOINT',       value: '' }
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
