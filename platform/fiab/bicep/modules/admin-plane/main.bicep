@@ -114,6 +114,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
+param adxEnableOptimizedAutoscale bool = false
+
+@description('ADX optimized auto-scale minimum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMinimum int = 2
+
+@description('ADX optimized auto-scale maximum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMaximum int = 10
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -621,6 +634,9 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   params: {
     location: location
     skuName: adxSkuName
+    enableOptimizedAutoscale: adxEnableOptimizedAutoscale
+    autoscaleMinimum: adxAutoscaleMinimum
+    autoscaleMaximum: adxAutoscaleMaximum
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }
@@ -822,6 +838,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // Full ARM resource id of the Event Hubs namespace — consumed by the
+            // eventhouse ingest route to wire an ADX → Event Hub data connection
+            // (Get-Data wizard, streaming source). Derived from the same
+            // namespace/RG/sub the navigator uses (RG/sub fall back to the DLZ).
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}' }
+            // Cloud-aware ARM base. Commercial → management.azure.com (default);
+            // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
+            // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
+            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these
@@ -850,6 +875,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Each prefers a reused existing<Service> (any RG/sub) over the
             // provisioned module output, and is '' when neither → honest gate.
             { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
+            // Data Management (ingestion) endpoint — REQUIRED for `.purge table
+            // records` (GDPR erasure); the engine endpoint rejects purge. Prefer
+            // the ARM clusterDataIngestionUri; for a reused cluster derive the
+            // ingest-* host. kusto-client falls back to prepending `ingest-` to
+            // the cluster URI when this is unset.
+            { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
@@ -1021,6 +1052,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
             { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // AOAI token audience by cloud (public: cognitiveservices.azure.com,
+            // Gov: cognitiveservices.azure.us). Derived from the ARM environment()
+            // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
+            // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
+            { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
@@ -1214,6 +1250,13 @@ output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId
 output uamiActivatorId string = identity.outputs.uamiActivatorId
 output uamiActivatorPrincipalId string = identity.outputs.uamiActivatorPrincipalId
+
+// ADX cluster system-assigned MI principal ID — threaded to the DLZ
+// landing-zone module so eventhubs.bicep can grant it Azure Event Hubs Data
+// Receiver (required for KQL-database Event Hub data connections). Empty when
+// ADX is disabled or a BYO existing cluster is used (then bootstrap the grant
+// manually — see docs/fiab/v3-tenant-bootstrap.md).
+output adxClusterPrincipalId string = (adxEnabled && empty(existingAdxClusterName)) ? adxCluster!.outputs.clusterPrincipalId : ''
 output uamiMirroringId string = identity.outputs.uamiMirroringId
 output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 

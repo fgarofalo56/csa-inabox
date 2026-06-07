@@ -17,6 +17,20 @@ describe('KqlDatabaseEditor', () => {
 
   beforeEach(() => {
     const m = installFetchMock({
+      '/api/items/kql-database/kqldb-fixture/schema-graph': () => ({
+        ok: true,
+        database: 'loomdb-default',
+        nodes: [
+          { id: 'table:Events', kind: 'table', name: 'Events', columns: [{ name: 'ts', type: 'datetime' }] },
+          { id: 'mv:EventsDaily', kind: 'materialized-view', name: 'EventsDaily', sourceTable: 'Events' },
+          { id: 'function:fn_recent', kind: 'function', name: 'fn_recent', parameters: '(days:int)' },
+        ],
+        edges: [
+          { from: 'mv:EventsDaily', to: 'table:Events', type: 'mv-source' },
+          { from: 'function:fn_recent', to: 'table:Events', type: 'function-ref' },
+        ],
+        counts: { tables: 1, materializedViews: 1, functions: 1, shortcuts: 0, edges: 2 },
+      }),
       '/api/items/kql-database/kqldb-fixture/query': () => ({
         ok: true,
         database: 'loomdb-default',
@@ -74,5 +88,19 @@ describe('KqlDatabaseEditor', () => {
   it('skips the DB fetch when id is "new" (pre-save gate)', () => {
     render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="new" />);
     expect(calls.filter((c) => c.url.endsWith('/api/items/kql-database/new')).length).toBe(0);
+  });
+
+  it('Diagram tab fetches schema-graph and renders entity nodes', async () => {
+    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: /diagram/i }));
+    await waitFor(() => {
+      expect(calls.some((c) => c.url.includes('/schema-graph'))).toBe(true);
+    });
+    // The canvas renders the real entity names returned by the schema-graph route.
+    await waitFor(() => {
+      expect(screen.getByText('EventsDaily')).toBeInTheDocument();
+      expect(screen.getByText('fn_recent')).toBeInTheDocument();
+    });
   });
 });
