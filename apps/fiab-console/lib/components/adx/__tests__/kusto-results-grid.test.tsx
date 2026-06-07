@@ -24,6 +24,9 @@ import {
   computeColumnStats,
   isNumericColumn,
   formatCell,
+  clampColumnWidth,
+  MIN_COL_WIDTH,
+  MAX_COL_WIDTH,
 } from '../kusto-results-grid';
 
 // A realistic small Kusto result: one string col + one numeric col.
@@ -123,6 +126,13 @@ describe('KustoResultsGrid — pure helpers', () => {
     expect(tricky).toBe('a,b\n"x,y","he said ""hi"""');
   });
 
+  it('clampColumnWidth clamps into the allowed range and rounds', () => {
+    expect(clampColumnWidth(10)).toBe(MIN_COL_WIDTH);
+    expect(clampColumnWidth(5000)).toBe(MAX_COL_WIDTH);
+    expect(clampColumnWidth(123.6)).toBe(124);
+    expect(clampColumnWidth(NaN)).toBe(MIN_COL_WIDTH);
+  });
+
   it('buildTsv produces tab-separated text', () => {
     const tsv = buildTsv(COLUMNS, ROWS);
     expect(tsv).toBe('City\tPopulation\nSeattle\t100\nAustin\t20\nBoston\t9');
@@ -166,3 +176,39 @@ describe('KustoResultsGrid — pure helpers', () => {
     expect(formatCell(42)).toBe('42');
   });
 });
+
+describe('KustoResultsGrid — column resize', () => {
+  it('dragging a header resize handle sets an explicit column width on header + cells', () => {
+    renderGrid();
+    const handle = screen.getByLabelText('Resize Population column');
+    const th = handle.parentElement as HTMLElement;
+    expect(th.tagName).toBe('TH');
+    expect(th.style.width).toBe(''); // auto-size before any drag
+
+    // Drag 60px right. jsdom getBoundingClientRect width is 0 → start clamps to
+    // MIN_COL_WIDTH (48), so final width = 48 + 60 = 108px.
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    fireEvent.mouseMove(window, { clientX: 160 });
+    expect(th.style.width).toBe(`${MIN_COL_WIDTH + 60}px`);
+    fireEvent.mouseUp(window);
+
+    // The matching body cell receives the same width so the column stays aligned.
+    const table = screen.getByRole('table');
+    const firstBodyRow = within(table).getAllByRole('row')[1];
+    const popCell = within(firstBodyRow).getAllByRole('cell')[1] as HTMLElement;
+    expect(popCell.style.width).toBe(`${MIN_COL_WIDTH + 60}px`);
+  });
+
+  it('double-clicking the handle clears the explicit width (auto-fit)', () => {
+    renderGrid();
+    const handle = screen.getByLabelText('Resize Population column');
+    const th = handle.parentElement as HTMLElement;
+    fireEvent.mouseDown(handle, { clientX: 0 });
+    fireEvent.mouseMove(window, { clientX: 120 });
+    fireEvent.mouseUp(window);
+    expect(th.style.width).not.toBe('');
+    fireEvent.doubleClick(handle);
+    expect(th.style.width).toBe('');
+  });
+});
+
