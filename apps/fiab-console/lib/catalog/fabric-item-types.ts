@@ -1090,12 +1090,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics',
     description: 'Spark notebook designer — multi-cell PySpark/Scala/SQL on a Synapse Big Data pool.',
     learnContent: {
-      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
+      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR, .NET Spark C#) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
       "steps": [
         { "title": "Attach a Spark pool", "body": "Pick a Big Data pool from the attach picker; the first run cold-starts the session (about 2-3 minutes)." },
-        { "title": "Author cells", "body": "Add code or markdown cells, set the per-cell language, and reorder them in the designer." },
+        { "title": "Attach an environment (optional)", "body": "Pick a Spark configuration to apply library packages and Spark session settings to the pool — surfaced from the workspace's sparkconfigurations." },
+        { "title": "Author cells", "body": "Add code or markdown cells between any two cells, set the notebook default language and per-cell language, reorder, duplicate, and collapse cells in the designer." },
+        { "title": "Mark a parameters cell", "body": "Designate one code cell as the parameters cell so its variables can be overridden when the notebook runs from a pipeline (papermill/ADF)." },
+        { "title": "Navigate with the outline", "body": "The left-panel outline tracks headings from markdown cells; click an entry to scroll to that cell." },
         { "title": "Run and inspect", "body": "Run a cell or Run all; output and error tracebacks render inline from the Livy statement result." },
-        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact." }
+        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact and backs up the .ipynb to ADLS silver/loom/notebooks/." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks"
     } },
