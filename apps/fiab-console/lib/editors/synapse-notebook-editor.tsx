@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip, Input, Link,
   Tree, TreeItem, TreeItemLayout, Dropdown, Option,
+  Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
@@ -92,6 +93,10 @@ const useStyles = makeStyles({
   },
   outlineEmpty: { padding: '2px 4px', color: tokens.colorNeutralForeground3, fontSize: 12 },
   addBar: { display: 'flex', gap: 8, justifyContent: 'center', padding: '4px 0' },
+  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: 10, maxHeight: 320, overflow: 'auto' },
+  richTable: { width: 'max-content', minWidth: '100%' },
+  richImg: { maxWidth: '100%', display: 'block' },
+  richHtml: { overflow: 'auto', fontSize: 13 },
   assistBar: {
     display: 'flex', gap: 6, padding: '4px 8px', alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -118,12 +123,24 @@ const KIND_MAGIC: Record<CellKind, string> = {
   pyspark: '', spark: '%%spark', sql: '%%sql', sparkr: '%%sparkr', csharp: '%%csharp',
 };
 
+interface CellOutput {
+  status: 'ok' | 'error' | 'running';
+  text?: string;
+  html?: string;
+  tableColumns?: string[];
+  tableRows?: string[][];
+  imageBase64?: string;
+  ename?: string;
+  evalue?: string;
+  traceback?: string[];
+}
+
 interface EditorCell {
   id: string;
   type: 'code' | 'markdown';
   lang: CellKind;
   source: string;
-  output?: { status: 'ok' | 'error' | 'running'; text?: string; ename?: string; evalue?: string; traceback?: string[] };
+  output?: CellOutput;
   running?: boolean;
   /** papermill/ADF "parameters" cell — at most one per notebook. */
   isParameters?: boolean;
@@ -134,6 +151,14 @@ interface EditorCell {
 function uid(): string {
   return (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID() : `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// Client-side mirror of the server's parseConfigureMagic detection — only the
+// "is this a %%configure cell?" check. The server does the authoritative parse
+// (and validates the JSON body) when the cell is sent to /execute.
+function isConfigureCell(source: string): boolean {
+  const first = source.split('\n').find((l) => l.trim() !== '')?.trim().toLowerCase() || '';
+  return first.split(/\s+/)[0].startsWith('%%configure');
 }
 
 // Synapse magic %%sql / %%spark etc. carry per-cell language in IPYNB source.
@@ -252,8 +277,19 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   // Compute attach + Livy session.
   const [pools, setPools] = useState<SparkPoolLite[]>([]);
   const [attachedPool, setAttachedPool] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<number | string | null>(null);
   const [sessionState, setSessionState] = useState<string>('none');
+
+  // Backend (Azure-native Synapse Livy by default; Databricks strictly opt-in
+  // via LOOM_NOTEBOOK_BACKEND=databricks) + Databricks cluster attach.
+  const [backend, setBackend] = useState<'synapse' | 'databricks'>('synapse');
+  const [clusters, setClusters] = useState<{ cluster_id: string; cluster_name?: string; state?: string }[]>([]);
+  const [attachedCluster, setAttachedCluster] = useState<string | null>(null);
+
+  // %%configure options applied to the next (re)created session.
+  const [sessionConfig, setSessionConfig] = useState<Record<string, unknown> | null>(null);
+  // Latest live session, for keepalive + kill-on-unmount (avoids stale closures).
+  const liveSessionRef = useRef<{ compute: string; sessionId: number | string } | null>(null);
 
   // Notebook default language (new cells inherit it) + attached environment
   // (Synapse Spark configuration applied to the session).
@@ -308,6 +344,56 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   }, []);
 
   useEffect(() => { refreshList(); refreshPools(); refreshEnvs(); }, [refreshList, refreshPools, refreshEnvs]);
+
+  // Detect the active notebook compute backend (Synapse Livy default; Databricks
+  // strictly opt-in). When Databricks is selected, load its all-purpose clusters
+  // for the attach picker instead of Spark pools.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/session?probe=1`);
+        const j = await r.json();
+        if (cancelled || !j?.ok) return;
+        const b: 'synapse' | 'databricks' = j.backend === 'databricks' ? 'databricks' : 'synapse';
+        setBackend(b);
+        if (b === 'databricks') {
+          const cr = await fetch('/api/admin/scaling/databricks-cluster');
+          const cj = await cr.json();
+          if (!cancelled && cj?.ok) setClusters(cj.clusters || []);
+        }
+      } catch { /* stay on synapse default */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Keepalive — reset the session idle clock every 4 minutes while a notebook is
+  // open so the warm session survives between cell runs.
+  useEffect(() => {
+    if (sessionId == null) return;
+    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
+    if (!compute) return;
+    const param = backend === 'databricks'
+      ? `cluster=${encodeURIComponent(compute)}&sessionId=${encodeURIComponent(String(sessionId))}`
+      : `pool=${encodeURIComponent(compute)}&sessionId=${encodeURIComponent(String(sessionId))}`;
+    const timer = setInterval(() => {
+      fetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`).catch(() => {});
+    }, 4 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [sessionId, backend, attachedPool, attachedCluster, id]);
+
+  // Kill the live session on unmount so we don't leak Spark drivers / contexts.
+  useEffect(() => {
+    return () => {
+      const ref = liveSessionRef.current;
+      if (!ref) return;
+      const param = backend === 'databricks'
+        ? `cluster=${encodeURIComponent(ref.compute)}&sessionId=${encodeURIComponent(String(ref.sessionId))}`
+        : `pool=${encodeURIComponent(ref.compute)}&sessionId=${encodeURIComponent(String(ref.sessionId))}`;
+      fetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, backend]);
 
   // ---- Hydrate from the installed item's bundle cells ----
   // A bundle-installed synapse-notebook has its NotebookContent cells stamped
@@ -478,65 +564,140 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     return items;
   }, [cells]);
 
-  // ── Run a cell against the Spark pool via Livy (create session → submit →
-  //    poll). Reuses the warm sessionId across cells (notebook semantics). ──────
-  const pollStatement = useCallback(async (pool: string, sess: number, stmt: number, cid: string) => {
+  // ── Run a cell against the attached compute via Livy (create session →
+  //    submit → poll). Reuses the warm session across cells (notebook
+  //    semantics). Databricks uses the execution-context analog under the same
+  //    /api/notebook/[id]/{session,execute} routes. ──────────────────────────
+  const computeParam = useCallback((sess: number | string, stmt?: number | string) => {
+    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
+    const key = backend === 'databricks' ? 'cluster' : 'pool';
+    let qs = `${key}=${encodeURIComponent(String(compute))}&sessionId=${encodeURIComponent(String(sess))}`;
+    if (stmt != null) qs += `&stmtId=${encodeURIComponent(String(stmt))}`;
+    return qs;
+  }, [backend, attachedCluster, attachedPool]);
+
+  const applyOutput = useCallback((cid: string, out: any) => {
+    if (!out) { patchCell(cid, { running: false, output: { status: 'ok', text: '(no output)' } }); return; }
+    if (out.status === 'error') {
+      patchCell(cid, { running: false, output: { status: 'error', ename: out.ename, evalue: out.evalue, traceback: out.traceback, text: out.evalue } });
+      return;
+    }
+    patchCell(cid, {
+      running: false,
+      output: {
+        status: 'ok',
+        text: out.textPlain || (out.textHtml || out.tableRows || out.imageBase64 ? '' : '(no output)'),
+        html: out.textHtml || undefined,
+        tableColumns: out.tableColumns || undefined,
+        tableRows: out.tableRows || undefined,
+        imageBase64: out.imageBase64 || undefined,
+      },
+    });
+  }, [patchCell]);
+
+  const pollStatement = useCallback(async (sess: number | string, stmt: number | string, cid: string) => {
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const r = await fetch(`/api/synapse/notebooks/${encodeURIComponent(openName || '_')}/run-cell?pool=${encodeURIComponent(pool)}&session=${sess}&stmt=${stmt}`);
+      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt)}`);
       const j = await r.json();
       if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'poll failed' } }); return; }
       const st = String(j.state);
-      if (st === 'available') {
-        const o = j.output || {};
-        if (o.status === 'error') {
-          patchCell(cid, { running: false, output: { status: 'error', ename: o.ename, evalue: o.evalue, traceback: o.traceback } });
-        } else {
-          const text = o?.data?.['text/plain'] ?? '';
-          patchCell(cid, { running: false, output: { status: 'ok', text: Array.isArray(text) ? text.join('') : String(text) } });
-        }
-        return;
-      }
+      if (st === 'available') { applyOutput(cid, j.output); return; }
       if (st === 'error' || st === 'cancelled') {
-        patchCell(cid, { running: false, output: { status: 'error', text: `statement ${st}` } });
+        if (j.output) applyOutput(cid, j.output);
+        else patchCell(cid, { running: false, output: { status: 'error', text: `statement ${st}` } });
         return;
       }
     }
     patchCell(cid, { running: false, output: { status: 'error', text: 'timed out polling statement' } });
-  }, [openName, patchCell]);
+  }, [id, computeParam, patchCell, applyOutput]);
 
   const runCell = useCallback(async (cid: string): Promise<void> => {
     const cell = cells.find((c) => c.id === cid);
     if (!cell || cell.type !== 'code') return;
-    if (!attachedPool) { setBanner({ intent: 'info', text: 'Attach a Spark pool before running.' }); return; }
+    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
+    if (!compute) {
+      setBanner({ intent: 'info', text: backend === 'databricks' ? 'Attach a Databricks cluster before running.' : 'Attach a Spark pool before running.' });
+      return;
+    }
+
+    // %%configure interception — store the compute options for the next session
+    // (re)create; the session must be restarted for them to take effect.
+    if (isConfigureCell(cell.source)) {
+      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sessionId ?? undefined, code: cell.source, kind: cell.lang }),
+      });
+      const j = await r.json();
+      if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || '%%configure invalid' } }); return; }
+      setSessionConfig(j.configureOptions || {});
+      setSessionId(null); setSessionState('none'); liveSessionRef.current = null;
+      patchCell(cid, { running: false, output: { status: 'ok', text: '%%configure applied. The session was reset; the next run starts a session with these settings.' } });
+      setBanner({ intent: 'info', text: '%%configure stored. The next Run starts a fresh session with the new compute settings.' });
+      return;
+    }
+
     patchCell(cid, { running: true, output: { status: 'running', text: 'Submitting…' } });
     try {
-      // POST may return sessionWarming when the Spark session is still cold —
-      // poll the session to idle, then re-POST to actually submit the statement.
+      // 1. Ensure a live, idle session (create or reuse). Poll to idle.
       let sess = sessionId;
       for (let attempt = 0; attempt < 90; attempt++) {
-        const r = await fetch(`/api/synapse/notebooks/${encodeURIComponent(openName || '_')}/run-cell`, {
+        const sr = await fetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ pool: attachedPool, code: cell.source, kind: cell.lang, sessionId: sess ?? undefined }),
+          body: JSON.stringify({
+            pool: attachedPool, cluster: attachedCluster,
+            kind: cell.lang,
+            existingSessionId: backend === 'synapse' && typeof sess === 'number' ? sess : undefined,
+            existingContextId: backend === 'databricks' && typeof sess === 'string' ? sess : undefined,
+            configureOptions: backend === 'synapse' && sessionConfig ? sessionConfig : undefined,
+          }),
         });
-        const j = await r.json();
-        if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'run failed' } }); return; }
-        sess = j.sessionId; setSessionId(j.sessionId);
-        if (j.sessionWarming || j.stmtId == null) {
-          setSessionState(j.state || 'starting');
+        const sj = await sr.json();
+        if (!sj?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: sj?.error || 'session failed' } }); return; }
+        sess = sj.sessionId; setSessionId(sj.sessionId);
+        if (sj.state !== 'idle') {
+          setSessionState(sj.state || 'starting');
+          // Poll the session GET until idle.
           await new Promise((r2) => setTimeout(r2, 3000));
+          const gr = await fetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
+          const gj = await gr.json();
+          if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; }
+          if (gj?.state === 'idle') break;
           continue;
         }
-        setSessionState('busy');
-        await pollStatement(attachedPool, j.sessionId, j.stmtId, cid);
-        setSessionState('idle');
+        break;
+      }
+      if (sess == null) { patchCell(cid, { running: false, output: { status: 'error', text: 'Spark session did not become ready in time' } }); return; }
+
+      setSessionState('busy');
+      liveSessionRef.current = { compute, sessionId: sess };
+
+      // 2. Submit the statement.
+      const er = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: cell.source, kind: cell.lang }),
+      });
+      const ej = await er.json();
+      if (!ej?.ok) {
+        if (ej?.sessionDead) { setSessionId(null); setSessionState('none'); liveSessionRef.current = null; }
+        patchCell(cid, { running: false, output: { status: 'error', text: ej?.error || 'run failed' } });
         return;
       }
-      patchCell(cid, { running: false, output: { status: 'error', text: 'Spark session did not become ready in time' } });
+      if (ej.configureApplied) { setSessionConfig(ej.configureOptions || {}); patchCell(cid, { running: false, output: { status: 'ok', text: '%%configure applied.' } }); return; }
+      if (ej.sessionWarming || ej.stmtId == null) {
+        // Session warmed between the POSTs above and this one — retry once.
+        setSessionState(ej.state || 'starting');
+        await new Promise((r3) => setTimeout(r3, 3000));
+        return runCell(cid);
+      }
+
+      // 3. Poll the statement to completion.
+      await pollStatement(sess, ej.stmtId, cid);
+      setSessionState('idle');
     } catch (e: any) {
       patchCell(cid, { running: false, output: { status: 'error', text: e?.message || String(e) } });
     }
-  }, [cells, attachedPool, sessionId, openName, patchCell, pollStatement]);
+  }, [cells, backend, attachedPool, attachedCluster, sessionId, sessionConfig, id, computeParam, patchCell, pollStatement]);
 
   const runAll = useCallback(async () => {
     for (const c of cells) {
@@ -547,10 +708,12 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     }
   }, [cells, runCell]);
 
+  const attachedCompute = backend === 'databricks' ? attachedCluster : attachedPool;
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Run', actions: [
-        { label: 'Run all', onClick: openName && attachedPool ? runAll : undefined, disabled: !openName || !attachedPool, title: !attachedPool ? 'Attach a Spark pool first' : undefined },
+        { label: 'Run all', onClick: openName && attachedCompute ? runAll : undefined, disabled: !openName || !attachedCompute, title: !attachedCompute ? (backend === 'databricks' ? 'Attach a Databricks cluster first' : 'Attach a Spark pool first') : undefined },
       ]},
       { label: 'Cells', actions: [
         { label: 'Add code', onClick: () => addCell('code', activeCell || undefined, 'after') },
@@ -564,7 +727,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         { label: 'Refresh', onClick: refreshList },
       ]},
     ]},
-  ], [openName, attachedPool, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList]);
+  ], [openName, attachedCompute, backend, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList]);
 
   const sparkUiNote = sessionState === 'idle' || sessionState === 'busy';
 
@@ -670,6 +833,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
               <Badge appearance="filled" color="brand">Notebook</Badge>
               <Body1>{openName || 'no notebook open'}</Body1>
               {dirty && <Badge appearance="outline" color="warning" size="small">unsaved</Badge>}
+              {backend === 'databricks' && <Badge appearance="tint" color="important">Backend: Databricks</Badge>}
+              {sessionConfig && Object.keys(sessionConfig).length > 0 && <Badge appearance="outline" color="brand" size="small">%%configure pending</Badge>}
               <div className={s.spacer} />
               <Caption1>Language:</Caption1>
               <Dropdown
@@ -685,39 +850,60 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                 ))}
               </Dropdown>
               <Caption1>Attach:</Caption1>
-              <Dropdown
-                size="small"
-                placeholder="Spark pool"
-                value={attachedPool || ''}
-                selectedOptions={attachedPool ? [attachedPool] : []}
-                onOptionSelect={(_, d) => { setAttachedPool(d.optionValue || null); setSessionId(null); setSessionState('none'); setDirty(true); }}
-                aria-label="Attach Spark pool"
-                style={{ minWidth: 180 }}
-              >
-                {pools.length === 0 && <Option value="" disabled>no Spark pools in workspace</Option>}
-                {pools.map((p) => (
-                  <Option key={p.name} value={p.name} text={p.name}>
-                    {p.name} {p.properties?.nodeSize ? `· ${p.properties.nodeSize}` : ''}
-                  </Option>
-                ))}
-              </Dropdown>
-              <Dropdown
-                size="small"
-                placeholder="Environment"
-                value={attachedEnv || ''}
-                selectedOptions={attachedEnv ? [attachedEnv] : ['']}
-                onOptionSelect={(_, d) => { setAttachedEnv(d.optionValue || null); setDirty(true); }}
-                aria-label="Attach environment (Spark configuration)"
-                title="Spark configuration applied to the session"
-                style={{ minWidth: 160 }}
-              >
-                <Option value="" text="(no environment)">(no environment)</Option>
-                {environments.map((e) => (
-                  <Option key={e.name} value={e.name} text={e.name}>
-                    {e.name}{e.sparkVersion ? ` · Spark ${e.sparkVersion}` : ''}
-                  </Option>
-                ))}
-              </Dropdown>
+              {backend === 'databricks' ? (
+                <Dropdown
+                  size="small"
+                  placeholder="Databricks cluster"
+                  value={attachedCluster || ''}
+                  selectedOptions={attachedCluster ? [attachedCluster] : []}
+                  onOptionSelect={(_, d) => { setAttachedCluster(d.optionValue || null); setSessionId(null); setSessionState('none'); liveSessionRef.current = null; }}
+                  aria-label="Attach Databricks cluster"
+                  style={{ minWidth: 200 }}
+                >
+                  {clusters.length === 0 && <Option value="" disabled>no clusters in workspace</Option>}
+                  {clusters.map((c) => (
+                    <Option key={c.cluster_id} value={c.cluster_id} text={c.cluster_name || c.cluster_id}>
+                      {c.cluster_name || c.cluster_id} {c.state ? `· ${c.state}` : ''}
+                    </Option>
+                  ))}
+                </Dropdown>
+              ) : (
+                <>
+                  <Dropdown
+                    size="small"
+                    placeholder="Spark pool"
+                    value={attachedPool || ''}
+                    selectedOptions={attachedPool ? [attachedPool] : []}
+                    onOptionSelect={(_, d) => { setAttachedPool(d.optionValue || null); setSessionId(null); setSessionState('none'); liveSessionRef.current = null; setDirty(true); }}
+                    aria-label="Attach Spark pool"
+                    style={{ minWidth: 180 }}
+                  >
+                    {pools.length === 0 && <Option value="" disabled>no Spark pools in workspace</Option>}
+                    {pools.map((p) => (
+                      <Option key={p.name} value={p.name} text={p.name}>
+                        {p.name} {p.properties?.nodeSize ? `· ${p.properties.nodeSize}` : ''}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                  <Dropdown
+                    size="small"
+                    placeholder="Environment"
+                    value={attachedEnv || ''}
+                    selectedOptions={attachedEnv ? [attachedEnv] : ['']}
+                    onOptionSelect={(_, d) => { setAttachedEnv(d.optionValue || null); setDirty(true); }}
+                    aria-label="Attach environment (Spark configuration)"
+                    title="Spark configuration applied to the session"
+                    style={{ minWidth: 160 }}
+                  >
+                    <Option value="" text="(no environment)">(no environment)</Option>
+                    {environments.map((e) => (
+                      <Option key={e.name} value={e.name} text={e.name}>
+                        {e.name}{e.sparkVersion ? ` · Spark ${e.sparkVersion}` : ''}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </>
+              )}
               <Badge appearance="outline" color={sessionState === 'idle' ? 'success' : sessionState === 'busy' || sessionState === 'starting' ? 'warning' : 'informative'}>
                 session: {sessionId != null ? `${sessionId} (${sessionState})` : 'none'}
               </Badge>
@@ -738,7 +924,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                   <NotebookCellView
                     cell={c}
                     active={activeCell === c.id}
-                    canRun={!!attachedPool}
+                    canRun={!!attachedCompute}
                     canUp={i > 0}
                     canDown={i < cells.length - 1}
                     notebookId={id}
@@ -993,16 +1179,47 @@ function NotebookCellView(props: {
         </MessageBar>
       )}
 
-      {out && !cell.collapsed && (
+      {out && !cell.collapsed && (out.status === 'running' || out.status === 'error' || out.text) && (
         <div className={`${s.output} ${out.status === 'error' ? s.outputErr : ''}`}>
           {out.status === 'running' && <Spinner size="tiny" label="Running…" labelPosition="after" />}
-          {out.status === 'ok' && (out.text || '(no output)')}
+          {out.status === 'ok' && out.text}
           {out.status === 'error' && (
             <>
               {out.ename ? `${out.ename}: ${out.evalue || ''}\n` : ''}
-              {out.traceback?.length ? out.traceback.join('\n') : (out.text || 'error')}
+              {out.traceback?.length ? out.traceback.join('\n') : (out.text || out.evalue || 'error')}
             </>
           )}
+        </div>
+      )}
+      {out?.status === 'ok' && out.tableRows && out.tableRows.length > 0 && (
+        <div className={s.richOut}>
+          <Table size="extra-small" className={s.richTable} aria-label="DataFrame output">
+            {out.tableColumns && out.tableColumns.length > 0 && (
+              <TableHeader>
+                <TableRow>
+                  {out.tableColumns.map((col, ci) => <TableHeaderCell key={ci}>{col}</TableHeaderCell>)}
+                </TableRow>
+              </TableHeader>
+            )}
+            <TableBody>
+              {out.tableRows.map((row, ri) => (
+                <TableRow key={ri}>
+                  {row.map((cellVal, ci) => <TableCell key={ci}>{cellVal}</TableCell>)}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      {out?.status === 'ok' && out.html && !out.tableRows && (
+        <div className={s.richOut}>
+          {/* Synapse display(df) emits an HTML table here. eslint-disable-next-line react/no-danger */}
+          <div className={s.richHtml} dangerouslySetInnerHTML={{ __html: out.html }} />
+        </div>
+      )}
+      {out?.status === 'ok' && out.imageBase64 && (
+        <div className={s.richOut}>
+          <img className={s.richImg} src={`data:image/png;base64,${out.imageBase64}`} alt="cell output" />
         </div>
       )}
     </div>

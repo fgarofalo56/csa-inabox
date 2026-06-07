@@ -885,6 +885,7 @@ export type CommandLanguage = 'python' | 'sql' | 'scala' | 'r';
 
 export interface ExecutionContext {
   id: string;
+  status?: string; // Pending | Running | Error | Cancelling | Cancelled
 }
 
 /**

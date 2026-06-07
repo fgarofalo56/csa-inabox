@@ -46,6 +46,13 @@ param atlasOnAksEnabled bool
 @description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
 param databricksUnityCatalogEnabled bool = false
 
+@description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy; set to "databricks" to opt the notebook editor into the Databricks Execution Context API instead. Must NOT be "databricks" at IL5.')
+@allowed(['', 'synapse', 'databricks'])
+param loomNotebookBackend string = ''
+
+@description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
+param loomCloudTier string = ''
+
 @description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
 #disable-next-line no-unused-params
 param openaiLocation string
@@ -786,6 +793,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // value embeds a non-deterministic workspace id so it is patched
             // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
             { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            // Notebook per-cell execution backend (F16). Empty/'synapse' → Azure-
+            // native Synapse Spark Livy (default). 'databricks' opts into the
+            // Databricks Execution Context API. LOOM_CLOUD_TIER=IL5 makes the BFF
+            // block the Databricks opt-in regardless (falls back to Livy).
+            { name: 'LOOM_NOTEBOOK_BACKEND', value: loomNotebookBackend }
+            { name: 'LOOM_CLOUD_TIER', value: loomCloudTier }
             // ADX / Kusto navigator + KQL editors. bicep formerly set only the
             // bare LOOM_KUSTO_CLUSTER (read nowhere); the client reads the URI,
             // name, RG, location, and default database.
