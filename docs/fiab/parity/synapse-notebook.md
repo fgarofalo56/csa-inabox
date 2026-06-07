@@ -69,6 +69,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | B11 | Cell **status indicator** (step-by-step) + duration summary | ⚠️ partial | running spinner + ok/error output; no per-step timeline |
 | B12 | **Parameters cell** (papermill/ADF `tags:["parameters"]`) | ✅ built | "…" menu toggle + ribbon "Parameters cell"; single-cell enforced; `parameters` badge; tag round-trips in IPYNB |
 | B13 | **Outline** (markdown headings → click-to-scroll nav) | ✅ built | left-panel Outline (`outline` useMemo) → `scrollIntoView` on `cell-<id>` |
+| B14 | **Copilot cell edges** (NL→code, explain, fix-error) | ✅ built | per-cell Ask Copilot / Explain / Fix → `POST /api/notebook/[id]/assist` → AOAI `chat` deployment (`resolveAoaiTarget`), grounded in T2 lakehouse schema; honest `no_aoai` gate. No Fabric Copilot dependency |
 
 ### C. Compute attach & session
 
@@ -108,10 +109,10 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 ## Coverage tally (post-F15 authoring update, 2026-06-06)
 
-- **built ✅: 28**
-- **partial ⚠️: 3**
+- **built ✅: 29**
+- **partial ⚠️: 4**
 - **honest-gate ⚠️: 1**
-- **MISSING ❌: 11**
+- **MISSING ❌: 10**
 
 ## Honest grade: **B+**
 
@@ -156,6 +157,7 @@ shell**.
 | ADLS .ipynb backup | `PUT /api/synapse/notebooks/[name]` (folded) | `adls-client.uploadFile` → `silver/loom/notebooks/<ws>/<name>.ipynb` |
 | Run cell (submit) | `POST /api/synapse/notebooks/[name]/run-cell` | Livy create session + submit statement |
 | Run cell (poll) | `GET …/run-cell?pool=&session=&stmt=` | Livy get statement |
+| Copilot edge (generate/explain/fix) | `POST /api/notebook/[id]/assist` | AOAI chat-completions on the Foundry `chat` deployment (`cognitiveservices.azure.com` scope), schema-grounded |
 
 ## Bicep / env sync
 

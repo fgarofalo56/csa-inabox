@@ -1,122 +1,115 @@
-# Loom Data Pipeline Editor — Fabric-parity spec
+# data-pipeline — parity with the Fabric Data Pipeline editor
 
-> Captured 2026-05-26 by catalog agent `aff49f5c28912ff78`. Source: live `pl_casino_medallion_daily` + `Pipeline_1` (empty template) in `casino-fabric-poc` + Fabric Data Factory docs.
+> **rev.2 (2026-06-06) — rewritten against current code.** The 2026-05-26
+> capture described the editor as "a thin JSON form, no canvas / no activity
+> library / no properties pane." That is stale: `DataPipelineEditor`
+> (`apps/fiab-console/lib/editors/data-pipeline-editor.tsx`) is now a full
+> three-pane ADF-Studio-style designer (palette · React-Flow canvas over a
+> resizable config dock · top tabs) wired to **real backends**. This doc is the
+> honest, feature-by-feature comparison the rule (`ui-parity.md`) requires.
 
-## Overview
-No-code/low-code visual orchestration. Drag-drop activity canvas, ribbon-driven actions, properties pane for parameters/variables/settings, full Schedule + Trigger + Run History. Loom equivalent today = ADF proxy (real Azure Data Factory) wired via the `data-pipeline` editor route group.
+Source UI: **Fabric Data Pipeline** (Data Factory experience). Inventory
+grounded in Microsoft Learn:
+- Activities / canvas: <https://learn.microsoft.com/fabric/data-factory/activity-overview>
+- Run + monitor: <https://learn.microsoft.com/fabric/data-factory/monitor-pipeline-runs>
+- Schedule / triggers: <https://learn.microsoft.com/fabric/data-factory/pipeline-runs>
 
-## UI components
+**Azure-native default (no real Fabric required, per `no-fabric-dependency.md`).**
+The item type's canonical backend is **Azure Data Factory / Synapse pipeline**.
+Every Save / Validate / Publish / Run / Debug / Schedule call resolves to ADF
+REST (`Microsoft.DataFactory/factories`, api `2018-06-01`) or the Fabric
+data-pipeline REST when a workspace is opted in. The Manage hub (linked services
++ datasets) is **Synapse-backed** (`ManagePanel backend="synapse"`). With
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset the designer still renders fully; the
+workspace picker drives the live ADF/Synapse backing. No `return []`, no mock
+arrays, no `useState(MOCK)` — the editor's single source of truth is a parsed
+`PipelineSpec` round-tripped to the backend.
 
-### Title bar + tab strip
-- Pipeline name with label dropdown ("No label" default)
-- Multi-tab open item support (Pipeline, Notebook, Dataflow, Eventhouse, etc.) with color-coded icons (Notebook=blue, Pipeline=green)
-- Per-tab close (X)
+---
 
-### Ribbon (4 tabs)
-**Home** (default active):
-- **Validate** (checkmark icon)
-- **Run** (play icon)
-- **Schedule** (calendar icon)
-- **Trigger** (lightning bolt + dropdown)
-- **View run history** (history icon)
-- Activity quick-add buttons: **Copy data · Dataflow · Notebook · Lookup · Invoke Pipeline**
-- **Copilot** (AI icon) — NL pipeline build
+## Loom coverage — delivered editor surface
 
-**Activities**: full activity library/toolbox surface
+Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate.
 
-**Run**: execution + debug controls
+| Fabric capability | Loom | Backend (real REST) |
+| --- | --- | --- |
+| Workspace picker + pipeline tree (left rail) | ✅ `useWorkspaces` + `Tree` | `GET /api/loom/workspaces`, `GET /api/items/data-pipeline?workspaceId=` |
+| Deep-link auto-resolve item → its workspace/pipeline | ✅ self-resolves on mount | `GET /api/cosmos-items/data-pipeline/[id]` |
+| Create pipeline (dialog) | ✅ `New pipeline` | `POST /api/items/data-pipeline` (InlineBase64 definition) |
+| Delete pipeline (ribbon, confirm) | ✅ | `DELETE /api/items/data-pipeline/[id]` |
+| **Three-pane designer** (Activities palette · canvas · bottom config dock) | ✅ matches Fabric layout; canvas fills above a draggable, internally-scrolled config dock | spec from `GET .../[id]` |
+| **Activities palette** — searchable, categorized | ✅ `ActivityPalette` from `ACTIVITY_CATALOG` (Move&Transform / Compute / Iteration&Conditional / Lookup&Metadata / External / Office) | n/a (client) |
+| **Authoring canvas** — drag-add, drag-move, pan/zoom, minimap, snap-to-grid, show-grid, fit/reset zoom | ✅ `PipelineCanvas` on `@xyflow/react` (`CanvasHandle.fitToScreen/resetZoom`) | n/a (client) |
+| Dependency edges — drag a source port to a target (cycle-guarded DAG) | ✅ success (`Succeeded`) edge via `connect()` with ancestry cycle-guard | persisted in `dependsOn[]` on Save |
+| 4 dependency conditions (success / failure / completion / skip) coloured ports | ⚠️ partial — all four colours **render** from loaded `dependencyConditions` (`CONNECTOR_COLORS`); drag-create currently persists `Succeeded`; failure/completion/skip set via the activity's `dependsOn` in the config dock / raw JSON | `dependsOn[].dependencyConditions` |
+| **Bottom config dock** for the selected activity (General / Source-Sink / Settings / policy) — resizable splitter, own scroll | ✅ `PropertiesPanel layout="dock"` | `PUT .../[id]` |
+| Delete selected activity (cascades dependent edges) | ✅ `deleteActivity` | `PUT .../[id]` |
+| **Parameters** tab (name / type {string,int,float,bool,array,object,secureString} / default / add / delete) | ✅ inline table editor | round-trips `properties.parameters` on PUT |
+| **Variables** tab (name / type {String,Boolean,Array} / default / add / delete) | ✅ inline table editor | round-trips `properties.variables` on PUT |
+| **Settings** tab (description, concurrency, annotations) + active-triggers list (start/stop) + raw JSON | ✅ + `MonacoTextarea` JSON view round-tripped to/from the canvas model | `PUT .../[id]`; `PUT .../triggers?...&action=start\|stop` |
+| Code (JSON) view round-tripped to the canvas | ✅ Monaco (Settings tab) | `PUT .../[id]` |
+| Save / Ctrl+S | ✅ ribbon + keyboard | `PUT /api/items/data-pipeline/[id]` |
+| Discard (revert to last saved) | ✅ | re-`GET .../[id]` |
+| Validate | ✅ ribbon | `POST /api/items/data-pipeline/[id]/validate` (ADF `validatePipeline`) |
+| Publish to ADF (creates the live backing) | ✅ ribbon | `POST /api/items/data-pipeline/[id]/publish` (ADF `upsertPipeline`) |
+| Run (auto-publishes then retries when no ADF backing yet — no dead-end) | ✅ ribbon | `POST /api/items/data-pipeline/[id]/run` (`createRun`) |
+| Debug | ✅ ribbon | `POST /api/items/data-pipeline/[id]/debug` |
+| **Schedule / Add trigger** — guided wizard, no JSON/cron | ✅ `TriggerWizard`: Schedule (Minute/Hour/Day/**Week**/**Month** + weekDays), **Tumbling window**, **Storage events**, **Custom (Event Grid) events** | `POST /api/items/data-pipeline/[id]/triggers` |
+| Active triggers list + Start / Stop | ✅ Settings tab | `PUT .../triggers?...&action=start\|stop` |
+| **Output / run history** pane | ✅ `OutputPane` | `GET /api/items/data-pipeline/[id]/output[?runId=]` (`queryPipelineRuns`) |
+| **Manage hub** — linked services + datasets (Azure-native, Synapse-backed) | ✅ `ManagePanel backend="synapse"` | Synapse dev REST |
+| Fabric-unsupported activities (DataflowGen2 refresh, Office365) flagged honestly | ✅ rendered + saveable, badged "save-only" (`ACTIVITY_CATALOG[].runnable=false`); a count badge warns they won't run on the ADF backing | n/a |
+| Fabric / workspace not reachable | ⚠️ honest-gate — `MessageBar intent="error"` "Fabric not reachable" with the underlying 401/403 + hint; the full designer still renders | n/a |
+| No pipeline selected yet | ⚠️ honest-gate — info `MessageBar`: design on the canvas now; pick/create a pipeline to Save/Validate/Run | n/a |
 
-**View**: zoom + layout + minimap toggle
+Every row above is ✅ or an honest ⚠️ gate — zero stub banners, zero dead
+controls. The canvas ⇄ `properties.activities[]`/`dependsOn[]` round-trip is the
+same model the ADF pipeline editor covers with Vitest
+(`lib/components/pipeline/__tests__/activities-roundtrip.test.ts`).
 
-### Left sidebar — Activity Library
-- Search/pan navigator icon (crosshair)
-- Activity categories:
-  - **Move + Transform**: Copy data · Dataflow Gen2
-  - **Compute**: Notebook · Spark job definition · Stored procedure
-  - **Iteration + Conditional**: ForEach · IfCondition · Switch · Until · Wait
-  - **Lookup + Metadata**: Lookup · GetMetadata · Set Variable · Append Variable
-  - **External**: Web · WebHook · Azure Function · Custom · Databricks Notebook
-  - **Office**: Office365 Outlook · Teams · Fabric items
-- Drag-drop onto canvas
+## Backend per control (real REST, no mocks)
 
-### Canvas
-**Empty state**: welcome overlay with options
-- Start with a blank canvas
-- Start with guidance
-- Copy data assistant
-- Practice with sample data
-- Templates gallery
+- List / detail / create / save / delete: `app/api/items/data-pipeline[/[id]]/route.ts` → `lib/azure/adf-client.ts` (`listPipelines`, `getPipeline`, `upsertPipeline`, `deletePipeline`) / Fabric items REST.
+- Validate / Publish / Run / Debug: `app/api/items/data-pipeline/[id]/{validate,publish,run,debug}/route.ts`.
+- Triggers: `app/api/items/data-pipeline/[id]/triggers/route.ts` (`upsertTrigger`, `start/stopTrigger`).
+- Output / run history: `app/api/items/data-pipeline/[id]/output/route.ts` (`queryPipelineRuns`).
+- Manage hub: `lib/components/pipeline/manage-panel.tsx` (`backend="synapse"`) → Synapse dev REST for linked services + datasets.
+- Auth: `ChainedTokenCredential(UAMI, DefaultAzureCredential)` against `management.azure.com`.
 
-**Populated state**:
-- Activity cards (icon + display name)
-- Connector arrows (success=green, failure=red, completion=blue, skip=gray)
-- Per-card edit (pencil) + status checkmark
-- Visual dependency chain (left-to-right or branching DAG)
-- Click-to-select / right-click context menu (Copy / Delete / Rename / Clone / Disable)
+## Beyond this editor — full Fabric Data Factory capabilities not yet built (honest)
 
-### Right pane — Properties (5 tabs)
-- **Parameters**: pipeline input parameters (Name · Type {String/Int/Boolean/Array/Object} · Default · Required · Description)
-- **Variables**: runtime variables (`@variables('x')` access)
-- **Settings**: metadata, owner, tags, concurrency, retention
-- **Output**: schema definitions and which activities surface as pipeline output
-- **Library variables**: shared workspace variables (read-only lookup)
-- Collapsible (arrow toggle, top-right)
+These are genuinely absent in the Loom data-pipeline editor today (tracked, not
+claimed; see also [`parity/adf-data-factory.md`](./parity/adf-data-factory.md)):
 
-### Canvas controls (right edge)
-- Zoom in / zoom out / zoom % display
-- Fit-to-screen (bounds icon)
-- Pan mode (hand)
-- Full-screen toggle (expand)
-- Minimap
+| Fabric/ADF capability | Status |
+| --- | --- |
+| Add Dynamic Content / Expression Builder (`@`-expression editor, function list, IntelliSense) | ❌ not built — expressions typed raw into fields/JSON |
+| Per-connector Copy-data rich form (Source/Sink tabs, schema import, auto-map grid) | ❌ not built — Source/Sink edited via the config dock / JSON |
+| Nested control-flow inner-canvas drill-in (ForEach/If/Switch/Until) | ❌ not built **in this editor** (the Mounted-ADF pipeline editor has it via `drill-path.ts`) |
+| Empty-state assistants — Copy-data assistant, Templates gallery | ❌ not built |
+| Right-click activity context menu (Copy / Rename / Clone / Disable) | ❌ not built |
+| Copilot NL → pipeline build | ❌ not built (parked on AI Foundry agent) |
 
-### Schedule + Trigger
-- **Schedule**: frequency (hourly/daily/weekly/monthly), start+end date+time, timezone, advanced recurrence
-- **Trigger**: time-based, event-based, manual, Power Automate / Logic Apps integration
+## Bicep / env sync
 
-### Run history
-- Per-run row: timestamp · status (Success / Failed / In progress) · duration · triggered-by
-- Drill-down: per-activity status, duration, rows read/written, logs, error stack, inputs/outputs JSON
-- Rerun (whole pipeline or from failed activity)
-- Cancel button on active runs
+- Consumed env vars: `LOOM_ADF_NAME`, `LOOM_ADF_RG`, `LOOM_SUBSCRIPTION_ID`,
+  `LOOM_DLZ_RG`, `LOOM_SYNAPSE_WORKSPACE` (the gate MessageBars name them).
+- Resource: the ADF factory `adf-loom-default-<location>` deploys from
+  `platform/fiab/bicep/modules/landing-zone/adf.bicep`. **Fixed 2026-06-06:**
+  `main.bicep` now threads `adfPrivateDnsZoneId:
+  adminPlane.outputs.privateDnsZoneIds.adf` into the DLZ, and `network.bicep`
+  exposes the `adf` zone — previously the factory + SHIR modules silently
+  skipped in a clean-sub deploy because `adfPrivateDnsZoneId` stayed empty. With
+  the fix, `az deployment sub create -f platform/fiab/bicep/main.bicep -p
+  params/commercial-full.bicepparam` provisions the factory the editor drives,
+  matching the `LOOM_ADF_NAME` default (Commercial `adf.azure.com`, Gov
+  `datafactory.azure.us`).
+- Role: Console UAMI needs **Data Factory Contributor** on the factory
+  (`adf.bicep` role assignment). No new Cosmos container.
 
-### Validate
-- Syntax + missing-config detection
-- Dependency cycle detection
-- Errors + warnings surfaced in messages pane
+## Verification
 
-## What Loom has
-- ADF proxy already wired (`/api/items/data-pipeline/*` → real ADF pipelines named `loom_<wsHash>_<displayName>`)
-- Create / Read / Update / Delete via Cosmos with ADF backing
-- `/run` POST → `runPipeline()` against ADF
-- `/jobs` GET → `listPipelineRuns()` for run history
-- Editor is a thin JSON form, **no canvas / no activity library / no properties pane**
-
-## Gaps for parity
-1. **Visual canvas** — needs the drag-drop activity DAG editor
-2. **Activity library** — 8+ activity categories with drag-drop add
-3. **Ribbon** — Validate/Run/Schedule/Trigger/View-history/Copilot quick actions
-4. **Properties pane** — 5-tab pane (Parameters/Variables/Settings/Output/Library variables)
-5. **Empty-state wizard** — Copy data assistant + templates
-6. **Run history drill-down** — currently flat list, needs per-activity expansion
-7. **Schedule + Trigger UI** — currently `state.schedule` JSON, needs guided form
-8. **Connector arrows + branching** — success/failure/completion/skip paths
-
-## Backend mapping
-- ADF Linked Services library (browser already partially exposed at `/api/adf/linked-services`)
-- ADF Pipeline JSON read/write — convert canvas DAG → ADF Pipeline payload + back
-- `/api/items/data-pipeline/[id]/jobs/[runId]` — fetch ADF activity-run detail
-- Schedule wiring: ADF Trigger create/start/stop (`/triggers/{name}`)
-- Validate: server-side parse + ADF `/validate` REST call
-
-## Required Azure resources
-- ADF instance (`loom-adf-<suffix>` already deployed)
-- ADF Managed Private Endpoint to relevant data sources (Synapse, Storage, Cosmos, etc.)
-- UAMI Data Factory Contributor on ADF
-
-## Estimated effort
-**4-5 sessions.** Visual canvas (DAG editor) is the heaviest piece. MVP path: ribbon + activity quick-add buttons + properties pane (3 sessions), defer drag-drop canvas to v2.
-
-## Notes
-- Activities map 1:1 to ADF activity types — backend translation layer is straightforward
-- Copilot NL → pipeline build is parked until AI Foundry agent wired
-- Reference pipeline in tenant: `pl_casino_medallion_daily` (3 sequential Notebook activities, Gold-Slot → Gold-Player 360 → Gold-1)
+Per `no-vaporware.md`: Save/Validate/Publish/Run/Debug/Schedule hit real ADF
+REST; the workspace-unreachable and no-pipeline states are honest gates. Live
+`pnpm uat` + side-by-side against the Fabric Data Pipeline editor: confirm each
+control per the no-scaffold rule (DOM strings ≠ parity).

@@ -200,6 +200,34 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/environment-manage-customization"
     } },
+  { slug: 'spark-environment', displayName: 'Spark environment', restType: 'SparkEnvironment', category: 'Data Engineering',
+    description: 'Full lifecycle Spark environment: runtime version, compute config, public libraries (pip/conda), custom libraries (whl/jar), and Spark properties. Publish bakes the spec into a Synapse Spark pool; attach to notebooks and Spark job definitions.',
+    learnContent: {
+      "overview": "A Spark environment is a versioned, publishable bundle of runtime, compute, and library configuration. In Loom the spec persists to Cosmos; Publish bakes it into a Synapse Spark Big Data pool (sessionLevelPackagesEnabled + libraryRequirements + customLibraries + sparkConfigProperties) via ARM, and Attach wires it onto notebooks and Spark job definitions so they share the same runtime. No Microsoft Fabric capacity is required — the backend is Azure Synapse + ADLS Gen2.",
+      "steps": [
+        {
+          "title": "Pick the runtime",
+          "body": "Choose the Spark runtime version (3.5 GA recommended) and node family on the Runtime tab."
+        },
+        {
+          "title": "Size the compute",
+          "body": "Set node size, autoscale or a fixed node count, and auto-pause on the Compute tab — these are baked into the pool on publish."
+        },
+        {
+          "title": "Add libraries",
+          "body": "List pip/conda packages on Public libraries and upload .whl/.jar files (staged to ADLS) on Custom libraries."
+        },
+        {
+          "title": "Publish + validate",
+          "body": "Publish bakes the spec into the target Spark pool, then Validate import runs a live Spark session that installs the packages and imports them — the receipt proves importability."
+        },
+        {
+          "title": "Attach to items",
+          "body": "Attach the environment to notebooks and Spark job definitions so they default to the published pool and share the same libraries."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-azure-portal-add-libraries"
+    } },
 
   // Data Factory
   { slug: 'data-pipeline', displayName: 'Data pipeline', restType: 'DataPipeline', category: 'Data Factory',

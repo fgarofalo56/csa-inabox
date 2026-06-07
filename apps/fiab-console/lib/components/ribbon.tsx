@@ -7,16 +7,22 @@
  * in docs/fiab/fabric-feature-inventory.md §3.
  */
 
-import { ReactNode, useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import {
   Tab,
   TabList,
   Button,
   Divider,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
   makeStyles,
   tokens,
   type ButtonProps,
 } from '@fluentui/react-components';
+import { ChevronDown16Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   root: {
@@ -52,8 +58,25 @@ const useStyles = makeStyles({
   },
 });
 
+export interface RibbonDropdownItem {
+  label: string;
+  /** Real navigation / action handler. When omitted AND not disabled the
+   *  item renders disabled with a "not wired" tooltip (honest, per
+   *  no-vaporware.md). */
+  onClick?: () => void;
+  disabled?: boolean;
+  /** Optional tooltip — used to explain why an item is grayed out. */
+  title?: string;
+  icon?: ReactElement;
+}
+
 export interface RibbonAction extends Omit<ButtonProps, 'children'> {
   label: string;
+  /** When present, the button renders as a split-style dropdown: a chevron
+   *  opens a Fluent Menu of `dropdownItems` (mirrors Fabric's "Get data ▼" /
+   *  "Analyze data ▼" ribbon menus). Backward-compatible — actions that only
+   *  set label/onClick/disabled render as before. */
+  dropdownItems?: RibbonDropdownItem[];
 }
 
 export interface RibbonGroup {
@@ -94,7 +117,50 @@ export function Ribbon({ tabs, defaultTabId }: Props) {
             <div className={styles.group}>
               <div className={styles.groupRow}>
                 {g.actions.map((a, ai) => {
-                  const { label, onClick, disabled, ...rest } = a;
+                  const { label, onClick, disabled, dropdownItems, ...rest } = a;
+                  // Dropdown action: chevron opens a Fluent Menu. Each menu
+                  // item must navigate to a real surface (no toasts / dead
+                  // entries). Items with neither onClick nor disabled render
+                  // disabled + "not wired" tooltip so the menu is honest.
+                  if (dropdownItems?.length) {
+                    return (
+                      <Menu key={ai}>
+                        <MenuTrigger disableButtonEnhancement>
+                          <Button
+                            appearance="subtle"
+                            size="small"
+                            disabled={disabled}
+                            title={disabled ? (rest.title as string | undefined) : undefined}
+                            icon={<ChevronDown16Regular />}
+                            iconPosition="after"
+                          >
+                            {label}
+                          </Button>
+                        </MenuTrigger>
+                        <MenuPopover>
+                          <MenuList>
+                            {dropdownItems.map((mi, di) => {
+                              const miDead = !mi.onClick && !mi.disabled;
+                              return (
+                                <MenuItem
+                                  key={di}
+                                  icon={mi.icon}
+                                  disabled={mi.disabled || miDead}
+                                  onClick={miDead ? undefined : mi.onClick}
+                                  title={
+                                    mi.title ??
+                                    (miDead ? `${mi.label} — not wired in this editor` : undefined)
+                                  }
+                                >
+                                  {mi.label}
+                                </MenuItem>
+                              );
+                            })}
+                          </MenuList>
+                        </MenuPopover>
+                      </Menu>
+                    );
+                  }
                   // v2 validator finding: editors declared 74+ ribbon
                   // actions with only { label } and no onClick — they
                   // rendered as enabled buttons but did nothing
