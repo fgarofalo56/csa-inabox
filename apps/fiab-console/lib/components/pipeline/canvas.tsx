@@ -34,10 +34,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { Organization20Regular, FullScreenMaximize20Regular } from '@fluentui/react-icons';
+import { Organization20Regular, FullScreenMaximize20Regular, Flowchart20Regular } from '@fluentui/react-icons';
 import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-activity-node';
 import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
-import { elkLayout, topoFallback, type XY } from './flow-layout';
+import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layout';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
 import type { PipelineActivity } from './types';
@@ -46,6 +46,11 @@ const NODE_H = 84;
 
 const nodeTypes: NodeTypes = { activity: FlowActivityNode };
 const edgeTypes: EdgeTypes = { loom: LoomBezierEdge };
+
+/** Pan a viewport by (dx, dy) screen pixels, preserving zoom. */
+function shiftViewport(vp: { x: number; y: number; zoom: number }, dx: number, dy: number) {
+  return { x: vp.x + dx, y: vp.y + dy, zoom: vp.zoom };
+}
 
 const useStyles = makeStyles({
   shell: {
@@ -110,6 +115,12 @@ export interface PipelineCanvasProps {
    * pushes a drill step and re-renders the canvas at the inner level.
    */
   onDrillInto?: (name: string) => void;
+  /**
+   * Pop one drill level — wired to Backspace, which Fabric's keyboard spec maps
+   * to "Return to previous canvas" (Learn: data-factory/keyboard-shortcuts).
+   * No-op at the top level.
+   */
+  onDrillBack?: () => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
@@ -144,7 +155,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 }
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, snapToGrid = true, showGrid = true, onZoomChange },
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange },
   ref,
 ) {
   const s = useStyles();
@@ -153,6 +164,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   const positionsRef = useRef<Map<string, XY>>(new Map());
   const pendingDropRef = useRef<XY | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  // Fabric "updated canvas experience" — when on, container nodes render an
+  // inline mini-preview of their inner activities. Toggled by N / the toolbar.
+  const [showNestedPreviews, setShowNestedPreviews] = useState(false);
 
   // Build the RF node list from activities, preserving any positions the user
   // dragged (positionsRef) and placing brand-new activities either at the drop
@@ -178,12 +192,15 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         // Only container activities get a drill handler (→ the pencil button
         // renders). Non-containers leave it undefined.
         onDrill: onDrillInto && isContainerType(a.type) ? onDrillInto : undefined,
+        // Inline nested-activity preview (N toggle) — only meaningful on
+        // containers, but harmless on leaf nodes (they render nothing).
+        showNestedPreview: showNestedPreviews,
       } as ActivityNodeData,
       selected: selectedName === a.name,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
     })));
-  }, [activities, selectedName, setNodes, onDrillInto]);
+  }, [activities, selectedName, setNodes, onDrillInto, showNestedPreviews]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);
@@ -250,15 +267,46 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   useImperativeHandle(ref, () => ({ fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign }),
     [fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign]);
 
+  // --- keyboard map (Fabric Data Factory parity) ----------------------------
+  // Learn: data-factory/keyboard-shortcuts.
+  //   I / O      zoom in / out          F        zoom to fit
+  //   A          auto-align (ELK)       N        toggle nested preview
+  //   Shift+↑↓←→ pan the canvas         Backspace return to previous canvas
+  // Keys are ignored while focus is inside a text control so typing in a node
+  // label / property field is never hijacked.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' || target.isContentEditable
+    ) return;
+    const key = e.key;
+    if (key === 'i' || key === 'I') { e.preventDefault(); rf.zoomIn({ duration: 120 }); return; }
+    if (key === 'o' || key === 'O') { e.preventDefault(); rf.zoomOut({ duration: 120 }); return; }
+    if (key === 'f' || key === 'F') { e.preventDefault(); rf.fitView({ padding: 0.2, duration: 200 }); return; }
+    if (key === 'a' || key === 'A') { e.preventDefault(); void autoAlign(); return; }
+    if (key === 'n' || key === 'N') { e.preventDefault(); setShowNestedPreviews((v) => !v); return; }
+    if (key === 'Backspace') { e.preventDefault(); onDrillBack?.(); return; }
+    if (e.shiftKey) {
+      const PAN = 80;
+      if (key === 'ArrowUp')    { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), 0, PAN), { duration: 120 }); return; }
+      if (key === 'ArrowDown')  { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), 0, -PAN), { duration: 120 }); return; }
+      if (key === 'ArrowLeft')  { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), PAN, 0), { duration: 120 }); return; }
+      if (key === 'ArrowRight') { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), -PAN, 0), { duration: 120 }); return; }
+    }
+  }, [rf, autoAlign, onDrillBack]);
+
   return (
     <div
       ref={wrapRef}
       className={s.shell}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
       onDragOver={onDragOver}
       onDrop={onDrop}
       data-testid="pipeline-canvas"
       data-canvas="pipeline"
-      aria-label="Pipeline design canvas"
+      aria-label="Pipeline design canvas. Keyboard: I/O zoom, F fit, A align, N nested preview, Shift+arrows pan, Backspace back."
     >
       <ReactFlow
         nodes={nodes}
@@ -281,14 +329,27 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
+        onlyRenderVisibleElements={shouldVirtualize(activities.length)}
       >
         {showGrid && <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />}
         <Panel position="top-right">
           <div style={{ display: 'flex', gap: 4, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 2 }}>
-            <Tooltip content="Auto-align (ELK layout)" relationship="label">
+            <Tooltip content={`${showNestedPreviews ? 'Hide' : 'Show'} nested activity preview (N)`} relationship="label">
+              <Button
+                size="small"
+                appearance={showNestedPreviews ? 'primary' : 'subtle'}
+                icon={<Flowchart20Regular />}
+                aria-label="Toggle nested activity preview"
+                aria-pressed={showNestedPreviews}
+                onClick={() => setShowNestedPreviews((v) => !v)}
+              >
+                Nested
+              </Button>
+            </Tooltip>
+            <Tooltip content="Auto-align (ELK layout) — A" relationship="label">
               <Button size="small" appearance="subtle" icon={<Organization20Regular />} onClick={autoAlign}>Auto-align</Button>
             </Tooltip>
-            <Tooltip content="Zoom to fit" relationship="label">
+            <Tooltip content="Zoom to fit — F" relationship="label">
               <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={fitToScreen} />
             </Tooltip>
           </div>
@@ -309,7 +370,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       )}
       <div className={s.hint}>
         <Caption1 className={s.hintText}>
-          drag to pan · wheel to zoom · drag a coloured output port (success / failure / completion / skip) to connect
+          drag to pan · wheel to zoom · I/O zoom · F fit · A align · N nested · Shift+Arrow pan · Backspace back
         </Caption1>
       </div>
     </div>
