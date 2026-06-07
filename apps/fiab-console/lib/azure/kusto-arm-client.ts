@@ -30,10 +30,12 @@ import {
 } from '@azure/identity';
 
 // ARM endpoint is sovereign-cloud aware — single source of truth, identical
-// pattern to adf-client.ts. Default = Commercial (unchanged behavior). GCC-High
-// / IL5 deployments set AZURE_CLOUD=AzureUSGovernment (or LOOM_ARM_ENDPOINT) so
-// every Kusto ARM call below targets the correct ARM host + token scope instead
-// of management.azure.com. Required because follower-attach ships in Gov.
+// pattern to adf-client.ts. Default = Commercial (unchanged behavior). GCC /
+// GCC-High / IL5 deployments set AZURE_CLOUD=AzureUSGovernment (or
+// LOOM_ARM_ENDPOINT) so every Kusto ARM call below — GET cluster, PATCH SKU,
+// PATCH enableStreamingIngest, follower-attach — targets the correct ARM host +
+// token scope instead of management.azure.com. Required because follower-attach
+// ships in Gov.
 function armBase(): string {
   const explicit = process.env.LOOM_ARM_ENDPOINT;
   if (explicit) return explicit.replace(/\/+$/, '');
@@ -117,6 +119,7 @@ export interface KustoClusterArm {
   sku: { name: string; tier: string; capacity?: number };
   state?: string;
   provisioningState?: string;
+  enableStreamingIngest?: boolean;
 }
 
 function shape(raw: any): KustoClusterArm {
@@ -131,6 +134,7 @@ function shape(raw: any): KustoClusterArm {
     },
     state: raw?.properties?.state,
     provisioningState: raw?.properties?.provisioningState,
+    enableStreamingIngest: raw?.properties?.enableStreamingIngest,
   };
 }
 
@@ -275,4 +279,42 @@ export async function detachFollowerDatabase(configName: string): Promise<void> 
   if (!r.ok && r.status !== 202 && r.status !== 204) {
     throw new KustoArmError(r.status, await r.text(), `detachFollowerDatabase failed ${r.status}`);
   }
+}
+
+/**
+ * PATCH the cluster-level streaming-ingestion capability flag.
+ *
+ * ARM body: { "properties": { "enableStreamingIngest": true|false } }
+ *
+ * Unlike the SKU PATCH (which carries `sku` at the document root), this flag
+ * lives under `properties`. Toggling it triggers an async cluster
+ * reconfiguration: enabling is fast (seconds–minutes), disabling can take
+ * longer. ARM may answer 200 (full resource) or 202 (async). On 202 we return
+ * a synthetic shape with provisioningState='Updating' and the desired flag,
+ * matching updateKustoClusterSku.
+ *
+ * The UAMI must hold "Contributor" (or "Azure Kusto Contributor") at the
+ * cluster scope. Same auth + sovereign-cloud ARM host as the rest of this file.
+ */
+export async function updateKustoStreamingIngest(
+  enabled: boolean,
+): Promise<KustoClusterArm> {
+  const cfg = readKustoArmConfig();
+  const body = { properties: { enableStreamingIngest: enabled } };
+  const r = await callArm(
+    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new KustoArmError(r.status, await r.text(), `updateKustoStreamingIngest failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    return shape({
+      id: cfg.clusterName,
+      name: cfg.clusterName,
+      sku: {},
+      properties: { provisioningState: 'Updating', enableStreamingIngest: enabled },
+    });
+  }
+  return shape(await r.json());
 }

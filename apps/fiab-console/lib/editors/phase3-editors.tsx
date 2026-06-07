@@ -496,6 +496,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [hotCacheDays, setHotCacheDays] = useState<number>(7);
   const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
   const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(false);
   const [policiesBusy, setPoliciesBusy] = useState(false);
   const [policiesErr, setPoliciesErr] = useState<string | null>(null);
 
@@ -613,6 +614,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         body: JSON.stringify({
           database: selectedDb,
           hotCacheDays, softDeleteDays, oneLakeAvailability: oneLakeEnabled,
+          enableStreamingIngest: streamingEnabled,
         }),
       });
       const ct = r.headers.get('content-type') || '';
@@ -624,7 +626,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     } finally {
       setPoliciesBusy(false);
     }
-  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
+  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, streamingEnabled, load]);
 
   const hasDbs = (state?.databases?.length ?? 0) > 0;
   const dbCount = state?.databases?.length ?? 0;
@@ -649,6 +651,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
           disabled: !hasDbs || !selectedDb,
           title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+        { label: 'Streaming ingest', onClick: hasDbs && selectedDb ? () => { setStreamingEnabled(true); setPoliciesOpen(true); } : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs || !selectedDb ? 'pick a database first' : 'Enable/disable low-latency streaming ingestion on the cluster' },
       ]},
       { label: 'Refresh', actions: [
         { label: 'Refresh', onClick: load },
@@ -849,6 +854,21 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                           label={oneLakeEnabled ? 'Mirrored to OneLake' : 'Not mirrored'}
                         />
                         <Caption1>Fabric-managed eventhouses only. Mirrors KQL tables into OneLake as Delta for Spark/Power BI.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Enable streaming ingestion</Label>
+                        <Switch
+                          checked={streamingEnabled}
+                          onChange={(_, d) => setStreamingEnabled(!!d.checked)}
+                          label={streamingEnabled ? 'Enabled' : 'Disabled'}
+                        />
+                        <Caption1>
+                          Cluster-level flag (ARM). Enables the low-latency (&lt;1s) ingest path
+                          for Event Hub data connections and the <code>.ingest inline</code> command,
+                          then turns on the database streaming-ingestion policy. Toggling triggers an
+                          async cluster update; the cluster stays online. New Loom clusters ship with
+                          this on by default.
+                        </Caption1>
                       </div>
                     </div>
                     {policiesErr && (
