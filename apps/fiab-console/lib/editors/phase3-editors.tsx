@@ -31,7 +31,8 @@ import {
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  Tooltip,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, Switch, SpinButton,
   makeStyles, tokens,
@@ -41,6 +42,7 @@ import {
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Table20Regular, Flowchart20Regular,
   Apps20Regular, List20Regular, Open20Regular,
+  Sparkle16Regular, Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import {
@@ -92,6 +94,15 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
+  assistBar: {
+    display: 'flex', gap: '6px', padding: '4px 8px', alignItems: 'center',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  assistResult: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+  },
 });
 
 // ============================================================
@@ -2808,6 +2819,14 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [alertActivators, setAlertActivators] = useState<Array<{ id: string; name: string }>>([]);
   const [alertErr, setAlertErr] = useState<string | null>(null);
   const [alertBusy, setAlertBusy] = useState(false);
+  // NL2KQL Copilot assist (generate / explain / fix) — inline build-assist over
+  // the Loom AOAI deployment. State machine mirrors the Notebook assist edge.
+  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
+  const [assistView, setAssistView] = useState<AssistView>('idle');
+  const [assistPrompt, setAssistPrompt] = useState('');
+  const [assistResult, setAssistResult] = useState<string | null>(null);
+  const [assistError, setAssistError] = useState<string | null>(null);
+  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-queryset/new fires this before any record exists.
@@ -3029,6 +3048,36 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [alertActivatorId, alertName, draft]);
 
+  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
+    lastModeRef.current = mode;
+    setAssistView('loading'); setAssistError(null);
+    try {
+      const r = await fetch(`/api/items/kql-queryset/${id}/assist`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          kql: draft.kql,
+          prompt: mode === 'generate' ? assistPrompt : undefined,
+          errorText: mode === 'fix' ? (result?.error || '') : undefined,
+          database: draft.database || qs?.database || qs?.defaultDatabase,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setAssistView('idle');
+        setAssistError(j?.code === 'no_aoai'
+          ? `KQL Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
+          : (j?.error || 'AI assist failed'));
+        return;
+      }
+      setAssistResult(j.result);
+      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
+    } catch (e: any) {
+      setAssistView('idle');
+      setAssistError(e?.message || String(e));
+    }
+  }, [id, draft, assistPrompt, result, qs]);
+
   const canRun = !loading && !!draft.kql.trim();
   const canSave = !saving && queries.length > 0 && dirty;
   const canPinAlert = !!draft.kql.trim();
@@ -3080,6 +3129,28 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             <Button appearance="outline" icon={<Save20Regular />} disabled={saving || queries.length === 0 || !dirty} onClick={saveAll}>
               {saving ? 'Saving…' : 'Save (Ctrl+S)'}
             </Button>
+            <Tooltip content="Generate KQL from a description" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
+                disabled={assistView === 'loading'}
+                onClick={() => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
+                aria-label="Ask Copilot to generate KQL">Ask Copilot</Button>
+            </Tooltip>
+            <Tooltip content="Explain this query" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Info16Regular />}
+                disabled={!draft.kql.trim() || assistView === 'loading'}
+                onClick={() => callAssist('explain')}
+                aria-label="Explain KQL">Explain</Button>
+            </Tooltip>
+            {result && !result.ok && result.error && (
+              <Tooltip content="Fix the KQL error" relationship="label">
+                <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
+                  disabled={assistView === 'loading'}
+                  onClick={() => callAssist('fix')}
+                  aria-label="Fix KQL error">
+                  {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
+                </Button>
+              </Tooltip>
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !draft.kql.trim()} onClick={run} style={{ marginLeft: 'auto' }}>
               {loading ? 'Running…' : 'Run'}
             </Button>
@@ -3095,6 +3166,57 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             minHeight={180}
             ariaLabel="KQL query"
           />
+          {/* NL prompt input — generate mode */}
+          {assistView === 'prompt' && (
+            <div className={s.assistBar}>
+              <Input size="small" autoFocus style={{ flex: 1 }}
+                placeholder="Describe the query (e.g. 'count events by source in the last hour')…"
+                value={assistPrompt}
+                onChange={(_: unknown, d: any) => setAssistPrompt(d.value)}
+                onKeyDown={(e: any) => {
+                  if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
+                  if (e.key === 'Escape') setAssistView('idle');
+                }}
+                aria-label="AI KQL generation prompt" />
+              <Button size="small" appearance="primary"
+                disabled={!assistPrompt.trim()}
+                onClick={() => callAssist('generate')}>Generate</Button>
+              <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
+            </div>
+          )}
+          {/* Loading spinner */}
+          {assistView === 'loading' && (
+            <div className={s.assistBar}>
+              <Spinner size="tiny" labelPosition="after"
+                label={lastModeRef.current === 'generate' ? 'Generating…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
+            </div>
+          )}
+          {/* Suggestion / explanation result */}
+          {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
+            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>
+                <pre className={s.assistResult}>{assistResult}</pre>
+              </MessageBarBody>
+              <MessageBarActions>
+                {assistView === 'suggestion' && (
+                  <Button size="small" appearance="primary"
+                    onClick={() => { setDraft({ ...draft, kql: assistResult }); setDirty(true); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
+                    Apply
+                  </Button>
+                )}
+                <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {/* Honest config gate / error */}
+          {assistError && (
+            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>{assistError}</MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
           <KqlResultsPanel result={result} loading={loading} />
 
           <Dialog open={pinDlgOpen} onOpenChange={(_: unknown, d: any) => setPinDlgOpen(d.open)}>
