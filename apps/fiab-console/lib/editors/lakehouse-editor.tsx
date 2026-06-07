@@ -28,6 +28,7 @@ import {
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Input, Field, Switch, Dropdown, Option, Textarea, Tooltip,
+  Toaster, Toast, ToastTitle, useToastController, useId, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -38,6 +39,7 @@ import {
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { LoadToTableWizard } from './components/load-to-table-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -308,6 +310,13 @@ export function LakehouseEditor({ item, id }: Props) {
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ctxEntry, setCtxEntry] = useState<PathEntry | null>(null);
   const [ctxPos, setCtxPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Load to Table (F6) wizard state + toast.
+  const lttToasterId = useId('ltt-toaster');
+  const { dispatchToast } = useToastController(lttToasterId);
+  const [lttOpen, setLttOpen] = useState(false);
+  const [lttEntry, setLttEntry] = useState<PathEntry | null>(null);
+
   const openContextMenu = useCallback((e: React.MouseEvent, entry: PathEntry) => {
     e.preventDefault();
     e.stopPropagation();
@@ -813,26 +822,26 @@ export function LakehouseEditor({ item, id }: Props) {
     router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&path=${encodeURIComponent(entry.name)}`);
   }, [activeContainer, router]);
 
-  /** Load a file as a Delta table — opens notebook with the conversion code prefilled. */
+  /** Load a file as a managed Delta table via the no-code Load to Table (F6) wizard. */
   const onLoadToTables = useCallback((entry: PathEntry) => {
-    if (!activeContainer) return;
-    const tableName = leafName(entry.name).replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-    const ext = entry.name.split('.').pop()?.toLowerCase();
-    const fmt = ext === 'parquet' ? 'parquet' : ext === 'csv' ? 'csv' : ext === 'json' ? 'json' : 'parquet';
-    const bulk = `abfss://${activeContainer}@__accountname__.dfs.core.windows.net/${entry.name}`;
-    const code = [
-      `# Load ${entry.name} into Tables/${tableName} as Delta`,
-      `df = spark.read.format("${fmt}")${fmt === 'csv' ? '.option("header", "true").option("inferSchema", "true")' : ''}.load("${bulk}")`,
-      `df.write.mode("overwrite").format("delta").saveAsTable("${tableName}")`,
-      `display(spark.table("${tableName}").limit(100))`,
-    ].join('\n');
-    try {
-      localStorage.setItem('loom.notebook.prefill', JSON.stringify({
-        source: 'lakehouse-load-to-tables', container: activeContainer, path: entry.name, tableName, code,
-      }));
-    } catch {}
-    router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&loadToTable=${encodeURIComponent(tableName)}`);
-  }, [activeContainer, router]);
+    if (!activeContainer || entry.isDirectory) return;
+    setLttEntry(entry);
+    setLttOpen(true);
+  }, [activeContainer]);
+
+  // F6 — Load the selected file to a Delta table (matches Fabric's keyboard affordance).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'F6') return;
+      if (lttOpen) return;
+      if (!activeContainer || !activePath || activePath.isDirectory) return;
+      e.preventDefault();
+      setLttEntry(activePath);
+      setLttOpen(true);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeContainer, activePath, lttOpen]);
 
   const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
@@ -1102,12 +1111,15 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Preview', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
         { label: 'Query this file', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
       ]},
+      { label: 'Tables', actions: [
+        { label: 'Load to table', onClick: hasFile ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' },
+      ]},
       { label: 'Manage', actions: [
         { label: 'Permissions', onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
         { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
+  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, onLoadToTables, activeContainer, openPerms, openSettings]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -2388,6 +2400,33 @@ export function LakehouseEditor({ item, id }: Props) {
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Load to Table (F6) wizard + job toast */}
+          <Toaster toasterId={lttToasterId} />
+          {lttEntry && (
+            <LoadToTableWizard
+              open={lttOpen}
+              onOpenChange={setLttOpen}
+              container={activeContainer || ''}
+              path={lttEntry.name}
+              onJobSubmitted={({ jobId, tableName, rowCount }) => {
+                const sessId = jobId.split('.')[0];
+                dispatchToast(
+                  <Toast>
+                    <ToastTitle
+                      action={<Link href="/monitor">View in Monitor</Link>}
+                    >
+                      Load to table started · job {sessId} — table “{tableName}”
+                      {typeof rowCount === 'number' ? ` (${rowCount} rows)` : ''} materializing as Delta.
+                    </ToastTitle>
+                  </Toast>,
+                  { intent: 'success', timeout: 12000 },
+                );
+                // Refresh the Tables tab so the new table shows up.
+                if (activeContainer) loadPaths(activeContainer, 'Tables');
+              }}
+            />
+          )}
         </>
       }
     />
