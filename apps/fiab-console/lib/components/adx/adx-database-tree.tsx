@@ -35,7 +35,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
-  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea,
+  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea, Switch,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
@@ -113,6 +113,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const [cSchema, setCSchema] = useState('ts:datetime, tenant:string, value:long');
   const [cSource, setCSource] = useState('');
   const [cQuery, setCQuery] = useState('');
+  const [cBackfill, setCBackfill] = useState(false);
   const [cArgs, setCArgs] = useState('');
   const [cKind, setCKind] = useState('json');
   const [cMapping, setCMapping] = useState('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
@@ -158,7 +159,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const openCreate = useCallback((g: CreatableGroup) => {
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCSchema('ts:datetime, tenant:string, value:long');
-    setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs('');
+    setCSource(tables[0]?.name || ''); setCQuery(''); setCArgs(''); setCBackfill(false);
     setCKind('json'); setCMapping('[\n  { "column": "ts", "Properties": { "Path": "$.ts" } }\n]');
   }, [tables]);
 
@@ -170,7 +171,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
       let route = TABLES; let payload: any = {};
       if (createGroup === 'table') { route = TABLES; payload = { name, schema: cSchema }; }
       else if (createGroup === 'function') { route = FUNCTIONS; payload = { name, args: cArgs, body: cQuery }; }
-      else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery }; }
+      else if (createGroup === 'mv') { route = MVIEWS; payload = { name, sourceTable: cSource, query: cQuery, backfill: cBackfill }; }
       else if (createGroup === 'mapping') { route = MAPPINGS; payload = { name, kind: cKind, table: cSource, mapping: cMapping }; }
       const res = await fetch(route, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
@@ -185,7 +186,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
+  }, [createGroup, cName, cSchema, cSource, cQuery, cArgs, cBackfill, cKind, cMapping, TABLES, FUNCTIONS, MVIEWS, MAPPINGS, loadAll]);
 
   const del = useCallback(async (route: string, query: string) => {
     setBusy(true); setError(null);
@@ -471,7 +472,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Update policies', '.alter table T policy update — transform-on-ingest pipelines; authored from the KQL database ribbon (New → Update policy), not from this navigator yet.'],
                 ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
                 ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
                 ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
@@ -538,6 +538,18 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
                     </Field>
                     <Field label="Query (one row per group key)">
                       <Textarea value={cQuery} onChange={(_, d) => setCQuery(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
+                    </Field>
+                    <Field label="Backfill from existing data">
+                      <Switch
+                        label="async .create materialized-view with (backfill=true) — processes the source table's existing records"
+                        checked={cBackfill}
+                        onChange={(_, d) => setCBackfill(!!d.checked)}
+                      />
+                      {cBackfill && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Large tables may take minutes to hours; the view is unavailable for query until the backfill completes. Track with <code>.show operations</code>.
+                        </Caption1>
+                      )}
                     </Field>
                   </>
                 )}

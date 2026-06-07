@@ -114,6 +114,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
+param adxEnableOptimizedAutoscale bool = false
+
+@description('ADX optimized auto-scale minimum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMinimum int = 2
+
+@description('ADX optimized auto-scale maximum instance count.')
+@minValue(2)
+@maxValue(1000)
+param adxAutoscaleMaximum int = 10
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -615,6 +628,9 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   params: {
     location: location
     skuName: adxSkuName
+    enableOptimizedAutoscale: adxEnableOptimizedAutoscale
+    autoscaleMinimum: adxAutoscaleMinimum
+    autoscaleMaximum: adxAutoscaleMaximum
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }
@@ -799,6 +815,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // Full ARM resource id of the Event Hubs namespace — consumed by the
+            // eventhouse ingest route to wire an ADX → Event Hub data connection
+            // (Get-Data wizard, streaming source). Derived from the same
+            // namespace/RG/sub the navigator uses (RG/sub fall back to the DLZ).
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}' }
+            // Cloud-aware ARM base. Commercial → management.azure.com (default);
+            // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
+            // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
+            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these

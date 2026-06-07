@@ -87,6 +87,7 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Tables** — drop | ✅ | `DELETE /api/adx/tables?name=` → `.drop table T ifexists` |
 | **Functions** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/functions` → `.show functions` / `.create-or-alter function NAME(args){body}` / `.drop function` |
 | **Materialized views** — list / count / open / create / drop | ✅ | `GET/POST/DELETE /api/adx/materialized-views` → `.show materialized-views` / `.create materialized-view NAME on table SRC {query}` / `.drop materialized-view` |
+| **Materialized views** — backfill on create | ✅ | Backfill toggle in the create wizard → `POST .../materialized-views {backfill:true}` → `.create async materialized-view with (backfill=true) NAME on table SRC {query}`; receipt notes the async operation. Source-table picker + monaco-kusto KQL body in the KqlDatabaseEditor ribbon wizard. |
 | **Ingestion mappings** — list / count / create / drop | ✅ | `GET/POST/DELETE /api/adx/ingestion-mappings` → `.show ingestion mappings` / `.create-or-alter table T ingestion <kind> mapping "N" 'json'` / `.drop <table\|database> … ingestion <kind> mapping "N"` |
 | **Database schema** — show full schema | ✅ | branch row loads `.show database schema` into the editor; `GET /api/adx/overview` also returns `.show database schema as json` |
 | **Continuous export** — list (read-only) | ✅ | `GET /api/adx/overview` → `.show continuous-exports`; status badge (running/disabled/last-result) |
@@ -118,7 +119,7 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
 | Function create | `POST /api/adx/functions` | `createFunction` | `.create-or-alter function … N(args){body}` |
 | Function drop | `DELETE /api/adx/functions` | `dropFunction` | `.drop function N ifexists` |
 | MViews list | `GET /api/adx/materialized-views` | `listMaterializedViews` | `.show materialized-views` |
-| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create materialized-view N on table ["SRC"] {query}` |
+| MView create | `POST /api/adx/materialized-views` | `createMaterializedView` | `.create [async] materialized-view [with (backfill=true)] N on table ["SRC"] {query}` |
 | MView drop | `DELETE /api/adx/materialized-views` | `dropMaterializedView` | `.drop materialized-view N ifexists` |
 | Mappings list | `GET /api/adx/ingestion-mappings` | `listIngestionMappings` | `.show ingestion mappings` |
 | Mapping create | `POST /api/adx/ingestion-mappings` | `createIngestionMapping` | `.create-or-alter table ["T"] ingestion <kind> mapping "N" 'json'` |
