@@ -70,6 +70,20 @@ interface QueryResponse {
   sqlNumber?: number;
 }
 
+// A row from sys.dm_pdw_exec_requests (Dedicated) / sys.dm_exec_requests
+// (Serverless), shaped by the /query-history BFF route.
+interface DmvEntry {
+  request_id: string;
+  status: string;
+  query_text?: string;
+  submit_time?: string;
+  start_time?: string;
+  end_time?: string;
+  total_elapsed_time_ms?: number;
+  resource_class?: string;
+  label?: string;
+}
+
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
   if (typeof v === 'object') return JSON.stringify(v);
@@ -459,6 +473,28 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
   const [secOpen, setSecOpen] = useState(false);
 
+  // Query history (DMV) — sys.dm_pdw_exec_requests, last 50 requests.
+  const [qhOpen, setQhOpen] = useState(false);
+  const [qhEntries, setQhEntries] = useState<DmvEntry[]>([]);
+  const [qhBusy, setQhBusy] = useState(false);
+  const [qhError, setQhError] = useState<string | null>(null);
+
+  const loadQueryHistory = useCallback(async () => {
+    setQhBusy(true); setQhError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query-history`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setQhEntries((j.entries || []) as DmvEntry[]);
+    } catch (e: any) { setQhError(e?.message || String(e)); }
+    finally { setQhBusy(false); }
+  }, [id]);
+
+  const openQueryHistory = useCallback(() => {
+    setQhOpen(true);
+    void loadQueryHistory();
+  }, [loadQueryHistory]);
+
   // ---- Save as table (CTAS) dialog — name/schema/distribution/index for MPP ----
   const [ctasOpen, setCtasOpen] = useState(false);
   const [ctasSchema, setCtasSchema] = useState('dbo');
@@ -679,6 +715,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
           + `FROM sys.dm_pdw_exec_requests r\n`
           + `ORDER BY r.submit_time DESC;`,
         ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
+        // Real DMV — distributed query history pane (sys.dm_pdw_exec_requests).
+        { label: 'Query history', onClick: isOnline ? openQueryHistory : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Recent requests from sys.dm_pdw_exec_requests' },
         { label: 'Save as table', onClick: isOnline && sqlText.trim() ? openCtas : undefined,
           disabled: !isOnline || !sqlText.trim(),
           title: !isOnline ? 'Resume the pool first' : !sqlText.trim() ? 'Enter a SELECT first' : 'CTAS — CREATE TABLE WITH (DISTRIBUTION, INDEX) AS SELECT …' },
@@ -725,7 +763,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
-  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, sqlText, openCtas]);
+  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory, sqlText, openCtas]);
 
   return (
     <ItemEditorChrome
@@ -953,6 +991,69 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+          <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
+              <DialogBody>
+                <DialogTitle>Query history — {poolState?.pool || 'Dedicated SQL pool'}</DialogTitle>
+                <DialogContent>
+                  <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                    Source: <code>sys.dm_pdw_exec_requests</code> — last 50 distributed requests (the DMV retains ~10,000 rows).
+                  </Caption1>
+                  {qhBusy && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+                  {qhError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{qhError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  <div className={s.tableWrap} style={{ maxHeight: '55vh' }}>
+                    <Table aria-label="Query history" size="small">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Request ID</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Submit time</TableHeaderCell>
+                          <TableHeaderCell>Duration</TableHeaderCell>
+                          <TableHeaderCell>Resource class</TableHeaderCell>
+                          <TableHeaderCell>Query</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {qhEntries.length === 0 && !qhBusy && (
+                          <TableRow><TableCell colSpan={6}><Caption1>No requests found.</Caption1></TableCell></TableRow>
+                        )}
+                        {qhEntries.map((e) => (
+                          <TableRow key={e.request_id}>
+                            <TableCell className={s.cell}>{e.request_id}</TableCell>
+                            <TableCell>
+                              <Badge appearance="filled" color={
+                                e.status === 'Completed' ? 'success'
+                                : e.status === 'Failed' ? 'danger'
+                                : e.status === 'Cancelled' ? 'warning'
+                                : e.status === 'Running' ? 'brand'
+                                : 'informative'
+                              }>
+                                {e.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className={s.cell}>{e.submit_time ? new Date(e.submit_time).toLocaleString() : '—'}</TableCell>
+                            <TableCell className={s.cell}>{e.total_elapsed_time_ms != null ? `${(e.total_elapsed_time_ms / 1000).toFixed(1)}s` : '—'}</TableCell>
+                            <TableCell className={s.cell}>{e.resource_class || '—'}</TableCell>
+                            <TableCell style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <code style={{ fontSize: 11 }}>{(e.query_text || '').slice(0, 200) || '—'}</code>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setQhOpen(false)}>Close</Button>
+                  <Button appearance="subtle" onClick={() => loadQueryHistory()} disabled={qhBusy}>Refresh</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
