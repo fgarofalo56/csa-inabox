@@ -5,33 +5,35 @@
  * navigator. The T-SQL equivalent of the ADX KQL-database / Databricks
  * workspace navigators: a typed left-pane tree of the connected database's
  * objects, one group per object type with a live count, a filter box, a
- * ＋ New affordance, inline drop, and an "open" action that loads a query
- * into the editor's query tab — matching the SSMS / Azure portal Query-editor
- * object tree with the Loom (Fluent v9) theme applied.
+ * ＋ New affordance, and a full **Fluent context menu per node** (Select top
+ * 1000, Data preview, New query, New query in notebook, Rename, Script as
+ * CREATE/ALTER/DROP, Delete, Refresh) — matching the SSMS / Azure portal
+ * Query-editor object tree with the Loom (Fluent v9) theme applied.
  *
- * Every count comes from a real `sys.*` catalog query over TDS; every drop is
- * a real, catalog-verified `DROP …` (the object name is looked up by id in
- * the catalog, never string-injected). Object enumeration is item-scoped via
- * `?workspaceId=&id=` (the Fabric SqlDatabase id), mirroring the ADX tree.
+ * Every count comes from a real `sys.*` catalog query over TDS; every drop /
+ * rename is a real, catalog-verified statement (the object name is looked up
+ * by id in the catalog, never string-injected). `Script as …` emits real DDL
+ * from `sys.sql_modules.definition` (views/procs/fns) or reconstructed from
+ * `sys.columns`/`sys.key_constraints`/`sys.indexes` (tables/table-types); the
+ * generated script is loaded into the editor's Query tab. `Data preview` runs a
+ * real `SELECT TOP 1000` and renders it in a sortable/filterable grid. The
+ * Indexes sub-node lists real `sys.indexes` rows (key + INCLUDE columns).
  *
- * Object creation is intentionally routed to the editor's T-SQL **Query** tab
- * (CREATE TABLE / CREATE PROCEDURE / CREATE VIEW / CREATE FUNCTION templates)
- * rather than faked as a form — the portal Query editor authors objects the
- * same way. Capabilities the Azure/SSMS UI exposes that we don't author from
- * this navigator yet (indexes, keys/constraints authoring, data editing,
- * query plan) render as honest ⚠️ "coming" rows naming the path — never a
- * fake list.
+ * Object creation is routed to the editor's T-SQL **Query** tab (CREATE
+ * templates) — the portal Query editor authors objects the same way.
  *
  * When no connection is bound and no env default is set, the routes 503 and
  * the whole tree shows a single honest infra-gate MessageBar.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Tree, TreeItem, TreeItemLayout,
   Button, Input, Field, Caption1, Badge, Spinner,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -39,8 +41,10 @@ import {
   Table20Regular, DocumentText20Regular, MathFormula20Regular,
   Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, Folder20Regular, Column20Regular,
-  ContentView20Regular,
+  ContentView20Regular, MoreHorizontal20Regular, Rename16Regular,
+  Code20Regular, Notebook20Regular, TableSearch20Regular, KeyMultiple20Regular,
 } from '@fluentui/react-icons';
+import { LoomDataTable } from '@/lib/components/ui/loom-data-table';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 264 },
@@ -51,6 +55,10 @@ const useStyles = makeStyles({
   leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
   leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
   colRow: { display: 'flex', alignItems: 'center', gap: 6, width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 },
+  ixRow: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
+  previewSurface: { maxWidth: '92vw', width: '92vw', display: 'flex', flexDirection: 'column' },
+  previewBody: { flex: 1, minHeight: 0, overflow: 'auto', maxHeight: '64vh' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, color: tokens.colorNeutralForeground3 },
 });
 
 async function readJson(res: Response): Promise<any> {
@@ -68,8 +76,16 @@ interface SqlColumnRow {
   precision: number; scale: number; isNullable: boolean; isIdentity: boolean;
   isComputed: boolean; isPrimaryKey: boolean;
 }
+export interface SqlIndexRow {
+  indexId: number; name: string; type: number; typeDesc: string;
+  isUnique: boolean; isPrimaryKey: boolean; isUniqueConstraint: boolean;
+  filterDefinition: string | null; keyColumns: string; includeColumns: string;
+}
 
 type CreatableGroup = 'table' | 'view' | 'procedure' | 'function';
+type RenameableGroup = 'table' | 'view' | 'procedure' | 'function';
+type ScriptGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type' | 'index';
+type ScriptVariant = 'CREATE' | 'ALTER' | 'DROP';
 
 export interface SqlDbTreeProps {
   /** Loom workspace id (to resolve the Fabric workspace). */
@@ -86,6 +102,8 @@ export interface SqlDbTreeProps {
   database?: string;
   /** Load a T-SQL statement into the editor's query tab. */
   onOpenQuery?: (sql: string) => void;
+  /** Open a new notebook pre-filled with the given SQL (deep-link). */
+  onOpenInNotebook?: (sql: string) => void;
   /** Increment to force a refresh from the parent. */
   refreshKey?: number;
 }
@@ -123,9 +141,23 @@ RETURN (
 );`,
 };
 
+/** Build a Python notebook cell template that runs the given SQL via pyodbc. */
+function notebookCell(sql: string): string {
+  return [
+    '# Auto-generated from the SQL Database Object Explorer.',
+    '# Set your connection string (Azure SQL / Fabric SQL share the TDS engine).',
+    'import pyodbc, pandas as pd',
+    '# conn = pyodbc.connect("Driver={ODBC Driver 18 for SQL Server};Server=...;Database=...;Authentication=ActiveDirectoryMsi;")',
+    `sql = """${sql}"""`,
+    '# df = pd.read_sql(sql, conn)',
+    '# display(df)',
+  ].join('\n');
+}
+
 /** A typed, SSMS/portal-faithful Azure SQL / Fabric SQL object navigator. */
-export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, refreshKey = 0 }: SqlDbTreeProps) {
+export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, onOpenInNotebook, refreshKey = 0 }: SqlDbTreeProps) {
   const s = useStyles();
+  const router = useRouter();
 
   const q = useMemo(() => {
     const p = new URLSearchParams();
@@ -158,8 +190,22 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const [schemas, setSchemas] = useState<SqlSchemaRow[]>([]);
   const [tableTypes, setTableTypes] = useState<SqlObjectRow[]>([]);
 
-  // per-table column cache (lazy on expand)
+  // per-table column + index caches (lazy on expand)
   const [cols, setCols] = useState<Record<number, SqlColumnRow[] | 'loading' | { error: string }>>({});
+  const [indexes, setIndexes] = useState<Record<number, SqlIndexRow[] | 'loading' | { error: string }>>({});
+
+  // Data preview dialog
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewName, setPreviewName] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<{ columns: string[]; rows: unknown[][]; truncated: boolean } | null>(null);
+
+  // Rename dialog
+  const [renameState, setRenameState] = useState<{ objectId: number; currentName: string; group: RenameableGroup } | null>(null);
+  const [renameTo, setRenameTo] = useState('');
+  const [renameWarn, setRenameWarn] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) {
@@ -169,7 +215,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }
 
   const loadAll = useCallback(async () => {
-    setLoading(true); setError(null); setCols({});
+    setLoading(true); setError(null); setCols({}); setIndexes({});
     try {
       const [tr, vr, pr, fr, sr, ttr] = await Promise.all([
         fetch(TABLES).then(readJson),
@@ -208,6 +254,17 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     }
   }, [q]);
 
+  const loadIndexes = useCallback(async (objectId: number) => {
+    setIndexes((ix) => ({ ...ix, [objectId]: 'loading' }));
+    try {
+      const body = await fetch(`/api/sqldb/indexes?${q}&objectId=${objectId}`).then(readJson);
+      if (body.ok) setIndexes((ix) => ({ ...ix, [objectId]: body.indexes || [] }));
+      else setIndexes((ix) => ({ ...ix, [objectId]: { error: body.error || 'failed to load indexes' } }));
+    } catch (e: any) {
+      setIndexes((ix) => ({ ...ix, [objectId]: { error: e?.message || String(e) } }));
+    }
+  }, [q]);
+
   const drop = useCallback(async (route: string, objectId: number, label: string) => {
     if (typeof window !== 'undefined' && !window.confirm(`Drop ${label}? This cannot be undone.`)) return;
     setBusy(true); setError(null);
@@ -221,9 +278,82 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     finally { setBusy(false); }
   }, [loadAll]);
 
+  const dropIndex = useCallback(async (tableObjectId: number, indexId: number, label: string) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Drop index ${label}? This cannot be undone.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const body = await fetch(`/api/sqldb/indexes?${q}&objectId=${tableObjectId}&indexId=${indexId}`, { method: 'DELETE' }).then(readJson);
+      if (!body.ok) { setError(body.error || 'drop index failed'); setBusy(false); return; }
+      await loadIndexes(tableObjectId);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [q, loadIndexes]);
+
   const newObject = useCallback((g: CreatableGroup) => {
     onOpenQuery?.(CREATE_TEMPLATES[g]);
   }, [onOpenQuery]);
+
+  const openQuery = useCallback((sql: string) => { onOpenQuery?.(sql); }, [onOpenQuery]);
+
+  const openInNotebook = useCallback((sql: string) => {
+    if (onOpenInNotebook) { onOpenInNotebook(sql); return; }
+    // Standalone fallback: stash the prefill + route to a new notebook (the
+    // notebook editor reads `loom.notebook.prefill` from localStorage on mount).
+    try {
+      localStorage.setItem('loom.notebook.prefill', JSON.stringify({ source: 'sql-db', sql, code: notebookCell(sql) }));
+    } catch { /* ignore */ }
+    router.push('/items/notebook/new?source=sql-db');
+  }, [onOpenInNotebook, router]);
+
+  const scriptAs = useCallback(async (group: ScriptGroup, objectId: number, variant: ScriptVariant, indexId?: number) => {
+    setBusy(true); setError(null);
+    try {
+      const ixp = indexId != null ? `&indexId=${indexId}` : '';
+      const body = await fetch(`/api/sqldb/script?${q}&objectId=${objectId}&group=${group}&variant=${variant}${ixp}`).then(readJson);
+      if (body.ok && typeof body.script === 'string') openQuery(body.script);
+      else setError(body.error || 'script generation failed');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [q, openQuery]);
+
+  const openPreview = useCallback(async (objectId: number, fullName: string) => {
+    setPreviewOpen(true); setPreviewName(fullName);
+    setPreviewLoading(true); setPreviewData(null); setPreviewError(null);
+    try {
+      const body = await fetch(`/api/sqldb/preview?${q}&objectId=${objectId}&top=1000`).then(readJson);
+      if (body.ok) setPreviewData({ columns: body.columns || [], rows: body.rows || [], truncated: !!body.truncated });
+      else setPreviewError(body.error || 'preview failed');
+    } catch (e: any) { setPreviewError(e?.message || String(e)); }
+    finally { setPreviewLoading(false); }
+  }, [q]);
+
+  const openRename = useCallback((objectId: number, currentName: string, group: RenameableGroup) => {
+    setRenameState({ objectId, currentName, group });
+    setRenameTo(currentName.split('.').pop() || currentName); // bare name, no schema
+    setRenameError(null);
+    setRenameWarn(
+      group === 'view' || group === 'procedure' || group === 'function'
+        ? 'sp_rename does not update this object’s definition body (sys.sql_modules). '
+          + 'Microsoft recommends DROP + CREATE to keep the definition in sync — the rename still applies to the object name.'
+        : '',
+    );
+  }, []);
+
+  const doRename = useCallback(async () => {
+    if (!renameState) return;
+    setBusy(true); setRenameError(null);
+    try {
+      const body = await fetch(`/api/sqldb/rename?${q}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ group: renameState.group, objectId: renameState.objectId, newName: renameTo }),
+      }).then(readJson);
+      if (!body.ok) { setRenameError(body.error || 'rename failed'); setBusy(false); return; }
+      setRenameState(null);
+      await loadAll(); // re-list verifies the new name appears
+    } catch (e: any) { setRenameError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [renameState, renameTo, q, loadAll]);
 
   // filtering
   const f = filter.trim().toLowerCase();
@@ -235,7 +365,35 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const fSchemas = useMemo(() => schemas.filter((t) => match(t.name)), [schemas, f]);
   const fTableTypes = useMemo(() => tableTypes.filter((t) => match(t.fullName)), [tableTypes, f]);
 
-  const openQuery = (sql: string) => onOpenQuery?.(sql);
+  /** A node "…" context menu button wrapping a MenuList of actions. */
+  const nodeMenu = (label: string, items: React.ReactNode) => (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <Tooltip content="More actions" relationship="label">
+          <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`${label} actions`} disabled={busy} />
+        </Tooltip>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>{items}</MenuList>
+      </MenuPopover>
+    </Menu>
+  );
+
+  /** A nested "Script as ▸ CREATE/ALTER/DROP" submenu. */
+  const scriptSubmenu = (group: ScriptGroup, objectId: number, variants: ScriptVariant[], indexId?: number) => (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <MenuItem icon={<Code20Regular />}>Script as</MenuItem>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          {variants.map((v) => (
+            <MenuItem key={v} onClick={() => scriptAs(group, objectId, v, indexId)}>{v}</MenuItem>
+          ))}
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
 
   const groupHeader = (
     label: string, icon: React.ReactElement, count: number,
@@ -266,7 +424,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
             Set <code>{gate.missing}</code> (or bind a connection on this SQL database item).
             The navigator stays here; objects appear once the database is reachable over TDS.
             The Loom UAMI must be an <strong>Microsoft Entra admin</strong> on the SQL server
-            (or a database user with <code>VIEW DEFINITION</code> + <code>ALTER</code> for drops).
+            (or a database user with <code>VIEW DEFINITION</code> + <code>ALTER</code> for drops/renames).
           </MessageBarBody>
         </MessageBar>
       </div>
@@ -316,7 +474,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
 
       <div style={{ overflow: 'auto', flex: 1 }}>
         <Tree aria-label="SQL database objects" defaultOpenItems={['g-tables']}>
-          {/* Tables (expand → columns) */}
+          {/* Tables (expand → columns + indexes) */}
           <TreeItem itemType="branch" value="g-tables">
             {groupHeader('Tables', <Table20Regular />, tables.length, onOpenQuery ? () => newObject('table') : undefined, 'New table (opens a CREATE TABLE template)')}
             <Tree>
@@ -334,13 +492,25 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                         <Tooltip content="Select top 1000" relationship="label">
                           <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`SELECT TOP 1000 * FROM [${t.schema}].[${t.name}];`)} aria-label={`Query ${t.fullName}`} />
                         </Tooltip>
-                        <Tooltip content="Drop table" relationship="label">
-                          <Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => drop(TABLES, t.objectId, `table ${t.fullName}`)} aria-label={`Drop ${t.fullName}`} />
-                        </Tooltip>
+                        {nodeMenu(t.fullName, (
+                          <>
+                            <MenuItem icon={<Open16Regular />} onClick={() => openQuery(`SELECT TOP 1000 * FROM [${t.schema}].[${t.name}];`)}>Select top 1000</MenuItem>
+                            <MenuItem icon={<TableSearch20Regular />} onClick={() => openPreview(t.objectId, t.fullName)}>Data preview</MenuItem>
+                            <MenuItem icon={<Open16Regular />} onClick={() => openQuery(`SELECT * FROM [${t.schema}].[${t.name}] WHERE 1 = 1;`)}>New query</MenuItem>
+                            <MenuItem icon={<Notebook20Regular />} onClick={() => openInNotebook(`SELECT TOP 1000 * FROM [${t.schema}].[${t.name}];`)}>New query in notebook</MenuItem>
+                            <MenuDivider />
+                            <MenuItem icon={<Rename16Regular />} onClick={() => openRename(t.objectId, t.fullName, 'table')}>Rename</MenuItem>
+                            {scriptSubmenu('table', t.objectId, ['CREATE', 'ALTER', 'DROP'])}
+                            <MenuDivider />
+                            <MenuItem icon={<Delete16Regular />} onClick={() => drop(TABLES, t.objectId, `table ${t.fullName}`)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync16Regular />} onClick={() => loadAll()}>Refresh</MenuItem>
+                          </>
+                        ))}
                       </span>
                     </span>
                   </TreeItemLayout>
                   <Tree>
+                    {/* Columns */}
                     <TreeItem itemType="branch" value={`t-${t.objectId}-cols`}>
                       <TreeItemLayout iconBefore={<Folder20Regular />}>Columns</TreeItemLayout>
                       <Tree>
@@ -368,6 +538,59 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                         )}
                       </Tree>
                     </TreeItem>
+
+                    {/* Indexes */}
+                    <TreeItem
+                      itemType="branch" value={`t-${t.objectId}-idxs`}
+                      onOpenChange={(_, data) => { if (data.open && indexes[t.objectId] === undefined) loadIndexes(t.objectId); }}
+                    >
+                      <TreeItemLayout iconBefore={<KeyMultiple20Regular />}>
+                        <span className={s.groupLayout}>
+                          <span>Indexes</span>
+                          <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+                            <Tooltip content="Refresh indexes" relationship="label">
+                              <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={() => loadIndexes(t.objectId)} disabled={busy} aria-label={`Refresh indexes for ${t.fullName}`} />
+                            </Tooltip>
+                          </span>
+                        </span>
+                      </TreeItemLayout>
+                      <Tree>
+                        {indexes[t.objectId] === undefined && <TreeItem itemType="leaf" value={`t-${t.objectId}-iload`}><TreeItemLayout><Caption1>Expand to load…</Caption1></TreeItemLayout></TreeItem>}
+                        {indexes[t.objectId] === 'loading' && <TreeItem itemType="leaf" value={`t-${t.objectId}-ispin`}><TreeItemLayout><Spinner size="tiny" label="Loading indexes…" /></TreeItemLayout></TreeItem>}
+                        {indexes[t.objectId] && typeof indexes[t.objectId] === 'object' && 'error' in (indexes[t.objectId] as any) && (
+                          <TreeItem itemType="leaf" value={`t-${t.objectId}-ierr`}><TreeItemLayout iconBefore={<Warning20Regular />}><Caption1>{(indexes[t.objectId] as any).error}</Caption1></TreeItemLayout></TreeItem>
+                        )}
+                        {Array.isArray(indexes[t.objectId]) && (indexes[t.objectId] as SqlIndexRow[]).map((ix) => (
+                          <TreeItem key={ix.indexId} itemType="leaf" value={`t-${t.objectId}-ix-${ix.indexId}`}>
+                            <TreeItemLayout iconBefore={<KeyMultiple20Regular />}>
+                              <span className={s.ixRow}>
+                                <span>{ix.name}</span>
+                                {ix.isPrimaryKey && <Badge size="small" appearance="tint" color="brand">PK</Badge>}
+                                {ix.isUnique && !ix.isPrimaryKey && <Badge size="small" appearance="outline">unique</Badge>}
+                                <Caption1>{ix.typeDesc.toLowerCase().replace(/_/g, ' ')}</Caption1>
+                                {ix.keyColumns && <Caption1 className={s.mono}>({ix.keyColumns})</Caption1>}
+                                <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                                  {nodeMenu(`index ${ix.name}`, (
+                                    <>
+                                      {scriptSubmenu('index', t.objectId, ['CREATE', 'DROP'], ix.indexId)}
+                                      {!ix.isPrimaryKey && (
+                                        <>
+                                          <MenuDivider />
+                                          <MenuItem icon={<Delete16Regular />} onClick={() => dropIndex(t.objectId, ix.indexId, `${ix.name} on ${t.fullName}`)}>Delete</MenuItem>
+                                        </>
+                                      )}
+                                    </>
+                                  ))}
+                                </span>
+                              </span>
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                        {Array.isArray(indexes[t.objectId]) && (indexes[t.objectId] as SqlIndexRow[]).length === 0 && (
+                          <TreeItem itemType="leaf" value={`t-${t.objectId}-inone`}><TreeItemLayout><Caption1>No indexes (heap)</Caption1></TreeItemLayout></TreeItem>
+                        )}
+                      </Tree>
+                    </TreeItem>
                   </Tree>
                 </TreeItem>
               ))}
@@ -389,7 +612,19 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                       >{v.fullName}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         <Tooltip content="Select top 1000" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`SELECT TOP 1000 * FROM [${v.schema}].[${v.name}];`)} aria-label={`Query ${v.fullName}`} /></Tooltip>
-                        <Tooltip content="Drop view" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => drop(VIEWS, v.objectId, `view ${v.fullName}`)} aria-label={`Drop ${v.fullName}`} /></Tooltip>
+                        {nodeMenu(v.fullName, (
+                          <>
+                            <MenuItem icon={<Open16Regular />} onClick={() => openQuery(`SELECT TOP 1000 * FROM [${v.schema}].[${v.name}];`)}>Select top 1000</MenuItem>
+                            <MenuItem icon={<TableSearch20Regular />} onClick={() => openPreview(v.objectId, v.fullName)}>Data preview</MenuItem>
+                            <MenuItem icon={<Notebook20Regular />} onClick={() => openInNotebook(`SELECT TOP 1000 * FROM [${v.schema}].[${v.name}];`)}>New query in notebook</MenuItem>
+                            <MenuDivider />
+                            <MenuItem icon={<Rename16Regular />} onClick={() => openRename(v.objectId, v.fullName, 'view')}>Rename</MenuItem>
+                            {scriptSubmenu('view', v.objectId, ['CREATE', 'ALTER', 'DROP'])}
+                            <MenuDivider />
+                            <MenuItem icon={<Delete16Regular />} onClick={() => drop(VIEWS, v.objectId, `view ${v.fullName}`)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync16Regular />} onClick={() => loadAll()}>Refresh</MenuItem>
+                          </>
+                        ))}
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -413,7 +648,18 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                       >{p.fullName}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         <Tooltip content="EXEC template" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`EXEC [${p.schema}].[${p.name}];`)} aria-label={`Exec ${p.fullName}`} /></Tooltip>
-                        <Tooltip content="Drop procedure" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => drop(PROCS, p.objectId, `procedure ${p.fullName}`)} aria-label={`Drop ${p.fullName}`} /></Tooltip>
+                        {nodeMenu(p.fullName, (
+                          <>
+                            <MenuItem icon={<Open16Regular />} onClick={() => openQuery(`EXEC [${p.schema}].[${p.name}];`)}>EXEC template</MenuItem>
+                            <MenuItem icon={<Notebook20Regular />} onClick={() => openInNotebook(`EXEC [${p.schema}].[${p.name}];`)}>New query in notebook</MenuItem>
+                            <MenuDivider />
+                            <MenuItem icon={<Rename16Regular />} onClick={() => openRename(p.objectId, p.fullName, 'procedure')}>Rename</MenuItem>
+                            {scriptSubmenu('procedure', p.objectId, ['CREATE', 'ALTER', 'DROP'])}
+                            <MenuDivider />
+                            <MenuItem icon={<Delete16Regular />} onClick={() => drop(PROCS, p.objectId, `procedure ${p.fullName}`)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync16Regular />} onClick={() => loadAll()}>Refresh</MenuItem>
+                          </>
+                        ))}
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -433,7 +679,17 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                     <span className={s.leafRow}>
                       <span>{fn.fullName} {fn.typeDesc ? <Caption1>· {fn.typeDesc.toLowerCase().replace(/_/g, ' ')}</Caption1> : null}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Tooltip content="Drop function" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => drop(FUNCS, fn.objectId, `function ${fn.fullName}`)} aria-label={`Drop ${fn.fullName}`} /></Tooltip>
+                        {nodeMenu(fn.fullName, (
+                          <>
+                            <MenuItem icon={<Notebook20Regular />} onClick={() => openInNotebook(`-- ${fn.fullName} (table-valued/scalar function)\nSELECT * FROM [${fn.schema}].[${fn.name}](/* args */);`)}>New query in notebook</MenuItem>
+                            <MenuDivider />
+                            <MenuItem icon={<Rename16Regular />} onClick={() => openRename(fn.objectId, fn.fullName, 'function')}>Rename</MenuItem>
+                            {scriptSubmenu('function', fn.objectId, ['CREATE', 'ALTER', 'DROP'])}
+                            <MenuDivider />
+                            <MenuItem icon={<Delete16Regular />} onClick={() => drop(FUNCS, fn.objectId, `function ${fn.fullName}`)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync16Regular />} onClick={() => loadAll()}>Refresh</MenuItem>
+                          </>
+                        ))}
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -453,7 +709,14 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                     <span className={s.leafRow}>
                       <span>{tt.fullName}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Tooltip content="Drop table type" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => drop(TABLE_TYPES, tt.objectId, `table type ${tt.fullName}`)} aria-label={`Drop ${tt.fullName}`} /></Tooltip>
+                        {nodeMenu(tt.fullName, (
+                          <>
+                            {scriptSubmenu('table-type', tt.objectId, ['CREATE', 'DROP'])}
+                            <MenuDivider />
+                            <MenuItem icon={<Delete16Regular />} onClick={() => drop(TABLE_TYPES, tt.objectId, `table type ${tt.fullName}`)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync16Regular />} onClick={() => loadAll()}>Refresh</MenuItem>
+                          </>
+                        ))}
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -489,9 +752,8 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Indexes', 'sys.indexes / sys.index_columns — per-table index list + CREATE/DROP INDEX. Author via the Query tab (CREATE INDEX …) until inline authoring lands.'],
                 ['Keys & constraints', 'sys.key_constraints / sys.foreign_keys / sys.check_constraints — PK/FK/UNIQUE/CHECK authoring via ALTER TABLE in the Query tab; inline designer not wired.'],
-                ['Data editing (edit rows)', 'The portal Edit-data grid (INSERT/UPDATE/DELETE) is not exposed here yet — use the Query tab for DML.'],
+                ['Data editing (edit rows)', 'The portal Edit-data grid (INSERT/UPDATE/DELETE) is not exposed here yet — use the Query tab for DML (Data preview is read-only).'],
                 ['Query plan', 'SET SHOWPLAN_XML / estimated + actual execution plan visualization is not wired; run SET STATISTICS / SHOWPLAN from the Query tab.'],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
@@ -507,6 +769,65 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
           </TreeItem>
         </Tree>
       </div>
+
+      {/* Data preview dialog — real SELECT TOP 1000 in a sortable/filterable grid */}
+      <Dialog open={previewOpen} onOpenChange={(_, d) => { if (!d.open) setPreviewOpen(false); }}>
+        <DialogSurface className={s.previewSurface}>
+          <DialogBody>
+            <DialogTitle>Data preview — top 1000 rows{previewName ? <> · <code>{previewName}</code></> : null}</DialogTitle>
+            <DialogContent className={s.previewBody}>
+              {previewLoading && <Spinner size="small" label="Loading data…" />}
+              {previewError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Preview failed</MessageBarTitle>{previewError}</MessageBarBody></MessageBar>}
+              {previewData && !previewLoading && (
+                previewData.columns.length === 0 ? (
+                  <Caption1>No columns returned.</Caption1>
+                ) : (
+                  <>
+                    {previewData.truncated && <MessageBar intent="info"><MessageBarBody>Showing the first rows (result truncated).</MessageBarBody></MessageBar>}
+                    <LoomDataTable
+                      ariaLabel={`Data preview for ${previewName}`}
+                      getRowId={(r: any) => String(r.__rowid)}
+                      columns={previewData.columns.map((c) => ({
+                        key: c, label: c, sortable: true, filterable: true,
+                        getValue: (r: any) => (r[c] == null ? '' : String(r[c])),
+                        render: (r: any) => (r[c] == null ? <span className={s.mono}>NULL</span> : <span className={s.mono}>{String(r[c])}</span>),
+                      }))}
+                      rows={previewData.rows.map((row, i) => {
+                        const obj: Record<string, unknown> = { __rowid: i };
+                        previewData.columns.forEach((c, ci) => { obj[c] = row[ci]; });
+                        return obj;
+                      })}
+                    />
+                  </>
+                )
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setPreviewOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Rename dialog */}
+      <Dialog open={!!renameState} onOpenChange={(_, d) => { if (!d.open) setRenameState(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Rename {renameState?.group} "{renameState?.currentName}"</DialogTitle>
+            <DialogContent>
+              {renameWarn && <MessageBar intent="warning"><MessageBarBody>{renameWarn}</MessageBarBody></MessageBar>}
+              {renameError && <MessageBar intent="error"><MessageBarBody>{renameError}</MessageBarBody></MessageBar>}
+              <Field label="New name (single-part identifier, no schema)">
+                <Input value={renameTo} onChange={(_, d) => setRenameTo(d.value)} />
+              </Field>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setRenameState(null)}>Cancel</Button>
+              <Button appearance="primary" onClick={doRename} disabled={busy || !renameTo.trim()}>{busy ? 'Renaming…' : 'Rename'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

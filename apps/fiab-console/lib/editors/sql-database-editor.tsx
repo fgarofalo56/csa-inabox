@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Field,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -63,6 +64,7 @@ interface Props { item: FabricItemType; id: string }
 
 export function SqlDatabaseEditor({ item, id }: Props) {
   const s = useStyles();
+  const router = useRouter();
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [workspaceId, setWorkspaceId] = useState('');
   const [fabricWsId, setFabricWsId] = useState<string | null>(null);
@@ -165,6 +167,23 @@ WHERE is_ms_shipped = 0;`,
     setSqlText(sql);
     setTab('query');
   }, []);
+
+  const openInNotebook = useCallback((sql: string) => {
+    // Deep-link a new notebook pre-filled with the SQL (read on mount via
+    // localStorage `loom.notebook.prefill`, same pattern as the lakehouse editor).
+    const code = [
+      '# Auto-generated from the SQL Database Object Explorer.',
+      'import pyodbc, pandas as pd',
+      '# conn = pyodbc.connect("Driver={ODBC Driver 18 for SQL Server};Server=...;Database=...;Authentication=ActiveDirectoryMsi;")',
+      `sql = """${sql}"""`,
+      '# df = pd.read_sql(sql, conn)',
+      '# display(df)',
+    ].join('\n');
+    try {
+      localStorage.setItem('loom.notebook.prefill', JSON.stringify({ source: 'sql-db', sql, code }));
+    } catch { /* ignore */ }
+    router.push('/items/notebook/new?source=sql-db');
+  }, [router]);
 
   const del = useCallback(async () => {
     if (!workspaceId || !dbId) return;
@@ -273,6 +292,7 @@ WHERE is_ms_shipped = 0;`,
                       workspaceId={workspaceId}
                       itemId={dbId}
                       onOpenQuery={openInQuery}
+                      onOpenInNotebook={openInNotebook}
                     />
                   </div>
                 )}
