@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _onelakeSecurityRoles: Container | null = null;
 // Wave 4 — Data Marketplace / Governance containers.
 let _dataProducts: Container | null = null;
 let _dataProductJobs: Container | null = null;
@@ -152,6 +153,11 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // OneLake Security roles (F7) — one doc per data-access role per item,
+  // partitioned by /itemId so the Security tab's per-item GET hits a single
+  // physical partition. Azure-native parity with Fabric's OneLake data-access
+  // roles; real enforcement is ADLS Gen2 ACLs (see onelake-security-client.ts).
+  _onelakeSecurityRoles = await mk('onelake-security-roles', '/itemId');
   // Data Marketplace / Governance containers (Wave 4). Partitioned by tenantId
   // (product catalog, attribute groups, OKRs, governance domains) or
   // dataProductId (jobs, access requests) so every per-product or per-tenant
@@ -200,6 +206,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
@@ -273,7 +280,8 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
+  'maintenance-jobs', 'onelake-security-roles',
+  'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
 ];
