@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { serverlessTarget, serverlessEndpoint, executeQuery, executeQueryAsUser } from '@/lib/azure/synapse-sql-client';
+import { serverlessTarget, serverlessEndpoint, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 
@@ -28,6 +28,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const database = (body?.database || 'master').toString();
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
+
+  // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
+  const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
+    .filter((p: any) => p && typeof p.name === 'string')
+    .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
 
   const accessMode = await resolveAccessMode(id, 'synapse-serverless-sql-pool');
 
@@ -46,9 +51,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           { status: 403 },
         );
       }
-      result = await executeQueryAsUser(serverlessTarget(database), sqlText, userToken, session.claims.oid);
+      result = await executeQueryAsUser(serverlessTarget(database), sqlText, userToken, session.claims.oid, 60_000, parameters);
     } else {
-      result = await executeQuery(serverlessTarget(database), sqlText);
+      result = await executeQuery(serverlessTarget(database), sqlText, 60_000, parameters);
     }
     // DDL (CREATE/ALTER/DROP VIEW|PROC|FUNCTION) and other non-SELECT statements
     // return no columns. Flag isDdl so the editor switches to the Messages pane
@@ -61,6 +66,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       accessMode,
       endpoint: serverlessEndpoint(),
       database,
+      // Receipt: the parameterized statement + bound params (values out-of-band).
+      statement: sqlText,
+      parameters,
+      parametersCount: parameters.length,
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
