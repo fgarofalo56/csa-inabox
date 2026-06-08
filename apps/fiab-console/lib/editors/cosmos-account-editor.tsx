@@ -44,7 +44,6 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/components/cosmos/cosmos-tree';
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
-import { CosmosSettings } from '@/lib/components/cosmos/cosmos-settings';
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
