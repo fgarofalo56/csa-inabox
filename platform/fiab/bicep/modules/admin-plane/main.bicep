@@ -389,6 +389,9 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar.')
+param loomIdentityPickerEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -454,6 +457,10 @@ param loomLakehouseBackend string = 'adls'
 @description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
+
+@description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
+@allowed(['cosmos', 'fabric'])
+param loomDomainsBackend string = 'cosmos'
 
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
@@ -585,6 +592,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     adminEntraGroupId: adminEntraGroupId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The governance-catalog index self-heals from the BFF (PE-locked service);
+    // pass the Console UAMI so an operator can flip deployGovernanceIndex=true
+    // when running on a VNet-injected script host.
+    deployGovernanceIndex: false
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
   }
 }
 
@@ -1078,6 +1091,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
+            // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
+            // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
+            { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
@@ -1111,6 +1128,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
+            // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
+            // gallery blob endpoint emitted by catalog.bicep ('' when Purview/
+            // catalog storage is not deployed — the editor shows an honest gate).
+            { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
+            { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
@@ -1159,6 +1182,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
+          // Identity Picker (Entra user/group/SPN search + transitive nested
+          // groups) — gated on the Console UAMI's Graph User.Read.All +
+          // Group.Read.All + Application.Read.All grants. When false the BFF
+          // returns 503 with the exact remediation (no mock principals).
+          loomIdentityPickerEnabled ? [
+            { name: 'LOOM_IDENTITY_PICKER_ENABLED', value: 'true' }
+          ] : [],
+          // Sovereign Microsoft Graph endpoint. Commercial/GCC use the global
+          // host; GCC-High uses graph.microsoft.us; IL5/DoD uses
+          // dod-graph.microsoft.us. The identity-picker client derives BOTH the
+          // base AND the token scope from this value so gov tenants mint a
+          // sovereign-scoped token. Existing Graph callers (admin/users,
+          // lakehouse/permissions) already read LOOM_GRAPH_BASE, so setting it
+          // here also fixes their gov-cloud endpoint in one shot.
+          [
+            { name: 'LOOM_GRAPH_BASE', value: boundary == 'GCC-High' ? 'https://graph.microsoft.us' : (boundary == 'IL5' ? 'https://dod-graph.microsoft.us' : 'https://graph.microsoft.com') }
+          ],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
             // Unity Catalog federation hostname list. Uses the REAL workspace
             // hostname (same source as the singular LOOM_DATABRICKS_HOSTNAME) —
@@ -1449,6 +1489,19 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
   scope: resourceGroup(loomDlzRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Identity Picker Graph AppRole documentation/wiring. AppRoles are granted
+// out-of-band by grant-identity-graph-approles.sh (ARM can't grant Graph
+// AppRoles); this module surfaces the required grants + sovereign Graph
+// endpoint as deterministic outputs for the post-deploy bootstrap.
+module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled) {
+  name: 'console-identity-graph-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    boundary: boundary
     skipRoleGrants: skipRoleGrants
   }
 }

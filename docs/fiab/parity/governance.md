@@ -27,7 +27,7 @@ sensitivity, insights, policies) work today with no Purview at all.
 | Purview capability | Loom surface | Backend | Status |
 |---|---|---|---|
 | Governance overview / posture | `/governance` (overview) | `/api/governance/insights` (Cosmos) + `purview/status` probe | ✅ BUILT |
-| Governance domains (create/list/delete) | `/catalog/domains` | `/api/catalog/domains` → `listBusinessDomains` / `createBusinessDomain` / `deleteBusinessDomain` (`/datagovernance/businessdomains`) | ⚠️ GATED (Purview REST) |
+| Governance domains (create/edit/delete/list) | `/governance` domains + `/catalog/domains` | `/api/governance/domains` (+ `[domainId]`, `[domainId]/assignWorkspaces`) → `getDomainsStore()`: **Cosmos `governance-domains` CRUD (default)** + best-effort Purview classic-collection mirror (`createBusinessDomain`/`updateBusinessDomain`/`deleteBusinessDomain` → `/collections/{ref}`); opt-in Fabric Admin `/v1/admin/domains` via `LOOM_DOMAINS_BACKEND=fabric` | ✅ BUILT (F4 — Azure-native, no Fabric/Purview hard dependency) |
 | Data products (list/detail/register) | data-product editor + `register-purview` | `registerDataProduct` (`/datagovernance/catalog/dataProducts`) | ⚠️ GATED |
 | Glossary terms | admin Purview panel | `listGlossaryTerms` / `createGlossaryTerm` (`/catalog/api/atlas/v2/glossary`) | ⚠️ GATED |
 | Data catalog (asset inventory) | `/governance/catalog` | `/api/governance/catalog` (Cosmos; merges Purview classifications when bound) | ✅ BUILT — click (or right-click) an asset → **detail drawer** (type, workspace, owner, classifications, sensitivity, **endorsement/certified**, rows, size, updated, description) with **Open in editor**, **View lineage**, and a real **Request access** action (`/api/catalog/request-access` → durable audit-log entry on the asset + requester notification; owner grants via Policies). |
@@ -48,6 +48,20 @@ renders; the controls call live Purview REST and disable behind the honest
 
 - `probePurview()` — cheap `GET /datagovernance/businessdomains` to classify
   reachability (live / cross_cloud / upstream_error / not_configured).
+- **Governance domains (F4)** → `lib/azure/domains-client.ts` `getDomainsStore()`.
+  DEFAULT (`LOOM_DOMAINS_BACKEND` unset/`cosmos`): one doc per domain in the
+  Cosmos `governance-domains` container (PK `/tenantId`), mirrored best-effort
+  to a Purview **classic Data Map collection** (`PUT /collections/{ref}`, api
+  `2019-11-01-preview`) when `LOOM_PURVIEW_ACCOUNT` is set + the UAMI holds
+  Collection Admin. `assignWorkspaces` patches each `workspaces` doc's `domain`
+  field. **Works with NO Fabric workspace and NO Purview account** — the mirror
+  is non-fatal. OPT-IN (`LOOM_DOMAINS_BACKEND=fabric`, Commercial/GCC only —
+  the BFF throws `DomainsBackendGateError` at `LOOM_CLOUD_TIER=IL5`): Fabric
+  Admin `POST/PATCH/DELETE /v1/admin/domains` + `/assignWorkspaces`. Every
+  mutation writes a `governance-domain.*` event to the Cosmos `audit-log`
+  container (Purview Audit categories do not cover collection CRUD).
+  Domain gallery images load from `LOOM_DOMAIN_IMAGES_URL` (catalog.bicep blob,
+  Storage Blob Data Reader on the Console UAMI).
 - Sources/scans → Purview scan plane `/scan/datasources/...`.
 - Domains/data products/glossary → Unified Catalog `/datagovernance/...` +
   Atlas `/catalog/api/atlas/v2/...`.

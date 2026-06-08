@@ -45,6 +45,8 @@ let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
 let _wsRoles: Container | null = null;
+let _governanceDomains: Container | null = null;
+let _labelAssignments: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -150,6 +152,19 @@ async function ensure() {
   // Distinct from the legacy UPN-keyed `workspace-permissions` container, which
   // is left untouched for the data-agent config authz path.
   _wsRoles = await mk('workspace-roles', '/workspaceId');
+  // Governance Domains (F4) — one doc per domain, partitioned by tenant so
+  // every Governance "Domains" list lookup hits a single physical partition.
+  // Created lazily; no pre-step beyond the Cosmos account + database. The
+  // Purview classic-collection mirror is best-effort on top of this store.
+  _governanceDomains = await mk('governance-domains', '/tenantId');
+  // Sensitivity-label assignments — one row per manual label application to a
+  // Loom item (F12 sensitivity-label flyout). Mirrors what's written into
+  // item.state.sensitivityLabel, but as an append-only, tenant-partitioned
+  // audit tier so the governance dashboard can query "every label change in
+  // the tenant" without scanning every item's state field. PK /tenantId.
+  // createIfNotExists keeps a fresh environment from needing an extra
+  // ARM/Bicep step beyond the account+database.
+  _labelAssignments = await mk('label-assignments', '/tenantId');
   _ensured = true;
 }
 
@@ -160,6 +175,8 @@ export async function threadEdgesContainer(): Promise<Container> { await ensure(
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
+export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
+export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -222,7 +239,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'workspace-roles',
+  'maintenance-jobs', 'workspace-roles', 'governance-domains',
 ];
 
 /** List all Loom containers with their current throughput shape. */

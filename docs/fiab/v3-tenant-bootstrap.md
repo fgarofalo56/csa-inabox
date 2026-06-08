@@ -700,3 +700,50 @@ Cosmos row and the ARM assignment are gone.
 - Wired in `admin-plane/main.bicep` (`module workspaceRbac` + param
   `loomWorkspaceRolesFabricEnabled` + env `LOOM_WORKSPACE_ROLES_FABRIC`)
 - Cosmos container `workspace-roles` is created lazily by `cosmos-client.ts`.
+
+## SQL endpoint "user's identity" data-access mode {#sql-user-identity-access-mode}
+
+A SQL analytics endpoint (Synapse Dedicated / Serverless SQL pool) has a
+**Data access mode** control in its editor (F10):
+
+- **Delegated (service identity)** — the DEFAULT. Queries run as the Loom
+  console managed identity. Always works; no per-user setup. Nothing below is
+  required for this mode.
+- **User's identity** — queries run under the signed-in user's own Azure
+  identity (so row-level security, `SUSER_NAME()`, and the SQL audit log reflect
+  the real user). This is **opt-in** and needs the one-time tenant config below.
+  Until it's done, the mode is honest-gated: the query route returns
+  `NO_USER_SQL_TOKEN` and the editor shows what to do.
+
+**Step 1 — Delegated SQL permission + admin consent (one-time, per tenant).**
+The Loom console app registration must hold the Azure SQL Database
+`user_impersonation` delegated permission so a SQL-audience token is issued for
+the user at sign-in. The audience host is cloud-portable via
+`LOOM_SYNAPSE_SQL_TOKEN_SCOPE` (`database.windows.net` for Commercial/GCC,
+`database.usgovcloudapi.net` for GCC-High/IL5) — already set per-boundary in
+`admin-plane/main.bicep`, so no new env var.
+
+```bash
+az login   # user/SP with Application.ReadWrite.All on the app
+MSAL_APP_ID=<loom console app registration appId> \
+  scripts/csa-loom/grant-sql-delegated-permission.sh
+# then a Tenant Admin grants consent:
+az ad app permission admin-consent --id <loom console app registration appId>
+```
+
+**Step 2 — Provision the user in the SQL endpoint** (so their token authorizes):
+
+- *Dedicated pool* (run as the Synapse AAD admin / console UAMI):
+  ```sql
+  CREATE USER [user@tenant.onmicrosoft.com] FROM EXTERNAL PROVIDER;
+  ALTER ROLE db_datareader ADD MEMBER [user@tenant.onmicrosoft.com];
+  ALTER ROLE db_datawriter ADD MEMBER [user@tenant.onmicrosoft.com];
+  ```
+- *Serverless (OPENROWSET over ADLS)*: grant the user **Storage Blob Data
+  Reader** on the lake storage account (Azure RBAC). Workspace members often
+  already have it — then no extra step.
+
+**Verify.** With the mode set to *User's identity*, run
+`SELECT SUSER_NAME() AS me;` (Dedicated) — it returns the signed-in user's UPN,
+not the console identity. The chosen mode persists in Cosmos
+(`item.state.accessMode`) and survives reload.

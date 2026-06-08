@@ -1040,7 +1040,107 @@ export async function deleteBusinessDomain(id: string): Promise<void> {
 }
 
 /**
- * Honest gate: the unified-catalog Data Quality preview lives under
+ * Update the Purview classic collection that mirrors a Loom domain.
+ *
+ * Classic Data Map `PUT /collections/{referenceName}` (api-version
+ * 2019-11-01-preview) is an idempotent create-or-update — there is no PATCH
+ * for collections — so this mirrors `createBusinessDomain` and re-uses the
+ * same ≤36-char `domainCollectionName(id)` slug as the referenceName.
+ *
+ * Requires the UAMI to hold "Collection Admin" on the root collection (classic
+ * Data Map metadata-policy role, NOT ARM RBAC; granted via
+ * scripts/csa-loom/grant-purview-datamap-role.sh). A 401/403 surfaces as the
+ * honest infra-gate, not a Fabric dependency.
+ */
+export async function updateBusinessDomain(
+  id: string,
+  body: { name?: string; description?: string },
+): Promise<PurviewBusinessDomain> {
+  purviewAccount();
+  const colName = domainCollectionName(id);
+  const root = await rootCollectionName();
+  const res = await purviewFetch(`/collections/${encodeURIComponent(colName)}`, {
+    method: 'PUT',
+    apiVersion: ACCOUNT_API_VERSION,
+    body: JSON.stringify({
+      ...(body.name ? { friendlyName: body.name } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(root ? { parentCollection: { referenceName: root } } : {}),
+    }),
+  });
+  const j = await readJson<any>(res);
+  if (!res.ok)
+    throw new PurviewError(res.status, j, `Update Purview collection (domain mirror) failed: ${res.status}`);
+  return {
+    id: j?.name || colName,
+    name: j?.friendlyName || body.name || colName,
+    description: j?.description,
+    parentId: j?.parentCollection?.referenceName,
+    raw: j,
+  };
+}
+
+export interface DomainAuditEvent {
+  id?: string;
+  timestamp?: string;
+  operation?: string;
+  userId?: string;
+  resourceId?: string;
+  category?: string;
+  raw?: unknown;
+}
+
+/**
+ * Query Purview Audit for Asset-level governance events associated with a
+ * domain.
+ *
+ * Real endpoint: POST {base}/datamap/api/audit/query?api-version=2023-10-01-preview
+ * Ref: https://learn.microsoft.com/rest/api/purview/datamapdataplane/audit/query
+ *
+ * NOTE: Purview Audit categories (Asset / GlossaryTerm / ClassificationDef) do
+ * NOT include Purview collection CRUD. Domain CRUD audit is therefore written
+ * by the BFF routes to the Cosmos audit-log container. This function surfaces
+ * Asset-level governance events (e.g. label change, scan result) scoped to a
+ * domain when the account exposes the Audit data plane.
+ */
+export async function queryDomainAuditLog(opts: {
+  domainId?: string;
+  startTime?: string;
+  endTime?: string;
+  limit?: number;
+}): Promise<DomainAuditEvent[]> {
+  purviewAccount();
+  const token = await credential.getToken(PURVIEW_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire Purview data-plane token');
+  const payload: Record<string, unknown> = {
+    category: 'Asset',
+    ...(opts.startTime ? { startTime: opts.startTime } : {}),
+    ...(opts.endTime ? { endTime: opts.endTime } : {}),
+    ...(opts.limit ? { limit: opts.limit } : {}),
+    ...(opts.domainId
+      ? { filters: [{ attributeName: 'domainId', attributeValue: opts.domainId }] }
+      : {}),
+  };
+  const res = await fetch(
+    `${purviewBase()}/datamap/api/audit/query?api-version=2023-10-01-preview`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) {
+    const j = await readJson<any>(res);
+    throw new PurviewError(res.status, j, `Domain audit query failed: ${res.status}`);
+  }
+  const j = await readJson<{ value?: DomainAuditEvent[] }>(res);
+  return j?.value || [];
+}
+
+/**
  * `/datagovernance/dataquality` on a new-experience account. Returns the gate
  * via throw so the panel renders the MessageBar (classic Data Map has no
  * equivalent rules surface).
