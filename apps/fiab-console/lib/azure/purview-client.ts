@@ -794,6 +794,76 @@ export async function addAssetClassification(guid: string, classificationNames: 
 }
 
 // ------------------------------------------------------------
+// MIP sensitivity labels — Data Map (Atlas) classification typedefs
+// ------------------------------------------------------------
+
+export interface DataMapSensitivityLabel {
+  /** Full Atlas classification typedef name, e.g. 'MICROSOFT.GOVERNANCE.LABELS.<labelGuid>'. */
+  typedefName: string;
+  /** The label GUID (suffix of typedefName) when it is a GUID, else the full typedef name. */
+  id: string;
+  /** Best-effort human-readable name (typedef description, else the GUID/slug). */
+  displayName: string;
+  raw?: unknown;
+}
+
+/**
+ * Atlas classification-typedef name prefix used by the Purview Data Map
+ * MIP + sensitivity-labels integration. When a Purview account is connected to
+ * Microsoft Purview Information Protection and assets are scanned, each MIP
+ * sensitivity label is registered in the Data Map as a classification typedef
+ * named `MICROSOFT.GOVERNANCE.LABELS.<labelGuid>`. Loom uses this same naming
+ * convention when it stamps a label onto an asset (ensureClassificationDefs +
+ * addAssetClassification), so the round-trip stays inside the classic Data Map
+ * and requires NO Microsoft Fabric / Power BI / Graph dependency.
+ *
+ * Grounded in:
+ *   https://learn.microsoft.com/purview/how-to-automatically-label-your-content
+ *   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2 (typedefs)
+ */
+export const SENSITIVITY_LABEL_TYPEDEF_PREFIX = 'MICROSOFT.GOVERNANCE.LABELS.';
+
+const LABEL_GUID_RE = GUID_RE;
+
+/**
+ * List MIP sensitivity labels registered in the CLASSIC Data Map.
+ *
+ * Reads Atlas classification-typedef headers
+ *   GET {base}/datamap/api/atlas/v2/types/typedefs/headers?api-version=2023-09-01
+ * and keeps the ones whose name starts with SENSITIVITY_LABEL_TYPEDEF_PREFIX —
+ * the typedefs Purview creates for MIP labels (and the ones Loom creates when
+ * applying a label). The GUID suffix is the label id.
+ *
+ * Returns [] (HONEST — not a mock list) when the integration is not yet enabled
+ * or no labels have been scanned/applied. Throws PurviewNotConfiguredError when
+ * LOOM_PURVIEW_ACCOUNT is unset so the BFF renders the named MessageBar gate.
+ *
+ * https://learn.microsoft.com/rest/api/purview/datamapdataplane/type/list-type-def-headers
+ */
+export async function listSensitivityLabels(): Promise<DataMapSensitivityLabel[]> {
+  purviewAccount(); // throws PurviewNotConfiguredError when LOOM_PURVIEW_ACCOUNT is unset
+  const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs/headers');
+  const headers = await readJson<Array<{ name?: string; category?: string; guid?: string }>>(res);
+  if (!Array.isArray(headers)) return [];
+  return headers
+    .filter((h) => typeof h?.name === 'string' && h.name.startsWith(SENSITIVITY_LABEL_TYPEDEF_PREFIX))
+    .map((h): DataMapSensitivityLabel => {
+      const name = h.name as string;
+      const suffix = name.slice(SENSITIVITY_LABEL_TYPEDEF_PREFIX.length);
+      const isGuid = LABEL_GUID_RE.test(suffix);
+      return {
+        typedefName: name,
+        id: isGuid ? suffix : name,
+        // Headers carry no friendly name; surface the GUID (honest) or a
+        // de-slugged suffix when the typedef uses a readable name.
+        displayName: isGuid ? suffix : suffix.replace(/[._-]+/g, ' ').trim() || name,
+        raw: h,
+      };
+    })
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+// ------------------------------------------------------------
 // Atlas glossary surface (low-level — /datamap/api/atlas/v2/glossary)
 // ------------------------------------------------------------
 
