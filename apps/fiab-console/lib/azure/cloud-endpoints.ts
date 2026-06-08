@@ -139,6 +139,30 @@ export function cogScope(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Microsoft Graph (Entra principal search, directory reads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Microsoft Graph data-plane base URL including the `/v1.0` version segment
+ * (no trailing slash). Commercial / GCC use `graph.microsoft.com`; GCC-High /
+ * IL5 / DoD (`AzureUSGovernment` / `AzureDOD`) use `graph.microsoft.us`.
+ * `LOOM_GRAPH_BASE` overrides for non-standard sovereign clouds.
+ */
+export function graphBase(): string {
+  const explicit = process.env.LOOM_GRAPH_BASE;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  return isGovCloud()
+    ? 'https://graph.microsoft.us/v1.0'
+    : 'https://graph.microsoft.com/v1.0';
+}
+
+/** AAD `.default` scope for Microsoft Graph tokens (host root, not the /v1.0 path). */
+export function graphScope(): string {
+  const host = graphBase().replace(/\/v1\.0\/?$/, '');
+  return `${host}/.default`;
+}
+
+// ---------------------------------------------------------------------------
 // Service Bus / Event Hubs (data plane)
 // ---------------------------------------------------------------------------
 
