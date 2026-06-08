@@ -1,98 +1,132 @@
 /**
- * CosmosDataProductStore — the Azure-native DEFAULT DataProductStore adapter.
+ * CosmosDataProductStore — Azure-native DEFAULT adapter for DataProductStore.
  *
- * Wraps the shared item-crud helpers over the Loom `items` Cosmos container,
- * persisting/reading data products as `data-product` workspace items. Maps
- * WorkspaceItem <-> LoomDataProduct so the same BFF + UI work against either
- * backend (per .claude/rules/ui-parity.md).
+ * Stores data-product catalog records in the `dataproducts` Cosmos container
+ * (partitioned by /tenantId). Follows the connections-store.ts pattern: every
+ * write goes through the @azure/cosmos SDK (not a data-plane REST client) so
+ * ChainedTokenCredential auth is handled centrally by cosmos-client.ts ensure().
  *
- * This is the backend the factory selects whenever the Purview Unified Catalog
- * adapter is not explicitly opted in (and ALWAYS on GCC / GCC-High / IL5). It
- * requires no Fabric and no Purview — just the Loom Cosmos account every
- * deployment already has.
+ * The `tenantId` on each doc is the caller's Entra tenant/object id (the same
+ * value loadOwnedItem / connections-store use as the partition key). Callers
+ * pass it explicitly on register/update so this adapter is side-effect-free on
+ * session state.
+ *
+ * No Microsoft Fabric / Purview-unified-catalog dependency on this default path
+ * (.claude/rules/no-fabric-dependency.md). Real Cosmos queries, never mocks
+ * (.claude/rules/no-vaporware.md).
+ *
+ * Grounded in the @azure/cosmos SDK:
+ *   https://learn.microsoft.com/javascript/api/@azure/cosmos/items
  */
-import type { SessionPayload } from '@/lib/auth/session';
-import type { WorkspaceItem } from '@/lib/types/workspace';
-import {
-  createOwnedItem,
-  loadOwnedItem,
-  listOwnedItems,
-  updateOwnedItem,
-  deleteOwnedItem,
-} from '@/app/api/items/_lib/item-crud';
-import type { DataProductStore, LoomDataProduct, LoomDataProductPayload } from './store';
+import { randomUUID } from 'node:crypto';
+import { dataProductsContainer } from '@/lib/azure/cosmos-client';
+import type { DataProductStore } from './store';
+import type {
+  PurviewDataProduct,
+  PurviewDataProductPayload,
+} from '@/lib/azure/purview-client';
 
-const ITEM_TYPE = 'data-product';
-
-function toLoom(item: WorkspaceItem): LoomDataProduct {
-  const st = (item.state || {}) as Record<string, unknown>;
-  return {
-    id: item.id,
-    name: item.displayName,
-    description: item.description ?? (typeof st.description === 'string' ? st.description : undefined),
-    domain: typeof st.domain === 'string' ? st.domain : undefined,
-    status: typeof st.status === 'string' ? st.status : undefined,
-    type: typeof st.type === 'string' ? st.type : undefined,
-    endorsed: typeof st.endorsed === 'boolean' ? st.endorsed : undefined,
-    contacts: st.contacts,
-    businessUse: typeof st.businessUse === 'string' ? st.businessUse : undefined,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-    source: 'cosmos',
-    raw: item,
-  };
+/** Internal Cosmos document shape (a superset of the public PurviewDataProduct). */
+interface DataProductDoc extends PurviewDataProduct {
+  tenantId: string;
+  createdAt: string;
 }
 
-/** Pull the data-product fields OUT of a payload into the item `state` blob. */
-function toState(payload: Partial<LoomDataProductPayload>): Record<string, unknown> {
-  const { name, workspaceId, description, ...rest } = payload;
-  return { ...rest };
+/** Strip the internal-only fields before returning to callers. */
+function toProduct(doc: DataProductDoc): PurviewDataProduct {
+  const { tenantId: _t, createdAt: _c, ...rest } = doc;
+  return rest;
 }
 
 export class CosmosDataProductStore implements DataProductStore {
-  readonly backendName = 'cosmos' as const;
-
-  async list(session: SessionPayload): Promise<LoomDataProduct[]> {
-    const items = await listOwnedItems(ITEM_TYPE, session.claims.oid).catch(() => []);
-    return items.map(toLoom);
+  /** Cross-partition read of the raw doc (the id alone doesn't carry the pk). */
+  private async getDoc(id: string): Promise<DataProductDoc | null> {
+    const c = await dataProductsContainer();
+    const { resources } = await c.items
+      .query<DataProductDoc>({
+        query: 'SELECT * FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: id }],
+      })
+      .fetchAll();
+    return resources?.[0] ?? null;
   }
 
-  async get(session: SessionPayload, id: string): Promise<LoomDataProduct | null> {
-    const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
-    return item ? toLoom(item) : null;
-  }
-
-  async create(session: SessionPayload, payload: LoomDataProductPayload): Promise<LoomDataProduct> {
-    if (!payload?.workspaceId) {
-      throw new Error('workspaceId is required to create a data product in the Cosmos backend');
+  async register(payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
+    const tenantId = (payload.tenantId as string | undefined)?.trim();
+    if (!tenantId) {
+      throw Object.assign(
+        new Error('CosmosDataProductStore.register: payload.tenantId is required'),
+        { status: 400 },
+      );
     }
-    const r = await createOwnedItem(session, ITEM_TYPE, {
-      workspaceId: payload.workspaceId,
-      displayName: payload.name,
-      description: payload.description,
-      state: toState(payload),
-    });
-    if (!r.ok) {
-      const err = new Error(r.error) as Error & { status?: number };
-      err.status = r.status;
-      throw err;
+    const c = await dataProductsContainer();
+    const now = new Date().toISOString();
+    const existing = payload.id ? await this.getDoc(payload.id) : null;
+    const doc: DataProductDoc = {
+      id: payload.id ?? randomUUID(),
+      tenantId,
+      name: (payload.displayName ?? payload.name ?? existing?.name ?? '').trim(),
+      description: payload.description ?? existing?.description,
+      domain: payload.domain ?? existing?.domain,
+      status: existing?.status ?? 'DRAFT',
+      type: payload.type ?? existing?.type,
+      endorsed: payload.endorsed ?? existing?.endorsed ?? false,
+      contacts: existing?.contacts,
+      documentation: existing?.documentation,
+      updatedAt: now,
+      createdAt: existing?.createdAt ?? now,
+      raw: { ...((existing?.raw as object) ?? {}), ...payload },
+    };
+    const { resource } = await c.items.upsert<DataProductDoc>(doc);
+    return toProduct(resource ?? doc);
+  }
+
+  async get(id: string): Promise<PurviewDataProduct | null> {
+    const doc = await this.getDoc(id);
+    return doc ? toProduct(doc) : null;
+  }
+
+  async list(domain?: string): Promise<PurviewDataProduct[]> {
+    const c = await dataProductsContainer();
+    const spec = domain
+      ? {
+          query: 'SELECT * FROM c WHERE c.domain = @d ORDER BY c.name',
+          parameters: [{ name: '@d', value: domain }],
+        }
+      : { query: 'SELECT * FROM c ORDER BY c.name', parameters: [] as { name: string; value: unknown }[] };
+    const { resources } = await c.items.query<DataProductDoc>(spec).fetchAll();
+    return (resources ?? []).map(toProduct);
+  }
+
+  async update(id: string, payload: Partial<PurviewDataProductPayload>): Promise<PurviewDataProduct> {
+    const existing = await this.getDoc(id);
+    if (!existing) throw Object.assign(new Error(`DataProduct ${id} not found`), { status: 404 });
+    const c = await dataProductsContainer();
+    const now = new Date().toISOString();
+    const merged: DataProductDoc = {
+      ...existing,
+      tenantId: (payload.tenantId as string | undefined)?.trim() || existing.tenantId,
+      name: (payload.displayName ?? payload.name ?? existing.name).trim(),
+      description: payload.description ?? existing.description,
+      domain: payload.domain ?? existing.domain,
+      type: payload.type ?? existing.type,
+      endorsed: payload.endorsed ?? existing.endorsed,
+      updatedAt: now,
+      raw: { ...((existing.raw as object) ?? {}), ...payload },
+    };
+    const { resource } = await c.items.upsert<DataProductDoc>(merged);
+    return toProduct(resource ?? merged);
+  }
+
+  async delete(id: string): Promise<void> {
+    const existing = await this.getDoc(id);
+    if (!existing) return;
+    const c = await dataProductsContainer();
+    try {
+      await c.item(id, existing.tenantId).delete();
+    } catch (e: any) {
+      if (e?.code === 404) return;
+      throw e;
     }
-    return toLoom(r.item);
-  }
-
-  async update(session: SessionPayload, id: string, patch: Partial<LoomDataProductPayload>): Promise<LoomDataProduct | null> {
-    const current = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
-    if (!current) return null;
-    const nextState = { ...(current.state || {}), ...toState(patch) };
-    const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, {
-      displayName: typeof patch.name === 'string' ? patch.name : undefined,
-      description: 'description' in patch ? patch.description : undefined,
-      state: nextState,
-    });
-    return updated ? toLoom(updated) : null;
-  }
-
-  async remove(session: SessionPayload, id: string): Promise<boolean> {
-    return deleteOwnedItem(id, ITEM_TYPE, session.claims.oid);
   }
 }
