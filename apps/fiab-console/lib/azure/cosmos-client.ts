@@ -44,7 +44,32 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _dataproductJobs: Container | null = null;
 let _ensured = false;
+
+/**
+ * Bulk-import job record for the Data product "Import from CSV" flyout (F2/F18).
+ * One row per import run, partitioned by tenant so the Monitor tab polls a
+ * single physical partition. `rowErrors` captures the per-row failures that did
+ * NOT abort the valid rows — surfaced verbatim in the Monitor error log.
+ */
+export interface DataProductImportJob {
+  id: string;            // jobId (UUID)
+  tenantId: string;      // partition key — caller's oid
+  status: 'running' | 'done' | 'partial' | 'failed';
+  totalRows: number;
+  successCount: number;
+  failCount: number;
+  rowErrors: Array<{ row: number; name: string; error: string }>;
+  createdAt: string;
+  updatedAt: string;
+  workspaceId: string;
+  /** ADLS staging path (file name in the csv-imports container). '' when staging was gated. */
+  blobPath: string;
+  /** True when the raw CSV was staged to ADLS; false when the storage gate fired (inline-only). */
+  staged: boolean;
+  createdBy?: string;
+}
 
 function endpoint(): string {
   const v = process.env.LOOM_COSMOS_ENDPOINT;
@@ -142,6 +167,11 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Bulk-import jobs for the Data product "Import from CSV" flyout (F2/F18) —
+  // one row per import run, partitioned by tenant so the Monitor tab polls a
+  // single physical partition. Created lazily so a fresh environment needs no
+  // extra ARM/Bicep step beyond the account+database.
+  _dataproductJobs = await mk('dataproduct-jobs', '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +181,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +244,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'dataproduct-jobs',
 ];
 
 /** List all Loom containers with their current throughput shape. */

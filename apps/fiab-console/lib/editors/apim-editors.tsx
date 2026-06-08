@@ -30,6 +30,7 @@ import {
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ImportDataProductsFlyout } from './components/import-data-products-flyout';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1908,6 +1909,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
   const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
 
+  // Bulk "Import from CSV" flyout (F2 import + F18 monitoring) — creates many
+  // draft data-product items from a CSV in one shot. Available on /new and on
+  // an existing item alike (it always creates NEW items).
+  const [importOpen, setImportOpen] = useState(false);
+
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');
   const [dsType, setDsType] = useState('fabric_lakehouse');
@@ -2239,10 +2245,14 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
+      { label: 'Bulk', actions: [
+        { label: 'Import from CSV', onClick: () => setImportOpen(true) },
+      ]},
     ]},
   ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
 
   return (
+    <>
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {state.purviewDataProductId ? (
@@ -2519,5 +2529,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
       </div>
     } />
+    <ImportDataProductsFlyout
+      open={importOpen}
+      onOpenChange={setImportOpen}
+      defaultWorkspaceId={workspaceId || undefined}
+    />
+    </>
   );
 }
