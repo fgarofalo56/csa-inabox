@@ -584,3 +584,113 @@ export async function enableSqlServer2025Features(
     return { ok: false, note: e?.message || String(e) };
   }
 }
+
+// ============================================================
+// Database-scope ARM role assignments (item-level Share dialog)
+//
+// Per .claude/rules/ui-parity.md this mirrors the Azure portal "Access control
+// (IAM) → Add role assignment" blade scoped to a single Azure SQL database
+// (Microsoft.Sql/servers/databases/{db} ARM scope). The Console UAMI must hold
+// "Role Based Access Control Administrator" (constrained via ABAC to the three
+// roles below) on the SQL server's resource group — granted by
+// platform/fiab/bicep/modules/admin-plane/sql-database-share-rbac.bicep. If
+// that grant is absent ARM returns 403 verbatim and the route surfaces it
+// honestly (no fake success, per no-vaporware.md).
+// ============================================================
+
+/** Built-in role definition GUIDs (identical across every Azure cloud). */
+export const SQL_DATABASE_ROLES: Record<string, string> = {
+  'Reader':             'acdd72a7-3385-48ef-bd42-f606fba81ae7',
+  'Contributor':        'b24988ac-6180-42a0-ab88-20f7382dd24c',
+  'SQL DB Contributor': '9b7fa17d-e63e-47b0-bb0a-15c516ac86ec',
+};
+
+export interface DbRoleAssignment {
+  /** Full ARM id of the role assignment (the receipt). */
+  id: string;
+  principalId: string;
+  principalType?: string;
+  roleDefinitionId: string;
+  /** Friendly role name when the GUID is one of SQL_DATABASE_ROLES. */
+  roleName?: string;
+  createdOn?: string;
+}
+
+function dbScopeFrom(serverScope: string, databaseName: string): string {
+  return `${serverScope}/databases/${encodeURIComponent(databaseName)}`;
+}
+
+/** List the role assignments declared AT the database scope (atScope filter). */
+export async function listDatabaseRoleAssignments(
+  serverName: string,
+  databaseName: string,
+): Promise<DbRoleAssignment[]> {
+  const serverScope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  const dbScope = dbScopeFrom(serverScope, databaseName);
+  const res = await armRequest<{ value: any[] }>(
+    `${dbScope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`,
+  );
+  return (res.value || []).map((r) => {
+    const roleDef = r.properties?.roleDefinitionId || '';
+    const roleGuid = roleDef.split('/').pop() || '';
+    const known = Object.entries(SQL_DATABASE_ROLES).find(([, gid]) => gid === roleGuid);
+    return {
+      id: r.id,
+      principalId: r.properties?.principalId,
+      principalType: r.properties?.principalType,
+      roleDefinitionId: roleDef,
+      roleName: known ? known[0] : undefined,
+      createdOn: r.properties?.createdOn,
+    } as DbRoleAssignment;
+  });
+}
+
+/**
+ * Grant a role at the database scope via ARM PUT. `roleNameOrGuid` accepts a
+ * friendly name from SQL_DATABASE_ROLES or a raw role-definition GUID. Returns
+ * the new assignment including its ARM id (the receipt the UI shows).
+ */
+export async function grantDatabaseRole(
+  serverName: string,
+  databaseName: string,
+  principalId: string,
+  roleNameOrGuid: string,
+  principalType: 'User' | 'Group' | 'ServicePrincipal' = 'User',
+): Promise<DbRoleAssignment> {
+  if (!principalId || !roleNameOrGuid) {
+    throw new AzureSqlError('principalId and roleNameOrGuid are required', 400);
+  }
+  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+  if (!sub) throw new AzureSqlError('LOOM_SUBSCRIPTION_ID not set', 400);
+  const serverScope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  const dbScope = dbScopeFrom(serverScope, databaseName);
+  const roleGuid = SQL_DATABASE_ROLES[roleNameOrGuid] || roleNameOrGuid;
+  const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
+  // ARM role-assignment names are random GUIDs; a duplicate principal+role pair
+  // at the same scope 409s, which surfaces honestly to the caller.
+  const assignmentGuid =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+  const res = await armRequest<any>(
+    `${dbScope}/providers/Microsoft.Authorization/roleAssignments/${assignmentGuid}?api-version=2022-04-01`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ properties: { roleDefinitionId, principalId, principalType } }),
+    },
+  );
+  return {
+    id: res.id,
+    principalId,
+    principalType,
+    roleDefinitionId,
+    roleName: Object.entries(SQL_DATABASE_ROLES).find(([, gid]) => gid === roleGuid)?.[0],
+    createdOn: res.properties?.createdOn,
+  };
+}
+
+/** Revoke one role assignment by its full ARM id (ARM DELETE). */
+export async function revokeDatabaseRoleAssignment(roleAssignmentArmId: string): Promise<void> {
+  if (!roleAssignmentArmId) throw new AzureSqlError('roleAssignmentArmId is required', 400);
+  await armRequest<void>(`${roleAssignmentArmId}?api-version=2022-04-01`, { method: 'DELETE' });
+}

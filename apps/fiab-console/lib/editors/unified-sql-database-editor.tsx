@@ -40,11 +40,13 @@ import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  PeopleTeam20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { ShareDialog } from './components/share-dialog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -549,7 +551,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring' | 'share' | 'git'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -713,6 +715,12 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Share', actions: [
+        { label: 'Manage access', onClick: (server && database && family === 'azure-sql') ? () => setTab('share') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Assign Azure RBAC roles on this database (Access control / IAM)' },
+      ]},
+      { label: 'Source control', actions: [
+        { label: 'Git settings', onClick: () => setTab('git'), title: 'Connect this database schema to Azure DevOps or GitHub' },
+      ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
@@ -777,8 +785,10 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
+            {family === 'azure-sql' && <Tab value="share" icon={<PeopleTeam20Regular />}>Share</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
+            <Tab value="git" icon={<BranchFork20Regular />}>Source control</Tab>
           </TabList>
 
           {/* ---------------- Connect ---------------- */}
@@ -1034,6 +1044,72 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </MessageBarBody>
                 </MessageBar>
               )
+          )}
+
+          {/* ---------------- Share (per-database Access control / IAM) ---------------- */}
+          {tab === 'share' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <ShareDialog itemId={id} server={server} database={database} open={true} />
+                  : <Caption1>Pick an Azure SQL server + database on the <strong>Connect</strong> tab to assign Azure RBAC roles at the database scope.</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Database Share applies to Azure SQL</MessageBarTitle>
+                    Per-database Azure RBAC role assignment targets the <code>Microsoft.Sql/servers/databases</code> scope. Select an Azure SQL database; SQL MI and PostgreSQL manage access at the instance/server resource scope.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
+          {/* ---------------- Source control (Git) — honest connection gate ---------------- */}
+          {tab === 'git' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Source control for this database schema</MessageBarTitle>
+                  Mirrors the Azure SQL Database / SSDT "Schema compare + Git" workflow. Schema version
+                  control (DACPAC diff, migration history) runs through an Azure DevOps service connection or
+                  a GitHub Actions workflow — not a live ARM data-plane API — so it is gated on a one-time
+                  connection setting rather than a fake in-app commit form.
+                </MessageBarBody>
+              </MessageBar>
+              <div className={s.card}>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Connect a Git provider</Subtitle2>
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>No ADO / GitHub connection configured</MessageBarTitle>
+                    Set the following environment variables on the Console container app and redeploy, then
+                    schema source control activates for this database:
+                    <br /><br />
+                    <code>LOOM_SQL_GIT_PROVIDER</code> — <code>azdo</code> or <code>github</code>
+                    <br />
+                    <strong>Azure DevOps</strong> (when <code>LOOM_SQL_GIT_PROVIDER=azdo</code>):
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_ORG</code> — your Azure DevOps organization name
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_PROJECT</code> — the Azure DevOps project that holds the repo
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_REPO</code> — the Git repository name for the DACPAC project
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_PAT_SECRET</code> — Key Vault secret name holding the ADO PAT
+                    <br /><br />
+                    <strong>GitHub</strong> (when <code>LOOM_SQL_GIT_PROVIDER=github</code>):
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_REPO</code> — <code>org/repo</code> for the schema project
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_BRANCH</code> — default branch (e.g. <code>main</code>)
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_PAT_SECRET</code> — Key Vault secret name holding the GitHub PAT
+                    <br /><br />
+                    Wire these in <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code> (env block) and
+                    add a pipeline step that runs <code>SqlPackage /Action:Extract</code> (DACPAC) +
+                    <code> /Action:Script</code> to diff against the checked-in schema. See
+                    <code> docs/fiab/v3-tenant-bootstrap.md</code>. Honest gate — no fake commit form.
+                  </MessageBarBody>
+                </MessageBar>
+              </div>
+            </>
           )}
 
           {/* ---------------- Catalog ---------------- */}
