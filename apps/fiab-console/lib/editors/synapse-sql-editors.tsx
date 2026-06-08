@@ -30,6 +30,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -350,6 +351,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             onChange={setComputeId}
             showLifecycle={false}
           />
+          <SqlAccessModeSection itemId={id} itemType="synapse-serverless-sql-pool" />
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}
@@ -656,6 +658,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             value={computeId}
             onChange={setComputeId}
           />
+          <SqlAccessModeSection itemId={id} itemType="synapse-dedicated-sql-pool" />
           {state === 'Resuming' && (
             <MessageBar intent="info">
               <MessageBarBody>
