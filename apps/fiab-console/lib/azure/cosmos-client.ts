@@ -46,6 +46,10 @@ let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
+// Govern → Admin view (F2) — tenant-scoped posture aggregates, distinct from the
+// owner-scoped (F3) containers above. Partitioned by /tenantId.
+let _postureAggregatesAdmin: Container | null = null;
+let _recommendedActionsAdmin: Container | null = null;
 let _onelakeSecurityRoles: Container | null = null;
 // Wave 4 — Data Marketplace / Governance containers.
 let _dataProducts: Container | null = null;
@@ -210,6 +214,13 @@ async function ensure() {
   // createIfNotExists keeps a fresh environment from needing an extra
   // ARM/Bicep step beyond the account+database.
   _labelAssignments = await mk('label-assignments', '/tenantId');
+  // Govern → Admin view (F2) — tenant-scoped posture, distinct containers from
+  // the owner-scoped (F3) posture-aggregates / recommended-actions above so the
+  // two features never collide on partition key. The posture-refresh Azure
+  // Function pre-computes `posture:${tenantId}` here; the BFF reads it on the
+  // fast path (/api/governance/govern/posture). Partitioned by /tenantId.
+  _postureAggregatesAdmin = await mk('posture-aggregates-admin', '/tenantId');
+  _recommendedActionsAdmin = await mk('recommended-actions-admin', '/tenantId');
   _ensured = true;
 }
 
@@ -221,6 +232,8 @@ export async function connectionsContainer(): Promise<Container> { await ensure(
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
+export async function postureAggregatesAdminContainer(): Promise<Container> { await ensure(); return _postureAggregatesAdmin!; }
+export async function recommendedActionsAdminContainer(): Promise<Container> { await ensure(); return _recommendedActionsAdmin!; }
 export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
@@ -297,6 +310,7 @@ const KNOWN_CONTAINER_IDS = [
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
   'maintenance-jobs',
   'posture-aggregates', 'recommended-actions',
+  'posture-aggregates-admin', 'recommended-actions-admin',
   'onelake-security-roles',
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',

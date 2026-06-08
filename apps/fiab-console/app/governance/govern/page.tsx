@@ -1,48 +1,50 @@
 'use client';
 
 /**
- * /governance/govern — the Govern tab (OneLake Catalog → Govern parity).
+ * /governance/govern — the "Govern" tab (OneLake Catalog → Govern parity).
  *
  * Two scopes, selected via `?view=`:
  *   - `owner` (default) — the data-owner "My items" view (F3). Rendered by
  *     GovernOwnerPane: posture for items the signed-in user owns, refreshed on
- *     tab-open.
- *   - `admin` — the tenant-wide governance posture. Loom already ships this as
- *     a full, real surface at /governance/insights (compliance score, coverage
- *     by item type, policy effectiveness, audit activity), so this scope links
- *     straight to it rather than duplicating the dashboard.
+ *     tab-open. Fabric defaults data owners to "My items".
+ *   - `admin` — the Admin view (F2): three sub-tabs (Manage estate / Protect,
+ *     secure, comply / Discover, trust, reuse) with live posture tiles, a
+ *     governance Copilot, and an embedded report. Rendered by GovernAdminPane.
+ *     Restricted to tenant admins by the BFF (the pane renders the honest admin
+ *     gate on a 403).
  *
- * Fabric defaults data owners to "My items" and admins to "All data"; Loom
- * defaults to the owner scope here and exposes the tenant-wide view via the
- * Insights nav entry.
+ * The route always renders something useful (per ui-parity.md, no dead tab).
  */
 
 import { Suspense } from 'react';
-import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Button, Body1 } from '@fluentui/react-components';
+import { Button } from '@fluentui/react-components';
 import { Open16Regular } from '@fluentui/react-icons';
-import { GovernanceShell } from '@/lib/components/governance-shell';
+import { PageShell } from '@/lib/components/page-shell';
+import { GovernAdminPane } from '@/lib/panes/govern-admin';
 import { GovernOwnerPane } from '@/lib/panes/govern-owner';
 
-function GovernAdminRedirect() {
+function GovernAdminView() {
   return (
-    <GovernanceShell sectionTitle="Govern" sectionBadge="All data">
-      <Body1 style={{ display: 'block', marginBottom: 16 }}>
-        The tenant-wide governance posture — compliance score, coverage by item type, policy
-        effectiveness, and audit activity — lives in Insights.
-      </Body1>
-      <Link href="/governance/insights">
-        <Button appearance="primary" icon={<Open16Regular />}>Open tenant-wide Insights</Button>
-      </Link>
-    </GovernanceShell>
+    <PageShell
+      title="Govern"
+      subtitle="Estate posture, protection, and catalog trust — live from your tenant. No fake numbers."
+      breadcrumbs={[{ label: 'Home', href: '/' }, { label: 'Governance', href: '/governance' }, { label: 'Govern' }]}
+      actions={
+        <Button as="a" href="/governance/govern" appearance="subtle" size="small" icon={<Open16Regular />}>
+          My items view
+        </Button>
+      }
+    >
+      <GovernAdminPane />
+    </PageShell>
   );
 }
 
 function GovernContent() {
   const params = useSearchParams();
   const view = params.get('view') ?? 'owner';
-  if (view === 'admin') return <GovernAdminRedirect />;
+  if (view === 'admin') return <GovernAdminView />;
   return <GovernOwnerPane />;
 }
 

@@ -546,6 +546,30 @@ jobs:
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
           fi
 
+      - name: Publish Govern posture-refresh Function code (if the app exists)
+        if: always()
+        run: |
+          # Publishes the azure-functions/posture-refresh code to the Function
+          # App provisioned by azure-functions/posture-refresh/deploy/main.bicep.
+          # Pre-computes the Govern → Admin view (F2) posture aggregates into the
+          # Cosmos posture-aggregates container every 5 min. The Console BFF still
+          # computes live values, so this is a latency pre-warm, not a hard
+          # dependency — the step is best-effort (skips cleanly if the app or the
+          # func CLI is absent).
+          set +e
+          POSTURE_FUNC=$(az functionapp list --query "[?starts_with(name, 'func-loom-posture')].name | [0]" -o tsv 2>/dev/null)
+          if [ -z "$POSTURE_FUNC" ]; then
+            echo "  No posture-refresh Function App found — skipping (deploy azure-functions/posture-refresh/deploy/main.bicep to enable the pre-compute path)."
+            exit 0
+          fi
+          if ! command -v func >/dev/null 2>&1; then
+            echo "  Azure Functions Core Tools (func) not installed on this runner — skipping code publish for $POSTURE_FUNC."
+            exit 0
+          fi
+          echo "Publishing posture-refresh code to $POSTURE_FUNC ..."
+          ( cd azure-functions/posture-refresh && func azure functionapp publish "$POSTURE_FUNC" --python ) || \
+            echo "  posture-refresh publish returned non-zero — re-run manually: cd azure-functions/posture-refresh && func azure functionapp publish $POSTURE_FUNC --python"
+
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
         run: |
           # Grant the Console UAMI the three Microsoft Graph application

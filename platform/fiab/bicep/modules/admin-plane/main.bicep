@@ -401,6 +401,35 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
+param loomGrafanaDashboardUid string = ''
+
+// ---------------------------------------------------------------------------
+// Govern → Admin view (F2) "View more" embedded report backend.
+//   - Power BI Embedded (A1)  : Commercial / GCC "View more" backend.
+//   - Azure Managed Grafana   : GCC-High / IL5 "View more" backend.
+// Both default OFF so existing deployments are unchanged; the BFF
+// /api/governance/govern/embed honestly gates when neither is wired.
+// ---------------------------------------------------------------------------
+@description('Deploy a Power BI Embedded (A1) capacity for the Govern Admin "View more" report (Commercial / GCC). Set LOOM_REPORT_KIND=powerbi + the report env vars after publishing a report.')
+param pbiEmbeddedEnabled bool = false
+
+@description('Deploy Azure Managed Grafana for the Govern Admin "View more" dashboard (GCC-High / IL5). Set LOOM_REPORT_KIND=grafana + the dashboard env vars after creating a dashboard.')
+param managedGrafanaEnabled bool = false
+
+@description('LOOM_REPORT_KIND for the Govern Admin "View more" report. "powerbi" (Commercial/GCC), "grafana" (GCC-High/IL5), or empty to leave the surface honestly gated.')
+@allowed([ '', 'powerbi', 'grafana' ])
+param loomReportKind string = ''
+
+@description('Power BI workspace id holding the governance report (when loomReportKind=powerbi).')
+param loomGovernPbiWorkspaceId string = ''
+
+@description('Power BI report id to embed in the Govern Admin "View more" (when loomReportKind=powerbi).')
+param loomGovernPbiReportId string = ''
+
+@description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
+param loomGrafanaDashboardUid string = ''
+
 @description('ADLS Gen2 / Blob container URL for custom domain images (optional). When set, the /admin/domains Image tab shows a gallery of image blobs in this container alongside the always-available preset color swatches + icon tiles. Format: https://<account>.dfs.core.windows.net/<container>[/<prefix>]. Grant the Console UAMI Storage Blob Data Reader on the container. When empty, only preset swatches and icons are offered (honest gate — no Fabric/OneLake dependency).')
 param loomDomainImageStorage string = ''
 
@@ -1235,6 +1264,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
+          // Govern → Admin view (F2) "View more" embedded report env. The
+          // embed BFF gates honestly when LOOM_REPORT_KIND is empty; when set,
+          // the matching report/dashboard env vars must also be present.
+          !empty(loomReportKind) ? [
+            { name: 'LOOM_REPORT_KIND', value: loomReportKind }
+          ] : [],
+          (loomReportKind == 'powerbi' && !empty(loomGovernPbiWorkspaceId) && !empty(loomGovernPbiReportId)) ? [
+            { name: 'LOOM_GOVERN_PBI_WORKSPACE_ID', value: loomGovernPbiWorkspaceId }
+            { name: 'LOOM_GOVERN_PBI_REPORT_ID', value: loomGovernPbiReportId }
+          ] : [],
+          (loomReportKind == 'grafana' && managedGrafanaEnabled) ? [
+            { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
+            { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
+          ] : (loomReportKind == 'grafana' && !empty(loomGrafanaDashboardUid) ? [
+            { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
+          ] : []),
           // F6 item-level permissions: the Fabric /share mirror is strictly
           // opt-in and additive — the Azure-native backing (Cosmos
           // item-permissions + ADLS POSIX ACL + Storage data-plane RBAC) is
@@ -1560,6 +1605,37 @@ module scalingRbac 'scaling-rbac.bicep' = {
 }
 
 // =====================================================================
+// =====================================================================
+// Govern → Admin view (F2) — "View more" embedded report backends.
+//
+//   - Power BI Embedded (A1, Gen2): Commercial / GCC. The Console UAMI is set
+//     as a capacity administrator so it can mint embed tokens.
+//   - Azure Managed Grafana: GCC-High / IL5. The Console UAMI is granted
+//     "Grafana Viewer" so the BFF can embed the dashboard.
+//
+// Both gate off new bool params (default false) → no change to existing
+// deployments. Per .claude/rules/no-fabric-dependency.md these are OPT-IN
+// alternatives; the Govern surface works (with an honest gate) without either.
+// =====================================================================
+resource pbiEmbeddedCapacity 'Microsoft.PowerBIDedicated/capacities@2021-01-01' = if (pbiEmbeddedEnabled) {
+  name: take('pbicsaloom${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  tags: complianceTags
+  sku: {
+    name: 'A1'
+    tier: 'PBIE_Azure'
+  }
+  properties: {
+    administration: {
+      members: [
+        identity.outputs.uamiConsolePrincipalId
+      ]
+    }
+    mode: 'Gen2'
+  }
+}
+
+// =====================================================================
 // F5 Manage Access — constrained Role Based Access Control Administrator on
 // the DLZ RG so the Console can mirror workspace membership to real Azure RBAC
 // role assignments (Contributor + Reader only, enforced via ABAC condition).
@@ -1588,8 +1664,40 @@ module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEna
   }
 }
 
-output hubVnetId string = network.outputs.hubVnetId
+resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = if (managedGrafanaEnabled) {
+  name: take('grafana-csa-loom-${location}', 23)
+  location: location
+  tags: complianceTags
+  sku: {
+    name: 'Standard'
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    apiKey: 'Enabled'
+    deterministicOutboundIP: 'Disabled'
+    publicNetworkAccess: 'Enabled'
+    zoneRedundancy: 'Disabled'
+  }
+}
 
+// Grafana Viewer (60750a24-ce75-4119-aa84-5b8f3c5db3e0) for the Console UAMI —
+// granted via a module (a role-assignment name must be calculable at deploy
+// start, which a module output is not, but a module param is).
+module grafanaViewer 'grafana-rbac.bicep' = if (managedGrafanaEnabled) {
+  name: 'console-grafana-viewer'
+  params: {
+    grafanaName: grafana.name
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+output pbiEmbeddedCapacityName string = pbiEmbeddedEnabled ? pbiEmbeddedCapacity.name : ''
+output grafanaEndpoint string = managedGrafanaEnabled ? grafana.properties.endpoint : ''
+
+output hubVnetId string = network.outputs.hubVnetId
 output consoleUrl string = containerPlatform == 'containerApps'
   ? 'https://loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
   : 'https://loom-console.${location}.csa-loom.internal'

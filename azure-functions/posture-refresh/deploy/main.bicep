@@ -1,9 +1,12 @@
-// CSA Loom — posture-refresh Azure Function (F3 data-owner Govern view).
+// CSA Loom — posture-refresh Azure Function (Govern posture pre-compute).
 //
-// Provisions a standalone Python Consumption Function App that recomputes a data
-// owner's governance posture on tab-open and writes it to the Loom Cosmos
-// ``posture-aggregates`` + ``recommended-actions`` containers. AAD-only to
-// Cosmos via system-assigned managed identity (no account keys).
+// Provisions a standalone Python Consumption Function App that serves BOTH
+// Govern posture paths in one app:
+//   - F2 Admin view  — TimerTrigger (every 5 min) + /api/posture-refresh-admin
+//     recompute per tenant → Cosmos ``posture-aggregates-admin``.
+//   - F3 data-owner  — POST /api/posture-refresh recomputes a signed-in owner's
+//     posture on tab-open → Cosmos ``posture-aggregates`` + ``recommended-actions``.
+// AAD-only to Cosmos via system-assigned managed identity (no account keys).
 //
 // What this Bicep creates:
 //   - Storage account (Functions runtime backing store), TLS1.2, no public blob.
@@ -13,7 +16,8 @@
 //     Contributor" on the existing Loom Cosmos account.
 //
 // What it does NOT do (post-deploy, see DEPLOYMENT.md):
-//   - Push the function code (func azure functionapp publish).
+//   - Push the function code (func azure functionapp publish). The bootstrap
+//     workflow auto-publishes any app named ``func-loom-posture*``.
 //   - Read the generated host key and store it in Key Vault as
 //     ``loom-posture-function-key``.
 //   - Set ``LOOM_POSTURE_FUNCTION_URL`` (= output ``functionUrl``) on the
@@ -49,7 +53,7 @@ param tags object = {}
 
 var saName = take('saposture${uniqueString(resourceGroup().id)}', 24)
 var planName = 'plan-posture-refresh-${uniqueString(resourceGroup().id)}'
-var siteName = 'func-posture-refresh-${uniqueString(resourceGroup().id)}'
+var siteName = 'func-loom-posture-refresh-${uniqueString(resourceGroup().id)}'
 
 resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: saName
