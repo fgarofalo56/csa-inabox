@@ -145,6 +145,35 @@ export function stripArmBase(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Data Factory Studio (browser deep-links)
+// ---------------------------------------------------------------------------
+
+/**
+ * Azure Data Factory Studio browser base URL (no trailing slash). Sovereign
+ * cloud aware: Commercial + GCC run on the global ADF Studio
+ * (https://adf.azure.com); GCC-High / IL5 / DoD run on the Azure Government
+ * ADF Studio (https://adf.azure.us). Grounded in the Azure Government
+ * endpoint mapping for Data Factory (Learn: azure-government/compare-azure-government-global-azure).
+ *
+ * Used to build "Get data" deep-links — `{adfStudioBase()}/copyDataTool?factory=…`,
+ * `/authoring/pipeline/{name}?factory=…`, `/authoring/dataflow/{name}?factory=…`.
+ */
+export function adfStudioBase(): string {
+  return isGovCloud() ? 'https://adf.azure.us' : 'https://adf.azure.com';
+}
+
+/**
+ * Bare ARM resource ID of a Data Factory (NO management host prefix) —
+ * `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.DataFactory/factories/{name}`.
+ * This is the value ADF Studio expects as its `factory=` deep-link query
+ * parameter (URL-encode before appending). Pure string builder — no Azure SDK
+ * dependency — so it is unit-testable without the credential chain.
+ */
+export function adfFactoryDeepLinkId(subscriptionId: string, resourceGroup: string, factoryName: string): string {
+  return `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DataFactory/factories/${factoryName}`;
+}
+
+// ---------------------------------------------------------------------------
 // Microsoft Graph (national-cloud aware)
 // ---------------------------------------------------------------------------
 //
