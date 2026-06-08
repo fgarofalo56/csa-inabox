@@ -97,15 +97,17 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Change vCores / DTUs (slider) | ❌ MISSING | — |
 | Serverless min/max vCores + auto-pause delay | ❌ MISSING | — |
 | Max data size | ❌ MISSING | create-only (`maxSizeBytes`) |
-| Backup storage redundancy (LRS/ZRS/GRS/GZRS) | ❌ MISSING | — |
-| Zone redundant | ⚠️ partial | `createDatabase` accepts at create; no UI checkbox, no post-create edit |
+| Backup storage redundancy (LRS/ZRS/GRS/GZRS) | ✅ built (create-time) | Provision tab dropdown → `requestedBackupStorageRedundancy` (Local/Zone/Geo/GeoZone) → ARM PUT. Post-create edit still MISSING |
+| Zone redundant | ✅ built (create-time) | Provision tab checkbox → `zoneRedundant` → ARM PUT. Post-create edit still MISSING |
 
 ### D. Create / provision
 | Azure capability | Loom | Where / backend |
 | --- | --- | --- |
 | Create DB on existing server (name, SKU, tier, sample) | ✅ built | Provision tab → `POST /create-db` → ARM PUT `Microsoft.Sql/servers/databases`. Real |
 | Seed AdventureWorksLT | ✅ built | `sampleName` → ARM |
-| Collation / maintenance window / Ledger / elastic-pool placement / workload env | ❌ MISSING | form is name+SKU+tier+sample only |
+| Collation (enumerated, default `SQL_Latin1_General_CP1_CI_AS`) | ✅ built | Provision tab dropdown → `collation` → ARM PUT. Validated client + route (`/^[A-Za-z0-9_]+$/`). Immutable after create |
+| Maintenance window | ✅ built | Provision tab dropdown, options from `GET /maintenance-configs?location=` (ARM Maintenance API, scope=SQLDB) → `maintenanceConfigurationId` → ARM PUT. Empty region ⇒ System default only |
+| Ledger / elastic-pool placement / workload env | ❌ MISSING | not yet surfaced |
 
 ### E. Security blade
 | Azure capability | Loom | Where / backend |
