@@ -44,6 +44,8 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _postureAggregates: Container | null = null;
+let _recommendedActions: Container | null = null;
 let _onelakeSecurityRoles: Container | null = null;
 // Wave 4 — Data Marketplace / Governance containers.
 let _dataProducts: Container | null = null;
@@ -153,6 +155,17 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Governance posture aggregates — F3 data-owner Govern view. One doc per
+  // data owner (id = owner OID, PK /ownerId), recomputed by the posture-refresh
+  // Azure Function on tab-open AND live in the BFF as a fallback. Partitioned by
+  // ownerId so every owner-scoped read is a single-partition point-read —
+  // cross-owner leakage is structurally impossible. Created lazily so a fresh
+  // environment needs no extra ARM/Bicep step beyond the account+database.
+  _postureAggregates = await mk('posture-aggregates', '/ownerId');
+  // Recommended governance actions — owner-scoped action cards (items missing a
+  // sensitivity label / description / endorsement). One doc per owner, PK
+  // /ownerId. Same single-partition isolation guarantee as posture-aggregates.
+  _recommendedActions = await mk('recommended-actions', '/ownerId');
   // OneLake Security roles (F7) — one doc per data-access role per item,
   // partitioned by /itemId so the Security tab's per-item GET hits a single
   // physical partition. Azure-native parity with Fabric's OneLake data-access
@@ -206,6 +219,8 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
+export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
 export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
@@ -280,7 +295,9 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'onelake-security-roles',
+  'maintenance-jobs',
+  'posture-aggregates', 'recommended-actions',
+  'onelake-security-roles',
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',

@@ -294,6 +294,12 @@ param loomCosmosAccount string = ''
 @description('Loom Cosmos DB account resource group for the control-plane navigator (databases/containers/sprocs). Empty defaults to LOOM_DLZ_RG, where the single-sub DLZ Cosmos account lives.')
 param loomCosmosAccountRg string = ''
 
+@description('Base URL of the posture-refresh Azure Function (deployed from azure-functions/posture-refresh/deploy/main.bicep). Backs the Govern tab data-owner view on-open refresh. Empty surfaces an honest MessageBar gate; the owner view still computes posture live from Cosmos.')
+param loomPostureFunctionUrl string = ''
+
+@description('Key Vault secret name holding the posture-refresh Function host key. The Console reads this via secretRef as LOOM_POSTURE_FUNCTION_KEY. Only emitted when loomPostureFunctionUrl is set.')
+param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
+
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
@@ -1117,6 +1123,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Govern tab data-owner view (F3) — on-open posture refresh Function.
+            // Empty → honest gate; the owner view still computes posture live.
+            { name: 'LOOM_POSTURE_FUNCTION_URL', value: loomPostureFunctionUrl }
             // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
             // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
             // the one-time tenant config required to use them.
@@ -1168,6 +1177,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // doesn't need this. Only set when the maps account is wired.
           !empty(loomAzureMapsAccount) ? [
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
+          ] : [],
+          // Posture-refresh Function host key — only when the Function URL is wired.
+          // Surfaced to the Govern owner-view refresh BFF, never to the browser.
+          !empty(loomPostureFunctionUrl) ? [
+            { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
@@ -1391,6 +1405,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // primary key here as 'loom-azure-maps-primary-key' on the
             // Loom Key Vault.
             { name: 'loom-azure-maps-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomAzureMapsKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // Posture-refresh Function host key — stored in KV post-deploy as
+          // 'loom-posture-function-key' (see azure-functions/posture-refresh/DEPLOYMENT.md).
+          !empty(loomPostureFunctionUrl) ? [
+            { name: 'loom-posture-function-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPostureFunctionKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }

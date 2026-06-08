@@ -1,0 +1,9 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "LOOM_COSMOS_ENDPOINT": "https://YOUR-LOOM-COSMOS.documents.azure.com:443/",
+    "LOOM_COSMOS_DATABASE": "loom"
+  }
+}

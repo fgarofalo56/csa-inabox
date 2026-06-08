@@ -17,6 +17,7 @@ import { makeStyles, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-co
 
 const SECTIONS = [
   { href: '/governance',                  label: 'Overview',           desc: 'Governance posture, coverage scores, recent activity.' },
+  { href: '/governance/govern',           label: 'Govern',             desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
   { href: '/governance/domains',          label: 'Domains',            desc: 'Business domains and subdomains, workspace assignment, delegated settings.' },
   { href: '/governance/catalog',          label: 'Data catalog',       desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS, on-prem.' },
   { href: '/governance/lineage',          label: 'Lineage',            desc: 'Column-level lineage across pipelines, notebooks, dataflows, semantic models.' },
