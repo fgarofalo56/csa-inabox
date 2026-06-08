@@ -361,6 +361,55 @@ export async function createDirectory(
   return { ok: true };
 }
 
+// ============================================================
+// Soft-delete / restore (Recycle bin) — HNS blob soft-delete.
+// Requires the account's blobServices deleteRetentionPolicy to be
+// enabled (it is, via storage.bicep). When a directory is deleted the
+// DELETE response carries a `deletionId` that is REQUIRED to restore it
+// via DataLakeFileSystemClient.undeletePath().
+// ============================================================
+
+/**
+ * Soft-delete a directory in ADLS Gen2 (HNS + blob soft-delete enabled).
+ * Returns the `deletionId` from the delete response (PathDeleteHeaders) —
+ * required to restore the path later via unDeleteDirectory().
+ * Returns null when the path does not exist (already gone / never created)
+ * OR when soft-delete is not enabled on the account (no deletionId issued).
+ * Never throws on 404.
+ */
+export async function softDeleteDirectory(
+  container: string,
+  path: string,
+): Promise<{ deletionId: string } | null> {
+  const fs = getFileSystem(container);
+  const dir = fs.getDirectoryClient(path);
+  try {
+    if (!(await dir.exists())) return null;
+    const resp = await dir.delete(true /* recursive */);
+    const deletionId = resp.deletionId;
+    if (!deletionId) return null; // soft-delete not enabled on this account
+    return { deletionId };
+  } catch (e: any) {
+    if (e?.statusCode === 404) return null;
+    throw e;
+  }
+}
+
+/**
+ * Restore a soft-deleted ADLS Gen2 directory (HNS) via undeletePath().
+ *   container   the file-system (e.g. 'bronze')
+ *   path        the container-relative path that was soft-deleted
+ *   deletionId  the id returned by softDeleteDirectory() — required by ADLS
+ */
+export async function unDeleteDirectory(
+  container: string,
+  path: string,
+  deletionId: string,
+): Promise<void> {
+  const fs = getFileSystem(container);
+  await fs.undeletePath(path, deletionId);
+}
+
 /** Build the full https URL for OPENROWSET BULK against a SPECIFIC account. */
 export function pathToHttpsUrlFor(account: string, container: string, path: string): string {
   const clean = path.replace(/^\/+/, '');

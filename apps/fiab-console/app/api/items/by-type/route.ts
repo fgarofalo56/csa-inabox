@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   // c.state.endorsement / c.state.sensitivityLabel as top-level fields.
   const { resources: candidates } = await items.items
     .query({
-      query: `SELECT c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt, c.state.endorsement, c.state.sensitivityLabel FROM c WHERE ${orClauses}`,
+      query: `SELECT c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt, c.state.endorsement, c.state.sensitivityLabel FROM c WHERE (${orClauses}) AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)`,
       parameters: params,
     })
     .fetchAll();

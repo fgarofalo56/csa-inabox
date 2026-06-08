@@ -96,6 +96,11 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Soft-delete retention days for ADLS Gen2 blob/directory recovery (OneLake Recycle bin restore window). 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
 @description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default; set true when the lifecycle feature is enabled.')
 param consolePrincipalNeedsLifecycleWrite bool = false
 
@@ -131,6 +136,7 @@ module storage 'storage.bicep' = {
     privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    recycleRetentionDays: recycleRetentionDays
   }
 }
 

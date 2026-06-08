@@ -54,7 +54,9 @@ import {
   MenuItem,
   Dialog,
   DialogSurface,
+  DialogTitle,
   DialogBody,
+  DialogActions,
   DialogContent,
   makeStyles,
   tokens,
@@ -68,6 +70,8 @@ import {
   DatabaseStack16Regular,
   AppsList20Regular,
   Person20Regular,
+  Delete20Regular,
+  BinRecycle20Regular,
   ShieldCheckmark20Regular,
   ShieldKeyhole16Regular,
   MoreHorizontal20Regular,
@@ -90,20 +94,9 @@ import { SecureView } from '@/lib/components/onelake/secure-view';
 import { GovernView } from '@/lib/components/onelake/govern-view';
 import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { RecycleView } from '@/lib/components/onelake/recycle-view';
+import { ONELAKE_TYPES } from '@/lib/catalog/onelake-types';
 import { initials, endorsementOf } from './card-badges';
-
-// ── Item types surfaced by the OneLake catalog Explore tab ────────────────
-// "lakehouses, warehouses, Fabric databases, mirrored items, and other
-// supported [data] item types" (Learn).
-const ONELAKE_TYPES = [
-  'lakehouse',
-  'warehouse',
-  'sql-database',
-  'mirrored-database',
-  'mirrored-databricks',
-  'kql-database',
-  'eventhouse',
-] as const;
 
 const TABLE_BACKED_TYPES = new Set(['lakehouse']);
 
@@ -535,12 +528,14 @@ function ItemDetails({
   workspaceName,
   me,
   onClose,
+  onDeleted,
   onLabelChange,
 }: {
   item: OwnedItem;
   workspaceName: string;
   me: string | null;
   onClose: () => void;
+  onDeleted: (id: string) => void;
   onLabelChange: (itemId: string, labelName: string | null, labelId: string | null) => void;
 }) {
   const styles = useStyles();
@@ -549,6 +544,29 @@ function ItemDetails({
   const Icon = visual.icon;
   const hasTables = TABLE_BACKED_TYPES.has(item.itemType);
   const [tab, setTab] = useState<'overview' | 'tables' | 'security'>('overview');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleSoftDelete = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/onelake/${encodeURIComponent(item.id)}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemType: item.itemType }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${res.status}`);
+      setConfirmDelete(false);
+      onDeleted(item.id);
+    } catch (e: any) {
+      setDeleteError(e?.message ?? 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
+  };
   const isOwner = !!me && item.createdBy === me;
 
   // ── Set-label state (Purview MIP via GET/PUT /sensitivity) ──
@@ -655,8 +673,42 @@ function ItemDetails({
         >
           Open
         </Button>
+        <Button
+          appearance="subtle"
+          icon={<Delete20Regular />}
+          onClick={() => setConfirmDelete(true)}
+        >
+          Delete
+        </Button>
         {isPreviewType(item.itemType) && <Badge appearance="tint" color="brand">Preview</Badge>}
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={(_e, d) => { if (!d.open) { setConfirmDelete(false); setDeleteError(null); } }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Move to recycle bin</DialogTitle>
+            <DialogContent>
+              <Text>
+                Delete <strong>{item.displayName}</strong>? It moves to the recycle bin and its ADLS Gen2 data
+                is soft-deleted. You can restore it from the recycle bin until its retention window elapses.
+              </Text>
+              {deleteError && (
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <MessageBarBody>{deleteError}</MessageBarBody>
+                </MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                Cancel
+              </Button>
+              <Button appearance="primary" icon={<Delete20Regular />} onClick={handleSoftDelete} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Move to recycle bin'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       <TabList
         selectedValue={tab}
@@ -814,6 +866,7 @@ export default function OneLakeCatalogPage() {
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const [wsFilter, setWsFilter] = useState<string | null>(null); // workspaceId or null
   const [selected, setSelected] = useState<OwnedItem | null>(null);
+  const [activeSection, setActiveSection] = useState<'explore' | 'recycle'>('explore');
   const [propsItem, setPropsItem] = useState<OwnedItem | null>(null);
 
   // ── load items + workspaces + identity ──
@@ -1032,7 +1085,8 @@ export default function OneLakeCatalogPage() {
 
       {pageTab === 'explore' && (
         <>
-      {/* Toolbar: search + category chips + view toggle */}
+      {/* Toolbar: search + category chips + view toggle (Explore only) */}
+      {activeSection === 'explore' && (
       <Toolbar
         search={q}
         onSearch={setQ}
@@ -1068,8 +1122,9 @@ export default function OneLakeCatalogPage() {
           })}
         </div>
       </Toolbar>
+      )}
 
-      <div className={mergeClasses(styles.layout, Boolean(selected) && styles.layoutWithDetails)}>
+      <div className={mergeClasses(styles.layout, activeSection === 'explore' && Boolean(selected) && styles.layoutWithDetails)}>
         {/* LEFT — filters rail */}
         <nav className={styles.rail} aria-label="Catalog filters">
           <div>
@@ -1077,9 +1132,9 @@ export default function OneLakeCatalogPage() {
             <div className={styles.railList}>
               <button
                 type="button"
-                className={mergeClasses(styles.railItem, scope === 'all' && styles.railItemActive)}
-                aria-pressed={scope === 'all'}
-                onClick={() => setScope('all')}
+                className={mergeClasses(styles.railItem, activeSection === 'explore' && scope === 'all' && styles.railItemActive)}
+                aria-pressed={activeSection === 'explore' && scope === 'all'}
+                onClick={() => { setActiveSection('explore'); setScope('all'); }}
               >
                 <AppsList20Regular />
                 <span className={styles.railItemText}>All items</span>
@@ -1087,16 +1142,25 @@ export default function OneLakeCatalogPage() {
               </button>
               <button
                 type="button"
-                className={mergeClasses(styles.railItem, scope === 'mine' && styles.railItemActive)}
-                aria-pressed={scope === 'mine'}
+                className={mergeClasses(styles.railItem, activeSection === 'explore' && scope === 'mine' && styles.railItemActive)}
+                aria-pressed={activeSection === 'explore' && scope === 'mine'}
                 disabled={!me}
-                onClick={() => setScope('mine')}
+                onClick={() => { setActiveSection('explore'); setScope('mine'); }}
               >
                 <Person20Regular />
                 <span className={styles.railItemText}>My items</span>
                 <span className={styles.railCount}>
                   {me ? (items ?? []).filter((it) => it.createdBy === me).length : 0}
                 </span>
+              </button>
+              <button
+                type="button"
+                className={mergeClasses(styles.railItem, activeSection === 'recycle' && styles.railItemActive)}
+                aria-pressed={activeSection === 'recycle'}
+                onClick={() => { setSelected(null); setActiveSection('recycle'); }}
+              >
+                <BinRecycle20Regular />
+                <span className={styles.railItemText}>Recycle bin</span>
               </button>
             </div>
           </div>
@@ -1135,11 +1199,13 @@ export default function OneLakeCatalogPage() {
           </div>
         </nav>
 
-        {/* CENTER — items */}
+        {/* CENTER — items (Explore) or Recycle bin */}
         <div className={styles.itemsCol}>
-          {items === null && <Spinner label="Loading catalog…" />}
+          {activeSection === 'recycle' && <RecycleView workspaceNames={wsName} />}
 
-          {items !== null && visible.length === 0 && (
+          {activeSection === 'explore' && items === null && <Spinner label="Loading catalog…" />}
+
+          {activeSection === 'explore' && items !== null && visible.length === 0 && (
             <div className={styles.emptyBox}>
               <Text weight="semibold">No items match your filters.</Text>
               <Caption1>
@@ -1150,7 +1216,7 @@ export default function OneLakeCatalogPage() {
             </div>
           )}
 
-          {items !== null && visible.length > 0 && view === 'tile' && (
+          {activeSection === 'explore' && items !== null && visible.length > 0 && view === 'tile' && (
             <>
               {grouped.map((g) => (
                 <div key={g.id} className={styles.wsGroup}>
@@ -1182,7 +1248,7 @@ export default function OneLakeCatalogPage() {
             </>
           )}
 
-          {items !== null && visible.length > 0 && view === 'list' && (
+          {activeSection === 'explore' && items !== null && visible.length > 0 && view === 'list' && (
             <>
               {grouped.map((g) => (
                 <Section key={g.id} title={`${g.name} · ${g.items.length}`}>
@@ -1201,12 +1267,16 @@ export default function OneLakeCatalogPage() {
         </div>
 
         {/* RIGHT — in-context details */}
-        {selected && (
+        {activeSection === 'explore' && selected && (
           <ItemDetails
             item={selected}
             workspaceName={wsName.get(selected.workspaceId) ?? 'Unknown workspace'}
             me={me}
             onClose={() => setSelected(null)}
+            onDeleted={(id) => {
+              setItems((prev) => (prev ? prev.filter((it) => it.id !== id) : prev));
+              setSelected(null);
+            }}
             onLabelChange={(itemId, labelName, labelId) => {
               const patch = (it: OwnedItem): OwnedItem =>
                 it.id === itemId
