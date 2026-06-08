@@ -38,6 +38,8 @@ export interface ItemTileProps {
    * the item. Coexists with `badge` (badge sits to its left).
    */
   overflowMenu?: React.ReactNode;
+  /** Bottom badge row: endorsement chip, owner avatar, domain chip. Omit → row absent. */
+  footer?: React.ReactNode;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
@@ -122,6 +124,13 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
     flexShrink: 0,
   },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minHeight: '20px',
+  },
 });
 
 export function ItemTile({
@@ -131,6 +140,7 @@ export function ItemTile({
   meta,
   badge,
   overflowMenu,
+  footer,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -201,6 +211,7 @@ export function ItemTile({
           {meta}
         </Text>
       )}
+      {footer != null && <div className={styles.footer}>{footer}</div>}
     </div>
   );
 }
