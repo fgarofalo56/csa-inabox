@@ -20,9 +20,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import sql from 'mssql';
-import { armBase } from './cloud-endpoints';
-
-const SQL_SCOPE = 'https://database.windows.net/.default';
+import { armBase, getSqlSuffix } from './cloud-endpoints';
 
 function arm(): string {
   // Sovereign-cloud ARM base (cloud-endpoints honors LOOM_ARM_ENDPOINT + AZURE_CLOUD).
@@ -31,8 +29,16 @@ function arm(): string {
 }
 
 function sqlHostSuffix(): string {
-  // Commercial: database.windows.net   Gov: database.usgovcloudapi.net
-  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || 'database.windows.net';
+  // LOOM_AZURE_SQL_HOST_SUFFIX: explicit per-instance override (rare edge cases).
+  // Default: cloud-aware from LOOM_CLOUD / AZURE_CLOUD via getSqlSuffix().
+  //   Commercial / GCC      → database.windows.net
+  //   GCC-High / IL5 / DoD  → database.usgovcloudapi.net
+  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || getSqlSuffix();
+}
+
+/** TDS AAD token scope, cloud-correct (https://<sql-suffix>/.default). */
+function sqlScope(): string {
+  return `https://${sqlHostSuffix()}/.default`;
 }
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -216,6 +222,55 @@ export interface CreateDatabaseSpec {
   /** Zone redundancy. */
   zoneRedundant?: boolean;
   maxSizeBytes?: number;
+  /** Database collation. Default applied by ARM: SQL_Latin1_General_CP1_CI_AS.
+   *  Set at create time only; immutable after the database exists. */
+  collation?: string;
+  /** Backup storage redundancy. ARM validates against region/tier availability. */
+  requestedBackupStorageRedundancy?: 'Geo' | 'GeoZone' | 'Local' | 'Zone';
+  /** Full ARM resource ID of a public maintenance configuration (SQLDB scope).
+   *  Use listDbMaintenanceConfigs() to discover valid IDs for the server's
+   *  region. Only honored on vCore tiers (GP, BC, HS). */
+  maintenanceConfigurationId?: string;
+}
+
+export interface MaintenanceConfig {
+  /** Full ARM resource ID — pass as CreateDatabaseSpec.maintenanceConfigurationId. */
+  id: string;
+  /** Configuration name, e.g. SQL_EastUS2_DB_1. */
+  name: string;
+  /** Human-friendly window description for the UI dropdown. */
+  displayName: string;
+}
+
+/**
+ * Lists available public maintenance configurations for a given Azure region,
+ * scope=SQLDB. Use a returned `id` as `maintenanceConfigurationId` in
+ * CreateDatabaseSpec. An empty array means the region publishes no SQLDB
+ * windows (the database then uses the System default policy) — that is an
+ * honest gate, not an error. Resolves to the sovereign ARM host automatically
+ * via armBase() (Commercial / Gov / DoD) with no per-cloud branching here.
+ */
+export async function listDbMaintenanceConfigs(location: string): Promise<MaintenanceConfig[]> {
+  if (!location) return [];
+  try {
+    const filter = encodeURIComponent(`location eq '${location}' and maintenanceScope eq 'SQLDB'`);
+    const res = await armRequest<{ value: any[] }>(
+      `/providers/Microsoft.Maintenance/publicMaintenanceConfigurations?api-version=2023-09-01&$filter=${filter}`,
+    );
+    return (res.value || []).map((c) => {
+      const name: string = c.name || '';
+      const displayName = name.endsWith('_DB_1')
+        ? 'Weekday window (Mon–Thu 10 PM – 6 AM local)'
+        : name.endsWith('_DB_2')
+          ? 'Weekend window (Fri–Sun 10 PM – 6 AM local)'
+          : name;
+      return { id: c.id, name, displayName };
+    });
+  } catch {
+    // Maintenance API may be unavailable in a region or boundary; fall back to
+    // System default rather than blocking the create flow.
+    return [];
+  }
 }
 
 export async function createDatabase(
@@ -240,6 +295,13 @@ export async function createDatabase(
         ...(spec.sampleName ? { sampleName: spec.sampleName } : {}),
         ...(typeof spec.zoneRedundant === 'boolean' ? { zoneRedundant: spec.zoneRedundant } : {}),
         ...(spec.maxSizeBytes ? { maxSizeBytes: spec.maxSizeBytes } : {}),
+        ...(spec.collation ? { collation: spec.collation } : {}),
+        ...(spec.requestedBackupStorageRedundancy
+          ? { requestedBackupStorageRedundancy: spec.requestedBackupStorageRedundancy }
+          : {}),
+        ...(spec.maintenanceConfigurationId
+          ? { maintenanceConfigurationId: spec.maintenanceConfigurationId }
+          : {}),
       },
       ...(spec.skuName ? { sku: { name: spec.skuName, ...(spec.tier ? { tier: spec.tier } : {}) } } : {}),
     };
@@ -276,6 +338,24 @@ async function defaultServerScopePath(serverName: string, suffix: string): Promi
 
 const pools: Map<string, sql.ConnectionPool> = new Map();
 
+/**
+ * Registry of live mssql `Request` objects, keyed by a caller-supplied request
+ * id. The cancel route (`/query/cancel`) looks the request up and calls
+ * `.cancel()`, which makes tedious send a TDS ATTENTION packet on the same
+ * connection — SQL Server acknowledges (error 3617 / SYS_ATTN) and the in-flight
+ * `.query()` promise rejects with `RequestError('Canceled.', 'ECANCEL')`.
+ *
+ * This is in-process Node.js state scoped to ONE Container App replica. For a
+ * scaled-out console the cancel POST must reach the SAME replica that started
+ * the query — enable ingress sticky sessions
+ * (`ingress.stickySessions.affinity: 'sticky'`) or run a single replica. There
+ * is no cross-replica cancel because the mssql connection itself is per-replica.
+ *
+ * Entries are removed on completion, error, or explicit cancel (in the `finally`
+ * of `executeQuery` and in the cancel route after `.cancel()`).
+ */
+export const liveRequests: Map<string, sql.Request> = new Map();
+
 export interface QueryResult {
   columns: string[];
   rows: unknown[][];
@@ -290,7 +370,7 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   const key = `${server}/${database}`;
   const existing = pools.get(key);
   if (existing?.connected) return existing;
-  const tok = await credential.getToken(SQL_SCOPE);
+  const tok = await credential.getToken(sqlScope());
   if (!tok?.token) throw new AzureSqlError('Failed to acquire AAD token for Azure SQL', 401);
   const host = server.includes('.') ? server : `${server}.${sqlHostSuffix()}`;
   const pool = new sql.ConnectionPool({
@@ -311,20 +391,34 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   return pool;
 }
 
-export async function executeQuery(server: string, database: string, sqlText: string): Promise<QueryResult> {
+export async function executeQuery(
+  server: string,
+  database: string,
+  sqlText: string,
+  opts?: { requestId?: string },
+): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(server, database);
-  const result = await pool.request().query(sqlText);
-  const recordset = result.recordset || [];
-  const columns = recordset.length ? Object.keys(recordset[0]) : [];
-  const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
-  return {
-    columns,
-    rows,
-    rowCount: recordset.length,
-    executionMs: Date.now() - started,
-    truncated: recordset.length > MAX_ROWS,
-  };
+  const request = pool.request();
+  // Register the live Request so the cancel route can send a TDS ATTENTION
+  // packet for this exact in-flight query. Registered BEFORE .query() so a
+  // cancel that races the start still lands on the right Request.
+  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  try {
+    const result = await request.query(sqlText);
+    const recordset = result.recordset || [];
+    const columns = recordset.length ? Object.keys(recordset[0]) : [];
+    const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+    return {
+      columns,
+      rows,
+      rowCount: recordset.length,
+      executionMs: Date.now() - started,
+      truncated: recordset.length > MAX_ROWS,
+    };
+  } finally {
+    if (opts?.requestId) liveRequests.delete(opts.requestId);
+  }
 }
 
 /**

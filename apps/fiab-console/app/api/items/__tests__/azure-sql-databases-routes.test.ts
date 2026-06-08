@@ -140,6 +140,39 @@ describe('POST /azure-sql-database/[id]/create-db', () => {
     const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd' }));
     expect(res.status).toBe(403);
   });
+
+  it('passes collation + backup-redundancy + maintenance-config-id through to createDatabase', async () => {
+    (getSession as any).mockReturnValue(session);
+    (createDatabase as any).mockResolvedValue({ ok: true, id: '/subs/.../databases/d', status: 'Creating' });
+    const res = await createDbPOST(bodyReq('http://x/', {
+      server: 'srv', name: 'd',
+      collation: 'Latin1_General_100_CI_AS_SC_UTF8',
+      requestedBackupStorageRedundancy: 'Zone',
+      maintenanceConfigurationId: '/subscriptions/x/providers/Microsoft.Maintenance/publicMaintenanceConfigurations/SQL_EastUS2_DB_1',
+    }));
+    expect(res.status).toBe(201);
+    expect(createDatabase).toHaveBeenCalledWith(expect.objectContaining({
+      collation: 'Latin1_General_100_CI_AS_SC_UTF8',
+      requestedBackupStorageRedundancy: 'Zone',
+      maintenanceConfigurationId: '/subscriptions/x/providers/Microsoft.Maintenance/publicMaintenanceConfigurations/SQL_EastUS2_DB_1',
+    }));
+  });
+
+  it('400 for an invalid collation string (route-level regex blocks before ARM)', async () => {
+    (getSession as any).mockReturnValue(session);
+    const res = await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', collation: "'; DROP TABLE--" }));
+    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect(j.error).toMatch(/collation/i);
+    expect(createDatabase).not.toHaveBeenCalled();
+  });
+
+  it('drops unknown requestedBackupStorageRedundancy values (allow-list: Geo|GeoZone|Local|Zone)', async () => {
+    (getSession as any).mockReturnValue(session);
+    (createDatabase as any).mockResolvedValue({ ok: true, id: '/subs/.../databases/d', status: 'Creating' });
+    await createDbPOST(bodyReq('http://x/', { server: 'srv', name: 'd', requestedBackupStorageRedundancy: 'Unknown' }));
+    expect(createDatabase).toHaveBeenCalledWith(expect.objectContaining({ requestedBackupStorageRedundancy: undefined }));
+  });
 });
 
 // ---------------------------------------------------------------
