@@ -22,6 +22,8 @@ const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: stri
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Fabric Apps (Build 2026 preview)
   'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
+  // Data Marketplace — consumer discovery (F14/F18) over the loom-data-products AI Search index
+  'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),
   // Phase 2
   'lakehouse':            reg(() => import('./lakehouse-editor'),         'LakehouseEditor'),
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),

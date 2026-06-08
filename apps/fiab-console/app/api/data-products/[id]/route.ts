@@ -37,6 +37,12 @@
  *          owners[], endorsed, governanceDomainId, useCase, customAttributes }.
  *       3. Owner details page (F3): { ownerLabels: { <ownerKey>: <label> } } —
  *          sets a per-owner contact label in place.
+ *       4. Marketplace editor (lib/editors/data-marketplace.tsx): { publishStatus }
+ *          (Draft/Published/Deprecated toggle) and the marketplace metadata
+ *          fields { domain, productType, owner, sla, glossaryTerms[], CDEs[] }.
+ *          Flipping publishStatus Draft → Published is what makes a product
+ *          appear in consumer search; the re-save re-mirrors it into the
+ *          loom-data-products AI Search index.
  *     Returns { ok, item, doc, product, patched } (+ ETag). Optimistic
  *     concurrency: an `If-Match` header conditions the replace; a stale ETag
  *     (concurrent write) returns HTTP 409 instead of clobbering.
@@ -73,6 +79,7 @@ import {
   PurviewUnifiedCatalogGateError,
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
+import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
@@ -105,6 +112,13 @@ function ownerToString(o: OwnerRecord): string {
 function ownerKey(o: OwnerRecord): string {
   if (typeof o === 'string') return o;
   return (o?.id || o?.upn || o?.displayName || '').toString();
+}
+
+/** Coerce a comma/semicolon/newline-delimited string or array to a clean string[]. */
+function asArray(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof v === 'string') return v.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+  return [];
 }
 
 /**
@@ -400,9 +414,11 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
         ok: true,
         item,
         doc: toDoc(item),
+        // Marketplace-shape projection so lib/editors/data-marketplace.tsx can
+        // read a single product the same way it reads the list (state-based).
+        product: itemToProduct(item, ownerTenantId),
         ownerTenantId,
         isOwner,
-        product: itemToProduct(item, ownerTenantId),
         dqScore,
         dqGate,
         subscriberCount,
@@ -437,6 +453,14 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
   if (!body || typeof body !== 'object') return err('Body must be an object', 400, 'bad_body');
 
+  // The marketplace editor (data-marketplace.tsx) may nest its metadata under a
+  // `state` object; the Purview callers send fields at the top level. Flatten a
+  // nested `state` onto the body so both shapes hit the same field handlers.
+  if (body.state && typeof body.state === 'object' && !Array.isArray(body.state)) {
+    const { state, ...rest } = body;
+    body = { ...state, ...rest };
+  }
+
   // state-level partial patch (set undefined → delete key); collected logical
   // field names for the edit-dialog success message + onSaved.
   const statePatch: Record<string, unknown> = {};
@@ -468,12 +492,50 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     patched.push('documentation');
   }
 
+  // ---- Marketplace editor fields (data-marketplace.tsx) --------------------
+  if ('publishStatus' in body) {
+    const ps = String(body.publishStatus) as PublishStatus;
+    statePatch.publishStatus = PUBLISH_STATUSES.includes(ps) ? ps : 'Draft';
+    patched.push('publishStatus');
+  }
+  if ('domain' in body) {
+    statePatch.domain = body.domain ? String(body.domain) : undefined;
+    patched.push('domain');
+  }
+  if ('productType' in body) {
+    statePatch.productType = body.productType ? String(body.productType) : undefined;
+    patched.push('productType');
+  }
+  if ('owner' in body) {
+    statePatch.owner = body.owner ? String(body.owner) : undefined;
+    patched.push('owner');
+  }
+  if ('sla' in body) {
+    statePatch.sla = body.sla ? String(body.sla) : undefined;
+    patched.push('sla');
+  }
+  if ('glossaryTerms' in body) {
+    statePatch.glossaryTerms = asArray(body.glossaryTerms);
+    patched.push('glossaryTerms');
+  }
+  if ('CDEs' in body) {
+    statePatch.CDEs = asArray(body.CDEs);
+    patched.push('CDEs');
+  }
+
   // ---- F4 edit-dialog fields (Basic / Business / Custom) -------------------
   if ('name' in body) {
     if (typeof body.name !== 'string' || !body.name.trim()) {
       return err('name must be a non-empty string', 400, 'bad_name');
     }
     nextDisplayName = body.name.trim();
+    patched.push('name');
+  }
+  if ('displayName' in body && !('name' in body)) {
+    if (typeof body.displayName !== 'string' || !body.displayName.trim()) {
+      return err('displayName must be a non-empty string', 400, 'bad_name');
+    }
+    nextDisplayName = body.displayName.trim();
     patched.push('name');
   }
   if ('description' in body) {

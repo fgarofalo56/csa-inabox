@@ -2349,6 +2349,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // --- v3 — Push-button data-products library (CSA-curated templates + instances) ---
+  { slug: 'data-marketplace',            displayName: 'Data marketplace',            restType: 'DataMarketplace',           category: 'CSA Data Products',
+    description: 'Consumer discovery hub for Published data products — faceted search, governance-domain card grid, and access requests. Backed by Azure AI Search.',
+    learnContent: {
+      "overview": "The Data marketplace is the consumer-facing discovery surface for the tenant's Published data products (F14/F18). It searches a dedicated Azure AI Search index (loom-data-products) that mirrors every Published data-product item, with faceted navigation over governance domain, type, owner, glossary terms, and critical data elements (CDEs). It is Azure-native — no Microsoft Fabric or Power BI dependency.",
+      "steps": [
+        {
+          "title": "Discover",
+          "body": "Search the live index. Wrap a term in double quotes for an exact-phrase match. Use the left facet panel to filter by domain, type, owner, glossary term, or CDE. Only Published products in your tenant appear."
+        },
+        {
+          "title": "Explore by domain",
+          "body": "The Domains tab shows a card per governance domain with a live product count from the index facet aggregate. Click a card to filter Discover to that domain."
+        },
+        {
+          "title": "Publish",
+          "body": "Producers create a data product (workspace, name, domain, type, owner, glossary terms, CDEs, SLA) and set it Published to make it visible to consumers. Draft and Deprecated products are hidden from consumer search."
+        },
+        {
+          "title": "Request & track access",
+          "body": "Request access from any result; the request is recorded durably. The My data access tab lists your requests and their status — owners grant access in Governance → Policies (real Azure RBAC)."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
+    } },
   { slug: 'data-product-template',       displayName: 'Data product template',       restType: 'DataProductTemplate',       category: 'CSA Data Products',
     description: 'CSA-curated push-button template: medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial.',
     learnContent: {

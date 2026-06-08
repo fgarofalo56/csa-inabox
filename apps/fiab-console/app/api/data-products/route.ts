@@ -1,25 +1,32 @@
 /**
- * /api/data-products — Loom data-product creation surface (Microsoft Purview
- * Unified Catalog "Data product" parity, F1 + F18 domain picker).
+ * /api/data-products — unified data-product surface.
  *
- * POST /api/data-products
- *   body: {
- *     workspaceId?, displayName, description?, type, audience[],
- *     governanceDomainId?, governanceDomainName?, useCase?, endorsed?,
- *     owners?: [{ id, upn, displayName }], customAttributes?: {...}
- *   }
- *   → creates a REAL Cosmos draft (itemType 'data-product', state.status DRAFT)
- *     via createOwnedItem, then BEST-EFFORT registers it in Purview Unified
- *     Catalog when a UC endpoint + a GUID governance domain are available. The
- *     Cosmos write always lands; Purview registration is additive and never
- *     blocks (honest hint when it can't run — per no-vaporware.md / no-fabric).
+ * Serves TWO live consumers off the same `data-product` WorkspaceItem store
+ * (Cosmos), keeping both feature intents intact:
  *
- * GET /api/data-products → list the tenant's data-product drafts.
+ *   1. Marketplace producer surface (lib/editors/data-marketplace.tsx) — uses
+ *      the `state.publishStatus` marketplace metadata (domain, productType,
+ *      owner, glossaryTerms, CDEs, sla) and reads GET → `products`.
+ *   2. Purview Unified Catalog "Data product" parity (app/data-products + the
+ *      create wizard) — uses `state.status`/`type`/`audience`/governanceDomain
+ *      and reads GET → `dataProducts`. Best-effort Purview UC registration on
+ *      create.
  *
- * Azure-native default: with LOOM_DEFAULT_FABRIC_WORKSPACE UNSET and Purview
- * unconfigured, the draft is still created in Loom's own Cosmos store and is
- * fully functional. Purview UC is strictly opt-in (LOOM_PURVIEW_UC_ENDPOINT /
- * LOOM_PURVIEW_ACCOUNT) — its absence is not a gate.
+ * Writes go through the shared item-crud helpers (createOwnedItem /
+ * loadOwnedItem / listOwnedItems), so every create automatically mirrors the
+ * product into the `loom-data-products` AI Search index — only Published
+ * products are visible to consumers (the index push happens regardless; the
+ * consumer query filters on publishStatus).
+ *
+ * GET  /api/data-products            — list this tenant's data products (Cosmos)
+ *      /api/data-products?name=<n>   — duplicate-name lookup (wizard F4)
+ * POST /api/data-products            — create (shape-discriminated)
+ *
+ * Azure-native by default: no Microsoft Fabric / Power BI dependency. With
+ * LOOM_DEFAULT_FABRIC_WORKSPACE UNSET and Purview unconfigured, the draft is
+ * still created in Loom's own Cosmos store and is fully functional. Purview UC
+ * is strictly opt-in (LOOM_PURVIEW_UC_ENDPOINT / LOOM_PURVIEW_ACCOUNT) — its
+ * absence is not a gate.
  *
  * Grounding (Microsoft Learn):
  *   - Create data product (single):
@@ -37,6 +44,7 @@ import {
   listOwnedWorkspaces,
 } from '@/app/api/items/_lib/item-crud';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
   DATA_PRODUCT_AUDIENCE_VALUES,
@@ -45,6 +53,8 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const ITEM_TYPE = 'data-product';
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UC_API = process.env.LOOM_PURVIEW_UC_API_VERSION || '2026-03-20-preview';
@@ -64,6 +74,28 @@ function resolveUcEndpoint(): string | undefined {
 }
 
 interface OwnerInput { id?: string; upn?: string; displayName?: string }
+
+/** Whitelist + normalize the marketplace metadata that lands in item.state. */
+function normalizeMarketplaceState(raw: any): Record<string, unknown> {
+  const asArray = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+    if (typeof v === 'string') return v.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+    return [];
+  };
+  const ps = String(raw?.publishStatus || 'Draft') as PublishStatus;
+  const state: Record<string, unknown> = {
+    publishStatus: PUBLISH_STATUSES.includes(ps) ? ps : 'Draft',
+  };
+  if (raw?.domain) state.domain = String(raw.domain);
+  if (raw?.productType) state.productType = String(raw.productType);
+  if (raw?.owner) state.owner = String(raw.owner);
+  if (raw?.sla) state.sla = String(raw.sla);
+  const glossaryTerms = asArray(raw?.glossaryTerms);
+  if (glossaryTerms.length) state.glossaryTerms = glossaryTerms;
+  const CDEs = asArray(raw?.CDEs);
+  if (CDEs.length) state.CDEs = CDEs;
+  return state;
+}
 
 /**
  * Best-effort Purview Unified Catalog registration. Never throws — returns a
@@ -162,7 +194,7 @@ export async function GET(req: NextRequest) {
   if (nameQ) {
     const excludeId = req.nextUrl.searchParams.get('excludeId') || '';
     try {
-      const items = await listOwnedItems('data-product', session.claims.oid);
+      const items = await listOwnedItems(ITEM_TYPE, session.claims.oid);
       const dup = items.find(
         (it) => it.id !== excludeId && (it.displayName || '').trim().toLowerCase() === nameQ.toLowerCase(),
       );
@@ -176,21 +208,31 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const items = await listOwnedItems('data-product', session.claims.oid);
-    return NextResponse.json({
-      ok: true,
-      dataProducts: items.map((it) => ({
-        id: it.id,
-        displayName: it.displayName,
-        description: it.description,
-        type: (it.state as any)?.type,
-        status: (it.state as any)?.status || 'DRAFT',
-        governanceDomainName: (it.state as any)?.governanceDomainName,
-        endorsed: !!(it.state as any)?.endorsed,
-        purviewRegistered: !!(it.state as any)?.purviewRegistered,
-        updatedAt: it.updatedAt,
-      })),
-    });
+    const items = await listOwnedItems(ITEM_TYPE, session.claims.oid);
+    // Purview UC parity shape (consumed by app/data-products/page.tsx).
+    const dataProducts = items.map((it) => ({
+      id: it.id,
+      displayName: it.displayName,
+      description: it.description,
+      type: (it.state as any)?.type,
+      status: (it.state as any)?.status || 'DRAFT',
+      governanceDomainName: (it.state as any)?.governanceDomainName,
+      endorsed: !!(it.state as any)?.endorsed,
+      purviewRegistered: !!(it.state as any)?.purviewRegistered,
+      updatedAt: it.updatedAt,
+    }));
+    // Marketplace shape (consumed by lib/editors/data-marketplace.tsx).
+    const products = items.map((it) => ({
+      id: it.id,
+      workspaceId: it.workspaceId,
+      displayName: it.displayName,
+      description: it.description,
+      state: it.state || {},
+      createdBy: it.createdBy,
+      createdAt: it.createdAt,
+      updatedAt: it.updatedAt,
+    }));
+    return NextResponse.json({ ok: true, dataProducts, products });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -203,6 +245,32 @@ export async function POST(req: NextRequest) {
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
 
+  // ── Marketplace create path ───────────────────────────────────────────────
+  // Discriminator: the marketplace editor sends a top-level `state` object and
+  // no Purview `type`. Preserve its simpler create contract (returns `product`).
+  if (body && typeof body === 'object' && body.state && typeof body.state === 'object' && !body.type) {
+    const workspaceId = String(body?.workspaceId || '').trim();
+    const displayName = String(body?.displayName || '').trim();
+    if (!workspaceId || !displayName) {
+      return NextResponse.json({ ok: false, error: 'workspaceId and displayName are required' }, { status: 400 });
+    }
+    const state = normalizeMarketplaceState(body.state);
+    if (!state.owner) state.owner = session.claims.upn || session.claims.email || session.claims.oid;
+    try {
+      const res = await createOwnedItem(session, ITEM_TYPE, {
+        workspaceId,
+        displayName,
+        description: body?.description ? String(body.description) : undefined,
+        state,
+      });
+      if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+      return NextResponse.json({ ok: true, product: res.item });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    }
+  }
+
+  // ── Purview Unified Catalog create path (wizard) ──────────────────────────
   const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
   const description = typeof body?.description === 'string' ? body.description : '';
   const type = typeof body?.type === 'string' ? body.type : '';
@@ -271,7 +339,7 @@ export async function POST(req: NextRequest) {
     ...(purview.hint ? { purviewHint: purview.hint } : {}),
   };
 
-  const created = await createOwnedItem(session, 'data-product', {
+  const created = await createOwnedItem(session, ITEM_TYPE, {
     workspaceId,
     displayName,
     description: description || undefined,
