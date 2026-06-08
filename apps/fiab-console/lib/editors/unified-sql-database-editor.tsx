@@ -43,6 +43,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -66,6 +67,38 @@ const SQL_DB_SKUS = [
   'HS_Gen5_2', 'HS_Gen5_4', 'HS_Gen5_8', 'HS_Gen5_16',
 ];
 const SQL_DB_TIERS = ['Basic', 'Standard', 'Premium', 'GeneralPurpose', 'BusinessCritical', 'Hyperscale'];
+// SQL Server collations surfaced in the Azure portal Create Database blade.
+// The full catalog has thousands; these are the portal-offered choices. The
+// first entry is the ARM default applied when no collation is sent.
+const SQL_COLLATIONS = [
+  'SQL_Latin1_General_CP1_CI_AS',       // portal default — case-insensitive, accent-sensitive
+  'SQL_Latin1_General_CP1_CS_AS',       // case-sensitive variant
+  'Latin1_General_100_CI_AS_SC_UTF8',   // UTF-8 aware, SQL Server 2019+
+  'Latin1_General_100_CS_AS_SC_UTF8',
+  'Latin1_General_BIN2',                // binary sort (fastest, case-sensitive)
+  'Latin1_General_CI_AS',
+  'Latin1_General_CS_AS',
+  'French_CI_AS',
+  'German_PhoneBook_CI_AS',
+  'Japanese_CI_AS',
+  'Korean_Wansung_CI_AS',
+  'Modern_Spanish_CI_AS',
+  'SQL_Latin1_General_CP437_CI_AI',     // accent-insensitive variant
+  'SQL_Latin1_General_CP850_CI_AS',
+  'SQL_Latin1_General_CP1_CI_AI',
+  'Traditional_Spanish_CI_AS',
+  'Chinese_PRC_CI_AS',
+] as const;
+type SqlCollation = typeof SQL_COLLATIONS[number];
+const DEFAULT_COLLATION: SqlCollation = 'SQL_Latin1_General_CP1_CI_AS';
+// requestedBackupStorageRedundancy — ARM validates the choice against the
+// region/tier; an incompatible pick surfaces verbatim in the result MessageBar.
+const BACKUP_REDUNDANCY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'Geo', label: 'Geo-redundant (default)' },
+  { value: 'GeoZone', label: 'Geo-zone-redundant (requires AZ + paired region)' },
+  { value: 'Zone', label: 'Zone-redundant (within region)' },
+  { value: 'Local', label: 'Locally redundant (single region)' },
+];
 const PG_VERSIONS = ['11', '12', '13', '14', '15', '16'];
 const PG_TIERS = ['Burstable', 'GeneralPurpose', 'MemoryOptimized'];
 // Common PG flexible-server compute SKUs grouped by tier.
@@ -622,6 +655,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [newDbTier, setNewDbTier] = useState('GeneralPurpose');
   const [newDbSample, setNewDbSample] = useState(false);
   const [newDbZoneRedundant, setNewDbZoneRedundant] = useState(false);
+  const [newDbCollation, setNewDbCollation] = useState<SqlCollation>(DEFAULT_COLLATION);
+  const [newDbBackupRedundancy, setNewDbBackupRedundancy] = useState('');
+  const [newDbMaintenanceWindow, setNewDbMaintenanceWindow] = useState('');
+  const [maintenanceConfigs, setMaintenanceConfigs] = useState<{ id: string; name: string; displayName: string }[]>([]);
+  const [maintLoading, setMaintLoading] = useState(false);
   // PG fields
   const [pgName, setPgName] = useState('');
   const [pgRg, setPgRg] = useState('');
@@ -632,7 +670,34 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [pgTier, setPgTier] = useState('Burstable');
   const [pgVersion, setPgVersion] = useState('16');
 
+  const loadMaintenanceConfigs = useCallback(async (serverName: string) => {
+    if (!serverName) { setMaintenanceConfigs([]); return; }
+    const loc = inv?.sql.servers.find((srv) => srv.name === serverName)?.location;
+    if (!loc) { setMaintenanceConfigs([]); return; }
+    setMaintLoading(true);
+    const j = await fetchJson(
+      `/api/items/azure-sql-database/${encodeURIComponent(id)}/maintenance-configs?location=${encodeURIComponent(loc)}`,
+    );
+    setMaintenanceConfigs(j.ok ? (j.configs || []) : []);
+    setMaintLoading(false);
+  }, [id, inv]);
+
+  // Discover the region's maintenance windows whenever a target server is picked.
+  useEffect(() => {
+    if (newDbServer) loadMaintenanceConfigs(newDbServer);
+    else setMaintenanceConfigs([]);
+    // Reset any prior selection — windows are region-specific.
+    setNewDbMaintenanceWindow('');
+  }, [newDbServer, loadMaintenanceConfigs]);
+
   const provisionSqlDb = useCallback(async () => {
+    // Client-side collation guard — reject anything outside the enumerated list
+    // before issuing the BFF call (the dropdown enforces this; this is a
+    // defense-in-depth check that mirrors the route-level validation).
+    if (!SQL_COLLATIONS.includes(newDbCollation)) {
+      setProvMsg({ ok: false, text: `Collation '${newDbCollation}' is not in the supported list.` });
+      return;
+    }
     setProvBusy(true); setProvMsg(null);
     const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/create-db`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -640,14 +705,17 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         server: newDbServer, name: newDbName, skuName: newDbSku, tier: newDbTier,
         sampleName: newDbSample ? 'AdventureWorksLT' : undefined,
         zoneRedundant: newDbZoneRedundant || undefined,
+        collation: newDbCollation !== DEFAULT_COLLATION ? newDbCollation : undefined,
+        requestedBackupStorageRedundancy: newDbBackupRedundancy || undefined,
+        maintenanceConfigurationId: newDbMaintenanceWindow || undefined,
       }),
     });
     setProvMsg(j.ok
-      ? { ok: true, text: `Azure SQL database '${newDbName}' provisioning on ${newDbServer} (status: ${j.status || 'accepted'}). ARM continues async.` }
+      ? { ok: true, text: `Azure SQL database '${newDbName}' provisioning on ${newDbServer} · collation ${newDbCollation}${newDbZoneRedundant ? ' · zone-redundant' : ''} (status: ${j.status || 'accepted'}). ARM continues async.` }
       : { ok: false, text: j.error || 'create failed' });
     if (j.ok) loadInventory();
     setProvBusy(false);
-  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, newDbZoneRedundant, loadInventory]);
+  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, newDbZoneRedundant, newDbCollation, newDbBackupRedundancy, newDbMaintenanceWindow, loadInventory]);
 
   const provisionPg = useCallback(async () => {
     setProvBusy(true); setProvMsg(null);
@@ -895,10 +963,46 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         {SQL_DB_TIERS.map((t) => <Option key={t} value={t}>{t}</Option>)}
                       </Dropdown>
                     </Field>
+                    <Field label="Collation" hint="Set at create time only — immutable after the database exists.">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={[newDbCollation]}
+                        value={newDbCollation}
+                        onOptionSelect={(_, d) => setNewDbCollation((d.optionValue as SqlCollation) || newDbCollation)}
+                        aria-label="Database collation"
+                      >
+                        {SQL_COLLATIONS.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Backup storage redundancy">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={newDbBackupRedundancy ? [newDbBackupRedundancy] : []}
+                        value={newDbBackupRedundancy ? (BACKUP_REDUNDANCY_OPTIONS.find((o) => o.value === newDbBackupRedundancy)?.label || newDbBackupRedundancy) : ''}
+                        placeholder="Geo-redundant (default)"
+                        onOptionSelect={(_, d) => setNewDbBackupRedundancy(d.optionValue || '')}
+                        aria-label="Backup storage redundancy"
+                      >
+                        {BACKUP_REDUNDANCY_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label={`Maintenance window${maintLoading ? ' (loading…)' : ''}`} hint="vCore tiers only. System default applies any time outside business hours.">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={[newDbMaintenanceWindow]}
+                        value={newDbMaintenanceWindow ? (maintenanceConfigs.find((c) => c.id === newDbMaintenanceWindow)?.displayName || newDbMaintenanceWindow) : 'System default (any time)'}
+                        disabled={maintLoading || !newDbServer}
+                        onOptionSelect={(_, d) => setNewDbMaintenanceWindow(d.optionValue || '')}
+                        aria-label="Maintenance window"
+                      >
+                        <Option value="">System default (any time)</Option>
+                        {maintenanceConfigs.map((c) => <Option key={c.id} value={c.id}>{c.displayName}</Option>)}
+                      </Dropdown>
+                    </Field>
                   </div>
                   <Checkbox checked={newDbSample} onChange={(_, d) => setNewDbSample(!!d.checked)} label="Seed AdventureWorksLT sample schema" />
                   <Checkbox checked={newDbZoneRedundant} onChange={(_, d) => setNewDbZoneRedundant(!!d.checked)}
-                    label="Zone-redundant (Premium / Business Critical / Hyperscale)" />
+                    label="Zone-redundant (vCore tiers only: GeneralPurpose / BusinessCritical / Hyperscale)" />
                   <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !newDbServer || !newDbName} onClick={provisionSqlDb}>
                     {provBusy ? 'Creating…' : 'Create Azure SQL database'}
                   </Button>
@@ -946,7 +1050,6 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
               </div>
               {family === 'managed-instance' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
@@ -954,7 +1057,29 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {family === 'postgres' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL query path is gated</MessageBarTitle>Add the <code>pg</code> driver to apps/fiab-console and set <code>LOOM_POSTGRES_QUERY_LIVE=true</code> (with the console UAMI created as a PG AAD principal via <code>pgaadauth_create_principal</code>). ARM inventory, provisioning, databases, and firewall are fully live now.</MessageBarBody></MessageBar>
               )}
-              <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+              {family === 'postgres' ? (
+                // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are
+                // T-SQL-specific, so the PG path keeps the plain Monaco surface
+                // until a pg-catalog provider lands. Run still posts the script.
+                <>
+                  <div className={s.toolbar}>
+                    <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
+                  </div>
+                  <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+                </>
+              ) : (
+                <TsqlMonaco
+                  value={sqlText}
+                  onChange={setSqlText}
+                  onRun={(sql) => run(sql)}
+                  server={server}
+                  database={database}
+                  itemId={id}
+                  height={240}
+                  readOnly={family === 'managed-instance'}
+                  busy={qLoading}
+                />
+              )}
               <ResultsPanel result={qResult} loading={qLoading} />
             </>
           )}
