@@ -78,8 +78,9 @@ resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   }
 }
 
-// Containers: bronze (raw), silver (cleansed), gold (curated), landing-zone
-// (Open Mirroring publisher drops), checkpoints (Spark checkpoint dirs)
+// Containers: bronze (raw), silver (cleansed), gold (curated), landing
+// (Open Mirroring publisher drops — producers push Parquet here, merged into
+// managed Delta under bronze/mirrors/**), checkpoints (Spark checkpoint dirs)
 resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: sa
   name: 'default'
@@ -100,7 +101,7 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   }
 }
 
-var containers = ['bronze', 'silver', 'gold', 'landing-zone', 'checkpoints', 'csv-imports']
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs
@@ -220,4 +221,4 @@ output eventGridTopicId string = sysTopic.id
 output bronzeContainerUrl string = '${sa.properties.primaryEndpoints.dfs}bronze'
 output silverContainerUrl string = '${sa.properties.primaryEndpoints.dfs}silver'
 output goldContainerUrl string = '${sa.properties.primaryEndpoints.dfs}gold'
-output landingZoneContainerUrl string = '${sa.properties.primaryEndpoints.dfs}landing-zone'
+output landingContainerUrl string = '${sa.properties.primaryEndpoints.dfs}landing'

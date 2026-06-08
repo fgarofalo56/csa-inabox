@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
+import { OpenMirrorConfig } from './components/open-mirror-config';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -593,6 +594,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
             </Caption1>
+          )}
+
+          {/* Open mirroring (push Parquet → managed Delta) — only for the
+              GenericMirror source. Azure-native: ADLS landing → Synapse Spark
+              merge → managed Delta, no Microsoft Fabric. */}
+          {mirrorId && workspaceId && detail?.source?.sourceType === 'GenericMirror' && (
+            <OpenMirrorConfig
+              mirrorId={mirrorId}
+              workspaceId={workspaceId}
+              tableName={detail?.source?.database || 'default'}
+            />
           )}
 
           {mirrorId && detail && (
