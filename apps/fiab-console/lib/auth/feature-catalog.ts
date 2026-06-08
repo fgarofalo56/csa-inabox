@@ -57,6 +57,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'editor.synapse-serverless-sql-pool', domain: 'Data', workload: 'Warehouse',     name: 'Synapse Serverless SQL',kind: 'editor',   description: 'Serverless SQL pool', parentId: 'workload.warehouse' },
   { id: 'editor.azure-sql-server',   domain: 'Data',      workload: 'Warehouse',         name: 'Azure SQL Server',     kind: 'editor',    description: 'Azure SQL server', parentId: 'workload.warehouse' },
   { id: 'editor.azure-sql-database', domain: 'Data',      workload: 'Warehouse',         name: 'Azure SQL Database',   kind: 'editor',    description: 'Azure SQL database', parentId: 'workload.warehouse' },
+  { id: 'service.sql-security',      domain: 'Data',      workload: 'Warehouse',         name: 'SQL Granular Security', kind: 'service',  description: 'Object/column GRANT, Row-Level Security and Dynamic Data Masking wizards for Synapse Dedicated/Serverless and Azure SQL.', parentId: 'workload.warehouse' },
 
   { id: 'workload.pipelines',        domain: 'Data',      workload: 'Pipelines',         name: 'Data integration',     kind: 'workload',  description: 'Pipelines, dataflows, ADF, copy jobs.' },
   { id: 'editor.data-pipeline',      domain: 'Data',      workload: 'Pipelines',         name: 'Fabric Data Pipeline', kind: 'editor',    description: 'Fabric pipelines', parentId: 'workload.pipelines' },

@@ -17,6 +17,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -28,6 +29,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -191,6 +193,9 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   // (start/stop) — the picker is read-only for the serverless kind today,
   // matching the existing ComputePicker semantics.
   const [computeId, setComputeId] = useState('');
+  // SQL granular security (F11) — GRANT / column-GRANT / DDM wizards (Entra-only
+  // TDS). RLS is gated off for Serverless by the panel (not supported there).
+  const [secOpen, setSecOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,6 +274,11 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
           + `-- Set a daily cap (workspace admin):\n`
           + `-- sp_set_data_processed_limit @type = N'daily', @limit_TB = 1;`,
         ) },
+      ]},
+      { label: 'Security', actions: [
+        // Object/column GRANT + Dynamic Data Masking over the serverless
+        // database (views). Real T-SQL via /sql-security (Entra-only TDS).
+        { label: 'GRANT / masking', onClick: () => setSecOpen(true), title: 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
       ]},
     ]},
   ], [loading, run]);
@@ -349,6 +359,19 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             ariaLabel="Serverless T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
+          <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
+              <DialogBody>
+                <DialogTitle>SQL granular security — Serverless ({database})</DialogTitle>
+                <DialogContent>
+                  <SqlSecurityPanel itemType="synapse-serverless-sql-pool" itemId={id} database={database} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -399,6 +422,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   // glance. The actual query still routes to the BFF's wired-in pool from
   // env — switching is read-only here for v2.x; v2.3 wires per-pool query.
   const [computeId, setComputeId] = useState('');
+  // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
+  const [secOpen, setSecOpen] = useState(false);
 
   const refreshState = useCallback(async () => {
     const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
@@ -540,6 +565,11 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
           + `ORDER BY restore_point_creation_date DESC;`,
         ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
       ]},
+      { label: 'Security', actions: [
+        // Object/column GRANT, Row-Level Security and Dynamic Data Masking
+        // wizards — real T-SQL over TDS (Entra-only) via /sql-security.
+        { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
+      ]},
     ]},
   ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema]);
 
@@ -651,6 +681,19 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             ariaLabel="Dedicated T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
+          <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
+              <DialogBody>
+                <DialogTitle>SQL granular security — {poolState?.pool || 'Dedicated SQL pool'}</DialogTitle>
+                <DialogContent>
+                  <SqlSecurityPanel itemType="synapse-dedicated-sql-pool" itemId={id} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
