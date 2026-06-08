@@ -65,6 +65,24 @@ async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
 // Warehouse management
 // ------------------------------------------------------------
 
+/**
+ * Connection endpoint details for a SQL Warehouse, returned verbatim by
+ * `GET /api/2.0/sql/warehouses/{id}` in the `odbc_params` field. These are the
+ * real, externally-routable JDBC/ODBC coordinates a BI tool or `databricks sql`
+ * client uses to reach the warehouse — the Connection details panel surfaces
+ * them so an analyst can copy a working JDBC URL.
+ *   hostname : adb-7405613013893759.19.azuredatabricks.net (workspace FQDN)
+ *   path     : /sql/1.0/warehouses/<warehouse-id> (the warehouse HTTP path)
+ *   protocol : 'https'
+ *   port     : 443
+ */
+export interface WarehouseOdbcParams {
+  hostname: string;
+  path: string;
+  protocol?: string;
+  port?: number;
+}
+
 export interface Warehouse {
   id: string;
   name: string;
@@ -82,6 +100,12 @@ export interface Warehouse {
   min_num_clusters?: number;
   max_num_clusters?: number;
   auto_stop_mins?: number;
+  /**
+   * ODBC/JDBC connection coordinates — present on a started warehouse. A
+   * STOPPED warehouse may omit these until it has been provisioned at least
+   * once; the connection route gates honestly when they are absent.
+   */
+  odbc_params?: WarehouseOdbcParams;
 }
 
 export async function listWarehouses(): Promise<Warehouse[]> {
@@ -127,6 +151,14 @@ export interface WarehouseCreateSpec {
   auto_stop_mins?: number;
   warehouse_type?: 'CLASSIC' | 'PRO';
   enable_serverless_compute?: boolean;
+  // Advanced options (parity with the Databricks "Create SQL warehouse" dialog —
+  // every field below is accepted by POST /api/2.0/sql/warehouses, verified
+  // against Microsoft Learn `warehouses/create` + the createWarehouse audit
+  // request_params list).
+  enable_photon?: boolean;        // Photon vectorized engine (default on for serverless)
+  channel?: { name: 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW' };
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
+  spot_instance_policy?: 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED' | 'POLICY_UNSPECIFIED';
 }
 
 /** Create a SQL Warehouse. POST /api/2.0/sql/warehouses → { id }. */
@@ -141,6 +173,18 @@ export async function createWarehouse(spec: WarehouseCreateSpec): Promise<{ id: 
   };
   if (typeof spec.enable_serverless_compute === 'boolean') {
     payload.enable_serverless_compute = spec.enable_serverless_compute;
+  }
+  if (typeof spec.enable_photon === 'boolean') {
+    payload.enable_photon = spec.enable_photon;
+  }
+  if (spec.channel?.name) {
+    payload.channel = { name: spec.channel.name };
+  }
+  if (spec.tags?.custom_tags && spec.tags.custom_tags.length > 0) {
+    payload.tags = { custom_tags: spec.tags.custom_tags };
+  }
+  if (spec.spot_instance_policy) {
+    payload.spot_instance_policy = spec.spot_instance_policy;
   }
   const res = await dbxFetch('/api/2.0/sql/warehouses', {
     method: 'POST',
@@ -252,6 +296,97 @@ export async function listQueryHistory(
   return { entries, nextPageToken: body.next_page_token };
 }
 
+/**
+ * Per-query execution metrics, returned by the Query History API when
+ * `include_metrics=true`. Field set per the Databricks `QueryMetrics`
+ * object (the same numbers the Databricks Query Profile UI renders).
+ * https://docs.databricks.com/api/workspace/queryhistory/get
+ */
+export interface DbxQueryMetrics {
+  compilation_time_ms?: number;
+  execution_time_ms?: number;
+  photon_total_time_ms?: number;
+  total_time_ms?: number;
+  read_bytes?: number;
+  read_remote_bytes?: number;
+  write_remote_bytes?: number;
+  read_cache_bytes?: number;
+  rows_read_count?: number;
+  rows_produced_count?: number;
+  result_fetch_time_ms?: number;
+  read_files_count?: number;
+  read_partitions_count?: number;
+  pruned_files_count?: number;
+  pruned_bytes?: number;
+  network_sent_bytes?: number;
+  spill_to_disk_bytes?: number;
+  task_total_time_ms?: number;
+  result_from_cache?: boolean;
+}
+
+/**
+ * Single-query execution profile. The `metrics` object carries the IO/Photon
+ * stats; `spark_ui_url` is the authoritative deep-link to the full physical
+ * plan DAG in the Spark UI (the same data the Databricks Query Profile view
+ * renders). `plans_state` reports whether the plan tree is available; when the
+ * workspace returns the structured plan inline it lands on `plans` (opaque
+ * JSON, passed straight through to the UI).
+ */
+export interface DbxQueryProfile {
+  query_id: string;
+  status: string;
+  query_text?: string;
+  query_start_time_ms?: number;
+  query_end_time_ms?: number;
+  duration?: number; // ms
+  user_name?: string;
+  warehouse_id?: string;
+  rows_produced?: number;
+  error_message?: string;
+  spark_ui_url?: string;
+  statement_type?: string;
+  metrics?: DbxQueryMetrics;
+  plans_state?: string;
+  plans?: unknown;
+}
+
+/**
+ * GET /api/2.0/sql/history/queries/{statement_id}?include_metrics=true
+ *
+ * Fetches a single query's execution profile (metrics + plan state + Spark UI
+ * deep-link). The caller MI must own the query or hold CAN MONITOR on the
+ * warehouse.
+ */
+export async function getQueryProfile(queryId: string): Promise<DbxQueryProfile> {
+  const res = await dbxFetch(
+    `/api/2.0/sql/history/queries/${encodeURIComponent(queryId)}?include_metrics=true`,
+  );
+  if (!res.ok) {
+    throw new Error(`getQueryProfile failed ${res.status}: ${await res.text()}`);
+  }
+  // The single-query endpoint returns the QueryInfo object directly; some
+  // workspace versions nest it under `res`. Accept either shape.
+  const body = (await res.json()) as any;
+  const q = body?.query_id ? body : body?.res || body;
+  return {
+    query_id: q.query_id,
+    status: q.status,
+    query_text: q.query_text,
+    query_start_time_ms: q.query_start_time_ms,
+    query_end_time_ms: q.query_end_time_ms,
+    duration: q.duration,
+    user_name: q.user_name,
+    warehouse_id: q.warehouse_id,
+    rows_produced: q.rows_produced,
+    error_message: q.error_message,
+    spark_ui_url: q.spark_ui_url,
+    statement_type: q.statement_type,
+    metrics: q.metrics,
+    plans_state: q.plans_state,
+    plans: q.plans,
+  };
+}
+
 // ------------------------------------------------------------
 // Statement execution
 // ------------------------------------------------------------
@@ -282,11 +417,26 @@ const MAX_ROWS = 5_000;
 const POLL_INTERVAL_MS = 1_000;
 const POLL_TIMEOUT_MS = 120_000;
 
+/**
+ * A named parameter for the Statement Execution API. The SQL references the
+ * marker as `:name` (colon-prefixed); the value here is bound SEPARATELY by
+ * Databricks, never spliced into the SQL string — the canonical SQL-injection-
+ * safe path. `type` is an optional SQL type hint (STRING/INT/DOUBLE/DATE/…).
+ *
+ * See: https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-parameter-marker
+ */
+export interface DbxQueryParam {
+  name: string;
+  value: string | null;
+  type?: string;
+}
+
 export async function executeStatement(
   warehouseId: string,
   sql: string,
   catalog?: string,
   schema?: string,
+  parameters?: DbxQueryParam[],
 ): Promise<QueryResult> {
   const t0 = Date.now();
   const payload: Record<string, unknown> = {
@@ -300,6 +450,16 @@ export async function executeStatement(
   };
   if (catalog) payload.catalog = catalog;
   if (schema) payload.schema = schema;
+  // Named parameter markers (`:name`) → the API `parameters` array. The value
+  // is bound by Databricks, NOT concatenated into the statement, so this is
+  // injection-safe regardless of what the user types.
+  if (parameters?.length) {
+    payload.parameters = parameters.map((p) => ({
+      name: p.name,
+      value: p.value,
+      ...(p.type ? { type: p.type } : {}),
+    }));
+  }
 
   const res = await dbxFetch('/api/2.0/sql/statements', {
     method: 'POST',

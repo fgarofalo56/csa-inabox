@@ -214,6 +214,55 @@ export interface CreateDatabaseSpec {
   /** Zone redundancy. */
   zoneRedundant?: boolean;
   maxSizeBytes?: number;
+  /** Database collation. Default applied by ARM: SQL_Latin1_General_CP1_CI_AS.
+   *  Set at create time only; immutable after the database exists. */
+  collation?: string;
+  /** Backup storage redundancy. ARM validates against region/tier availability. */
+  requestedBackupStorageRedundancy?: 'Geo' | 'GeoZone' | 'Local' | 'Zone';
+  /** Full ARM resource ID of a public maintenance configuration (SQLDB scope).
+   *  Use listDbMaintenanceConfigs() to discover valid IDs for the server's
+   *  region. Only honored on vCore tiers (GP, BC, HS). */
+  maintenanceConfigurationId?: string;
+}
+
+export interface MaintenanceConfig {
+  /** Full ARM resource ID — pass as CreateDatabaseSpec.maintenanceConfigurationId. */
+  id: string;
+  /** Configuration name, e.g. SQL_EastUS2_DB_1. */
+  name: string;
+  /** Human-friendly window description for the UI dropdown. */
+  displayName: string;
+}
+
+/**
+ * Lists available public maintenance configurations for a given Azure region,
+ * scope=SQLDB. Use a returned `id` as `maintenanceConfigurationId` in
+ * CreateDatabaseSpec. An empty array means the region publishes no SQLDB
+ * windows (the database then uses the System default policy) — that is an
+ * honest gate, not an error. Resolves to the sovereign ARM host automatically
+ * via armBase() (Commercial / Gov / DoD) with no per-cloud branching here.
+ */
+export async function listDbMaintenanceConfigs(location: string): Promise<MaintenanceConfig[]> {
+  if (!location) return [];
+  try {
+    const filter = encodeURIComponent(`location eq '${location}' and maintenanceScope eq 'SQLDB'`);
+    const res = await armRequest<{ value: any[] }>(
+      `/providers/Microsoft.Maintenance/publicMaintenanceConfigurations?api-version=2023-09-01&$filter=${filter}`,
+    );
+    return (res.value || []).map((c) => {
+      const name: string = c.name || '';
+      const displayName = name.endsWith('_DB_1')
+        ? 'Weekday window (Mon–Thu 10 PM – 6 AM local)'
+        : name.endsWith('_DB_2')
+          ? 'Weekend window (Fri–Sun 10 PM – 6 AM local)'
+          : name;
+      return { id: c.id, name, displayName };
+    });
+  } catch {
+    // Maintenance API may be unavailable in a region or boundary; fall back to
+    // System default rather than blocking the create flow.
+    return [];
+  }
 }
 
 export async function createDatabase(
@@ -238,6 +287,13 @@ export async function createDatabase(
         ...(spec.sampleName ? { sampleName: spec.sampleName } : {}),
         ...(typeof spec.zoneRedundant === 'boolean' ? { zoneRedundant: spec.zoneRedundant } : {}),
         ...(spec.maxSizeBytes ? { maxSizeBytes: spec.maxSizeBytes } : {}),
+        ...(spec.collation ? { collation: spec.collation } : {}),
+        ...(spec.requestedBackupStorageRedundancy
+          ? { requestedBackupStorageRedundancy: spec.requestedBackupStorageRedundancy }
+          : {}),
+        ...(spec.maintenanceConfigurationId
+          ? { maintenanceConfigurationId: spec.maintenanceConfigurationId }
+          : {}),
       },
       ...(spec.skuName ? { sku: { name: spec.skuName, ...(spec.tier ? { tier: spec.tier } : {}) } } : {}),
     };
