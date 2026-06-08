@@ -131,9 +131,9 @@ delta, not a rebuild.
 | W10 | `SELECT INTO` + `CREATE TABLE AS CLONE OF` (zero-copy clone) | Synapse `SELECT INTO`; Databricks `CREATE TABLE ... DEEP/SHALLOW CLONE` | Object menu → clone dialog | all | ❌ missing | **T7** clone + SELECT INTO actions |
 | W11 | Open in Excel (.iqy) | BFF emits real `.iqy` web-query | Results toolbar → download | all | ✅ built (warehouse) | **T8** wire for Databricks/Synapse-serverless |
 | W12 | Export results (CSV / JSON) | client iterate over real result rows | Download button | all | ⚠️ partial | **T8** CSV+JSON export all engines |
-| W13 | Visualize results (chart) | Recharts over real result set | Visualize toggle (bar/line/pie/area/scatter) | all | ⚠️ honest-gate (Power BI) | **T9** in-Loom Recharts visualize (no Power BI dep) |
+| W13 | Visualize results (chart) | in-Loom chart over real result set | Visualize toggle (bar/line/area/pie/scatter) + axis pickers | all | ✅ built | **T9** in-Loom SVG chart (`result-visualize.tsx`), no Power BI dep |
 | W14 | Copy results (with/without headers) | client selection → clipboard | Results context menu | all | ✅ built | none |
-| W15 | Query parameters (`{{name}}`) | Databricks `parameters[]`; Synapse `sp_executesql` | Param widgets above editor | all | ❌ missing | **T9** param widgets + substitution |
+| W15 | Query parameters (`{{name}}`) | Databricks `parameters[]` (`:name`); Synapse `req.input()` → `sp_executesql` (`@name`) | Param widgets above editor (auto-detected) | all | ✅ built | **T9** param widgets + injection-safe substitution |
 | W16 | Query history / insights (text, status, duration, profile) | Databricks `GET /sql/history/queries[/id]`; Synapse `sys.dm_exec_*` DMVs | History pane + profile drawer | all | ✅ built (Databricks list); **profile + Synapse DMVs missing** | **T10** query profile drawer + Synapse DMV history |
 | W17 | Statistics — CREATE/UPDATE/DROP STATISTICS | Synapse `CREATE STATISTICS`; Databricks `ANALYZE TABLE` | Table menu → statistics dialog | all | ❌ missing | **T11** statistics manager |
 | W18 | Cross-warehouse 3-/4-part-name queries | Synapse cross-DB; UC 3-level names | Same editor path; honest cross-workspace note in Gov | all | ✅ built (3-part TDS / UC) | **T2** verify 4-part + cross-DB picker |

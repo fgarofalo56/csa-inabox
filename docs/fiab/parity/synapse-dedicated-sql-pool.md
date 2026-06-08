@@ -36,3 +36,5 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 - Lifecycle → ARM (`synapse-pool-arm` `getPoolState`/resume/pause).
 
 Grade: **A — every inventory row built; all four former "deferred" buttons now wired to real DMV T-SQL through the existing /query TDS path.**
+
+> **T9 — Visualize + query parameters.** Added a **Visualize** toggle (in-Loom SVG chart: bar/line/area/pie/scatter + axis pickers over the real result rows, `result-visualize.tsx`) and **query parameters** (`{{name}}` widgets → `@name` bound via `req.input()` → `sp_executesql`, injection-safe). Receipt returns `statement` + `parameters` + `parametersCount`. Grade unchanged (A).

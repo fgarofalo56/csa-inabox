@@ -282,11 +282,26 @@ const MAX_ROWS = 5_000;
 const POLL_INTERVAL_MS = 1_000;
 const POLL_TIMEOUT_MS = 120_000;
 
+/**
+ * A named parameter for the Statement Execution API. The SQL references the
+ * marker as `:name` (colon-prefixed); the value here is bound SEPARATELY by
+ * Databricks, never spliced into the SQL string — the canonical SQL-injection-
+ * safe path. `type` is an optional SQL type hint (STRING/INT/DOUBLE/DATE/…).
+ *
+ * See: https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-parameter-marker
+ */
+export interface DbxQueryParam {
+  name: string;
+  value: string | null;
+  type?: string;
+}
+
 export async function executeStatement(
   warehouseId: string,
   sql: string,
   catalog?: string,
   schema?: string,
+  parameters?: DbxQueryParam[],
 ): Promise<QueryResult> {
   const t0 = Date.now();
   const payload: Record<string, unknown> = {
@@ -300,6 +315,16 @@ export async function executeStatement(
   };
   if (catalog) payload.catalog = catalog;
   if (schema) payload.schema = schema;
+  // Named parameter markers (`:name`) → the API `parameters` array. The value
+  // is bound by Databricks, NOT concatenated into the statement, so this is
+  // injection-safe regardless of what the user types.
+  if (parameters?.length) {
+    payload.parameters = parameters.map((p) => ({
+      name: p.name,
+      value: p.value,
+      ...(p.type ? { type: p.type } : {}),
+    }));
+  }
 
   const res = await dbxFetch('/api/2.0/sql/statements', {
     method: 'POST',

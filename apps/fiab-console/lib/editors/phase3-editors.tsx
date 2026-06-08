@@ -45,6 +45,7 @@ import {
   Apps20Regular, List20Regular, Open20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
+  DataBarVertical20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -67,6 +68,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
+import { ResultVisualize } from './components/result-visualize';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -8259,6 +8262,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
+  const [showViz, setShowViz] = useState(false);
   // Seed the SQL editor with the bundle DDL once, when the live warehouse has
   // no tables to show — so the surface lands populated instead of on a smoke
   // test. The user can Run it (creates the schema) against the live compute.
@@ -8293,9 +8299,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const run = useCallback(async () => {
     setLoading(true); setResult(null);
     try {
+      // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
+      const statement = substituteSynapse(sqlText, queryParams);
       const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sqlText }),
+        body: JSON.stringify({ sql: statement, parameters: queryParams }),
       });
       const j = (await r.json()) as WHQueryResult;
       setResult(j);
@@ -8303,7 +8311,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) {
       setResult({ ok: false, error: e?.message || String(e) });
     } finally { setLoading(false); }
-  }, [id, sqlText, loadSchema]);
+  }, [id, sqlText, queryParams, loadSchema]);
 
   const schemaEntries = Object.entries(schema?.schemas || {});
   const ready = schema?.ok === true;
@@ -8557,6 +8565,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             minHeight={200}
             ariaLabel="Warehouse T-SQL editor"
           />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
             <MessageBar intent="error">
@@ -8572,7 +8581,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
                 <Caption1>· {result.executionMs} ms</Caption1>
                 {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+                {(result.rows?.length ?? 0) > 0 && (
+                  <Button size="small" appearance={showViz ? 'primary' : 'outline'} icon={<DataBarVertical20Regular />}
+                    onClick={() => setShowViz((v) => !v)} style={{ marginLeft: 'auto' }}>
+                    {showViz ? 'Hide chart' : 'Visualize'}
+                  </Button>
+                )}
               </div>
+              {showViz && (result.rows?.length ?? 0) > 0 && (
+                <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+              )}
               {(result.rows?.length ?? 0) === 0 ? (
                 <Caption1>Query returned no rows.</Caption1>
               ) : (

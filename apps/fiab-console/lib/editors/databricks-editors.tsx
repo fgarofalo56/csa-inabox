@@ -27,6 +27,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  DataBarVertical20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
@@ -43,6 +44,8 @@ import {
   parseSource, serializeCells, cellLangToCommandLanguage,
   type DbxBaseLanguage,
 } from './databricks-notebook-source';
+import { QueryParamsBar, substituteDbx, type QueryParam } from './components/query-params';
+import { ResultVisualize } from './components/result-visualize';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -628,6 +631,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [tables, setTables] = useState<string[]>([]);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
+  const [showViz, setShowViz] = useState(false);
   const [starting, setStarting] = useState(false);
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -809,14 +815,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setLoading(true);
     setResult(null);
     try {
+      // Rewrite {{name}} → :name and pass values out-of-band in parameters[]
+      // (Databricks binds them — never concatenated, so injection-safe).
+      const statement = substituteDbx(sqlText, queryParams);
       const res = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          sql: sqlText,
+          sql: statement,
           warehouseId,
           catalog: activeCatalog || undefined,
           schema: activeSchema || undefined,
+          parameters: queryParams,
         }),
       });
       const json = (await res.json()) as QueryResponse;
@@ -831,7 +841,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     } finally {
       setLoading(false);
     }
-  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, refreshState]);
+  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, queryParams, refreshState]);
 
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
@@ -1111,6 +1121,22 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             minHeight={200}
             ariaLabel="Databricks SQL editor"
           />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
+          {result?.ok && (result.rows?.length ?? 0) > 0 && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button
+                size="small"
+                appearance={showViz ? 'primary' : 'outline'}
+                icon={<DataBarVertical20Regular />}
+                onClick={() => setShowViz((v) => !v)}
+              >
+                {showViz ? 'Hide chart' : 'Visualize'}
+              </Button>
+            </div>
+          )}
+          {showViz && result?.ok && (result.rows?.length ?? 0) > 0 && (
+            <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+          )}
           <ResultsPanel result={result} loading={loading} />
           {!warehousesError && warehouses.length === 0 && (
             <div>
