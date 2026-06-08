@@ -123,6 +123,10 @@ export async function GET(req: NextRequest) {
     const assets = items
       .filter((i: any) => DATA_ITEM_TYPES.has(i.itemType))
       .filter((i: any) => !typeFilter || i.itemType === typeFilter)
+      // F6 — Expired data products are restricted to stewards/owners. Exclude
+      // them from the consumer discovery catalog so "Set to expired" actually
+      // removes consumer visibility (no-vaporware: the transition is observable).
+      .filter((i: any) => i.state?.lifecycleStatus !== 'EXPIRED')
       .map((i: any) => {
         const endorsement = i.state?.endorsement || (i.state?.certified ? 'Certified' : null);
         return {
@@ -136,6 +140,7 @@ export async function GET(req: NextRequest) {
           classifications: i.state?.classifications || [],
           sensitivity: i.state?.sensitivityLabel || null,
           endorsement,
+          lifecycleStatus: i.state?.lifecycleStatus || null,
           description: i.state?.description || null,
           domainId: i.state?.domainId || wsDomain.get(i.workspaceId) || null,
           isDiscoverable: i.state?.discoverable === true || !!endorsement,
