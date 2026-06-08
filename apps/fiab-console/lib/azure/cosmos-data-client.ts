@@ -56,6 +56,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { getCosmosSuffix } from './cloud-endpoints';
 
 /** Cosmos data-plane REST API version (stable). */
 const COSMOS_DATA_API_VERSION = '2018-12-31';
@@ -86,7 +87,7 @@ export function cosmosDataEndpoint(): string {
   if (explicit) return explicit.replace(/\/+$/, '');
   const acct = process.env.LOOM_COSMOS_ACCOUNT;
   if (!acct) throw new Error('Missing env var: LOOM_COSMOS_ACCOUNT');
-  return `https://${acct}.documents.azure.com`;
+  return `https://${acct}.${getCosmosSuffix()}`;
 }
 
 /** The AAD scope for the data plane — the account endpoint's `.default`. */

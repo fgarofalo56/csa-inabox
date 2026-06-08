@@ -13,15 +13,16 @@
 
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import sql from 'mssql';
+import { getSqlSuffix, synapseSqlSuffix } from './cloud-endpoints';
 
 /**
- * TDS AAD token scope — cloud-portable.
- *   Commercial / GCC : https://database.windows.net/.default
- *   GCC-High / IL5   : https://database.usgovcloudapi.net/.default
- * Set via `LOOM_SYNAPSE_SQL_TOKEN_SCOPE` (host without scheme / .default).
+ * TDS AAD token scope — cloud-portable. The SQL audience host differs per
+ * sovereign boundary and is resolved by `cloud-endpoints.getSqlSuffix()`
+ * (Commercial/GCC vs Gov). Override the host via `LOOM_SYNAPSE_SQL_TOKEN_SCOPE`
+ * (host without scheme / `.default`).
  */
 function sqlScope(): string {
-  return `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net'}/.default`;
+  return `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || getSqlSuffix()}/.default`;
 }
 // Prefer explicit UAMI when LOOM_UAMI_CLIENT_ID is set (Container App
 // runtime). Fall back to the default chain for local dev (az CLI).
@@ -50,23 +51,19 @@ export interface SynapseTarget {
 }
 
 /**
- * Cloud-aware Synapse SQL endpoint domain suffix.
- *   - Commercial + GCC (AZURE_CLOUD=AzureCloud / unset): sql.azuresynapse.net
- *   - GCC-High + IL5 (AZURE_CLOUD=AzureUSGovernment):     sql.azuresynapse.usgovcloudapi.net
- *
- * AZURE_CLOUD is set per-boundary by admin-plane/main.bicep, mirroring the
- * privatelink DNS zone suffix that network.bicep provisions, so the serverless
- * FQDN resolves through the right private endpoint in every sovereign cloud.
+ * Cloud-aware Synapse SQL endpoint domain suffix. The Commercial/GCC vs Gov
+ * suffix is resolved by `cloud-endpoints.synapseSqlSuffix()` (the single source
+ * of truth), mirroring the privatelink DNS zone suffix that network.bicep
+ * provisions so the serverless FQDN resolves through the right private endpoint
+ * in every sovereign cloud. `LOOM_SYNAPSE_HOST_SUFFIX` overrides outright.
  * Grounded in the Azure Government endpoint mapping:
  *   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
  */
 export function getSynapseSqlSuffix(): string {
   // Explicit per-deployment override wins (single image can serve any cloud /
-  // sovereign endpoint without an AZURE_CLOUD mapping change).
+  // sovereign endpoint without a boundary mapping change).
   if (process.env.LOOM_SYNAPSE_HOST_SUFFIX) return process.env.LOOM_SYNAPSE_HOST_SUFFIX;
-  return process.env.AZURE_CLOUD === 'AzureUSGovernment'
-    ? 'sql.azuresynapse.usgovcloudapi.net'
-    : 'sql.azuresynapse.net';
+  return synapseSqlSuffix();
 }
 
 export function dedicatedTarget(): SynapseTarget {

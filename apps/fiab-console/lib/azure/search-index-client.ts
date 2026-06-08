@@ -31,6 +31,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { getSearchSuffix } from './cloud-endpoints';
 
 export const SEARCH_DATA_API = '2024-07-01';
 const SEARCH_SCOPE = 'https://search.azure.com/.default';
@@ -98,7 +99,7 @@ export function resolveServiceName(override?: string): string {
 function serviceBase(service: string): string {
   // Accept either a bare name or a fully-qualified host.
   if (service.includes('.')) return `https://${service.replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
-  return `https://${service}.search.windows.net`;
+  return `https://${service}.${getSearchSuffix()}`;
 }
 
 async function searchToken(): Promise<string> {
