@@ -104,6 +104,7 @@ var databases = [
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
+//   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
 
 
 // Databases — one per workload
