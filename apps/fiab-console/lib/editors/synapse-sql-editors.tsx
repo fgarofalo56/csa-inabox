@@ -18,11 +18,14 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Field, Input, Dropdown, Option, Switch,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
+  TableAdd20Regular,
+  Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +34,10 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
+import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
+import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -83,28 +90,16 @@ function formatCell(v: unknown): string {
   return String(v);
 }
 
-// ── Results export (CSV / JSON) — client-side, no extra route ──
-function downloadBlob(filename: string, mime: string, data: string) {
-  const blob = new Blob([data], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function resultsToCsv(columns: string[], rows: unknown[][]): string {
-  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
-}
-function resultsToJson(columns: string[], rows: unknown[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
-
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
+// ── Results export (CSV / JSON / Open-in-Excel) — serializers + blob
+// download live in ./components/result-export (shared with Databricks +
+// Warehouse). Open-in-Excel routes through the per-engine /iqy BFF route.
+function ResultsPanel({
+  result, loading, onOpenExcel,
+}: {
+  result: QueryResponse | null;
+  loading: boolean;
+  onOpenExcel?: () => void | Promise<void>;
+}) {
   const s = useStyles();
   if (loading) {
     return (
@@ -151,6 +146,12 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
               <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                 onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
             </Tooltip>
+            {onOpenExcel && (
+              <Tooltip content="Open in Excel (web query — refresh re-runs against the live endpoint)" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                  onClick={() => void onOpenExcel()}>Excel</Button>
+              </Tooltip>
+            )}
           </div>
         )}
       </div>
@@ -239,6 +240,32 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     }
   }, [id, sqlText, database]);
 
+  // Open-in-Excel — download a .iqy web-query for the current SQL + database.
+  // Excel refreshes by POSTing back to the serverless /query route (real TDS).
+  const openInExcel = useCallback(async () => {
+    if (!sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText, database }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-synapse-serverless-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText, database]);
+
   // Ctrl+S / Cmd+S → Run (SSMS / Azure Data Studio muscle memory). T-SQL text
   // is ephemeral query state, so the surfaced save action is Run.
   useEffect(() => {
@@ -261,6 +288,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
+        { label: 'Open in Excel', onClick: sqlText.trim() && !loading ? openInExcel : undefined, disabled: !sqlText.trim() || loading, title: !sqlText.trim() ? 'Enter a query first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the live endpoint' },
         // Loads a real sys.external_tables / OPENROWSET template; Run executes
         // it via the wired serverless /query path.
         { label: 'External tables', onClick: () => setSqlText(
@@ -296,7 +324,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
         { label: 'GRANT / masking', onClick: () => setSecOpen(true), title: 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
       ]},
     ]},
-  ], [loading, run]);
+  ], [loading, run, openInExcel, sqlText]);
 
   return (
     <ItemEditorChrome
@@ -374,7 +402,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
           />
-          <ResultsPanel result={result} loading={loading} />
+          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() ? openInExcel : undefined} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
@@ -413,6 +441,10 @@ interface DedicatedSchema {
   pool?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  views?: { schema: string; name: string }[];
+  procedures?: { schema: string; name: string }[];
+  functions?: { schema: string; name: string; type: string }[];
+  warnings?: string[];
 }
 
 function poolBadgeColor(state: string): 'success' | 'warning' | 'severe' | 'informative' {
@@ -462,6 +494,28 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     setQhOpen(true);
     void loadQueryHistory();
   }, [loadQueryHistory]);
+
+  // ---- Save as table (CTAS) dialog — name/schema/distribution/index for MPP ----
+  const [ctasOpen, setCtasOpen] = useState(false);
+  const [ctasSchema, setCtasSchema] = useState('dbo');
+  const [ctasName, setCtasName] = useState('');
+  const [ctasDist, setCtasDist] = useState<'ROUND_ROBIN' | 'HASH' | 'REPLICATE'>('ROUND_ROBIN');
+  const [ctasDistCol, setCtasDistCol] = useState('');
+  const [ctasIndex, setCtasIndex] = useState<'CLUSTERED COLUMNSTORE INDEX' | 'HEAP' | 'CLUSTERED INDEX'>('CLUSTERED COLUMNSTORE INDEX');
+  const [ctasIndexCol, setCtasIndexCol] = useState('');
+  const [ctasBusy, setCtasBusy] = useState(false);
+  const [ctasError, setCtasError] = useState<string | null>(null);
+  const [ctasReceipt, setCtasReceipt] = useState<string | null>(null);
+
+  // ---- Select into (full physical copy — no zero-copy clone on Dedicated) ----
+  const [siOpen, setSiOpen] = useState(false);
+  const [siSourceSchema, setSiSourceSchema] = useState('dbo');
+  const [siSourceTable, setSiSourceTable] = useState('');
+  const [siTargetSchema, setSiTargetSchema] = useState('dbo');
+  const [siTargetTable, setSiTargetTable] = useState('');
+  const [siBusy, setSiBusy] = useState(false);
+  const [siError, setSiError] = useState<string | null>(null);
+  const [siReceipt, setSiReceipt] = useState<string | null>(null);
 
   const refreshState = useCallback(async () => {
     const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
@@ -539,6 +593,24 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
+  const views = schema?.views ?? [];
+  const procedures = schema?.procedures ?? [];
+  const functions = schema?.functions ?? [];
+
+  // Script-out: load the real CREATE/ALTER/DROP into the editor buffer.
+  const loadScript = useCallback(async (type: ScriptObjectType, objSchema: string, name: string, mode: ScriptMode) => {
+    const r = await loadSqlScript('synapse-dedicated-sql-pool', id, { type, schema: objSchema, name, mode });
+    if (r.ok && r.script != null) {
+      setSqlText(r.script);
+      setResult(null);
+    } else {
+      setResult({ ok: false, error: r.error || 'Could not script object' });
+    }
+  }, [id]);
+  const countRows = useCallback(
+    (objSchema: string, name: string) => sqlRowCount('synapse-dedicated-sql-pool', id, objSchema, name),
+    [id],
+  );
 
   // Ctrl+S / Cmd+S → Run when the pool is Online (SSMS muscle memory).
   useEffect(() => {
@@ -551,6 +623,81 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isOnline, loading, run]);
+
+  // ---- Save as table (CTAS) — distribution + index control over the editor SELECT ----
+  const openCtas = useCallback(() => {
+    setCtasName('');
+    setCtasError(null);
+    setCtasReceipt(null);
+    setCtasOpen(true);
+  }, []);
+
+  const submitCtas = useCallback(async () => {
+    if (!ctasName.trim()) { setCtasError('table name required'); return; }
+    if (ctasDist === 'HASH' && !ctasDistCol.trim()) { setCtasError('HASH distribution requires a column'); return; }
+    if (ctasIndex === 'CLUSTERED INDEX' && !ctasIndexCol.trim()) { setCtasError('CLUSTERED INDEX requires a column'); return; }
+    const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+    if (!/^select\b/i.test(cleaned)) {
+      setCtasError('CTAS requires the editor to contain a SELECT statement.');
+      return;
+    }
+    setCtasBusy(true); setCtasError(null);
+    try {
+      const esc = (x: string) => x.replace(/]/g, ']]');
+      const distClause =
+        ctasDist === 'HASH' ? `DISTRIBUTION = HASH([${esc(ctasDistCol.trim())}])`
+        : ctasDist === 'REPLICATE' ? 'DISTRIBUTION = REPLICATE'
+        : 'DISTRIBUTION = ROUND_ROBIN';
+      const indexClause =
+        ctasIndex === 'HEAP' ? 'HEAP'
+        : ctasIndex === 'CLUSTERED INDEX' ? `CLUSTERED INDEX ([${esc(ctasIndexCol.trim())}])`
+        : 'CLUSTERED COLUMNSTORE INDEX';
+      const ddl = [
+        `CREATE TABLE [${esc(ctasSchema.trim() || 'dbo')}].[${esc(ctasName.trim())}]`,
+        `WITH (${distClause}, ${indexClause})`,
+        'AS',
+        cleaned + ';',
+      ].join('\n');
+      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: ddl }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCtasError(j.error || `HTTP ${r.status}`); return; }
+      setCtasOpen(false);
+      setCtasReceipt(`Table created: ${ctasSchema.trim() || 'dbo'}.${ctasName.trim()} (${j.executionMs}ms · ${distClause.replace('DISTRIBUTION = ', '')}). Queryable via TDS.`);
+      refreshSchema();
+    } catch (e: any) { setCtasError(e?.message || String(e)); }
+    finally { setCtasBusy(false); }
+  }, [id, sqlText, ctasSchema, ctasName, ctasDist, ctasDistCol, ctasIndex, ctasIndexCol, refreshSchema]);
+
+  // ---- Select into — full physical copy (Dedicated has no zero-copy clone) ----
+  const openSelectIntoForTable = useCallback((schemaName: string, tableName: string) => {
+    setSiSourceSchema(schemaName);
+    setSiSourceTable(tableName);
+    setSiTargetSchema(schemaName);
+    setSiTargetTable('');
+    setSiError(null);
+    setSiReceipt(null);
+    setSiOpen(true);
+  }, []);
+
+  const submitSelectInto = useCallback(async () => {
+    if (!siSourceTable.trim() || !siTargetTable.trim()) { setSiError('source and target table names required'); return; }
+    setSiBusy(true); setSiError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/clone`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSchema: siSourceSchema.trim() || 'dbo', sourceTable: siSourceTable.trim(), targetSchema: siTargetSchema.trim() || 'dbo', targetTable: siTargetTable.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSiError(j.error || `HTTP ${r.status}`); return; }
+      setSiOpen(false);
+      setSiReceipt(`Table materialized: ${j.target} (${(j.recordsAffected ?? 0).toLocaleString()} rows copied · ${j.executionMs}ms). Full physical copy — not zero-copy.`);
+      refreshSchema();
+    } catch (e: any) { setSiError(e?.message || String(e)); }
+    finally { setSiBusy(false); }
+  }, [id, siSourceSchema, siSourceTable, siTargetSchema, siTargetTable, refreshSchema]);
 
   // Ribbon — every action is wired. State actions hit ARM/TDS routes; Query +
   // Manage actions load real DMV T-SQL into the editor so Run executes them via
@@ -570,6 +717,9 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
         // Real DMV — distributed query history pane (sys.dm_pdw_exec_requests).
         { label: 'Query history', onClick: isOnline ? openQueryHistory : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Recent requests from sys.dm_pdw_exec_requests' },
+        { label: 'Save as table', onClick: isOnline && sqlText.trim() ? openCtas : undefined,
+          disabled: !isOnline || !sqlText.trim(),
+          title: !isOnline ? 'Resume the pool first' : !sqlText.trim() ? 'Enter a SELECT first' : 'CTAS — CREATE TABLE WITH (DISTRIBUTION, INDEX) AS SELECT …' },
       ]},
       { label: 'State', actions: [
         { label: resuming ? 'Resuming…' : 'Resume', onClick: !resuming && state === 'Paused' ? resume : undefined, disabled: resuming || state !== 'Paused', title: state !== 'Paused' ? 'Only available when pool is Paused' : undefined },
@@ -604,6 +754,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
           + `FROM sys.pdw_loader_backup_runs\n`
           + `ORDER BY restore_point_creation_date DESC;`,
         ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
+        // Select into — full physical copy of a table (Dedicated has no zero-copy clone).
+        { label: 'Select into', onClick: isOnline ? () => { setSiOpen(true); setSiError(null); setSiReceipt(null); } : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Copy a table via SELECT INTO (full physical copy — Synapse Dedicated has no zero-copy clone)' },
       ]},
       { label: 'Security', actions: [
         // Object/column GRANT, Row-Level Security and Dynamic Data Masking
@@ -611,7 +763,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
-  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory]);
+  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory, sqlText, openCtas]);
 
   return (
     <ItemEditorChrome
@@ -647,12 +799,110 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                           value={`t-${schemaName}.${t.table}`}
                           onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
                         >
-                          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                          <TreeItemLayout
+                            iconBefore={<DocumentTable20Regular />}
+                            actions={
+                              <Tooltip content={`Select into (copy ${t.table})`} relationship="label">
+                                <Button
+                                  size="small" appearance="subtle" icon={<TableAdd20Regular />}
+                                  aria-label={`Select into ${t.table}`}
+                                  onClick={(e) => { e.stopPropagation(); openSelectIntoForTable(schemaName, t.table); }}
+                                />
+                              </Tooltip>
+                            }
+                          >
                             {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
                           </TreeItemLayout>
                         </TreeItem>
                       ))}
                     </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Views */}
+            <TreeItem itemType="branch" value="views">
+              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({views.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="v-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && views.length === 0 && (
+                  <TreeItem itemType="leaf" value="v-empty"><TreeItemLayout><Caption1>No views</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {views.map((v) => (
+                  <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
+                    onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Eye20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
+                        onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
+                        onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
+                        onScriptDrop={() => loadScript('view', v.schema, v.name, 'drop')} />}
+                    >
+                      {v.schema}.{v.name}{' '}
+                      <SqlRowCountBadge cacheKey={`v-${v.schema}.${v.name}`} load={() => countRows(v.schema, v.name)} />
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Stored procedures */}
+            <TreeItem itemType="branch" value="procs">
+              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({procedures.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="p-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && procedures.length === 0 && (
+                  <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>No procedures</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {procedures.map((p) => (
+                  <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
+                    onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Form20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
+                        onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
+                        onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
+                        onScriptDrop={() => loadScript('procedure', p.schema, p.name, 'drop')} />}
+                    >
+                      {p.schema}.{p.name}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Functions */}
+            <TreeItem itemType="branch" value="funcs">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({functions.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="f-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && functions.length === 0 && (
+                  <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>No functions</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {functions.map((f) => (
+                  <TreeItem key={`f-${f.schema}.${f.name}`} itemType="leaf" value={`f-${f.schema}.${f.name}`}
+                    onClick={() => setSqlText(
+                      f.type === 'FN'
+                        ? `SELECT [${f.schema}].[${f.name}]();`
+                        : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
+                    )}>
+                    <TreeItemLayout
+                      iconBefore={<MathFormula20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
+                        onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
+                        onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
+                        onScriptDrop={() => loadScript('function', f.schema, f.name, 'drop')} />}
+                    >
+                      {f.schema}.{f.name}{' '}
+                      <Caption1>· {f.type === 'FN' ? 'scalar' : f.type === 'IF' ? 'inline TVF' : 'TVF'}</Caption1>
+                    </TreeItemLayout>
                   </TreeItem>
                 ))}
               </Tree>
@@ -722,6 +972,16 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             ariaLabel="Dedicated T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
+          {ctasReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Table created</MessageBarTitle>{ctasReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
+          {siReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Table materialized</MessageBarTitle>{siReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
@@ -794,6 +1054,121 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setQhOpen(false)}>Close</Button>
                   <Button appearance="subtle" onClick={() => loadQueryHistory()} disabled={qhBusy}>Refresh</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Save as table (CTAS — distribution + index control) */}
+          <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '620px' }}>
+              <DialogBody>
+                <DialogTitle>Save as table (CTAS — Synapse Dedicated)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {ctasError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                    )}
+                    <Caption1>
+                      Emits <code>CREATE TABLE [schema].[name] WITH (DISTRIBUTION = …, …INDEX) AS SELECT …</code>.
+                      CTAS is the recommended way to create distributed tables on a Dedicated SQL pool — it runs in parallel and lets you choose the distribution + index strategy.
+                    </Caption1>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Field label="Schema" required style={{ flex: 1 }}>
+                        <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="dbo" />
+                      </Field>
+                      <Field label="Table name" required style={{ flex: 2 }}>
+                        <Input value={ctasName} onChange={(_, d) => setCtasName(d.value)} placeholder="orders_summary" />
+                      </Field>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <Field label="Distribution" style={{ flex: 1 }}>
+                        <Dropdown value={ctasDist} selectedOptions={[ctasDist]}
+                          onOptionSelect={(_, d) => d.optionValue && setCtasDist(d.optionValue as 'ROUND_ROBIN' | 'HASH' | 'REPLICATE')}>
+                          <Option value="ROUND_ROBIN" text="ROUND_ROBIN">ROUND_ROBIN (default)</Option>
+                          <Option value="HASH" text="HASH">HASH — specify column</Option>
+                          <Option value="REPLICATE" text="REPLICATE">REPLICATE (small tables)</Option>
+                        </Dropdown>
+                      </Field>
+                      {ctasDist === 'HASH' && (
+                        <Field label="Hash column" required style={{ flex: 1 }}>
+                          <Input value={ctasDistCol} onChange={(_, d) => setCtasDistCol(d.value)} placeholder="customer_id" />
+                        </Field>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <Field label="Index type" style={{ flex: 1 }}>
+                        <Dropdown value={ctasIndex} selectedOptions={[ctasIndex]}
+                          onOptionSelect={(_, d) => d.optionValue && setCtasIndex(d.optionValue as 'CLUSTERED COLUMNSTORE INDEX' | 'HEAP' | 'CLUSTERED INDEX')}>
+                          <Option value="CLUSTERED COLUMNSTORE INDEX" text="CLUSTERED COLUMNSTORE INDEX">CLUSTERED COLUMNSTORE INDEX (default)</Option>
+                          <Option value="HEAP" text="HEAP">HEAP</Option>
+                          <Option value="CLUSTERED INDEX" text="CLUSTERED INDEX">CLUSTERED INDEX — specify column</Option>
+                        </Dropdown>
+                      </Field>
+                      {ctasIndex === 'CLUSTERED INDEX' && (
+                        <Field label="Index column" required style={{ flex: 1 }}>
+                          <Input value={ctasIndexCol} onChange={(_, d) => setCtasIndexCol(d.value)} placeholder="order_date" />
+                        </Field>
+                      )}
+                    </div>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCtasOpen(false)} disabled={ctasBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitCtas}
+                    disabled={ctasBusy || !ctasName.trim() || (ctasDist === 'HASH' && !ctasDistCol.trim()) || (ctasIndex === 'CLUSTERED INDEX' && !ctasIndexCol.trim())}>
+                    {ctasBusy ? 'Creating…' : 'Create table'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Select into — full physical copy (no zero-copy clone on Dedicated) */}
+          <Dialog open={siOpen} onOpenChange={(_, d) => setSiOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '540px' }}>
+              <DialogBody>
+                <DialogTitle>Select into (copy table)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {siError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>SELECT INTO failed</MessageBarTitle>{siError}</MessageBarBody></MessageBar>
+                    )}
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>No zero-copy clone on Synapse Dedicated</MessageBarTitle>
+                        SELECT INTO performs a full physical data copy (ROUND_ROBIN distribution,
+                        Clustered Columnstore Index). Every row is duplicated in storage. To choose
+                        a specific distribution or index, use Save as table (CTAS) instead.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Field label="Source schema" style={{ flex: 1 }}>
+                        <Input value={siSourceSchema} onChange={(_, d) => setSiSourceSchema(d.value)} />
+                      </Field>
+                      <Field label="Source table" required style={{ flex: 2 }}>
+                        <Input value={siSourceTable} onChange={(_, d) => setSiSourceTable(d.value)} />
+                      </Field>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Field label="Target schema" style={{ flex: 1 }}>
+                        <Input value={siTargetSchema} onChange={(_, d) => setSiTargetSchema(d.value)} />
+                      </Field>
+                      <Field label="Target table" required style={{ flex: 2 }}>
+                        <Input value={siTargetTable} onChange={(_, d) => setSiTargetTable(d.value)} placeholder="orders_copy" />
+                      </Field>
+                    </div>
+                    <Caption1>
+                      Emits <code>SELECT * INTO [{siTargetSchema}].[{siTargetTable}] FROM [{siSourceSchema}].[{siSourceTable}]</code>.
+                      The target table must not already exist.
+                    </Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSiOpen(false)} disabled={siBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitSelectInto} disabled={siBusy || !siSourceTable.trim() || !siTargetTable.trim()}>
+                    {siBusy ? 'Copying…' : 'Copy table (SELECT INTO)'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

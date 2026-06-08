@@ -127,6 +127,14 @@ export interface WarehouseCreateSpec {
   auto_stop_mins?: number;
   warehouse_type?: 'CLASSIC' | 'PRO';
   enable_serverless_compute?: boolean;
+  // Advanced options (parity with the Databricks "Create SQL warehouse" dialog —
+  // every field below is accepted by POST /api/2.0/sql/warehouses, verified
+  // against Microsoft Learn `warehouses/create` + the createWarehouse audit
+  // request_params list).
+  enable_photon?: boolean;        // Photon vectorized engine (default on for serverless)
+  channel?: { name: 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW' };
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
+  spot_instance_policy?: 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED' | 'POLICY_UNSPECIFIED';
 }
 
 /** Create a SQL Warehouse. POST /api/2.0/sql/warehouses → { id }. */
@@ -141,6 +149,18 @@ export async function createWarehouse(spec: WarehouseCreateSpec): Promise<{ id: 
   };
   if (typeof spec.enable_serverless_compute === 'boolean') {
     payload.enable_serverless_compute = spec.enable_serverless_compute;
+  }
+  if (typeof spec.enable_photon === 'boolean') {
+    payload.enable_photon = spec.enable_photon;
+  }
+  if (spec.channel?.name) {
+    payload.channel = { name: spec.channel.name };
+  }
+  if (spec.tags?.custom_tags && spec.tags.custom_tags.length > 0) {
+    payload.tags = { custom_tags: spec.tags.custom_tags };
+  }
+  if (spec.spot_instance_policy) {
+    payload.spot_instance_policy = spec.spot_instance_policy;
   }
   const res = await dbxFetch('/api/2.0/sql/warehouses', {
     method: 'POST',
