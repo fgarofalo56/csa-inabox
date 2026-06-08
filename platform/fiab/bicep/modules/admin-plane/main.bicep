@@ -582,6 +582,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     adminEntraGroupId: adminEntraGroupId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The governance-catalog index self-heals from the BFF (PE-locked service);
+    // pass the Console UAMI so an operator can flip deployGovernanceIndex=true
+    // when running on a VNet-injected script host.
+    deployGovernanceIndex: false
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
   }
 }
 
@@ -1075,6 +1081,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
+            // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
+            // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
+            { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
