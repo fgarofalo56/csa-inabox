@@ -2311,8 +2311,6 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          </>
-          )}
         </div>
       }
     />

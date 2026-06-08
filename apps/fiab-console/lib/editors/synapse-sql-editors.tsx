@@ -1285,8 +1285,6 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          </>
-          )}
         </div>
       }
     />

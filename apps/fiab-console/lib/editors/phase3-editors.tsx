@@ -8837,8 +8837,6 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          </>
-          )}
         </div>
       }
     />
