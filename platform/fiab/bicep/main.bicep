@@ -75,6 +75,9 @@ param loomDlpEnabled bool = false
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false
 
+@description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
+param loomIdentityPickerEnabled bool = false
+
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
@@ -406,6 +409,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
+    loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
