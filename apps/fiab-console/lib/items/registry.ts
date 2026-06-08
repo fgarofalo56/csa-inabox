@@ -50,4 +50,9 @@ export const ITEM_PAIRING_RULES: Record<string, PairedItemDef[]> = {
       deriveName: (input) => `${input.displayName} SQL Analytics`,
     },
   ],
+  // Data Marketplace (Wave 4): the data-product type is registered so the
+  // provisioning engine treats it as a known item. It catalogs into Loom's own
+  // Azure-native Cosmos DataProductStore (no Fabric / Purview-unified-catalog
+  // dependency) — no auto-paired sibling item in v1.
+  'data-product': [],
 };

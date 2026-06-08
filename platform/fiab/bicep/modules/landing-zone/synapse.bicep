@@ -274,6 +274,14 @@ resource consoleAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01
   }
 }
 
+// The Console UAMI being the workspace Microsoft Entra admin (above) gives the
+// SQL granular-security wizards (F11 — object/column GRANT, RLS, DDM) the
+// server-level admin they need. To execute the per-database security DDL the
+// UAMI must also be a db_owner contained user in each user database — run the
+// one-time bootstrap: platform/fiab/bootstrap/sql-security-bootstrap.sql
+// (pass LOOM_CONSOLE_UAMI_NAME = consoleUamiName). No new ARM resource is
+// required; this is an honest in-database grant per .claude/rules/no-vaporware.md.
+
 resource groupAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (empty(consolePrincipalId) && !empty(adminEntraGroupId)) {
   parent: synapseWs
   name: 'activeDirectory'

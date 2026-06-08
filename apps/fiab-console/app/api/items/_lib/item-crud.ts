@@ -10,8 +10,30 @@ import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import {
+  upsertGovernanceItem, deleteGovernanceItem, docForGovernanceItem, isCatalogDataType,
+} from '@/lib/azure/governance-catalog-index';
 import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+
+/**
+ * Mirror a data-catalog item into the `loom-governance-items` AI Search index
+ * (best-effort, never throws). Skips non-data item types so facet counts in the
+ * catalog reflect data assets only. No-op when AI Search isn't configured.
+ */
+async function mirrorGovernanceDoc(item: WorkspaceItem, tenantId: string): Promise<void> {
+  if (!isCatalogDataType(item.itemType)) return;
+  try {
+    const ws = await workspacesContainer();
+    let workspaceName = item.workspaceId;
+    let workspaceDomain: string | undefined;
+    try {
+      const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
+      if (resource) { workspaceName = resource.name; workspaceDomain = resource.domain; }
+    } catch { /* keep id as name */ }
+    await upsertGovernanceItem(docForGovernanceItem(item, { tenantId, workspaceName, workspaceDomain }));
+  } catch { /* swallow — derived index is best-effort */ }
+}
 
 export function jerr(error: string, status = 500, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
@@ -154,6 +176,8 @@ export async function createOwnedItem(
   const { resource } = await items.items.create<WorkspaceItem>(item);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
+  // Mirror into the governance data-catalog index (best-effort; data types only).
+  void mirrorGovernanceDoc(resource!, session.claims.oid);
   // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
   // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
   void autoOnboardToPurview(resource!, session.claims.oid);
@@ -179,6 +203,7 @@ export async function updateOwnedItem(
   const items = await itemsContainer();
   const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
   void upsertLoomDoc(docForItem(resource!, tenantId));
+  void mirrorGovernanceDoc(resource!, tenantId);
   return resource!;
 }
 
@@ -192,5 +217,6 @@ export async function deleteOwnedItem(
   const items = await itemsContainer();
   await items.item(current.id, current.workspaceId).delete();
   void deleteLoomDoc(`it:${current.id}`);
+  void deleteGovernanceItem(current.id);
   return true;
 }
