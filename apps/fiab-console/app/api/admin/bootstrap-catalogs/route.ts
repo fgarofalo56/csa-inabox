@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
+import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -98,5 +99,12 @@ export async function POST(_req: NextRequest) {
     wlCount++;
   }
 
-  return NextResponse.json({ ok: true, tenant: TENANT, appsSeeded: appCount, workloadsSeeded: wlCount });
+  // Provision the consumer-discovery AI Search index for the Data Marketplace.
+  // Idempotent + best-effort: a brand-new env gets the index here; a missing
+  // LOOM_AI_SEARCH_SERVICE just reports the honest gate (no throw).
+  const dataProductsIndex = await ensureDataProductsIndex().catch((e: any) => ({
+    created: false, ok: false, error: e?.message || String(e),
+  }));
+
+  return NextResponse.json({ ok: true, tenant: TENANT, appsSeeded: appCount, workloadsSeeded: wlCount, dataProductsIndex });
 }

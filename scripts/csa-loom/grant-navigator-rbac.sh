@@ -87,6 +87,27 @@ else
   echo "  - Cosmos account not found in $DLZ_RG — skipping"
 fi
 
+# label-propagation timer Function (F15) — its system-assigned identity needs the
+# Cosmos DATA-plane role to read items + upsert propagation state. Discover the
+# function app (func-lblprop-*) in the admin RG and grant Built-in Data
+# Contributor at the Loom Cosmos account. Keyed off LABEL_PROP_FUNC_NAME or
+# discovered by name prefix. No-op when the engine isn't deployed.
+LABEL_PROP_FUNC="${LABEL_PROP_FUNC_NAME:-$(q functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-lblprop')].name | [0]" -o tsv)}"
+if [[ -n "$LABEL_PROP_FUNC" && -n "${COSMOS_ACCT:-}" ]]; then
+  LP_PRINCIPAL="$(q functionapp identity show -n "$LABEL_PROP_FUNC" -g "$ADMIN_RG" --query principalId -o tsv)"
+  if [[ -n "$LP_PRINCIPAL" ]]; then
+    echo "  label-propagation Function data-plane: Built-in Data Contributor ($LABEL_PROP_FUNC)"
+    MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
+      --account-name "$COSMOS_ACCT" -g "$DLZ_RG" \
+      --role-definition-id "00000000-0000-0000-0000-000000000002" \
+      --principal-id "$LP_PRINCIPAL" --scope "/" -o none 2>&1 \
+      | grep -vi "already\|exists\|Conflict" || true
+    echo "  ✓ Cosmos data-plane granted to $LABEL_PROP_FUNC"
+  fi
+else
+  echo "  - label-propagation Function not found in $ADMIN_RG — skipping (F15 engine optional)"
+fi
+
 # AI Search service
 SEARCH_NAME="$(q search service list -g "$ADMIN_RG" --query "[0].name" -o tsv)"
 if [[ -n "$SEARCH_NAME" ]]; then

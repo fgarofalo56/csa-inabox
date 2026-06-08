@@ -104,6 +104,12 @@ param agentFoundryEnabled bool = false
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
 
+@description('Deploy the label-propagation timer Function (F15) — polls the Loom Cosmos lineage graph and writes sensitivity-label downstream propagation state. Defaults on; a no-op without a Cosmos account.')
+param labelPropagationEnabled bool = true
+
+@description('NCRONTAB schedule for the label-propagation timer (6-field). Default every 15 minutes.')
+param labelPropagationCron string = '0 */15 * * * *'
+
 @description('SQL server FQDN the DAB preview runtime targets (e.g. <srv>.database.windows.net). Required when dabRuntimeEnabled.')
 param dabSqlServerFqdn string = ''
 
@@ -176,6 +182,12 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
+param loomOnelakeSecurityEnabled bool = false
+
+@description('Enable the OPT-IN Fabric OneLake dataAccessRoles sync path on the Console app (sets LOOM_FABRIC_SECURITY_ENABLED=true). The Azure-native ADLS ACL path is the default and needs no Fabric workspace. Ignored at the GCC-High / IL5 boundary (Fabric is not authorized there). Off by default.')
+param loomFabricSecurityEnabled bool = false
+
 @description('Synapse dev-endpoint DNS suffix for sovereign clouds. Commercial = azuresynapse.net (default); GCC-High / DoD = azuresynapse.us. Empty resolves to azuresynapse.net in code.')
 param loomSynapseDevSuffix string = ''
 
@@ -229,6 +241,9 @@ param loomHdinsightLinkedService string = ''
 
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
+
+@description('Opt-in (F5): also mirror workspace role assignments to a Microsoft Fabric workspace via /v1/workspaces/{id}/roleAssignments. Default false: Azure-native only (Cosmos + Azure RBAC). Forced off at IL5 (Fabric is not IL5-authorized).')
+param loomWorkspaceRolesFabricEnabled bool = false
 
 @description('Loom Stream Analytics resource group (backs the stream-analytics-job editor). Empty defaults to LOOM_DLZ_RG.')
 param loomAsaRg string = ''
@@ -284,6 +299,12 @@ param loomCosmosAccount string = ''
 
 @description('Loom Cosmos DB account resource group for the control-plane navigator (databases/containers/sprocs). Empty defaults to LOOM_DLZ_RG, where the single-sub DLZ Cosmos account lives.')
 param loomCosmosAccountRg string = ''
+
+@description('Base URL of the posture-refresh Azure Function (deployed from azure-functions/posture-refresh/deploy/main.bicep). Backs the Govern tab data-owner view on-open refresh. Empty surfaces an honest MessageBar gate; the owner view still computes posture live from Cosmos.')
+param loomPostureFunctionUrl string = ''
+
+@description('Key Vault secret name holding the posture-refresh Function host key. The Console reads this via secretRef as LOOM_POSTURE_FUNCTION_KEY. Only emitted when loomPostureFunctionUrl is set.')
+param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
@@ -386,6 +407,44 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+// ---------------------------------------------------------------------------
+// Govern → Admin view (F2) "View more" embedded report backend.
+//   - Power BI Embedded (A1)  : Commercial / GCC "View more" backend.
+//   - Azure Managed Grafana   : GCC-High / IL5 "View more" backend.
+// Both default OFF so existing deployments are unchanged; the BFF
+// /api/governance/govern/embed honestly gates when neither is wired.
+// ---------------------------------------------------------------------------
+@description('Deploy a Power BI Embedded (A1) capacity for the Govern Admin "View more" report (Commercial / GCC). Set LOOM_REPORT_KIND=powerbi + the report env vars after publishing a report.')
+param pbiEmbeddedEnabled bool = false
+
+@description('Deploy Azure Managed Grafana for the Govern Admin "View more" dashboard (GCC-High / IL5). Set LOOM_REPORT_KIND=grafana + the dashboard env vars after creating a dashboard.')
+param managedGrafanaEnabled bool = false
+
+@description('LOOM_REPORT_KIND for the Govern Admin "View more" report. "powerbi" (Commercial/GCC), "grafana" (GCC-High/IL5), or empty to leave the surface honestly gated.')
+@allowed([ '', 'powerbi', 'grafana' ])
+param loomReportKind string = ''
+
+@description('Power BI workspace id holding the governance report (when loomReportKind=powerbi).')
+param loomGovernPbiWorkspaceId string = ''
+
+@description('Power BI report id to embed in the Govern Admin "View more" (when loomReportKind=powerbi).')
+param loomGovernPbiReportId string = ''
+
+@description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
+param loomGrafanaDashboardUid string = ''
+
+@description('ADLS Gen2 / Blob container URL for custom domain images (optional). When set, the /admin/domains Image tab shows a gallery of image blobs in this container alongside the always-available preset color swatches + icon tiles. Format: https://<account>.dfs.core.windows.net/<container>[/<prefix>]. Grant the Console UAMI Storage Blob Data Reader on the container. When empty, only preset swatches and icons are offered (honest gate — no Fabric/OneLake dependency).')
+param loomDomainImageStorage string = ''
+
+@description('OPT-IN ONLY: additively mirror item-level permission grants (F6 Share / Manage permissions) to the Fabric item /share endpoint, on TOP of the always-on Azure-native backing (Cosmos item-permissions + ADLS POSIX ACL + Storage data-plane RBAC). Requires the Console UAMI to be a member of each Fabric workspace + the "Service principals can use Fabric APIs" tenant setting. Ignored in GCC-High / IL5 (no Fabric API). When false (default), F6 is 100% Azure-native — no Fabric workspace required (per no-fabric-dependency.md).')
+param loomFabricPermissionsEnabled bool = false
+
+@description('Enable the Power BI Admin InformationProtection.setLabels API used by /admin/batch-labeling to propagate a MIP sensitivity label to linked Power BI artifacts. Requires (1) loomMipEnabled=true for the label GUIDs, and (2) the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action — NOT an Azure ARM role, so it cannot be granted from bicep). When false, batch labeling still writes Cosmos + Purview; the Power BI checkbox is hidden.')
+param loomPowerBiAdminLabels bool = false
+
+@description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar.')
+param loomIdentityPickerEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -452,6 +511,13 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
+param loomPurviewUnifiedAccount string = ''
+
+@description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
+@allowed(['cosmos', 'fabric'])
+param loomDomainsBackend string = 'cosmos'
+
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
 // ---------------------------------------------------------------------
@@ -468,6 +534,10 @@ param copyJobControlEnabled bool = false
 @description('Dataflow Gen2 (Power Query) backend selector. Default: adf (Azure-native WranglingDataFlow on ADF Spark — no Fabric). fabric is opt-in and additionally requires LOOM_DEFAULT_FABRIC_WORKSPACE.')
 @allowed(['adf', 'fabric'])
 param loomDataflowBackend string = 'adf'
+
+@description('Data-products store backend. Default empty → Cosmos (Azure-native DEFAULT; data products catalog in the Loom Cosmos `dataproducts` container, NO Microsoft Fabric / Purview-unified-catalog dependency). Set to "unified-catalog" to opt into the Purview Unified Catalog path, which throws an honest gate on a classic Data Map account.')
+@allowed(['', 'cosmos', 'unified-catalog'])
+param loomDataproductsBackend string = ''
 
 @description('Explicit Azure ML MLflow tracking URI for the ML Experiment editor. REQUIRED in IL5 / GCC-High (the commercial *.api.azureml.ms host is wrong there and no public alternate hostname is documented). Get it via `az ml workspace show --query mlflow_tracking_uri -o tsv`. Empty in Commercial / GCC, where the editor auto-constructs the URI from LOOM_AML_WORKSPACE/LOOM_FOUNDRY_NAME + region + subscription.')
 param loomMlflowTrackingUri string = ''
@@ -582,6 +652,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     adminEntraGroupId: adminEntraGroupId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The governance-catalog index self-heals from the BFF (PE-locked service);
+    // pass the Console UAMI so an operator can flip deployGovernanceIndex=true
+    // when running on a VNet-injected script host.
+    deployGovernanceIndex: false
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
   }
 }
 
@@ -1091,9 +1167,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
+            // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
+            // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
+            { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Govern tab data-owner view (F3) — on-open posture refresh Function.
+            // Empty → honest gate; the owner view still computes posture live.
+            { name: 'LOOM_POSTURE_FUNCTION_URL', value: loomPostureFunctionUrl }
             // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
             // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
             // the one-time tenant config required to use them.
@@ -1124,18 +1207,55 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // Data-products store backend (Wave 4 — Data Marketplace / F22).
+            // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
+            // Microsoft Fabric / Purview-unified-catalog dependency). Set to
+            // 'unified-catalog' to opt into the Purview Unified Catalog REST
+            // adapter (Commercial only — GCC / GCC-High / IL5 fall through to
+            // Cosmos silently; CSA_LOOM_BOUNDARY is injected for every app by
+            // app-deployments.bicep so the factory's Gov fall-through needs no
+            // extra var here). When opted in WITHOUT loomPurviewUnifiedAccount
+            // the factory renders an honest gate instead of fabricated data.
+            { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomDataproductsBackend }
+            // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
+            // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
+            // gallery blob endpoint emitted by catalog.bicep ('' when Purview/
+            // catalog storage is not deployed — the editor shows an honest gate).
+            { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
+            { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
+          // F22 — Purview Unified Catalog account for the data-product adapter.
+          // Only emitted when set; absence makes the factory serve the honest
+          // gate (501/503 + remediation) on Commercial when
+          // LOOM_DATAPRODUCTS_BACKEND=unified-catalog, rather than fabricated data.
+          !empty(loomPurviewUnifiedAccount) ? [
+            { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
+          ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
           !empty(loomAzureMapsAccount) ? [
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
           ] : [],
+          // Posture-refresh Function host key — only when the Function URL is wired.
+          // Surfaced to the Govern owner-view refresh BFF, never to the browser.
+          !empty(loomPostureFunctionUrl) ? [
+            { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
+          ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+            // LOOM_CSV_IMPORTS_URL backs the Data product "Import from CSV" flyout
+            // (F2/F18): the BFF stages the raw uploaded CSV to the csv-imports
+            // container before bulk-creating draft data products + writing the
+            // dataproduct-jobs status doc. Only emitted when an ADLS account is
+            // configured; otherwise the flyout's honest gate fires and the import
+            // still runs inline (Cosmos-only, no Blob staging). The csv-imports
+            // container is created in landing-zone/storage.bicep; the Console UAMI
+            // already holds Storage Blob Data Contributor on the account.
+            { name: 'LOOM_CSV_IMPORTS_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/csv-imports' }
             // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
             // card: when set, the BFF uploads a sample CSV to landing/samples and
             // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
@@ -1166,12 +1286,83 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
           ] : []),
+          // Purview Unified Catalog data-plane endpoint + API version — used by
+          // the data-product creation wizard (/api/data-products,
+          // /api/governance-domains) to register data products + list business
+          // domains. STRICTLY OPT-IN: empty when no Purview account is bound, in
+          // which case the wizard saves the draft to Loom's Cosmos store and
+          // shows an honest "not registered in Purview" hint (no gate; the item
+          // is 100% functional Azure-native per no-fabric-dependency.md). The UC
+          // API is Commercial-only today; GCC/GCC-High/IL5 fall back to the
+          // Cosmos governance-domain list automatically.
+          !empty(loomPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${loomPurviewAccount}.purview.azure.com' }
+            { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
+          ] : (purviewEnabled ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
+            { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
+          ] : []),
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
+          ] : [],
+          // Sovereign Graph base for MIP — GCC-High / IL5 use graph.microsoft.us.
+          // mip-graph-client reads LOOM_MIP_GRAPH_BASE (defaults to graph.microsoft.com).
+          boundary == 'GCC-High' || boundary == 'IL5' ? [
+            { name: 'LOOM_MIP_GRAPH_BASE', value: 'https://graph.microsoft.us' }
+          ] : [],
+          // Custom domain-image gallery storage (optional, honest-gated). The
+          // /admin/domains Image tab lists image blobs here; preset swatches +
+          // icons work regardless. No Fabric/OneLake dependency.
+          !empty(loomDomainImageStorage) ? [
+            { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: loomDomainImageStorage }
           ] : [],
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
+          // Govern → Admin view (F2) "View more" embedded report env. The
+          // embed BFF gates honestly when LOOM_REPORT_KIND is empty; when set,
+          // the matching report/dashboard env vars must also be present.
+          !empty(loomReportKind) ? [
+            { name: 'LOOM_REPORT_KIND', value: loomReportKind }
+          ] : [],
+          (loomReportKind == 'powerbi' && !empty(loomGovernPbiWorkspaceId) && !empty(loomGovernPbiReportId)) ? [
+            { name: 'LOOM_GOVERN_PBI_WORKSPACE_ID', value: loomGovernPbiWorkspaceId }
+            { name: 'LOOM_GOVERN_PBI_REPORT_ID', value: loomGovernPbiReportId }
+          ] : [],
+          (loomReportKind == 'grafana' && managedGrafanaEnabled) ? [
+            { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
+            { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
+          ] : (loomReportKind == 'grafana' && !empty(loomGrafanaDashboardUid) ? [
+            { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
+          ] : []),
+          // F6 item-level permissions: the Fabric /share mirror is strictly
+          // opt-in and additive — the Azure-native backing (Cosmos
+          // item-permissions + ADLS POSIX ACL + Storage data-plane RBAC) is
+          // always on and needs NO Fabric workspace. Only set this flag when an
+          // operator wants grants ALSO pushed to a bound Fabric item.
+          (loomFabricPermissionsEnabled && boundary != 'GCC-High' && boundary != 'IL5') ? [
+            { name: 'LOOM_FABRIC_PERMISSIONS_ENABLED', value: 'true' }
+          ] : [],
+          loomPowerBiAdminLabels ? [
+            { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
+          ] : [],
+          // Identity Picker (Entra user/group/SPN search + transitive nested
+          // groups) — gated on the Console UAMI's Graph User.Read.All +
+          // Group.Read.All + Application.Read.All grants. When false the BFF
+          // returns 503 with the exact remediation (no mock principals).
+          loomIdentityPickerEnabled ? [
+            { name: 'LOOM_IDENTITY_PICKER_ENABLED', value: 'true' }
+          ] : [],
+          // Sovereign Microsoft Graph endpoint. Commercial/GCC use the global
+          // host; GCC-High uses graph.microsoft.us; IL5/DoD uses
+          // dod-graph.microsoft.us. The identity-picker client derives BOTH the
+          // base AND the token scope from this value so gov tenants mint a
+          // sovereign-scoped token. Existing Graph callers (admin/users,
+          // lakehouse/permissions) already read LOOM_GRAPH_BASE, so setting it
+          // here also fixes their gov-cloud endpoint in one shot.
+          [
+            { name: 'LOOM_GRAPH_BASE', value: boundary == 'GCC-High' ? 'https://graph.microsoft.us' : (boundary == 'IL5' ? 'https://dod-graph.microsoft.us' : 'https://graph.microsoft.com') }
+          ],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
             // Unity Catalog federation hostname list. Uses the REAL workspace
             // hostname (same source as the singular LOOM_DATABRICKS_HOSTNAME) —
@@ -1183,8 +1374,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
+            { name: 'LOOM_CLOUD_BOUNDARY', value: boundary }
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
+            // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
+            // (Fabric is not IL5-authorized). Unset → Azure-native only.
+            { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary != 'IL5') ? '1' : '' }
           ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
@@ -1205,6 +1400,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // scripts/csa-loom/grant-uami-graph-roles.sh post-deploy
             // bootstrap step performs (idempotent).
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
+            // OneLake Security (F7) — Azure-native folder/table ACL roles for
+            // lakehouse / mirrored items. The ADLS-ACL backend is enabled when
+            // the Console UAMI holds Storage Blob Data Owner (granted by
+            // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
+            { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
+            { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -1286,6 +1487,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
+            // OneLake Security (F7) — Azure-native folder/table ACL roles for
+            // lakehouse / mirrored items. The ADLS-ACL backend is enabled when
+            // the Console UAMI holds Storage Blob Data Owner (granted by
+            // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
+            { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
+            { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
           ]
         )
         secrets: concat(
@@ -1298,6 +1505,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // primary key here as 'loom-azure-maps-primary-key' on the
             // Loom Key Vault.
             { name: 'loom-azure-maps-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomAzureMapsKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // Posture-refresh Function host key — stored in KV post-deploy as
+          // 'loom-posture-function-key' (see azure-functions/posture-refresh/DEPLOYMENT.md).
+          !empty(loomPostureFunctionUrl) ? [
+            { name: 'loom-posture-function-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPostureFunctionKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }
@@ -1384,12 +1596,27 @@ module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerAp
   }
 }
 
+// label-propagation timer Function (F15) — sensitivity-label downstream
+// propagation over the Loom Cosmos lineage graph. No-op without a Cosmos
+// account (loomCosmosEndpoint empty). The Function identity is granted Cosmos
+// DB Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
+module labelPropagation 'label-propagation-function.bicep' = if (labelPropagationEnabled) {
+  name: 'label-propagation-function'
+  params: {
+    location: location
+    loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
+    loomCosmosDatabase: 'loom'
+    labelPropagationCron: labelPropagationCron
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
 // =====================================================================
 // User access patterns (Bastion is always-on via network.bicep).
 // Each module is flag-gated so operators can pick the right path
 // without rewriting Bicep. See docs/fiab/access-patterns.md.
 // =====================================================================
-
 module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
   name: 'vpn-gateway'
   params: {
@@ -1447,8 +1674,100 @@ module scalingRbac 'scaling-rbac.bicep' = {
   }
 }
 
-output hubVnetId string = network.outputs.hubVnetId
+// =====================================================================
+// =====================================================================
+// Govern → Admin view (F2) — "View more" embedded report backends.
+//
+//   - Power BI Embedded (A1, Gen2): Commercial / GCC. The Console UAMI is set
+//     as a capacity administrator so it can mint embed tokens.
+//   - Azure Managed Grafana: GCC-High / IL5. The Console UAMI is granted
+//     "Grafana Viewer" so the BFF can embed the dashboard.
+//
+// Both gate off new bool params (default false) → no change to existing
+// deployments. Per .claude/rules/no-fabric-dependency.md these are OPT-IN
+// alternatives; the Govern surface works (with an honest gate) without either.
+// =====================================================================
+resource pbiEmbeddedCapacity 'Microsoft.PowerBIDedicated/capacities@2021-01-01' = if (pbiEmbeddedEnabled) {
+  name: take('pbicsaloom${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  tags: complianceTags
+  sku: {
+    name: 'A1'
+    tier: 'PBIE_Azure'
+  }
+  properties: {
+    administration: {
+      members: [
+        identity.outputs.uamiConsolePrincipalId
+      ]
+    }
+    mode: 'Gen2'
+  }
+}
 
+// =====================================================================
+// F5 Manage Access — constrained Role Based Access Control Administrator on
+// the DLZ RG so the Console can mirror workspace membership to real Azure RBAC
+// role assignments (Contributor + Reader only, enforced via ABAC condition).
+// Scoped to the DLZ RG (where the workspace backing resources live), so the
+// module is invoked at that RG scope.
+// =====================================================================
+module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRoleGrants) {
+  name: 'console-workspace-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Identity Picker Graph AppRole documentation/wiring. AppRoles are granted
+// out-of-band by grant-identity-graph-approles.sh (ARM can't grant Graph
+// AppRoles); this module surfaces the required grants + sovereign Graph
+// endpoint as deterministic outputs for the post-deploy bootstrap.
+module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled) {
+  name: 'console-identity-graph-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    boundary: boundary
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = if (managedGrafanaEnabled) {
+  name: take('grafana-csa-loom-${location}', 23)
+  location: location
+  tags: complianceTags
+  sku: {
+    name: 'Standard'
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    apiKey: 'Enabled'
+    deterministicOutboundIP: 'Disabled'
+    publicNetworkAccess: 'Enabled'
+    zoneRedundancy: 'Disabled'
+  }
+}
+
+// Grafana Viewer (60750a24-ce75-4119-aa84-5b8f3c5db3e0) for the Console UAMI —
+// granted via a module (a role-assignment name must be calculable at deploy
+// start, which a module output is not, but a module param is).
+module grafanaViewer 'grafana-rbac.bicep' = if (managedGrafanaEnabled) {
+  name: 'console-grafana-viewer'
+  params: {
+    grafanaName: grafana.name
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+output pbiEmbeddedCapacityName string = pbiEmbeddedEnabled ? pbiEmbeddedCapacity.name : ''
+output grafanaEndpoint string = managedGrafanaEnabled ? grafana.properties.endpoint : ''
+
+output hubVnetId string = network.outputs.hubVnetId
 output consoleUrl string = containerPlatform == 'containerApps'
   ? 'https://loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
   : 'https://loom-console.${location}.csa-loom.internal'
@@ -1500,3 +1819,8 @@ output vanityPublicUrl string = fdOn ? frontDoor.outputs.vanityPublicUrl : ''
 output vanityCnameTarget string = fdOn ? frontDoor.outputs.vanityCnameTarget : ''
 output vanityDnsTxtName string = fdOn ? frontDoor.outputs.vanityDnsTxtName : ''
 output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationToken : ''
+
+// label-propagation timer Function (F15). principalId is granted Cosmos DB
+// Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
+output labelPropagationFunctionName string = labelPropagationEnabled ? labelPropagation.outputs.siteName : ''
+output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropagation.outputs.principalId : ''

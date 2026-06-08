@@ -36,6 +36,9 @@ param consoleUamiName string = ''
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Enable OneLake Security (F7) — grants the Console UAMI Storage Blob Data Owner on the lakehouse ADLS account so the Security tab can set folder/table ACLs on behalf of role members. Off by default (least-privilege).')
+param loomOnelakeSecurityEnabled bool = false
+
 @description('Managed VNet enabled')
 param managedVnet bool = true
 
@@ -274,6 +277,14 @@ resource consoleAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01
   }
 }
 
+// The Console UAMI being the workspace Microsoft Entra admin (above) gives the
+// SQL granular-security wizards (F11 — object/column GRANT, RLS, DDM) the
+// server-level admin they need. To execute the per-database security DDL the
+// UAMI must also be a db_owner contained user in each user database — run the
+// one-time bootstrap: platform/fiab/bootstrap/sql-security-bootstrap.sql
+// (pass LOOM_CONSOLE_UAMI_NAME = consoleUamiName). No new ARM resource is
+// required; this is an honest in-database grant per .claude/rules/no-vaporware.md.
+
 resource groupAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (empty(consolePrincipalId) && !empty(adminEntraGroupId)) {
   parent: synapseWs
   name: 'activeDirectory'
@@ -324,6 +335,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // Shared ADX cluster MI gets Storage Blob Data Reader so the Eventhouse
     // Delta endpoint (external table kind=delta) can read this lakehouse.
     adxClusterPrincipalId: skipRoleGrants ? '' : adxClusterPrincipalId
+    // F7 — when OneLake Security is enabled, the Console UAMI also gets Storage
+    // Blob Data Owner so the Security tab can set ACLs on behalf of role members.
+    consolePrincipalNeedsOwner: loomOnelakeSecurityEnabled
   }
 }
 

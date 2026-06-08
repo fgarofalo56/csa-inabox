@@ -22,6 +22,8 @@ const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: stri
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Fabric Apps (Build 2026 preview)
   'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
+  // Data Marketplace — consumer discovery (F14/F18) over the loom-data-products AI Search index
+  'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),
   // Phase 2
   'lakehouse':            reg(() => import('./lakehouse-editor'),         'LakehouseEditor'),
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
@@ -92,7 +94,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),
   'apim-product':                reg(() => import('./apim-editors'),           'ApimProductEditor'),
   'apim-policy':                 reg(() => import('./apim-editors'),           'ApimPolicyEditor'),
-  'data-product':                reg(() => import('./apim-editors'),           'DataProductEditor'),
+  // data-product → read-first owner details page (F3). The full working owner
+  // editor (DataProductEditor) is reached from there via ?view=edit.
+  'data-product':                reg(() => import('./data-product-detail'),    'DataProductDetailEditor'),
 
   // v2.x — Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub)
   'ai-foundry-hub':              reg(() => import('./foundry-hub-editor'),     'FoundryHubEditor'),
