@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _dataproducts: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +143,14 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Data Marketplace — Cosmos-native data-products catalog (Purview Unified
+  // Catalog parity, Azure-native DEFAULT). One row per data product,
+  // partitioned by its governance domain so the marketplace browse + a
+  // domain's product list each hit a single physical partition. Created
+  // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
+  // account+database. Server-generated `_etag` on every write drives the
+  // per-step optimistic-concurrency PATCH in the edit dialog.
+  _dataproducts = await mk('dataproducts', '/governanceDomainId');
   _ensured = true;
 }
 
@@ -151,6 +160,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function dataproductsContainer(): Promise<Container> { await ensure(); return _dataproducts!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +223,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'dataproducts',
 ];
 
 /** List all Loom containers with their current throughput shape. */

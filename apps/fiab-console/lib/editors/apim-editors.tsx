@@ -27,7 +27,7 @@ import {
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
-  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
@@ -35,6 +35,7 @@ import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { DataProductEditDialog } from './data-product-edit-dialog';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -1773,6 +1774,13 @@ interface DataProductState {
   domain: string;
   owner: string;
   certified: boolean;
+  /**
+   * F7 — marketplace "Endorsed by governance" flag, distinct from the
+   * Purview-only `certified` concept. Toggled in the Data Product Edit dialog
+   * (Basic step) which PATCHes the Cosmos `dataproducts` doc; the badge below
+   * mirrors the saved value via the dialog's onSaved callback.
+   */
+  endorsed?: boolean;
   sla: string;
   bundle: string[];
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
@@ -1792,6 +1800,7 @@ const DP_EMPTY: DataProductState = {
   domain: '',
   owner: '',
   certified: false,
+  endorsed: false,
   sla: '',
   bundle: [],
 };
@@ -1895,6 +1904,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
   const [loading, setLoading] = useState(id !== 'new');
+  // F4 — Data Product Edit dialog (3-step, per-step PATCH) open state.
+  const [editOpen, setEditOpen] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
   const [dirty, setDirty] = useState(false);
@@ -2232,6 +2243,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           onClick: canSave ? save : undefined, disabled: !canSave,
           title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
         { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
+        { label: 'Edit (Basic / Business / Custom)', onClick: !isNew ? () => setEditOpen(true) : undefined, disabled: isNew, title: isNew ? 'Create the data product first' : 'Open the 3-step edit dialog (per-step Save + Endorse)' },
       ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
@@ -2287,10 +2299,20 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
+          {state.endorsed && <Badge appearance="tint" color="brand">Endorsed</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance={isNew ? 'primary' : 'secondary'} icon={<Save20Regular />} onClick={save} disabled={!canSave}>
             {status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : isNew ? 'Create' : 'Save'}
+          </Button>
+          <Button
+            appearance="secondary"
+            icon={<Edit20Regular />}
+            onClick={() => setEditOpen(true)}
+            disabled={isNew}
+            title={isNew ? 'Create the data product first' : 'Edit Basic / Business / Custom attributes (per-step Save + Endorse)'}
+          >
+            Edit
           </Button>
           <Button
             appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
@@ -2309,6 +2331,19 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           </Button>
         </div>
         <StatusBar status={status} />
+
+        {/* F4 — 3-step edit dialog (per-step PATCH) + F7 Endorse. Renders only
+            for a persisted product; onSaved mirrors the saved endorsed flag to
+            the header badge. Operates on the Cosmos `dataproducts` doc with the
+            same id (Azure-native, no Fabric dependency). */}
+        {!isNew && (
+          <DataProductEditDialog
+            id={id}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onSaved={(doc) => patchState({ endorsed: doc.endorsed })}
+          />
+        )}
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
