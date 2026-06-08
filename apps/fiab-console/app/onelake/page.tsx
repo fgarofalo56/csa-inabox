@@ -68,6 +68,7 @@ import {
   DatabaseStack16Regular,
   AppsList20Regular,
   Person20Regular,
+  ShieldCheckmark20Regular,
   ShieldKeyhole16Regular,
   MoreHorizontal20Regular,
   Copy16Regular,
@@ -85,6 +86,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
+import { GovernView } from '@/lib/components/onelake/govern-view';
 import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { initials, endorsementOf } from './card-badges';
@@ -277,6 +279,11 @@ function tileFooter(
 }
 
 const useStyles = makeStyles({
+  // top-level page pivot: Explore | Govern
+  pageTabBar: {
+    marginBottom: tokens.spacingVerticalL,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   // three-column Explore layout: filters | items | details
   layout: {
     display: 'grid',
@@ -805,6 +812,7 @@ export default function OneLakeCatalogPage() {
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const [wsFilter, setWsFilter] = useState<string | null>(null); // workspaceId or null
   const [selected, setSelected] = useState<OwnedItem | null>(null);
+  const [pageTab, setPageTab] = useState<'explore' | 'govern'>('explore');
   const [propsItem, setPropsItem] = useState<OwnedItem | null>(null);
 
   // ── load items + workspaces + identity ──
@@ -1005,6 +1013,22 @@ export default function OneLakeCatalogPage() {
     <PageShell title="OneLake catalog" subtitle={subtitle}>
       {unauth && <SignInRequired subject="catalog items" />}
 
+      {/* Page-level pivot: Explore (find/open items) vs Govern (posture) */}
+      <div className={styles.pageTabBar}>
+        <TabList
+          selectedValue={pageTab}
+          onTabSelect={(_e, d) => setPageTab(d.value as 'explore' | 'govern')}
+          size="medium"
+        >
+          <Tab value="explore" icon={<AppsList20Regular />}>Explore</Tab>
+          <Tab value="govern" icon={<ShieldCheckmark20Regular />}>Govern</Tab>
+        </TabList>
+      </div>
+
+      {pageTab === 'govern' && <GovernView />}
+
+      {pageTab === 'explore' && (
+        <>
       {/* Toolbar: search + category chips + view toggle */}
       <Toolbar
         search={q}
@@ -1216,6 +1240,8 @@ export default function OneLakeCatalogPage() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+        </>
+      )}
     </PageShell>
   );
 }
