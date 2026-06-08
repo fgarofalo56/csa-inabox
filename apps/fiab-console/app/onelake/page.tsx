@@ -67,6 +67,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
+import { SecureView } from '@/lib/components/onelake/secure-view';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 // ── Item types surfaced by the OneLake catalog Explore tab ────────────────
@@ -537,6 +538,7 @@ export default function OneLakeCatalogPage() {
   const [unauth, setUnauth] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
+  const [pageTab, setPageTab] = useState<'explore' | 'secure'>('explore');
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
   const [typeFilter, setTypeFilter] = useState<string>('all'); // 'all' | itemType slug
@@ -689,6 +691,19 @@ export default function OneLakeCatalogPage() {
     <PageShell title="OneLake catalog" subtitle={subtitle}>
       {unauth && <SignInRequired subject="catalog items" />}
 
+      <TabList
+        selectedValue={pageTab}
+        onTabSelect={(_e, d) => setPageTab(d.value as 'explore' | 'secure')}
+        style={{ marginBottom: tokens.spacingVerticalM }}
+      >
+        <Tab value="explore">Explore</Tab>
+        <Tab value="secure">Secure</Tab>
+      </TabList>
+
+      {pageTab === 'secure' && <SecureView workspaces={workspaces} items={items ?? []} />}
+
+      {pageTab === 'explore' && (
+        <>
       {/* Toolbar: search + category chips + view toggle */}
       <Toolbar
         search={q}
@@ -860,6 +875,8 @@ export default function OneLakeCatalogPage() {
           />
         )}
       </div>
+        </>
+      )}
     </PageShell>
   );
 }
