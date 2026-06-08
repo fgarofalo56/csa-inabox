@@ -26,13 +26,16 @@ export async function POST(req: NextRequest) {
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
   const sqlText = String(body?.sql || '').trim();
+  // Optional cancel token: registered in liveRequests so /query/cancel can send
+  // a TDS ATTENTION packet to this exact in-flight request.
+  const requestId = String(body?.requestId || '').trim() || undefined;
   if (!server) return NextResponse.json({ ok: false, error: 'server is required' }, { status: 400 });
   if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
   if (!sqlText) return NextResponse.json({ ok: false, error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ ok: false, error: 'sql too large (>64KB)' }, { status: 413 });
 
   try {
-    const result = await executeQueryBatch(server, database, sqlText);
+    const result = await executeQueryBatch(server, database, sqlText, requestId ? { requestId } : undefined);
     // Backward-compat single-recordset fields = first result set (or empty).
     const first = result.recordsets[0] ?? { columns: [], rows: [], rowCount: 0, truncated: false };
     return NextResponse.json({
