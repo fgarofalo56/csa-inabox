@@ -63,6 +63,11 @@ let _governanceDomains: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
 let _labelAssignments: Container | null = null;
+// F16 — Access-request approval workflow (manager → privacy → approver →
+// access-provider). Distinct from the Wave-4 marketplace `access-requests`
+// container above: this one is partitioned by /tenantId and drives the
+// multi-tier approval inbox + final real-RBAC grant.
+let _accessRequestWorkflow: Container | null = null;
 let _ensured = false;
 
 /**
@@ -262,6 +267,15 @@ async function ensure() {
   // fast path (/api/governance/govern/posture). Partitioned by /tenantId.
   _postureAggregatesAdmin = await mk('posture-aggregates-admin', '/tenantId');
   _recommendedActionsAdmin = await mk('recommended-actions-admin', '/tenantId');
+  // Access-request approval workflow (F16) — one row per data-asset access
+  // request, advanced through the manager → privacy → approver → access-provider
+  // tiers. Partitioned by tenant (s.claims.oid) so every per-tier inbox query
+  // hits a single physical partition. Final approval provisions a real Azure
+  // RBAC grant via enforceAccessGrant (access-policy-client) — no Fabric
+  // dependency. Distinct from the marketplace 'access-requests' container
+  // (PK /dataProductId) above. Created lazily so a fresh environment needs no
+  // extra ARM step.
+  _accessRequestWorkflow = await mk('access-request-workflow', '/tenantId');
   _ensured = true;
 }
 
@@ -282,6 +296,9 @@ export async function itemPermissionsContainer(): Promise<Container> { await ens
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
+// F16 — access-request approval workflow container (PK /tenantId). Distinct
+// from the marketplace accessRequestsContainer() below (PK /dataProductId).
+export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -289,6 +306,7 @@ export async function dataProductJobsContainer(): Promise<Container> { await ens
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
 export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
+
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -359,6 +377,7 @@ const KNOWN_CONTAINER_IDS = [
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
+  'access-request-workflow',
 ];
 
 /** List all Loom containers with their current throughput shape. */
