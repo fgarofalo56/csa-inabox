@@ -455,6 +455,10 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
+@allowed(['cosmos', 'fabric'])
+param loomDomainsBackend string = 'cosmos'
+
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
 // ---------------------------------------------------------------------
@@ -585,6 +589,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     adminEntraGroupId: adminEntraGroupId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The governance-catalog index self-heals from the BFF (PE-locked service);
+    // pass the Console UAMI so an operator can flip deployGovernanceIndex=true
+    // when running on a VNet-injected script host.
+    deployGovernanceIndex: false
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
   }
 }
 
@@ -1078,6 +1088,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
+            // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
+            // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
+            { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
@@ -1111,6 +1125,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
+            // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
+            // gallery blob endpoint emitted by catalog.bicep ('' when Purview/
+            // catalog storage is not deployed — the editor shows an honest gate).
+            { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
+            { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
