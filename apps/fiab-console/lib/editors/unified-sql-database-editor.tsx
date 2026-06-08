@@ -39,13 +39,14 @@ import {
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular, ChartMultiple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -582,7 +583,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -781,6 +782,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Performance', actions: [
+        { label: 'Query Store / QPI', onClick: (server && database) ? () => setTab('performance') : undefined, disabled: !(server && database), title: !(server && database) ? 'Pick a server + database first' : 'Top-resource queries, runtime-stats time series + execution plans over Query Store' },
+      ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
@@ -845,6 +849,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
+            {family === 'azure-sql' && <Tab value="performance" icon={<ChartMultiple20Regular />}>Performance</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
           </TabList>
@@ -1161,9 +1166,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               )
           )}
 
+          {/* ---------------- Performance (Query Store / QPI) ---------------- */}
+          {tab === 'performance' && (
+            family === 'azure-sql'
+              ? <SqlPerformanceDashboard id={id} server={server} database={database} />
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Query Store performance applies to Azure SQL</MessageBarTitle>
+                    The Query Store dashboard reads the T-SQL <code>sys.query_store_*</code> catalog views. Select an Azure SQL database to use it; PostgreSQL exposes performance via <code>pg_stat_statements</code> instead.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
           {/* ---------------- Catalog ---------------- */}
-          {tab === 'catalog' && (
-            <>
+          {tab === 'catalog' && (            <>
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>OneLake / Purview catalog</MessageBarTitle>
