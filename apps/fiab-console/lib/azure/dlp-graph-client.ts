@@ -45,9 +45,20 @@ import {
   ManagedIdentityCredential,
   type TokenCredential,
 } from '@azure/identity';
+import { getGraphHost, getGraphScope } from './cloud-endpoints';
 
-const GRAPH_BASE = process.env.LOOM_DLP_GRAPH_BASE || 'https://graph.microsoft.com';
-const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
+/**
+ * Graph host + AAD scope are resolved at CALL time (not import time) so the
+ * sovereign-cloud signal (`LOOM_CLOUD` / `AZURE_CLOUD`) is honoured even when
+ * env is mutated after module load (e.g. vitest). `LOOM_DLP_GRAPH_BASE`
+ * overrides the host outright for private-link / unenumerated clouds.
+ */
+function graphBase(): string {
+  return process.env.LOOM_DLP_GRAPH_BASE || getGraphHost();
+}
+function graphScope(): string {
+  return getGraphScope();
+}
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -149,9 +160,9 @@ function isDlpSegmentUnavailable(e: unknown): boolean {
 // ============================================================
 
 async function graphFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = await credential.getToken(GRAPH_SCOPE);
+  const token = await credential.getToken(graphScope());
   if (!token?.token) throw new DlpError(500, null, 'Failed to acquire Microsoft Graph token');
-  const url = `${GRAPH_BASE}${path}`;
+  const url = `${graphBase()}${path}`;
   return fetch(url, {
     ...init,
     headers: {
