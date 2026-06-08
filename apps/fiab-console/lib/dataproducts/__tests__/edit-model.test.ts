@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeDataProductPatch, type DataProductDoc } from '../store';
+import { mergeDataProductPatch, type DataProductDoc } from '../edit-model';
 import { pickStepFields, STEP_FIELDS } from '../steps';
 
 const base: DataProductDoc = {

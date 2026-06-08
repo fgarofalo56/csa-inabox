@@ -31,7 +31,7 @@ const credential: TokenCredential = uamiClientId
     )
   : new DefaultAzureCredential();
 
-export const KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing'] as const;
+export const KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
 export type KnownContainer = (typeof KNOWN_CONTAINERS)[number];
 
 const CONTAINER_URL_ENV: Record<KnownContainer, string> = {
@@ -39,6 +39,7 @@ const CONTAINER_URL_ENV: Record<KnownContainer, string> = {
   silver: 'LOOM_SILVER_URL',
   gold: 'LOOM_GOLD_URL',
   landing: 'LOOM_LANDING_URL',
+  'csv-imports': 'LOOM_CSV_IMPORTS_URL',
 };
 
 function containerUrl(name: KnownContainer): string | undefined {

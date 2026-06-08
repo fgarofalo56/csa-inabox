@@ -27,10 +27,16 @@ param consolePrincipalId string = ''
 @description('Shared ADX cluster system-assigned MI principal (object) id — granted Storage Blob Data Reader so .create external table kind=delta (…;managed_identity=system) over this lakehouse ADLS account can read the delta log + data files (Eventhouse → lakehouse/warehouse Delta endpoint). Empty = skip.')
 param adxClusterPrincipalId string = ''
 
+@description('Grant the Console UAMI "Storage Blob Data Owner" on the lakehouse ADLS account so the OneLake Security tab (F7) can SET POSIX ACLs on Delta folders/tables on behalf of role members. Owner is the only built-in role with the ACL-modify superuser bit. Only enabled when loomOnelakeSecurityEnabled=true — keep OFF in deployments that do not use OneLake security roles.')
+param consolePrincipalNeedsOwner bool = false
+
 // Storage Blob Data Contributor
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Storage Blob Data Reader (read-only data plane — sufficient for the catalog scan)
 var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+// Storage Blob Data Owner (data plane + ACL-modify superuser bit — required to
+// set ACLs on behalf of other principals for OneLake security roles, F7).
+var storageBlobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
 
 resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
   name: defaultStorageAccountName
@@ -70,6 +76,22 @@ resource adxReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
   properties: {
     principalId: adxClusterPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Console UAMI → Storage Blob Data Owner on the lakehouse storage account.
+// Required ONLY for the OneLake Security tab (F7): setting POSIX ACLs on behalf
+// of role members needs the Owner role's ACL-modify superuser bit (Reader /
+// Contributor cannot set ACLs for other principals). Gated behind
+// consolePrincipalNeedsOwner so deployments that don't use OneLake security
+// roles keep the Console UAMI at least-privilege (Reader, granted above).
+resource consoleOwnerGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (consolePrincipalNeedsOwner && !empty(consolePrincipalId)) {
+  name: guid(sa.id, consolePrincipalId, storageBlobDataOwnerRoleId)
+  scope: sa
+  properties: {
+    principalId: consolePrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)
     principalType: 'ServicePrincipal'
   }
 }

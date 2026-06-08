@@ -1,31 +1,47 @@
 /**
- * CosmosDataProductStore — the Azure-native DEFAULT DataProductStore.
+ * CosmosDataProductStore — Azure-native DEFAULT adapter for DataProductStore.
  *
- * Backed by the `dataproducts` Cosmos container (PK `/governanceDomainId`,
- * created lazily in cosmos-client.ts `ensure()`). All reads/writes are real
- * Cosmos data-plane calls — no mocks (per .claude/rules/no-vaporware.md).
+ * Stores data-product catalog records in the `dataproducts` Cosmos container
+ * (partitioned by /tenantId). Follows the connections-store.ts pattern: every
+ * write goes through the @azure/cosmos SDK (not a data-plane REST client) so
+ * ChainedTokenCredential auth is handled centrally by cosmos-client.ts ensure().
  *
- * The per-step PATCH uses Cosmos optimistic concurrency: `item().replace()`
- * is issued with `accessCondition: { type: 'IfMatch', condition: <_etag> }`.
- * If another writer changed the doc since the dialog read it, Cosmos returns
- * HTTP 412 and we raise {@link ETagConflictError} so the lost-update is
- * blocked rather than silently clobbered.
+ * The `tenantId` on each doc is the caller's Entra tenant/object id (the same
+ * value loadOwnedItem / connections-store use as the partition key). Callers
+ * pass it explicitly on register/update so this adapter is side-effect-free on
+ * session state.
+ *
+ * No Microsoft Fabric / Purview-unified-catalog dependency on this default path
+ * (.claude/rules/no-fabric-dependency.md). Real Cosmos queries, never mocks
+ * (.claude/rules/no-vaporware.md).
+ *
+ * Grounded in the @azure/cosmos SDK:
+ *   https://learn.microsoft.com/javascript/api/@azure/cosmos/items
  */
+import { randomUUID } from 'node:crypto';
+import { dataProductsContainer } from '@/lib/azure/cosmos-client';
+import type { DataProductStore } from './store';
+import type {
+  PurviewDataProduct,
+  PurviewDataProductPayload,
+} from '@/lib/azure/purview-client';
 
-import { dataproductsContainer } from '@/lib/azure/cosmos-client';
-import {
-  type DataProductDoc,
-  type DataProductPatch,
-  type DataProductStore,
-  ETagConflictError,
-  mergeDataProductPatch,
-} from './store';
+/** Internal Cosmos document shape (a superset of the public PurviewDataProduct). */
+interface DataProductDoc extends PurviewDataProduct {
+  tenantId: string;
+  createdAt: string;
+}
+
+/** Strip the internal-only fields before returning to callers. */
+function toProduct(doc: DataProductDoc): PurviewDataProduct {
+  const { tenantId: _t, createdAt: _c, ...rest } = doc;
+  return rest;
+}
 
 export class CosmosDataProductStore implements DataProductStore {
-  async get(id: string): Promise<DataProductDoc | null> {
-    const c = await dataproductsContainer();
-    // id is globally unique; the partition (governanceDomainId) isn't known to
-    // every caller, so this is an intentional cross-partition point lookup.
+  /** Cross-partition read of the raw doc (the id alone doesn't carry the pk). */
+  private async getDoc(id: string): Promise<DataProductDoc | null> {
+    const c = await dataProductsContainer();
     const { resources } = await c.items
       .query<DataProductDoc>({
         query: 'SELECT * FROM c WHERE c.id = @id',
@@ -35,43 +51,82 @@ export class CosmosDataProductStore implements DataProductStore {
     return resources?.[0] ?? null;
   }
 
-  async patch(id: string, patch: DataProductPatch, etag: string): Promise<DataProductDoc> {
-    if (!etag) throw new Error('patch requires an If-Match ETag');
-    const c = await dataproductsContainer();
-    const current = await this.get(id);
-    if (!current) {
-      const e: any = new Error(`data product ${id} not found`);
-      e.status = 404;
-      throw e;
+  async register(payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
+    const tenantId = (payload.tenantId as string | undefined)?.trim();
+    if (!tenantId) {
+      throw Object.assign(
+        new Error('CosmosDataProductStore.register: payload.tenantId is required'),
+        { status: 400 },
+      );
     }
-    const next = mergeDataProductPatch(current, patch);
-    try {
-      const { resource } = await c
-        .item(id, current.governanceDomainId)
-        .replace(next, { accessCondition: { type: 'IfMatch', condition: etag } });
-      return resource as DataProductDoc;
-    } catch (e: any) {
-      // Cosmos returns 412 Precondition Failed when the If-Match ETag is stale.
-      if (e?.code === 412 || e?.statusCode === 412 || e?.status === 412) {
-        throw new ETagConflictError();
-      }
-      throw e;
-    }
+    const c = await dataProductsContainer();
+    const now = new Date().toISOString();
+    const existing = payload.id ? await this.getDoc(payload.id) : null;
+    const doc: DataProductDoc = {
+      id: payload.id ?? randomUUID(),
+      tenantId,
+      name: (payload.displayName ?? payload.name ?? existing?.name ?? '').trim(),
+      description: payload.description ?? existing?.description,
+      domain: payload.domain ?? existing?.domain,
+      status: existing?.status ?? 'DRAFT',
+      type: payload.type ?? existing?.type,
+      endorsed: payload.endorsed ?? existing?.endorsed ?? false,
+      contacts: existing?.contacts,
+      documentation: existing?.documentation,
+      updatedAt: now,
+      createdAt: existing?.createdAt ?? now,
+      raw: { ...((existing?.raw as object) ?? {}), ...payload },
+    };
+    const { resource } = await c.items.upsert<DataProductDoc>(doc);
+    return toProduct(resource ?? doc);
   }
 
-  async findByName(name: string, excludeId = ''): Promise<DataProductDoc | null> {
-    const c = await dataproductsContainer();
-    const { resources } = await c.items
-      .query<DataProductDoc>({
-        // Case-insensitive exact-name match; exclude the product being edited.
-        query:
-          'SELECT TOP 1 * FROM c WHERE LOWER(c.name) = LOWER(@name) AND (@excludeId = "" OR c.id != @excludeId)',
-        parameters: [
-          { name: '@name', value: name },
-          { name: '@excludeId', value: excludeId },
-        ],
-      })
-      .fetchAll();
-    return resources?.[0] ?? null;
+  async get(id: string): Promise<PurviewDataProduct | null> {
+    const doc = await this.getDoc(id);
+    return doc ? toProduct(doc) : null;
+  }
+
+  async list(domain?: string): Promise<PurviewDataProduct[]> {
+    const c = await dataProductsContainer();
+    const spec = domain
+      ? {
+          query: 'SELECT * FROM c WHERE c.domain = @d ORDER BY c.name',
+          parameters: [{ name: '@d', value: domain }],
+        }
+      : { query: 'SELECT * FROM c ORDER BY c.name', parameters: [] as { name: string; value: unknown }[] };
+    const { resources } = await c.items.query<DataProductDoc>(spec).fetchAll();
+    return (resources ?? []).map(toProduct);
+  }
+
+  async update(id: string, payload: Partial<PurviewDataProductPayload>): Promise<PurviewDataProduct> {
+    const existing = await this.getDoc(id);
+    if (!existing) throw Object.assign(new Error(`DataProduct ${id} not found`), { status: 404 });
+    const c = await dataProductsContainer();
+    const now = new Date().toISOString();
+    const merged: DataProductDoc = {
+      ...existing,
+      tenantId: (payload.tenantId as string | undefined)?.trim() || existing.tenantId,
+      name: (payload.displayName ?? payload.name ?? existing.name).trim(),
+      description: payload.description ?? existing.description,
+      domain: payload.domain ?? existing.domain,
+      type: payload.type ?? existing.type,
+      endorsed: payload.endorsed ?? existing.endorsed,
+      updatedAt: now,
+      raw: { ...((existing.raw as object) ?? {}), ...payload },
+    };
+    const { resource } = await c.items.upsert<DataProductDoc>(merged);
+    return toProduct(resource ?? merged);
+  }
+
+  async delete(id: string): Promise<void> {
+    const existing = await this.getDoc(id);
+    if (!existing) return;
+    const c = await dataProductsContainer();
+    try {
+      await c.item(id, existing.tenantId).delete();
+    } catch (e: any) {
+      if (e?.code === 404) return;
+      throw e;
+    }
   }
 }

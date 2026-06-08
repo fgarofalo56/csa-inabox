@@ -5,6 +5,8 @@ import {
   Spinner, Badge, Caption1, Body1, Input, Button, Dropdown, Option, Switch, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Subtitle2, Divider, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular } from '@fluentui/react-icons';
@@ -21,6 +23,22 @@ interface Policy {
   createdAt: string;
   createdBy: string;
   enforcement?: { status: 'active' | 'pending' | 'error'; roleName?: string; roleAssignmentId?: string; detail?: string };
+  /** Set true by the DLP restrict-access action when this grant was revoked. */
+  dlpRestricted?: boolean;
+  dlpRestrictedAt?: string;
+}
+
+interface DlpViolation {
+  alertId: string; policyName?: string; ruleName?: string; severity?: string; status?: string;
+  user?: string; itemPath?: string; itemType?: string; workload?: string; action?: string; detectedAt?: string;
+}
+interface DlpMeta {
+  boundary: string;
+  dlpPolicyApiAvailable: boolean;
+  enabled?: boolean;
+  lastScannedAt?: string;
+  scanTriggeredAt?: string;
+  restrictions?: Array<{ id: string; at: string; principalName?: string; principalId: string; scopeType: string; scopeRef: string; revokedRoleNames: string[]; armConfirmed: boolean }>;
 }
 
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
@@ -31,6 +49,14 @@ const useStyles = makeStyles({
   spacer: { flex: 1 },
   empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
   rule: { fontFamily: 'Consolas, monospace', fontSize: 12, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  dlpCard: {
+    marginBottom: 16, padding: 16, borderRadius: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  dlpToolbar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' },
+  pickList: { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflowY: 'auto' },
+  chips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
 });
 
 function kindColor(k: string): any {
@@ -44,6 +70,27 @@ export default function PoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
+
+  // ── DLP (F22) — violations, last-scan, trigger-scan, restrict-access ────────
+  const [dlpMeta, setDlpMeta] = useState<DlpMeta | null>(null);
+  const [violations, setViolations] = useState<DlpViolation[]>([]);
+  const [vLoading, setVLoading] = useState(false);
+  const [vErr, setVErr] = useState<string | null>(null);
+  const [vGate, setVGate] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState<{ intent: 'warning' | 'success' | 'error'; title: string; body: string; portalLink?: string } | null>(null);
+  // Restrict-access dialog
+  const [rstOpen, setRstOpen] = useState(false);
+  const [rstScope, setRstScope] = useState<'adls-container' | 'warehouse' | 'kql-database'>('adls-container');
+  const [rstRef, setRstRef] = useState('');
+  const [rstQuery, setRstQuery] = useState('');
+  const [rstKind, setRstKind] = useState<'user' | 'group'>('user');
+  const [rstResults, setRstResults] = useState<Array<{ id: string; type: string; displayName: string; upn?: string }>>([]);
+  const [rstSearching, setRstSearching] = useState(false);
+  const [rstPicked, setRstPicked] = useState<{ id: string; name: string; type: 'User' | 'Group'; upn?: string } | null>(null);
+  const [rstExempt, setRstExempt] = useState<Array<{ id: string; name: string }>>([]);
+  const [rstBusy, setRstBusy] = useState(false);
+  const [rstMsg, setRstMsg] = useState<{ intent: 'success' | 'error' | 'warning'; title: string; body: string } | null>(null);
 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -130,6 +177,116 @@ export default function PoliciesPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Load DLP surface metadata (boundary gate + last-scan) and per-item violations.
+  const loadDlp = useCallback(async () => {
+    setVLoading(true); setVErr(null); setVGate(null);
+    try {
+      const m = await fetch('/api/governance/dlp/meta').then((x) => x.json()).catch(() => null);
+      if (m?.ok) setDlpMeta(m);
+      const r = await fetch('/api/governance/dlp/violations?top=100');
+      const j = await r.json();
+      if (r.status === 503 && j?.code === 'dlp_not_configured') {
+        setVGate(j?.hint?.followUp || j?.error || 'DLP is not wired in this deployment.');
+        setViolations([]);
+        return;
+      }
+      if (!j.ok) { setVErr(j.error || `HTTP ${r.status}`); return; }
+      setViolations(j.violations || []);
+      if (j.lastScannedAt) setDlpMeta((prev) => prev ? { ...prev, lastScannedAt: j.lastScannedAt } : prev);
+    } catch (e: any) { setVErr(e?.message || String(e)); }
+    finally { setVLoading(false); }
+  }, []);
+  useEffect(() => { loadDlp(); }, [loadDlp]);
+
+  async function triggerScan() {
+    setScanning(true); setScanMsg(null);
+    try {
+      const r = await fetch('/api/governance/dlp/scan', { method: 'POST' });
+      const j = await r.json();
+      if (r.status === 501 || j?.code === 'dlp_scan_trigger_unavailable') {
+        setScanMsg({
+          intent: 'warning',
+          title: 'Scanner trigger routes through Purview',
+          body: j?.error || 'No Graph REST API triggers the Purview scanner.',
+          portalLink: j?.portalLink,
+        });
+      } else if (j?.ok) {
+        setScanMsg({ intent: 'success', title: 'Scan requested', body: 'A content scan was started.' });
+      } else {
+        setScanMsg({ intent: 'error', title: `Scan request failed (HTTP ${r.status})`, body: j?.error || 'Unknown error' });
+      }
+      // refresh last-scan/last-requested timestamps
+      loadDlp();
+    } catch (e: any) {
+      setScanMsg({ intent: 'error', title: 'Scan request failed', body: e?.message || String(e) });
+    } finally { setScanning(false); }
+  }
+
+  const searchRst = useCallback(async () => {
+    const q = rstQuery.trim();
+    if (q.length < 2) { setRstResults([]); return; }
+    setRstSearching(true);
+    try {
+      const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${rstKind}`);
+      const j = await r.json();
+      setRstResults(j.ok ? (j.results || []) : []);
+    } catch { setRstResults([]); }
+    finally { setRstSearching(false); }
+  }, [rstQuery, rstKind]);
+
+  async function doRestrict() {
+    if (!rstPicked) { setRstMsg({ intent: 'error', title: 'Pick a principal', body: 'Search and select the user/group to restrict.' }); return; }
+    if (rstScope !== 'warehouse' && !rstRef.trim()) {
+      setRstMsg({ intent: 'error', title: 'Scope required', body: `Enter the ${rstScope === 'adls-container' ? 'ADLS container' : 'KQL database'} to restrict.` });
+      return;
+    }
+    setRstBusy(true); setRstMsg(null);
+    try {
+      const r = await fetch('/api/governance/dlp/restrict', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scopeType: rstScope,
+          scopeRef: rstScope === 'warehouse' ? 'warehouse' : rstRef.trim(),
+          principalId: rstPicked.id,
+          principalName: rstPicked.upn || rstPicked.name,
+          principalType: rstPicked.type,
+          exemptPrincipalIds: rstExempt.map((e) => e.id),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRstMsg({ intent: 'error', title: `Restrict failed (HTTP ${r.status})`, body: j?.error || 'Unknown error' }); return; }
+      if (j.skippedExempt) {
+        setRstMsg({ intent: 'warning', title: 'Principal exempt', body: j.detail || 'Left intact (on exempt list).' });
+      } else if (!j.restricted) {
+        setRstMsg({ intent: 'warning', title: 'Nothing to revoke', body: j.detail || 'Principal held no matching access.' });
+      } else {
+        const roles = (j.revokedRoleNames || []).join(', ') || '—';
+        setRstMsg({
+          intent: 'success',
+          title: 'Access revoked',
+          body: `Revoked ${roles} for ${rstPicked.name}.${j.armConfirmed ? ' Confirmed via ARM read-back.' : ''}${j.policiesUpdated ? ` ${j.policiesUpdated} policy record(s) updated.` : ''}`,
+        });
+      }
+      loadDlp(); load();
+    } catch (e: any) { setRstMsg({ intent: 'error', title: 'Restrict failed', body: e?.message || String(e) }); }
+    finally { setRstBusy(false); }
+  }
+
+  // Best-effort per-policy violation count: match a DLP-kind policy by name
+  // against the violation's policy name (Graph alerts_v2 doesn't reliably carry
+  // the governance policy id, so this is honest substring matching; unmatched
+  // DLP policies show a neutral "monitored" tip).
+  function violationTipFor(p: Policy): { count: number } {
+    if (p.kind !== 'DLP') return { count: 0 };
+    const name = (p.name || '').toLowerCase();
+    if (!name) return { count: 0 };
+    const count = violations.filter((v) => {
+      const vn = (v.policyName || '').toLowerCase();
+      return vn && (vn.includes(name) || name.includes(vn));
+    }).length;
+    return { count };
+  }
+
   async function create() {
     if (!draftName.trim()) { setActionErr('name required'); return; }
     const body: Record<string, unknown> = { name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true };
@@ -195,18 +352,39 @@ export default function PoliciesPage() {
     { key: 'scope', label: 'Scope', sortable: true, filterable: true, getValue: (p) => p.scope },
     {
       key: 'rule', label: 'Rule', sortable: false, filterable: true, getValue: (p) => p.rule || '',
-      render: (p) => (
-        <span>
-          <code className={s.rule}>{p.rule || '—'}</code>
-          {p.enforcement && (
-            <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
-              color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
-              title={p.enforcement.detail || p.enforcement.roleName}>
-              {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
-            </Badge>
-          )}
-        </span>
-      ),
+      render: (p) => {
+        const tip = violationTipFor(p);
+        return (
+          <span>
+            <code className={s.rule}>{p.rule || '—'}</code>
+            {p.enforcement && (
+              <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+                color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
+                title={p.enforcement.detail || p.enforcement.roleName}>
+                {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
+              </Badge>
+            )}
+            {/* DLP per-item policy-tip badge (best-effort name match). */}
+            {p.kind === 'DLP' && (
+              <Tooltip relationship="label" content={tip.count > 0
+                ? `${tip.count} active DLP violation(s) matched this policy in the last 30 days`
+                : 'No violations matched this policy name; it is actively monitored'}>
+                <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+                  color={tip.count > 0 ? 'danger' : 'subtle'}>
+                  {tip.count > 0 ? `${tip.count} tip${tip.count === 1 ? '' : 's'}` : 'monitored'}
+                </Badge>
+              </Tooltip>
+            )}
+            {/* Access rows that were revoked by DLP restrict-access. */}
+            {p.dlpRestricted && (
+              <Badge appearance="tint" size="small" color="warning" style={{ marginLeft: 6 }}
+                title={p.dlpRestrictedAt ? `Restricted ${p.dlpRestrictedAt.slice(0, 16)}` : 'Access revoked by DLP'}>
+                restricted
+              </Badge>
+            )}
+          </span>
+        );
+      },
     },
     {
       key: 'enabled', label: 'Enabled', sortable: true, filterable: false, width: 100, getValue: (p) => (p.enabled ? 1 : 0),
@@ -240,6 +418,117 @@ export default function PoliciesPage() {
           <MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error || actionErr}</MessageBarBody>
         </MessageBar>
       )}
+
+      {/* ── DLP (F22): violations · last-scan · trigger-scan · restrict-access ── */}
+      <div className={s.dlpCard}>
+        <div className={s.dlpToolbar}>
+          <Subtitle2 style={{ marginRight: 'auto' }}>Data loss prevention</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            {dlpMeta?.boundary ? `${dlpMeta.boundary} · ` : ''}
+            Last checked: {dlpMeta?.lastScannedAt ? dlpMeta.lastScannedAt.slice(0, 16).replace('T', ' ') : '—'}
+            {dlpMeta?.scanTriggeredAt ? ` · Scan requested: ${dlpMeta.scanTriggeredAt.slice(0, 16).replace('T', ' ')}` : ''}
+          </Caption1>
+          <Button size="small" icon={<ArrowSync24Regular />} onClick={loadDlp} disabled={vLoading}>Refresh</Button>
+          <Button size="small" onClick={triggerScan} disabled={scanning}>{scanning ? 'Requesting…' : 'Trigger scan'}</Button>
+          <Button size="small" appearance="primary" onClick={() => { setRstOpen(true); setRstMsg(null); }}>Restrict access</Button>
+        </div>
+
+        {/* Honest-gate MessageBar for Gov/DoD — policy authoring not on Graph there. */}
+        {dlpMeta && !dlpMeta.dlpPolicyApiAvailable && (
+          <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+            <MessageBarBody>
+              <MessageBarTitle>Partial DLP in {dlpMeta.boundary}</MessageBarTitle>
+              Microsoft Graph&apos;s <code>/beta/security/dataLossPreventionPolicies</code> policy
+              segment is not available in the US Government / DoD Graph roots
+              (<code>graph.microsoft.us</code> / <code>dod-graph.microsoft.us</code>) as of 2026, so
+              the per-policy list/rules read is unavailable here. DLP <strong>violations</strong>{' '}
+              (<code>/v1.0/security/alerts_v2</code>) and <strong>restrict-access</strong> enforcement
+              below remain fully operational. Author DLP policies at{' '}
+              <a href="https://compliance.microsoft.us/datalossprevention" target="_blank" rel="noreferrer">compliance.microsoft.us</a>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {scanMsg && (
+          <MessageBar intent={scanMsg.intent} style={{ marginBottom: 10 }}>
+            <MessageBarBody>
+              <MessageBarTitle>{scanMsg.title}</MessageBarTitle>
+              {scanMsg.body}
+              {scanMsg.portalLink && (
+                <Caption1 block style={{ marginTop: 4 }}>
+                  Run it now: <a href={scanMsg.portalLink} target="_blank" rel="noreferrer">Purview content scan jobs → Scan now</a>{' '}
+                  (or <code>Start-Scan</code> in the PurviewInformationProtection PowerShell module).
+                </Caption1>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {vGate && (
+          <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+            <MessageBarBody>
+              <MessageBarTitle>DLP not wired in this deployment</MessageBarTitle>
+              {vGate} Set <code>LOOM_DLP_ENABLED=true</code> on the Console Container App and grant the
+              <code> SecurityAlert.Read.All</code> Graph AppRole (post-deploy bootstrap
+              <code> grant-graph-approles.sh</code>).
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {vErr && !vGate && (
+          <MessageBar intent="error" style={{ marginBottom: 10 }}>
+            <MessageBarBody><MessageBarTitle>Could not load violations</MessageBarTitle>{vErr}</MessageBarBody>
+          </MessageBar>
+        )}
+
+        {vLoading && <Spinner size="tiny" label="Loading DLP violations…" />}
+        {!vLoading && !vGate && !vErr && violations.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No DLP violations detected in the last 30 days.</Caption1>
+        )}
+        {!vLoading && violations.length > 0 && (
+          <Table size="small" aria-label="DLP violations">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Detected</TableHeaderCell>
+                <TableHeaderCell>Policy</TableHeaderCell>
+                <TableHeaderCell>Item</TableHeaderCell>
+                <TableHeaderCell>User</TableHeaderCell>
+                <TableHeaderCell>Severity</TableHeaderCell>
+                <TableHeaderCell>Action</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {violations.slice(0, 50).map((v) => (
+                <TableRow key={v.alertId}>
+                  <TableCell><Caption1>{v.detectedAt?.slice(0, 16).replace('T', ' ') || '—'}</Caption1></TableCell>
+                  <TableCell><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</TableCell>
+                  <TableCell>
+                    <Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 44)}</Caption1>
+                    {v.itemType ? <Badge appearance="outline" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}
+                  </TableCell>
+                  <TableCell><Caption1>{v.user || '—'}</Caption1></TableCell>
+                  <TableCell><Badge color={v.severity === 'high' ? 'danger' : v.severity === 'medium' ? 'warning' : 'subtle'}>{v.severity || '—'}</Badge></TableCell>
+                  <TableCell><Caption1>{v.action || v.status || '—'}</Caption1></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+
+        {(dlpMeta?.restrictions?.length ?? 0) > 0 && (
+          <>
+            <Divider style={{ marginTop: 12, marginBottom: 8 }} />
+            <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Recent restrict-access actions</Caption1>
+            <div className={s.chips}>
+              {dlpMeta!.restrictions!.slice(0, 8).map((r) => (
+                <Badge key={r.id} appearance="tint" color={r.armConfirmed ? 'success' : 'warning'}
+                  title={`${r.at.slice(0, 16).replace('T', ' ')} · ${r.revokedRoleNames.join(', ') || 'no roles'}${r.armConfirmed ? ' · ARM-confirmed' : ''}`}>
+                  {(r.principalName || r.principalId).slice(0, 28)} ⊘ {r.scopeType === 'adls-container' ? r.scopeRef : r.scopeType}
+                </Badge>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
 
       {loading && !error && <Spinner label="Loading policies…" />}
 
@@ -426,6 +715,113 @@ export default function PoliciesPage() {
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
               <Button appearance="primary" onClick={create} disabled={busy || !draftName.trim()}>
                 {busy ? 'Creating…' : 'Create'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Restrict-access dialog (real RBAC/data-plane revoke) ── */}
+      <Dialog open={rstOpen} onOpenChange={(_, d) => setRstOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Restrict access (DLP)</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Revokes a principal&apos;s <strong>real</strong> data-plane access on a scope. ADLS
+                  containers revoke a Storage RBAC role assignment (confirmed via ARM read-back);
+                  warehouse/KQL replay the inverse SQL/ADX grant. Exempt principals are never touched.
+                </Caption1>
+
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Scope (data plane)" style={{ flex: 1 }}>
+                    <Dropdown
+                      value={rstScope === 'adls-container' ? 'ADLS container' : rstScope === 'warehouse' ? 'Warehouse (Synapse SQL)' : 'KQL database (ADX)'}
+                      selectedOptions={[rstScope]}
+                      onOptionSelect={(_, d) => { setRstScope((d.optionValue as typeof rstScope) || 'adls-container'); setRstRef(''); }}>
+                      <Option value="adls-container">ADLS container</Option>
+                      <Option value="warehouse">Warehouse (Synapse SQL)</Option>
+                      <Option value="kql-database">KQL database (ADX)</Option>
+                    </Dropdown>
+                  </Field>
+                  {rstScope === 'adls-container' && (
+                    <Field label="ADLS container" style={{ flex: 1 }}>
+                      <Input value={rstRef} placeholder="bronze" onChange={(_, d) => setRstRef(d.value)} />
+                    </Field>
+                  )}
+                  {rstScope === 'kql-database' && (
+                    <Field label="KQL database" style={{ flex: 1 }}>
+                      <Dropdown placeholder={kqlItems.length ? 'Select…' : 'No KQL databases found'} disabled={!kqlItems.length}
+                        value={rstRef} selectedOptions={rstRef ? [rstRef] : []}
+                        onOptionSelect={(_, d) => setRstRef(d.optionValue || '')}>
+                        {kqlItems.map((k) => <Option key={k.id} value={k.name}>{k.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                </div>
+
+                <Field label="Principal to restrict — search Entra users / groups">
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Dropdown value={rstKind === 'user' ? 'User' : 'Group'} selectedOptions={[rstKind]} style={{ minWidth: 100 }}
+                      onOptionSelect={(_, d) => { setRstKind((d.optionValue as 'user' | 'group') || 'user'); setRstResults([]); }}>
+                      <Option value="user">User</Option>
+                      <Option value="group">Group</Option>
+                    </Dropdown>
+                    <Input value={rstQuery} placeholder="name or UPN…" style={{ flex: 1 }}
+                      onChange={(_, d) => setRstQuery(d.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') searchRst(); }} />
+                    <Button onClick={searchRst} disabled={rstSearching || rstQuery.trim().length < 2}>
+                      {rstSearching ? 'Searching…' : 'Search'}
+                    </Button>
+                  </div>
+                </Field>
+                {rstResults.length > 0 && (
+                  <div className={s.pickList}>
+                    {rstResults.map((r) => (
+                      <div key={r.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <Button appearance={rstPicked?.id === r.id ? 'primary' : 'subtle'} style={{ justifyContent: 'flex-start', flex: 1 }}
+                          onClick={() => setRstPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User', upn: r.upn })}>
+                          {r.displayName}{r.upn ? ` · ${r.upn}` : ''}
+                        </Button>
+                        <Button size="small" appearance="subtle"
+                          onClick={() => setRstExempt((p) => p.some((x) => x.id === r.id) ? p : [...p, { id: r.id, name: r.displayName }])}>
+                          + exempt
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {rstPicked && (
+                  <Caption1>Restricting: <strong>{rstPicked.name}</strong> ({rstPicked.type})</Caption1>
+                )}
+                {rstExempt.length > 0 && (
+                  <div>
+                    <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Exempt (never restricted):</Caption1>
+                    <div className={s.chips}>
+                      {rstExempt.map((x) => (
+                        <Badge key={x.id} appearance="tint" color="informative"
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => setRstExempt((p) => p.filter((y) => y.id !== x.id))}
+                          title="Click to remove from exempt list">
+                          {x.name} ✕
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {rstMsg && (
+                  <MessageBar intent={rstMsg.intent}>
+                    <MessageBarBody><MessageBarTitle>{rstMsg.title}</MessageBarTitle>{rstMsg.body}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setRstOpen(false)}>Close</Button>
+              <Button appearance="primary" onClick={doRestrict} disabled={rstBusy || !rstPicked}>
+                {rstBusy ? 'Revoking…' : 'Revoke access'}
               </Button>
             </DialogActions>
           </DialogBody>

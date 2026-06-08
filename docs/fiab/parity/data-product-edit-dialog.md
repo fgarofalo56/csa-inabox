@@ -51,42 +51,42 @@ Zero ❌. No stub banners (row 11 is an honest infra-gate per `no-vaporware.md`)
 
 | Control | Backend |
 |---------|---------|
-| Load on open | `GET /api/data-products/[id]` → `CosmosDataProductStore.get` (cross-partition point read); ETag returned as the `ETag` response header |
-| Per-step Save | `PATCH /api/data-products/[id]` (`If-Match: <etag>`) → `CosmosDataProductStore.patch` → Cosmos `item().replace()` with `accessCondition { type:'IfMatch', condition }` |
-| Duplicate-name check | `GET /api/data-products?name=&excludeId=` → `CosmosDataProductStore.findByName` (case-insensitive, excludes self) |
+| Load on open | `GET /api/data-products/[id]` → loads the Cosmos `items` `data-product` record (tenant-checked) and returns `{ ok, item, doc }`; the WorkspaceItem `_etag` is returned as the `ETag` response header |
+| Per-step Save | `PATCH /api/data-products/[id]` (`If-Match: <etag>`) → merges only the step's fields into the same WorkspaceItem (name→`displayName`, description, the rest→`state`) and `item().replace()` with `accessCondition { type:'IfMatch', condition }` |
+| Duplicate-name check | `GET /api/data-products?name=&excludeId=` → `listOwnedItems('data-product')` filtered by case-insensitive `displayName`, excludes self |
 | Governance-domain picker | `GET /api/admin/domains` → Cosmos `tenant-settings` domains doc |
 
 ## Azure-native default (no Fabric dependency)
 
-All paths use the Azure Cosmos DB `dataproducts` container (PK
-`/governanceDomainId`), created lazily in `cosmos-client.ts` `ensure()` via
-`createIfNotExists`. No `fabricWorkspaceId`, no `api.fabric.microsoft.com` /
-`api.powerbi.com`, no Purview Unified Catalog call on the default path. The
-Purview Unified Catalog backend is reserved as a future opt-in
-(`LOOM_DATAPRODUCTS_BACKEND=purview-unified`, commercial only) and is never a
-gate. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset in every cloud
-(Commercial / GCC / GCC-High / IL5). No new Azure resource, env var, role
-assignment, or bicep change — the container is code-owned like every other
-Loom container.
+The edit dialog operates on the SAME Azure Cosmos DB `items` container record
+(itemType `data-product`) the marketplace lists and the create wizard writes —
+so an edit changes exactly what the marketplace shows, not a separate copy. No
+`fabricWorkspaceId`, no `api.fabric.microsoft.com` / `api.powerbi.com`, no
+Purview Unified Catalog call on the default path. Purview Unified Catalog
+registration is reserved as an additive, best-effort opt-in
+(`LOOM_PURVIEW_UC_ENDPOINT` / `LOOM_PURVIEW_ACCOUNT`) and is never a gate. Works
+with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset in every cloud (Commercial / GCC /
+GCC-High / IL5). No new Azure resource, env var, role assignment, or bicep
+change — the `items` container is code-owned like every other Loom container.
 
 ## Optimistic concurrency (Cosmos OCC)
 
 Grounded in the Cosmos OCC docs (`RequestOptions.accessCondition`): Cosmos
 stamps a server-generated `_etag` on every write. The dialog reads it on open
 and sends it as `If-Match` on each PATCH; a concurrent write changes the
-`_etag`, so the stale PATCH gets HTTP 412, which `CosmosDataProductStore.patch`
-maps to `ETagConflictError` and the route returns HTTP 409 — the lost update is
+`_etag`, so the stale PATCH gets HTTP 412, which the route
+maps to HTTP 409 (`etag_conflict`) — the lost update is
 blocked, not silently applied.
 
 ## Verification
 
-- `lib/dataproducts/__tests__/store.test.ts` — pure-logic tests: each step's
+- `lib/dataproducts/__tests__/edit-model.test.ts` — pure-logic tests: each step's
   PATCH body contains ONLY that step's keys (Basic has no `useCase` /
   `governanceDomainId` / `customAttributes`); `mergeDataProductPatch` preserves
   unchanged Business fields when saving Basic; identity/system fields are never
   overwritten; `updatedAt` bumps; endorsed toggles persist. (Validated via
   Node native type-strip in the isolated worktree; runs under vitest in CI.)
-- Manual E2E (per `no-vaporware.md`): seed a `dataproducts` doc, open the editor
+- Manual E2E (per `no-vaporware.md`): create a marketplace data product, open the editor
   → Edit → change name (warning fires after 500 ms) → Save Basic → PATCH body =
   `{name,description,type,audience,owners,endorsed}` only; switch to Business →
   Save → PATCH body = `{governanceDomainId,useCase}` only; toggle Endorsed →

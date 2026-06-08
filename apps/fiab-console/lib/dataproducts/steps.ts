@@ -10,7 +10,7 @@
  * deterministically without a browser.
  */
 
-import type { DataProductPatch, DataProductDoc } from './store';
+import type { DataProductPatch, DataProductDoc } from './edit-model';
 
 export type EditStep = 'basic' | 'business' | 'custom';
 

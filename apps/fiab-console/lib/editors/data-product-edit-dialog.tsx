@@ -38,7 +38,7 @@ import { Edit20Regular, Save16Regular } from '@fluentui/react-icons';
 import {
   DATA_PRODUCT_TYPES, DATA_PRODUCT_AUDIENCES, pickStepFields, type EditStep,
 } from '@/lib/dataproducts/steps';
-import type { DataProductDoc } from '@/lib/dataproducts/store';
+import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 540 },
