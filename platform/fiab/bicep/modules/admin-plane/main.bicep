@@ -386,6 +386,9 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('OPT-IN ONLY: additively mirror item-level permission grants (F6 Share / Manage permissions) to the Fabric item /share endpoint, on TOP of the always-on Azure-native backing (Cosmos item-permissions + ADLS POSIX ACL + Storage data-plane RBAC). Requires the Console UAMI to be a member of each Fabric workspace + the "Service principals can use Fabric APIs" tenant setting. Ignored in GCC-High / IL5 (no Fabric API). When false (default), F6 is 100% Azure-native — no Fabric workspace required (per no-fabric-dependency.md).')
+param loomFabricPermissionsEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -1155,6 +1158,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
+          ] : [],
+          // F6 item-level permissions: the Fabric /share mirror is strictly
+          // opt-in and additive — the Azure-native backing (Cosmos
+          // item-permissions + ADLS POSIX ACL + Storage data-plane RBAC) is
+          // always on and needs NO Fabric workspace. Only set this flag when an
+          // operator wants grants ALSO pushed to a bound Fabric item.
+          (loomFabricPermissionsEnabled && boundary != 'GCC-High' && boundary != 'IL5') ? [
+            { name: 'LOOM_FABRIC_PERMISSIONS_ENABLED', value: 'true' }
           ] : [],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
             // Unity Catalog federation hostname list. Uses the REAL workspace

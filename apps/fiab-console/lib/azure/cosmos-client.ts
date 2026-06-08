@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _itemPermissions: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +143,13 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Item-level permissions & sharing (F6) — one row per (item, principal),
+  // partitioned by the item id so every per-item permission lookup hits a
+  // single physical partition. The Azure-native default mirrors each grant to
+  // ADLS POSIX ACLs + ARM Storage data-plane RBAC; Cosmos is the source of
+  // truth for the "Manage permissions" list. Created lazily so a fresh
+  // environment needs no extra ARM/Bicep step beyond the account+database.
+  _itemPermissions = await mk('item-permissions', '/itemId');
   _ensured = true;
 }
 
@@ -151,6 +159,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +222,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'item-permissions',
 ];
 
 /** List all Loom containers with their current throughput shape. */
