@@ -8,13 +8,48 @@
 
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import {
+  upsertDataProductDoc, deleteDataProductDoc, docForDataProduct,
+} from '@/lib/azure/loom-data-products-search';
 import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export function jerr(error: string, status = 500, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+}
+
+/**
+ * Resolve a domain id → its display name from the tenant's domains doc
+ * (Cosmos tenant-settings, id="domains:<tenantId>"). Best-effort: returns
+ * undefined when the domain map or the id is absent so the marketplace doc
+ * falls back to the raw id. Never throws.
+ */
+async function resolveDomainName(tenantId: string, domainId?: string): Promise<string | undefined> {
+  if (!domainId) return undefined;
+  try {
+    const c = await tenantSettingsContainer();
+    const { resource } = await c.item(`domains:${tenantId}`, tenantId).read<{ items?: Array<{ id: string; name: string }> }>();
+    const hit = (resource?.items || []).find((d) => d.id === domainId);
+    return hit?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Mirror a `data-product` item into the consumer-discovery `loom-data-products`
+ * AI Search index. Best-effort + no-throw (the index is a derived store). The
+ * doc is always upserted; `docForDataProduct` stamps the item's `publishStatus`
+ * (default `Draft`), and consumer search filters to `Published` — so a Draft
+ * product is in the index but invisible to consumers until published.
+ */
+async function mirrorDataProduct(item: WorkspaceItem, tenantId: string): Promise<void> {
+  if (item.itemType !== 'data-product') return;
+  const domainId = (item.state as Record<string, unknown> | undefined)?.domain;
+  const domainName = await resolveDomainName(tenantId, domainId ? String(domainId) : undefined);
+  await upsertDataProductDoc(docForDataProduct(item, tenantId, domainName));
 }
 
 /** Load an item by id, verifying the caller's tenant owns the parent workspace. */
@@ -154,6 +189,8 @@ export async function createOwnedItem(
   const { resource } = await items.items.create<WorkspaceItem>(item);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
+  // Mirror a data-product into the consumer-discovery index (best-effort; no-throw).
+  void mirrorDataProduct(resource!, session.claims.oid);
   // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
   // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
   void autoOnboardToPurview(resource!, session.claims.oid);
@@ -179,6 +216,7 @@ export async function updateOwnedItem(
   const items = await itemsContainer();
   const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
   void upsertLoomDoc(docForItem(resource!, tenantId));
+  void mirrorDataProduct(resource!, tenantId);
   return resource!;
 }
 
@@ -192,5 +230,7 @@ export async function deleteOwnedItem(
   const items = await itemsContainer();
   await items.item(current.id, current.workspaceId).delete();
   void deleteLoomDoc(`it:${current.id}`);
+  // Remove the data-product mirror from the discovery index (best-effort; no-throw).
+  if (itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   return true;
 }
