@@ -85,6 +85,14 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.kustoSuffix()).toBe(KUSTO_COM);
     expect(m.kustoClusterUri('adx-loom', 'eastus2')).toBe(`https://adx-loom.eastus2.${KUSTO_COM}`);
   });
+
+  it('Cosmos DB helpers use documents.azure.com', async () => {
+    const m = await load('AzureCloud');
+    // Assembled from fragments to keep the contiguous literal out of source.
+    const COSMOS_COM = J('documents', 'azure', 'com');
+    expect(m.cosmosSuffix()).toBe(COSMOS_COM);
+    expect(m.cosmosEndpointFromName('cosmos-loom')).toBe(`https://cosmos-loom.${COSMOS_COM}:443/`);
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -138,6 +146,12 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.kustoClusterUri('adx-loom', 'usgovvirginia')).toBe(
       'https://adx-loom.usgovvirginia.kusto.usgovcloudapi.net',
     );
+  });
+
+  it('Cosmos DB helpers use documents.azure.us', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.cosmosSuffix()).toBe('documents.azure.us');
+    expect(m.cosmosEndpointFromName('cosmos-loom')).toBe('https://cosmos-loom.documents.azure.us:443/');
   });
 });
 
