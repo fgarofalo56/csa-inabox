@@ -32,6 +32,8 @@ import {
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ManagePoliciesDialog } from './components/manage-policies-dialog';
+import { policyTiers, type DataProductAccessPolicy } from '@/lib/types/access-policy';
 import { useObservability, DqScoreGauge, ObservabilityTabContent } from './data-product-detail';
 import { DeleteDataProductDialog } from './components/delete-data-product-dialog';
 import { AddDataAssetsPanel, type DataAssetRef as DataAssetWithFlags } from './components/add-data-assets-panel';
@@ -1810,6 +1812,11 @@ interface DataProductState {
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
+  // F8 access-policy state. `apimPublished` is stamped by publishApimMirror and
+  // gates the Manage-policies dialog (Purview only allows managing access
+  // policies on an unpublished product). `accessPolicy` is the saved policy.
+  apimPublished?: boolean;
+  accessPolicy?: DataProductAccessPolicy;
   // F6 — Publish/Unpublish/Expire lifecycle. Cosmos is the source of truth;
   // managed via POST /api/data-products/[id]/status. Unset == Draft.
   lifecycleStatus?: 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
@@ -2130,13 +2137,9 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [lineageBusy, setLineageBusy] = useState(false);
   const [lineageErr, setLineageErr] = useState<string | null>(null);
 
-  // Access policies (Cosmos governance policies, kind=Access).
-  const [policies, setPolicies] = useState<any[] | null>(null);
-  const [polName, setPolName] = useState('');
-  const [polApprovers, setPolApprovers] = useState('');
-  const [polLimit, setPolLimit] = useState('1 year');
-  const [polBusy, setPolBusy] = useState(false);
-  const [polMsg, setPolMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  // Access policies (F8) — per-product policy persisted to state.accessPolicy
+  // in Cosmos, edited via the Manage Policies dialog.
+  const [policiesOpen, setPoliciesOpen] = useState(false);
 
   // F6 — lifecycle (Publish / Set to draft / Set to expired).
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
@@ -2261,6 +2264,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+      // Stamp apimPublished on the item so the F8 Manage-policies dialog gates
+      // editing while Published (Purview parity). Persist it durably to Cosmos.
+      setState((prev) => ({ ...prev, apimPublished: true }));
+      try {
+        await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ state: { ...snapshot, apimPublished: true } }),
+        });
+      } catch { /* non-fatal: local flag still gates the dialog this session */ }
       setStatus({ kind: 'ok', msg: `Published API consumer surface as APIM product '${j.product.name}'. (Note: this is the API access layer, NOT the Purview Data Product registration.)` });
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
@@ -2525,42 +2538,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setLineageBusy(false); }
   }, [state.datasets, state.purviewDataProductId]);
 
-  // ---- Access policies ----
-  const loadPolicies = useCallback(async () => {
-    try {
-      const r = await fetch('/api/governance/policies');
-      const j = await r.json();
-      if (j.ok) setPolicies((j.items || []).filter((p: any) => p.kind === 'Access'));
-    } catch { /* leave null */ }
-  }, []);
-
-  const createPolicy = useCallback(async () => {
-    if (!polName.trim()) { setPolMsg({ intent: 'error', text: 'Policy name is required.' }); return; }
-    setPolBusy(true); setPolMsg(null);
-    try {
-      const r = await fetch('/api/governance/policies', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: polName.trim(), kind: 'Access',
-          scope: `data-product:${id}`,
-          rule: JSON.stringify({ accessTimeLimit: polLimit, approvers: polApprovers.split(',').map((a) => a.trim()).filter(Boolean) }),
-          enabled: true,
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setPolMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
-      setPolMsg({ intent: 'success', text: `Access policy '${polName}' saved.` });
-      setPolName(''); setPolApprovers('');
-      loadPolicies();
-    } catch (e: any) { setPolMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setPolBusy(false); }
-  }, [polName, polApprovers, polLimit, id, loadPolicies]);
+  // ---- Access policies (F8) ----
+  // Per-product access policy is edited via the Manage Policies dialog
+  // (GET/PUT /api/data-products/[id]/access-policy → state.accessPolicy in
+  // Cosmos). The read-only summary on the policies tab renders from
+  // state.accessPolicy, hydrated on item load.
 
   useEffect(() => {
     if (tab === 'lineage') loadLineage();
-    if (tab === 'policies') loadPolicies();
     if (tab === 'data-assets') loadAssets();
-  }, [tab, loadLineage, loadPolicies, loadAssets]);
+  }, [tab, loadLineage, loadAssets]);
 
   // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save. Matches notebook-editor.
   useEffect(() => {
@@ -2631,6 +2618,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Linked resources', onClick: () => setTab('linked-resources') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
+        { label: 'Manage policies', onClick: !isNew ? () => setPoliciesOpen(true) : undefined, disabled: isNew, title: isNew ? 'Create the data product first' : undefined },
         { label: 'Observability', onClick: () => setTab('observability') },
       ]},
       { label: 'Bulk', actions: [
@@ -3133,30 +3121,41 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         {tab === 'policies' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Body1>Access request policies for this data product (time limit + approvers). Mirrors Purview "Manage policies".</Body1>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'flex-end' }}>
-              <Field label="Policy name"><Input value={polName} onChange={(_, d) => setPolName(d.value)} placeholder="Standard access" /></Field>
-              <Field label="Access time limit"><Input value={polLimit} onChange={(_, d) => setPolLimit(d.value)} placeholder="1 year" /></Field>
-              <Field label="Approvers (comma-separated emails)"><Input value={polApprovers} onChange={(_, d) => setPolApprovers(d.value)} placeholder="owner@contoso.com" /></Field>
-            </div>
-            <Button appearance="primary" icon={<Add20Regular />} onClick={createPolicy} disabled={polBusy} style={{ alignSelf: 'flex-start' }}>
-              {polBusy ? 'Saving…' : 'Save access policy'}
+            <Body1>Access policies for this data product — permitted purposes and the approval sequence (manager → privacy review → approvers → access provider). Mirrors Purview "Manage policies". Saved policy persists to this item in Cosmos.</Body1>
+            {state.apimPublished && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Product is Published</MessageBarTitle>
+                  Access policies can only be edited while the data product is unpublished. The dialog opens read-only until you unpublish.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => setPoliciesOpen(true)} disabled={isNew} title={isNew ? 'Create the data product first' : undefined} style={{ alignSelf: 'flex-start' }}>
+              Manage policies
             </Button>
-            {polMsg && <MessageBar intent={polMsg.intent}><MessageBarBody>{polMsg.text}</MessageBarBody></MessageBar>}
-            <Table size="small" aria-label="Access policies">
-              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Scope</TableHeaderCell><TableHeaderCell>Rule</TableHeaderCell><TableHeaderCell>Enabled</TableHeaderCell></TableRow></TableHeader>
+            <Subtitle2>Permitted purposes</Subtitle2>
+            <Table size="small" aria-label="Permitted purposes">
+              <TableHeader><TableRow><TableHeaderCell>Purpose</TableHeaderCell><TableHeaderCell>Description</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
-                {(policies || []).length === 0 && <TableRow><TableCell>No access policies yet.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
-                {(policies || []).map((p: any) => (
-                  <TableRow key={p.id}>
-                    <TableCell><strong>{p.name}</strong></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{p.scope}</code></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{p.rule}</code></TableCell>
-                    <TableCell>{p.enabled ? 'yes' : 'no'}</TableCell>
-                  </TableRow>
+                {(!state.accessPolicy?.allowedPurposes?.length) && <TableRow><TableCell>No purposes defined yet — click Manage policies.</TableCell><TableCell /></TableRow>}
+                {(state.accessPolicy?.allowedPurposes || []).map((p) => (
+                  <TableRow key={p.name}><TableCell><strong>{p.name}</strong></TableCell><TableCell>{p.description || '—'}</TableCell></TableRow>
                 ))}
               </TableBody>
             </Table>
+            <Subtitle2>Approval sequence</Subtitle2>
+            {state.accessPolicy && policyTiers(state.accessPolicy).length > 0 ? (
+              <Table size="small" aria-label="Approval sequence">
+                <TableHeader><TableRow><TableHeaderCell>Tier</TableHeaderCell><TableHeaderCell>Approver / detail</TableHeaderCell></TableRow></TableHeader>
+                <TableBody>
+                  {policyTiers(state.accessPolicy).map((t, i) => (
+                    <TableRow key={t.key}><TableCell>{i + 1}. {t.label}</TableCell><TableCell>{t.detail || '—'}</TableCell></TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Caption1>No approval tiers configured — access requests will be auto-approved.</Caption1>
+            )}
           </div>
         )}
 
@@ -3179,6 +3178,13 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         />
       </div>
     } />
+    <ManagePoliciesDialog
+      open={policiesOpen}
+      productId={id}
+      isPublished={!!state.apimPublished}
+      onClose={() => setPoliciesOpen(false)}
+      onSaved={(policy) => { setState((prev) => ({ ...prev, accessPolicy: policy })); setPoliciesOpen(false); }}
+    />
     <ImportDataProductsFlyout
       open={importOpen}
       onOpenChange={setImportOpen}
