@@ -70,6 +70,7 @@ import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-script
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
@@ -8270,6 +8271,8 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Visual (no-code) query canvas — Power-Query diagram-view parity.
+  const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const [showViz, setShowViz] = useState(false);
@@ -8336,6 +8339,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const countRows = useCallback(
     (objSchema: string, name: string) => sqlRowCount('warehouse', id, objSchema, name),
     [id],
+  );
+
+  // Flatten the schema tree to a {schema, table} list for the visual-query
+  // canvas's Add-table picker.
+  const vqSourceTables = useMemo(
+    () => schemaEntries.flatMap(([sName, tables]) => tables.map((t) => ({ schema: sName, table: t.table }))),
+    [schemaEntries],
   );
 
   const canRun = ready && !loading;
@@ -8411,6 +8421,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — no SQL required' },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
         { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined, disabled: !canRun || !sqlText.trim(), title: !canRun ? 'warehouse compute is not ready' : (!sqlText.trim() ? 'enter a SELECT first' : undefined) },
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
@@ -8537,7 +8548,15 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           value={`t-${schemaName}.${t.table}`}
                           onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
                         >
-                          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                          <TreeItemLayout
+                            iconBefore={<DocumentTable20Regular />}
+                            // Drag onto the visual-query canvas to add a source.
+                            draggable
+                            onDragStart={(e: React.DragEvent) => {
+                              e.dataTransfer.setData('application/loom-vq-table', JSON.stringify({ schema: schemaName, table: t.table }));
+                              e.dataTransfer.effectAllowed = 'copy';
+                            }}
+                          >
                             {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
                           </TreeItemLayout>
                         </TreeItem>
@@ -8741,6 +8760,21 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                   <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasTable.trim()}>
                     {ctasBusy ? 'Creating…' : 'Create table'}
                   </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Visual (no-code) query canvas — Power Query diagram-view parity. */}
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — {schema?.warehouse || 'Warehouse'}</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas engine="warehouse" id={id} dialect="tsql" sourceTables={vqSourceTables} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

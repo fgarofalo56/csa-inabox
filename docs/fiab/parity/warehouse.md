@@ -29,7 +29,7 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 1 | ✅ | Explorer tree from `/schema`: schemas/tables (sys.partitions row counts) **+ views / stored procedures / functions** (sys.views / sys.procedures / sys.objects FN·IF·TF via `lib/azure/sql-object-scripting.ts`). View leaves carry a lazy `SELECT COUNT_BIG(*)` badge. |
 | 2 | ✅ | Per-node `…` menu → `/script-out` → real OBJECT_DEFINITION (Script as CREATE), CREATE OR ALTER (ALTER), or `DROP … IF EXISTS` (DROP). New measure also loads a CREATE FUNCTION template. |
 | 3 | ✅ | Monaco T-SQL editor + Run via `/query` (Dedicated pool TDS); Results grid |
-| 4 | ❌ MISSING | No-code visual Power-Query canvas not built — SQL editor is the authoring surface today |
+| 4 | ✅ | No-code visual Power-Query canvas (`lib/editors/components/visual-query-canvas.tsx`): drag tables from the Explorer (or Add-table picker), add Filter / Choose columns / Group by + aggregate / Keep top rows steps, Merge two chains with a 6-kind join picker, Applied-Steps inspector with controlled pickers (no freeform except the Filter WHERE box), live read-only generated-SQL pane (Monaco), Run via `/api/items/warehouse/[id]/visual-query`. Compiler `visual-query-compiler.ts` (12 unit tests). |
 | 5 | ✅ | Save-as-view achievable via CREATE VIEW in editor; CTAS dialog covers table |
 | 6 | ✅ | `Save as table` CTAS dialog (`submitCtas`) → real CREATE TABLE AS SELECT |
 | 7 | ✅ | `Open in Excel` → `/iqy` returns a real .iqy web-query file |
@@ -43,9 +43,10 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 
 ## Backend per control
 - Schema / query / CTAS / DMV actions → Synapse Dedicated pool TDS (`executeQuery` / `dedicatedTarget`) via `/api/items/warehouse/[id]/query` + `/schema`.
+- Visual query → `/api/items/[type]/[id]/visual-query` compiles the canvas graph server-side (same pure compiler the UI previews with) and executes it over the Dedicated pool TDS; describe mode resolves table columns via a zero-row `SELECT TOP 0` probe.
 - Visualize (chart) → client-side SVG over the real result set (`result-visualize.tsx`); no backend call, no Power BI.
 - Query parameters → bound server-side via `req.input(name, NVarChar, value)` in `executeQuery`; receipt returns `statement` + `parameters` + `parametersCount`.
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **A- — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships + in-Loom visualize + parameterized queries all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; one honest-gate (workspace Git). The Power BI visualize gate is removed (built Azure-native).**
+Grade: **A — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships + in-Loom visualize + parameterized queries all real, and the no-code visual query canvas is now built end-to-end (real backend, unit-tested compiler). Two honest-gates remain (Power BI visualize removed — built Azure-native; workspace Git). The same canvas is wired into the Synapse Serverless / Dedicated and Databricks SQL editors (Spark SQL dialect).**

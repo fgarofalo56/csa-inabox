@@ -32,6 +32,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
@@ -223,6 +224,8 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   // SQL granular security (F11) — GRANT / column-GRANT / DDM wizards (Entra-only
   // TDS). RLS is gated off for Serverless by the panel (not supported there).
   const [secOpen, setSecOpen] = useState(false);
+  // Visual (no-code) query canvas — Power-Query diagram-view parity.
+  const [vqOpen, setVqOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -300,6 +303,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — no SQL required' },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
         { label: 'Open in Excel', onClick: sqlText.trim() && !loading ? openInExcel : undefined, disabled: !sqlText.trim() || loading, title: !sqlText.trim() ? 'Enter a query first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the live endpoint' },
         // Loads a real sys.external_tables / OPENROWSET template; Run executes
@@ -430,6 +434,19 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
               </DialogBody>
             </DialogSurface>
           </Dialog>
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — Serverless ({database})</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas engine="synapse-serverless-sql-pool" id={id} dialect="tsql" database={database} sourceTables={[]} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -488,6 +505,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [computeId, setComputeId] = useState('');
   // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
   const [secOpen, setSecOpen] = useState(false);
+  // Visual (no-code) query canvas — Power-Query diagram-view parity.
+  const [vqOpen, setVqOpen] = useState(false);
 
   // Query history (DMV) — sys.dm_pdw_exec_requests, last 50 requests.
   const [qhOpen, setQhOpen] = useState(false);
@@ -611,6 +630,10 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
+  const vqSourceTables = useMemo<VqSourceTable[]>(
+    () => schemaTree.flatMap(([sName, tables]) => tables.map((t) => ({ schema: sName, table: t.table }))),
+    [schemaTree],
+  );
   const views = schema?.views ?? [];
   const procedures = schema?.procedures ?? [];
   const functions = schema?.functions ?? [];
@@ -724,6 +747,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — no SQL required' },
         { label: loading ? 'Running…' : 'Run', onClick: !loading && isOnline ? run : undefined, disabled: loading || !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
         // Real DMV — per-request resource class / cost estimate via the MPP DMVs.
         { label: 'Estimate cost', onClick: () => setSqlText(
@@ -1014,6 +1038,20 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </DialogBody>
             </DialogSurface>
           </Dialog>
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — {poolState?.pool || 'Dedicated SQL pool'}</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas engine="synapse-dedicated-sql-pool" id={id} dialect="tsql" sourceTables={vqSourceTables} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
               <DialogBody>
