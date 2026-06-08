@@ -546,6 +546,25 @@ jobs:
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
           fi
 
+      - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
+        run: |
+          # Grant the Console UAMI the three Microsoft Graph application
+          # permissions required by the reusable Identity Picker
+          # (/api/governance/identities/search + <IdentityPicker>):
+          #   - User.Read.All        (search users by displayName / UPN)
+          #   - Group.Read.All       (search groups + expand transitiveMembers)
+          #   - Application.Read.All (search service principals / managed ids)
+          #
+          # Idempotent — re-runs cleanly. Until a Tenant Administrator grants
+          # admin consent, the picker renders its honest-gate MessageBar
+          # naming exactly these grants. Delegates to the shared script so the
+          # grant logic stays in one place.
+          set -e
+          export CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL"
+          bash scripts/csa-loom/grant-identity-graph-approles.sh || \
+            echo "  Identity Picker AppRole grant step reported a non-zero status (likely already granted)."
+
+
       - name: Summary
         if: always()
         run: |

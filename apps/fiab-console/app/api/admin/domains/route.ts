@@ -10,8 +10,10 @@
  * tag themselves to it via their `domain` field, and the governance layer
  * (Purview) can mirror it as a business domain when Purview is provisioned.
  *
- * GET  /api/admin/domains — list tenant domains (+ Purview link status when configured)
- * POST /api/admin/domains   body: { id, name, description?, color?, owners? }
+ * GET  /api/admin/domains — list tenant domains (+ per-domain workspace count +
+ *                            Purview link status when configured)
+ * POST /api/admin/domains   body: { id, name, description?, color?, owners?, admins?, parentId? }
+ * PATCH /api/admin/domains?id=...  body: subset of mutable fields (settings side-pane)
  * DELETE /api/admin/domains?id=...
  *
  * Backed by Cosmos tenant-settings container under id="domains:<tenantId>"
@@ -22,7 +24,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   listBusinessDomains,
   createBusinessDomain,
@@ -34,15 +36,44 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+interface DomainContributors {
+  scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups';
+  users?: string[];
+}
+
+interface DomainDelegatedSettings {
+  defaultSensitivityLabelId?: string;
+  defaultSensitivityLabelName?: string;
+  /** Whether the label id refers to a Loom-native label (vs an M365/MIP label). */
+  defaultSensitivityLabelSource?: 'mip' | 'loom';
+  certificationEnabled?: boolean;
+  certificationUrl?: string;
+  certifiers?: string[];
+}
+
 interface DomainItem {
   id: string;
   name: string;
   description?: string;
   color?: string;
   owners?: string[];
+  /** Domain admins (UPNs / group names) — can change domain settings. */
+  admins?: string[];
+  /** Who may assign workspaces to this domain. */
+  contributors?: DomainContributors;
+  /** Users/groups for default-domain auto-assign. */
+  defaultDomainUsers?: string[];
+  /** Tenant-setting overrides delegated to the domain level. */
+  delegatedSettings?: DomainDelegatedSettings;
+  /** Image picker selection: "color::#0078d4" | "icon::finance" | "blob::<name>". */
+  imageKey?: string;
+  /** Parent domain id when this is a subdomain. */
+  parentId?: string;
   purviewDomainId?: string;
   createdAt: string;
   createdBy: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 interface DomainsDoc {
@@ -102,14 +133,56 @@ async function purviewStatus(): Promise<
   }
 }
 
+/**
+ * Workspace counts per domain — a Cosmos GROUP BY over the workspaces
+ * container's `domain` field, scoped to the tenant partition. Returns an
+ * empty map (never throws) when the workspaces container is unreachable so
+ * the domain list still renders. Matches the count Fabric shows beside each
+ * domain on the Domains tab.
+ */
+async function workspaceCounts(tenantId: string): Promise<Record<string, number>> {
+  try {
+    const wsC = await workspacesContainer();
+    const { resources } = await wsC.items.query<{ domain?: string; n: number }>({
+      query: 'SELECT c.domain AS domain, COUNT(1) AS n FROM c WHERE c.tenantId = @t GROUP BY c.domain',
+      parameters: [{ name: '@t', value: tenantId }],
+    }, { partitionKey: tenantId }).fetchAll();
+    const out: Record<string, number> = {};
+    for (const r of resources) if (r.domain) out[r.domain] = r.n;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Is the caller a Fabric/tenant-level admin (vs a domain-scoped admin)?
+ * Tenant admins may change a domain's name and admin list; domain admins
+ * may not (mirrors Fabric's role rules). When neither LOOM_TENANT_ADMIN_OID
+ * nor LOOM_TENANT_ADMIN_GROUP_ID is configured, the whole console is already
+ * admin-gated, so every authenticated session is treated as a tenant admin.
+ */
+function isTenantAdmin(oid: string): boolean {
+  const adminOids = (process.env.LOOM_TENANT_ADMIN_OID || '')
+    .split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const adminGroup = (process.env.LOOM_TENANT_ADMIN_GROUP_ID || '').trim();
+  if (adminOids.length === 0 && !adminGroup) return true;
+  return adminOids.includes((oid || '').toLowerCase());
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
-    const purview = await purviewStatus();
-    return NextResponse.json({ ok: true, domains: doc.items, updatedAt: doc.updatedAt, purview });
+    const [purview, counts] = await Promise.all([purviewStatus(), workspaceCounts(tenantId)]);
+    const domains = doc.items.map((d) => ({ ...d, workspaceCount: counts[d.id] || 0 }));
+    return NextResponse.json({
+      ok: true, domains, updatedAt: doc.updatedAt, purview,
+      isTenantAdmin: isTenantAdmin(s.claims.oid),
+      imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -147,9 +220,17 @@ export async function POST(req: NextRequest) {
       description: body?.description || undefined,
       color: body?.color || undefined,
       owners: normalizeOwners(body?.owners),
+      admins: normalizeOwners(body?.admins),
+      parentId: body?.parentId ? String(body.parentId).trim() : undefined,
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
     };
+    // A subdomain must reference an existing parent (Fabric parity: subdomains
+    // hang off a domain). Reject a dangling parentId rather than silently
+    // creating an orphan.
+    if (newItem.parentId && !doc.items.some((d) => d.id === newItem.parentId)) {
+      return NextResponse.json({ ok: false, error: `parent domain '${newItem.parentId}' not found` }, { status: 400 });
+    }
     // Best-effort Purview mirror: a Loom domain ⇄ a Purview collection on the
     // classic Data Map account. Never blocks the Cosmos write (Purview is
     // optional); a grant/auth error is surfaced in `purviewMirror` for the UI.
@@ -167,6 +248,99 @@ export async function POST(req: NextRequest) {
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, purviewMirror });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+  }
+}
+
+/**
+ * PATCH /api/admin/domains?id=...
+ *
+ * Settings side-pane writer. Body carries any subset of the mutable fields:
+ *   { name?, description?, color?, imageKey?, admins?, owners?,
+ *     contributors?: { scope, users? },
+ *     defaultDomainUsers?: string[],
+ *     delegatedSettings?: { defaultSensitivityLabelId?, defaultSensitivityLabelName?,
+ *                           defaultSensitivityLabelSource?, certificationEnabled?,
+ *                           certificationUrl?, certifiers? } }
+ *
+ * Authorization (mirrors Fabric role rules):
+ *   - Tenant/Fabric admin -> may change anything, including `name` and `admins`.
+ *   - Domain admin (UPN in domain.admins) -> may change everything EXCEPT `name`
+ *     and `admins` (Fabric: domain admins can't rename or change admin list).
+ *   - Anyone else -> 403.
+ */
+export async function PATCH(req: NextRequest) {
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const tenantId = s.claims.oid;
+  const id = req.nextUrl.searchParams.get('id');
+  if (!id) return NextResponse.json({ ok: false, error: 'id query param required' }, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  try {
+    const c = await tenantSettingsContainer();
+    const docId = `domains:${tenantId}`;
+    const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
+    const idx = doc.items.findIndex((d) => d.id === id);
+    if (idx < 0) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    const domain = doc.items[idx];
+
+    const upn = (s.claims.upn || '').toLowerCase();
+    const tenantAdmin = isTenantAdmin(s.claims.oid);
+    const domainAdmin = (domain.admins || []).some((a) => a.toLowerCase() === upn);
+    if (!tenantAdmin && !domainAdmin) {
+      return NextResponse.json(
+        { ok: false, error: 'Only a tenant admin or an admin of this domain may change its settings.' },
+        { status: 403 },
+      );
+    }
+    // Fields only a tenant admin may change.
+    if (!tenantAdmin && (body?.name !== undefined || body?.admins !== undefined)) {
+      return NextResponse.json(
+        { ok: false, error: "Domain admins can't change the domain name or admin list - that requires a tenant admin." },
+        { status: 403 },
+      );
+    }
+
+    // Merge only the provided fields.
+    if (typeof body?.name === 'string' && body.name.trim()) domain.name = body.name.trim();
+    if (body?.description !== undefined) domain.description = String(body.description || '').trim() || undefined;
+    if (body?.color !== undefined) domain.color = String(body.color || '').trim() || undefined;
+    if (body?.imageKey !== undefined) domain.imageKey = String(body.imageKey || '').trim() || undefined;
+    if (body?.admins !== undefined) domain.admins = normalizeOwners(body.admins);
+    if (body?.owners !== undefined) domain.owners = normalizeOwners(body.owners);
+    if (body?.defaultDomainUsers !== undefined) domain.defaultDomainUsers = normalizeOwners(body.defaultDomainUsers);
+    if (body?.contributors !== undefined) {
+      const scope = body.contributors?.scope;
+      const allowed = ['AllTenant', 'AdminsOnly', 'SpecificUsersAndGroups'];
+      if (!allowed.includes(scope)) {
+        return NextResponse.json({ ok: false, error: `contributors.scope must be one of ${allowed.join(', ')}` }, { status: 400 });
+      }
+      domain.contributors = {
+        scope,
+        users: scope === 'SpecificUsersAndGroups' ? normalizeOwners(body.contributors?.users) : undefined,
+      };
+    }
+    if (body?.delegatedSettings !== undefined) {
+      const ds = body.delegatedSettings || {};
+      const cur = domain.delegatedSettings || {};
+      domain.delegatedSettings = {
+        ...cur,
+        ...(ds.defaultSensitivityLabelId !== undefined ? { defaultSensitivityLabelId: String(ds.defaultSensitivityLabelId || '').trim() || undefined } : {}),
+        ...(ds.defaultSensitivityLabelName !== undefined ? { defaultSensitivityLabelName: String(ds.defaultSensitivityLabelName || '').trim() || undefined } : {}),
+        ...(ds.defaultSensitivityLabelSource !== undefined ? { defaultSensitivityLabelSource: ds.defaultSensitivityLabelSource === 'loom' ? 'loom' : 'mip' } : {}),
+        ...(ds.certificationEnabled !== undefined ? { certificationEnabled: !!ds.certificationEnabled } : {}),
+        ...(ds.certificationUrl !== undefined ? { certificationUrl: String(ds.certificationUrl || '').trim() || undefined } : {}),
+        ...(ds.certifiers !== undefined ? { certifiers: normalizeOwners(ds.certifiers) } : {}),
+      };
+    }
+
+    domain.updatedAt = new Date().toISOString();
+    domain.updatedBy = s.claims.upn || tenantId;
+    doc.items[idx] = domain;
+    doc.updatedAt = new Date().toISOString();
+    await c.item(docId, tenantId).replace(doc);
+    return NextResponse.json({ ok: true, domain });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
