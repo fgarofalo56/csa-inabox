@@ -426,6 +426,7 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
   name: 'dlz-cosmos-graph-vector'
   params: {
     location: location
+    boundary: boundary
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
