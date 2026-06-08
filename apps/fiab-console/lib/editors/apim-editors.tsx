@@ -28,16 +28,22 @@ import {
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
-  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
   Database20Regular, Warning20Filled, MoreHorizontal20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { AddDataAssetsPanel, type DataAssetRef as DataAssetWithFlags } from './components/add-data-assets-panel';
+import { ImportDataProductsFlyout } from './components/import-data-products-flyout';
+import {
+  SelectAttributePanel, LinkListAttributePanel, type AttrReceipt,
+} from './components/inline-attribute-panel';
+import { UPDATE_FREQUENCIES, type ExternalLink } from '@/lib/dataproducts/attributes';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { DataProductEditDialog } from './data-product-edit-dialog';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -1778,6 +1784,13 @@ interface DataProductState {
   domain: string;
   owner: string;
   certified: boolean;
+  /**
+   * F7 — marketplace "Endorsed by governance" flag, distinct from the
+   * Purview-only `certified` concept. Toggled in the Data Product Edit dialog
+   * (Basic step) which PATCHes the Cosmos `dataproducts` doc; the badge below
+   * mirrors the saved value via the dialog's onSaved callback.
+   */
+  endorsed?: boolean;
   sla: string;
   bundle: string[];
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
@@ -1791,6 +1804,26 @@ interface DataProductState {
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
+  // F6 — Publish/Unpublish/Expire lifecycle. Cosmos is the source of truth;
+  // managed via POST /api/data-products/[id]/status. Unset == Draft.
+  lifecycleStatus?: 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
+  lifecycleStatusAt?: string;
+  // F21 Publish-as-API edge — populated by
+  // POST /api/items/data-product/[id]/publish-api on success. The subscription
+  // KEY is deliberately NOT stored here (ephemeral, shown once in the receipt).
+  apimApiId?: string;
+  apimProductId?: string;
+  apimSubscriptionId?: string;
+  apimGatewayUrl?: string;
+  apimServiceUrl?: string;
+  apimApiPath?: string;
+  apimPublishedAt?: string;
+  // Inline right-rail attributes — 1:1 with the Purview Unified Catalog
+  // data-product details page (F5 / F11 / F12). Persisted to Cosmos state via
+  // the partial-merge PATCH /api/data-products/[id].
+  updateFrequency?: string;
+  termsOfUse?: ExternalLink[];
+  documentation?: ExternalLink[];
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1801,8 +1834,11 @@ const DP_EMPTY: DataProductState = {
   domain: '',
   owner: '',
   certified: false,
+  endorsed: false,
   sla: '',
   bundle: [],
+  termsOfUse: [],
+  documentation: [],
 };
 
 /**
@@ -1897,6 +1933,104 @@ function useGovernanceDomains() {
   return { domains, error, notConfigured, loading };
 }
 
+/**
+ * F21 — Publish-as-API dialog. Captures the backing query endpoint, POSTs to
+ * /publish-api, and on success renders the consumable URL + masked subscription
+ * key + a copy-paste curl example. Honest-gates when APIM env vars are absent.
+ */
+function PublishAsApiDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  serviceUrl: string;
+  onServiceUrlChange: (v: string) => void;
+  busy: boolean;
+  result: { callableUrl: string; primaryKey?: string; apiId: string; productId: string; sid: string; gatewayUrl: string } | null;
+  gate: { hint: string; missing?: string; bicepModule?: string } | null;
+  err: string | null;
+  keyVisible: boolean;
+  onToggleKey: () => void;
+  onPublish: () => void;
+  republish: boolean;
+}) {
+  const { open, onOpenChange, serviceUrl, onServiceUrlChange, busy, result, gate, err, keyVisible, onToggleKey, onPublish, republish } = props;
+  const copy = (text: string) => { try { void navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ } };
+  const curl = result
+    ? `curl "${result.callableUrl}" \\\n  -H "Ocp-Apim-Subscription-Key: ${result.primaryKey || '<your-subscription-key>'}"`
+    : '';
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: 640 }}>
+        <DialogBody>
+          <DialogTitle>{republish ? 'Re-publish data product as API' : 'Publish data product as API'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Body1>
+                Front this data product&apos;s backing query endpoint with Azure API Management. Loom creates an APIM
+                API + published product, mints an active subscription key, and returns a consumable URL. The API ref is
+                persisted on the data product.
+              </Body1>
+              {gate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Azure API Management is not configured in this deployment</MessageBarTitle>
+                    {gate.missing && <>Missing env var: <code>{gate.missing}</code>. </>}
+                    {gate.hint}
+                    {gate.bicepModule && <> Bicep module: <code>{gate.bicepModule}</code>.</>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              {!result && (
+                <Field label="Backing service URL (the query endpoint APIM proxies to)" required
+                  hint="The HTTPS endpoint that serves this data product's data — e.g. a Data API Builder route, a Function, or a Synapse SQL serverless REST surface.">
+                  <Input value={serviceUrl} onChange={(_, d) => onServiceUrlChange(d.value)} placeholder="https://dab.internal.example.com/api/silver_revenue" />
+                </Field>
+              )}
+              {result && (
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    <MessageBarTitle>API published — endpoint is live</MessageBarTitle>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <strong>Consumable URL:</strong>
+                        <code style={{ wordBreak: 'break-all' }}>{result.callableUrl}</code>
+                        <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.callableUrl)}>Copy</Button>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <strong>Header:</strong>
+                        <code>Ocp-Apim-Subscription-Key:</code>
+                        <code>{keyVisible ? (result.primaryKey || '—') : '••••••••••••••••'}</code>
+                        <Button size="small" appearance="subtle" icon={keyVisible ? <EyeOff20Regular /> : <Eye20Regular />} onClick={onToggleKey}>{keyVisible ? 'Hide' : 'Reveal'}</Button>
+                        {result.primaryKey && <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.primaryKey!)}>Copy key</Button>}
+                      </div>
+                      <Caption1>This subscription key is shown once and is not stored on the item — copy it now. Manage or regenerate it in the APIM navigator (subscription <code>{result.sid}</code>).</Caption1>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                        <pre style={{ flex: 1, margin: 0, padding: 8, background: tokens.colorNeutralBackground3, borderRadius: 4, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
+                        <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(curl)}>Copy curl</Button>
+                      </div>
+                      <Caption1>API <code>{result.apiId}</code> · Product <code>{result.productId}</code> · Gateway <code>{result.gatewayUrl}</code></Caption1>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {!result && (
+              <Button appearance="primary" icon={<Key20Regular />} onClick={onPublish} disabled={busy || !serviceUrl.trim() || !!gate}>
+                {busy ? 'Publishing…' : republish ? 'Re-publish API' : 'Publish API'}
+              </Button>
+            )}
+            <DialogTrigger disableButtonEnhancement>
+              <Button appearance="secondary">{result ? 'Done' : 'Cancel'}</Button>
+            </DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
@@ -1904,6 +2038,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
   const [loading, setLoading] = useState(id !== 'new');
+  // F4 — Data Product Edit dialog (3-step, per-step PATCH) open state.
+  const [editOpen, setEditOpen] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
   const [dirty, setDirty] = useState(false);
@@ -1912,10 +2048,27 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // module path + roles to grant.
   const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
 
+  // F21 Publish-as-API — dialog state. The serviceUrl is the backing query
+  // endpoint APIM proxies to; the receipt carries the callable URL + key.
+  const [publishApiOpen, setPublishApiOpen] = useState(false);
+  const [publishApiServiceUrl, setPublishApiServiceUrl] = useState('');
+  const [publishApiBusy, setPublishApiBusy] = useState(false);
+  const [publishApiResult, setPublishApiResult] = useState<{
+    callableUrl: string; primaryKey?: string; apiId: string; productId: string; sid: string; gatewayUrl: string;
+  } | null>(null);
+  const [publishApiGate, setPublishApiGate] = useState<{ hint: string; missing?: string; bicepModule?: string } | null>(null);
+  const [publishApiErr, setPublishApiErr] = useState<string | null>(null);
+  const [publishApiKeyVisible, setPublishApiKeyVisible] = useState(false);
+
   const domains = useGovernanceDomains();
 
   // Tabs: Overview | Datasets | Data assets | Glossary | Lineage | Access policies
   const [tab, setTab] = useState<'overview' | 'datasets' | 'data-assets' | 'glossary' | 'lineage' | 'policies'>('overview');
+
+  // Bulk "Import from CSV" flyout (F2 import + F18 monitoring) — creates many
+  // draft data-product items from a CSV in one shot. Available on /new and on
+  // an existing item alike (it always creates NEW items).
+  const [importOpen, setImportOpen] = useState(false);
 
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');
@@ -1962,6 +2115,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [polBusy, setPolBusy] = useState(false);
   const [polMsg, setPolMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
+  // F6 — lifecycle (Publish / Set to draft / Set to expired).
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleMsg, setLifecycleMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
   // Phase 4.5 — all field mutations use functional updates so that if an
   // async response (e.g. registerPurview hydrating purviewDataProductId)
   // lands between the user's keystroke and React's commit, neither edit
@@ -1970,6 +2127,22 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     setState((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   }, []);
+
+  // Inline right-rail attribute persistence (F5 / F11 / F12). Sends ONLY the
+  // changed field to the partial-merge PATCH /api/data-products/[id] — the
+  // server merges it into the persisted Cosmos state without clobbering other
+  // fields — and returns a receipt (request body + response) for the panel.
+  const patchAttr = useCallback(async (patch: Record<string, unknown>): Promise<AttrReceipt> => {
+    const url = `/api/data-products/${encodeURIComponent(id)}`;
+    const r = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+    return { method: 'PATCH', url, requestBody: patch, status: r.status, response: j, at: new Date().toISOString() };
+  }, [id]);
 
   // v3.27: F-vaporware fix — Cosmos-backed load, removes hardcoded
   // 'Customer 360' / alice@contoso / fixed bundle grid.
@@ -2071,6 +2244,53 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [id]);
 
+  // F21 — Publish-as-API: create a real APIM API + product + active subscription
+  // fronting the data product's backing query endpoint, then persist the API
+  // ref to Cosmos and surface the callable URL + subscription key.
+  const publishAsApi = useCallback(async () => {
+    if (!publishApiServiceUrl.trim()) { setPublishApiErr('Backing service URL is required.'); return; }
+    setPublishApiBusy(true); setPublishApiErr(null); setPublishApiGate(null); setPublishApiResult(null);
+    // Snapshot so the request body uses the freshest name/description.
+    let snapshot: DataProductState = DP_EMPTY;
+    setState((prev) => { snapshot = prev; return prev; });
+    try {
+      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/publish-api`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          serviceUrl: publishApiServiceUrl.trim(),
+          displayName: snapshot.displayName || undefined,
+          description: snapshot.description || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (r.status === 503 && j?.gated) {
+        setPublishApiGate({ hint: j.hint || j.error || 'APIM not configured', missing: j.missing, bicepModule: j.bicepModule });
+        return;
+      }
+      if (!j.ok) { setPublishApiErr(j.error || `HTTP ${r.status}`); return; }
+      // Hydrate the Cosmos-persisted refs from the receipt (no reload needed).
+      setState((prev) => ({
+        ...prev,
+        apimApiId: j.apiId,
+        apimProductId: j.productId,
+        apimSubscriptionId: j.sid,
+        apimGatewayUrl: j.gatewayUrl,
+        apimServiceUrl: publishApiServiceUrl.trim(),
+        apimApiPath: j.apimCreate?.api?.path,
+        apimPublishedAt: j.apimPublishedAt,
+      }));
+      setPublishApiResult({
+        callableUrl: j.callableUrl,
+        primaryKey: j.primaryKey,
+        apiId: j.apiId,
+        productId: j.productId,
+        sid: j.sid,
+        gatewayUrl: j.gatewayUrl,
+      });
+    } catch (e: any) { setPublishApiErr(e?.message || String(e)); }
+    finally { setPublishApiBusy(false); }
+  }, [id, publishApiServiceUrl]);
+
   const registerPurview = useCallback(async () => {
     setStatus({ kind: 'saving' });
     setPurviewHint(null);
@@ -2109,6 +2329,41 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   }, [id]);
 
   const setBundleText = (text: string) => patchState({ bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
+
+  // ---- F6 lifecycle: Publish / Set to draft / Set to expired ----
+  // The server (/api/data-products/[id]/status) is the authoritative guard:
+  // Publish enforces >=1 asset + an active Access policy + a set domain and
+  // returns 422 with the precise precondition reason. We surface that reason
+  // verbatim in the lifecycle MessageBar. Cosmos is the source of truth — no
+  // Microsoft Fabric / Power BI dependency.
+  const handleSetStatus = useCallback(async (next: 'PUBLISHED' | 'DRAFT' | 'EXPIRED') => {
+    setLifecycleBusy(true); setLifecycleMsg(null);
+    try {
+      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/status`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: next }),
+      });
+      const j = await r.json();
+      if (r.status === 422 && j?.preconditionFailed) {
+        setLifecycleMsg({ intent: 'error', text: j.preconditionFailed.message });
+        return;
+      }
+      if (!j?.ok) { setLifecycleMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setState((prev) => ({ ...prev, lifecycleStatus: next, lifecycleStatusAt: j.lifecycleStatusAt }));
+      const label = next === 'PUBLISHED' ? 'Published' : next === 'EXPIRED' ? 'set to expired' : 'set to draft';
+      setLifecycleMsg({
+        intent: 'success',
+        text: next === 'PUBLISHED'
+          ? `Published. ${j.purviewSync ? 'Purview unified catalog updated.' : (j.purviewSyncNote || 'Consumers can now discover this data product.')}`
+          : `Status ${label}.${next === 'EXPIRED' ? ' Consumers can no longer discover this data product.' : ''}`,
+      });
+    } catch (e: any) {
+      setLifecycleMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }, [id]);
 
   // ---- Datasets (register Atlas entity + classifications) ----
   const registerDataset = useCallback(async () => {
@@ -2304,6 +2559,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const canSave = status.kind !== 'saving' && (isNew
     ? (!!state.displayName.trim() && !!workspaceId)
     : dirty);
+  // F6 — client-side preflight for the Publish button. The server is the
+  // authoritative gate (assets / policy / domain); this only blocks obvious
+  // non-starters with an honest tooltip.
+  const isPublished = state.lifecycleStatus === 'PUBLISHED';
+  const canPublish = !isNew && !lifecycleBusy && status.kind !== 'saving' && !isPublished && !!state.displayName.trim();
+  const publishBlockReason = isNew
+    ? 'Create the data product first'
+    : isPublished ? 'Already published'
+    : !state.displayName.trim() ? 'Display name is required'
+    : undefined;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Product', actions: [
@@ -2311,6 +2576,29 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           onClick: canSave ? save : undefined, disabled: !canSave,
           title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
         { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
+        { label: 'Edit (Basic / Business / Custom)', onClick: !isNew ? () => setEditOpen(true) : undefined, disabled: isNew, title: isNew ? 'Create the data product first' : 'Open the 3-step edit dialog (per-step Save + Endorse)' },
+        { label: 'Publish as API', onClick: !isNew && status.kind !== 'saving' ? () => {
+            setPublishApiServiceUrl(state.apimServiceUrl || '');
+            setPublishApiResult(null);
+            setPublishApiGate(null);
+            setPublishApiErr(null);
+            setPublishApiKeyVisible(false);
+            setPublishApiOpen(true);
+          } : undefined,
+          disabled: isNew || status.kind === 'saving',
+          title: isNew ? 'Create the data product first' : 'Expose this data product as a consumable APIM API with a subscription key' },
+      ]},
+      { label: 'Lifecycle', actions: [
+        { label: lifecycleBusy ? 'Publishing…' : 'Publish',
+          onClick: canPublish ? () => handleSetStatus('PUBLISHED') : undefined,
+          disabled: !canPublish, title: publishBlockReason },
+        { label: 'Unpublish',
+          disabled: isNew || lifecycleBusy || !isPublished,
+          title: isNew ? 'Create the data product first' : !isPublished ? 'Publish the data product first' : undefined,
+          dropdownItems: [
+            { label: 'Set to draft', onClick: () => handleSetStatus('DRAFT') },
+            { label: 'Set to expired', onClick: () => handleSetStatus('EXPIRED') },
+          ] },
       ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
@@ -2319,11 +2607,61 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
+      { label: 'Bulk', actions: [
+        { label: 'Import from CSV', onClick: () => setImportOpen(true) },
+      ]},
     ]},
-  ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
+  ], [status.kind, isNew, canSave, dirty, save, state.displayName, state.apimServiceUrl, workspaceId, publishApimMirror, canPublish, isPublished, lifecycleBusy, publishBlockReason, handleSetStatus]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <>
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={isNew ? undefined : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <SelectAttributePanel
+          title="Update frequency"
+          value={state.updateFrequency ?? ''}
+          options={UPDATE_FREQUENCIES}
+          placeholder="Not set"
+          onSave={async (v) => {
+            const receipt = await patchAttr({ updateFrequency: v || null });
+            setState((prev) => ({ ...prev, updateFrequency: v || undefined }));
+            return receipt;
+          }}
+        />
+        <LinkListAttributePanel
+          title="Terms of use"
+          entries={state.termsOfUse ?? []}
+          onAdd={async (entry) => {
+            const next = [...(state.termsOfUse ?? []), entry];
+            const receipt = await patchAttr({ termsOfUse: next });
+            setState((prev) => ({ ...prev, termsOfUse: next }));
+            return receipt;
+          }}
+          onRemove={async (idx) => {
+            const next = (state.termsOfUse ?? []).filter((_, i) => i !== idx);
+            const receipt = await patchAttr({ termsOfUse: next });
+            setState((prev) => ({ ...prev, termsOfUse: next }));
+            return receipt;
+          }}
+        />
+        <LinkListAttributePanel
+          title="Documentation"
+          entries={state.documentation ?? []}
+          onAdd={async (entry) => {
+            const next = [...(state.documentation ?? []), entry];
+            const receipt = await patchAttr({ documentation: next });
+            setState((prev) => ({ ...prev, documentation: next }));
+            return receipt;
+          }}
+          onRemove={async (idx) => {
+            const next = (state.documentation ?? []).filter((_, i) => i !== idx);
+            const receipt = await patchAttr({ documentation: next });
+            setState((prev) => ({ ...prev, documentation: next }));
+            return receipt;
+          }}
+        />
+      </div>
+    )} main={
       <div className={s.pad}>
         {state.purviewDataProductId ? (
           <MessageBar intent="success">
@@ -2364,13 +2702,30 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         {loading && <Spinner size="tiny" label="Loading…" />}
 
         <div className={s.toolbar}>
+          {(() => {
+            const ls = state.lifecycleStatus;
+            if (ls === 'PUBLISHED') return <Badge appearance="filled" color="success">Published</Badge>;
+            if (ls === 'EXPIRED') return <Badge appearance="filled" color="danger">Expired</Badge>;
+            return <Badge appearance="outline" color="warning">Draft</Badge>;
+          })()}
           {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
+          {state.endorsed && <Badge appearance="tint" color="brand">Endorsed</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
+          {state.apimApiId && <Badge appearance="outline" color="success" icon={<Key20Regular />}>APIM API: {state.apimApiId}</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance={isNew ? 'primary' : 'secondary'} icon={<Save20Regular />} onClick={save} disabled={!canSave}>
             {status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : isNew ? 'Create' : 'Save'}
+          </Button>
+          <Button
+            appearance="secondary"
+            icon={<Edit20Regular />}
+            onClick={() => setEditOpen(true)}
+            disabled={isNew}
+            title={isNew ? 'Create the data product first' : 'Edit Basic / Business / Custom attributes (per-step Save + Endorse)'}
+          >
+            Edit
           </Button>
           <Button
             appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
@@ -2387,8 +2742,71 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={isNew || status.kind === 'saving' || !state.displayName} title={isNew ? 'Create the data product first' : undefined}>
             {status.kind === 'saving' ? 'Publishing…' : 'Publish to APIM'}
           </Button>
+          <Button
+            appearance="primary"
+            icon={<Key20Regular />}
+            onClick={() => {
+              setPublishApiServiceUrl(state.apimServiceUrl || '');
+              setPublishApiResult(null);
+              setPublishApiGate(null);
+              setPublishApiErr(null);
+              setPublishApiKeyVisible(false);
+              setPublishApiOpen(true);
+            }}
+            disabled={isNew || status.kind === 'saving'}
+            title={isNew ? 'Create the data product first' : 'Expose this data product as a consumable APIM API with a subscription key'}
+          >
+            {state.apimApiId ? 'Re-publish as API' : 'Publish as API'}
+          </Button>
         </div>
         <StatusBar status={status} />
+
+        {lifecycleMsg && (
+          <MessageBar intent={lifecycleMsg.intent}>
+            <MessageBarBody>
+              <MessageBarTitle>{lifecycleMsg.intent === 'error' ? 'Lifecycle error' : 'Status updated'}</MessageBarTitle>
+              {lifecycleMsg.text}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {state.lifecycleStatus === 'EXPIRED' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>This data product is expired</MessageBarTitle>
+              It is visible only to stewards and owners. Consumers cannot discover it in the catalog or request access. Use <strong>Publish</strong> to make it discoverable again.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        <PublishAsApiDialog
+          open={publishApiOpen}
+          onOpenChange={setPublishApiOpen}
+          serviceUrl={publishApiServiceUrl}
+          onServiceUrlChange={setPublishApiServiceUrl}
+          busy={publishApiBusy}
+          result={publishApiResult}
+          gate={publishApiGate}
+          err={publishApiErr}
+          keyVisible={publishApiKeyVisible}
+          onToggleKey={() => setPublishApiKeyVisible((v) => !v)}
+          onPublish={publishAsApi}
+          republish={!!state.apimApiId}
+        />
+
+        {/* F4 — 3-step edit dialog (per-step PATCH) + F7 Endorse. Renders only
+            for a persisted product; onSaved mirrors the saved endorsed flag to
+            the header badge. Operates on the SAME Cosmos `items` data-product
+            record the marketplace lists, via /api/data-products/[id] with
+            optimistic-concurrency If-Match (Azure-native, no Fabric dependency). */}
+        {!isNew && (
+          <DataProductEditDialog
+            id={id}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onSaved={(doc) => patchState({ endorsed: doc.endorsed })}
+          />
+        )}
+
+
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
@@ -2691,5 +3109,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
       </div>
     } />
+    <ImportDataProductsFlyout
+      open={importOpen}
+      onOpenChange={setImportOpen}
+      defaultWorkspaceId={workspaceId || undefined}
+    />
+    </>
   );
 }

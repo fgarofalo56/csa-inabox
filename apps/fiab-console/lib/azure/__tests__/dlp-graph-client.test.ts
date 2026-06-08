@@ -136,4 +136,90 @@ describe('dlp-graph-client', () => {
     await expect(mod.evaluatePolicy({ content: '' })).rejects.toBeInstanceOf(mod.DlpError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // ── F22 additions ──────────────────────────────────────────────────────────
+
+  it('listDlpViolations shapes per-item violations from alerts_v2 evidence', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [
+        {
+          id: 'v1', severity: 'high', status: 'newAlert', createdDateTime: '2026-05-22T09:00:00Z',
+          title: "DLP policy 'Finance PII' matched", actorDisplayName: 'Jane Doe',
+          additionalData: { policyId: 'p1', policyName: 'Finance PII', ruleName: 'SSN rule', dlpAction: 'Block', workload: 'SharePoint' },
+          evidences: [
+            { '@odata.type': '#microsoft.graph.security.fileEvidence', filePath: '/sites/finance/q1.xlsx', userAccount: { userPrincipalName: 'jane@contoso.com' } },
+          ],
+        },
+      ],
+    }), { status: 200 }));
+    const mod = await import('../dlp-graph-client');
+    const violations = await mod.listDlpViolations();
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/v1.0/security/alerts_v2');
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      alertId: 'v1', policyId: 'p1', policyName: 'Finance PII', ruleName: 'SSN rule',
+      severity: 'high', action: 'Block', user: 'jane@contoso.com', itemPath: '/sites/finance/q1.xlsx',
+    });
+  });
+
+  it('listDlpViolations filters by policyId when supplied', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [
+        { id: 'v1', additionalData: { policyId: 'p1', policyName: 'A' } },
+        { id: 'v2', additionalData: { policyId: 'p2', policyName: 'B' } },
+      ],
+    }), { status: 200 }));
+    const mod = await import('../dlp-graph-client');
+    const violations = await mod.listDlpViolations({ policyId: 'p2' });
+    expect(violations).toHaveLength(1);
+    expect(violations[0].alertId).toBe('v2');
+  });
+
+  it('getScanStatus returns an honest, non-faked gate', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    const mod = await import('../dlp-graph-client');
+    const status = await mod.getScanStatus();
+    expect(status.available).toBe(false);
+    expect(status.powershellCmd).toBe('Get-ScanStatus');
+    expect(status.portalLink).toMatch(/purview/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('triggerScan throws a typed 501 with portal remediation (no faked success)', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    const mod = await import('../dlp-graph-client');
+    await expect(mod.triggerScan()).rejects.toBeInstanceOf(mod.DlpError);
+    try {
+      await mod.triggerScan();
+    } catch (e: any) {
+      expect(e.status).toBe(501);
+      expect(e.body?.powershellCmd).toBe('Start-Scan');
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('honest-gates DLP policy reads in US Government clouds before calling Graph', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    process.env.LOOM_CLOUD_BOUNDARY = 'GCC-High';
+    delete process.env.LOOM_DLP_GRAPH_BASE;
+    const mod = await import('../dlp-graph-client');
+    await expect(mod.listDlpPolicies()).rejects.toBeInstanceOf(mod.DlpNotConfiguredError);
+    expect(fetchMock).not.toHaveBeenCalled(); // gated before any Graph call
+  });
+
+  it('uses the graph.microsoft.us root for violations in US Government clouds', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    process.env.LOOM_CLOUD_BOUNDARY = 'GCC-High';
+    delete process.env.LOOM_DLP_GRAPH_BASE;
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ value: [] }), { status: 200 }));
+    const mod = await import('../dlp-graph-client');
+    await mod.listDlpViolations();
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('https://graph.microsoft.us/v1.0/security/alerts_v2');
+  });
 });
