@@ -4,20 +4,24 @@
  * Paginated list of approved subscribers (access-requests) for a data product.
  * Real Cosmos query against the Azure-native `access-requests` container — no
  * Fabric/Purview dependency. Used by the owner details page (F3) subscribers
- * list. Tenant isolation is enforced by first confirming the product belongs
- * to the caller's tenant.
+ * list. Owner-only: the data product is loaded via the tenant-scoped workspace
+ * path, so a non-owner gets 404 and never sees the subscriber list.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
+  itemsContainer,
+  workspacesContainer,
   accessRequestsContainer,
-  dataproductsContainer,
 } from '@/lib/azure/cosmos-client';
-import type { AccessRequestDoc, DataProductDoc } from '@/lib/types/data-product';
+import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { AccessRequestDoc } from '@/lib/types/data-product';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const ITEM_TYPE = 'data-product';
 
 function err(error: string, status: number, code: string) {
   return NextResponse.json({ ok: false, error, code }, { status });
@@ -32,18 +36,29 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const page = Math.max(0, Number(req.nextUrl.searchParams.get('page') || 0) || 0);
   const pageSize = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get('pageSize') || 10) || 10));
 
-  // Tenant isolation — confirm the product belongs to this tenant first.
+  // Tenant isolation — confirm the product exists and belongs to this tenant
+  // (via its owning workspace) before exposing its subscriber list.
   try {
-    const dp = await dataproductsContainer();
-    const { resources } = await dp.items
-      .query<DataProductDoc>({
-        query: 'SELECT c.id, c.tenantId FROM c WHERE c.id = @id',
-        parameters: [{ name: '@id', value: id }],
+    const items = await itemsContainer();
+    const { resources } = await items.items
+      .query<WorkspaceItem>({
+        query: 'SELECT c.id, c.workspaceId FROM c WHERE c.id = @id AND c.itemType = @t',
+        parameters: [
+          { name: '@id', value: id },
+          { name: '@t', value: ITEM_TYPE },
+        ],
       })
       .fetchAll();
     const product = resources[0];
     if (!product) return err('Data product not found', 404, 'not_found');
-    if (product.tenantId && product.tenantId !== tenantId) return err('Forbidden', 403, 'forbidden');
+    const ws = await workspacesContainer();
+    try {
+      const { resource } = await ws.item(product.workspaceId, tenantId).read<Workspace>();
+      if (!resource || resource.tenantId !== tenantId) return err('Data product not found', 404, 'not_found');
+    } catch (e: any) {
+      if (e?.code === 404) return err('Data product not found', 404, 'not_found');
+      throw e;
+    }
   } catch (e: any) {
     return err(`Cosmos read failed: ${e?.message || String(e)}`, 502, 'cosmos_error');
   }

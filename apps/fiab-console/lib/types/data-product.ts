@@ -90,6 +90,10 @@ export interface AccessRequestDoc {
 export interface DataProductDetailResponse {
   ok: boolean;
   product?: DataProductDoc;
+  /** The raw WorkspaceItem (consumed by the read-only consumer view). */
+  item?: unknown;
+  /** True when the caller's tenant owns this product (server-authoritative). */
+  isOwner?: boolean;
   /** Real computed DQ score 0–100, or null when no rules are configured. */
   dqScore?: number | null;
   /** Honest-gate message shown in place of the gauge when dqScore is null. */

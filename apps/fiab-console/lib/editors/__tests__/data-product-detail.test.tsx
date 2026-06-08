@@ -40,6 +40,7 @@ function mountWith(extra: Record<string, unknown> = {}) {
   installFetchMock({
     '/api/data-products/': () => ({
       ok: true,
+      isOwner: true,
       product: PRODUCT,
       dqScore: null,
       dqGate: 'No data-quality rules configured for this tenant. Define rules in Admin › Data Quality Rules to compute a real score.',

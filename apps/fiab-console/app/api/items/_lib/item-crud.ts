@@ -10,11 +10,126 @@ import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import {
+  upsertGovernanceItem, deleteGovernanceItem, docForGovernanceItem, isCatalogDataType,
+} from '@/lib/azure/governance-catalog-index';
 import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
+import { labelRank } from '@/lib/governance/label-propagation';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+
+/**
+ * Mirror a data-catalog item into the `loom-governance-items` AI Search index
+ * (best-effort, never throws). Skips non-data item types so facet counts in the
+ * catalog reflect data assets only. No-op when AI Search isn't configured.
+ */
+async function mirrorGovernanceDoc(item: WorkspaceItem, tenantId: string): Promise<void> {
+  if (!isCatalogDataType(item.itemType)) return;
+  try {
+    const ws = await workspacesContainer();
+    let workspaceName = item.workspaceId;
+    let workspaceDomain: string | undefined;
+    try {
+      const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
+      if (resource) { workspaceName = resource.name; workspaceDomain = resource.domain; }
+    } catch { /* keep id as name */ }
+    await upsertGovernanceItem(docForGovernanceItem(item, { tenantId, workspaceName, workspaceDomain }));
+  } catch { /* swallow — derived index is best-effort */ }
+}
 
 export function jerr(error: string, status = 500, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+}
+
+/**
+ * Source-reference keys on an item's `state` that link it to an upstream item
+ * it derives from. Kept in sync with the lineage builder's REFERENCE_KEYS so a
+ * created item inherits the sensitivity label of whatever it was built from.
+ */
+const SOURCE_REF_KEYS = [
+  'sourceItemId', 'lakehouseId', 'warehouseId', 'datasetId', 'datasourceId',
+  'sourceLakehouseId', 'sourceWarehouseId', 'modelId', 'kqlDatabaseId',
+  'reportId', 'pipelineId',
+];
+
+/**
+ * F16 — sensitivity-label inheritance on create.
+ *
+ * When a new item is created FROM an upstream source (a typed reference in its
+ * state, e.g. a report built on a semantic model, a notebook attached to a
+ * lakehouse), it pre-populates its sensitivity label from the MOST restrictive
+ * upstream source. The caller can override by passing an explicit
+ * `state.sensitivityLabel` — in that case we keep theirs and record it as a
+ * manual (non-inherited) choice. Pure-ish: reads owned items from Cosmos only.
+ *
+ * Mutates and returns `state` so the created item carries:
+ *   sensitivityLabel           the effective label
+ *   sensitivityLabelInherited  true when copied from upstream (read-only in UI)
+ *   sensitivityLabelSource     { itemId, displayName, label } provenance
+ */
+export async function applyLabelInheritance(
+  state: Record<string, unknown>,
+  tenantId: string,
+): Promise<Record<string, unknown>> {
+  const explicit = typeof state.sensitivityLabel === 'string' ? state.sensitivityLabel.trim() : '';
+
+  // Gather candidate upstream source ids from typed references.
+  const candidateIds = new Set<string>();
+  for (const k of SOURCE_REF_KEYS) {
+    const v = state[k];
+    if (typeof v === 'string' && v) candidateIds.add(v);
+  }
+  const attached = state.attachedSources as Array<{ id?: string }> | undefined;
+  if (Array.isArray(attached)) for (const a of attached) if (a?.id) candidateIds.add(a.id);
+  if (candidateIds.size === 0) {
+    // No upstream — record the explicit choice (if any) as non-inherited.
+    if (explicit) {
+      state.sensitivityLabelInherited = false;
+    }
+    return state;
+  }
+
+  // Resolve each candidate to an owned item and collect its label.
+  const items = await itemsContainer();
+  const wsCache = new Map<string, boolean>();
+  let best: { itemId: string; displayName: string; label: string } | null = null;
+  for (const id of candidateIds) {
+    const { resources } = await items.items
+      .query<WorkspaceItem>({
+        query: 'SELECT c.id, c.workspaceId, c.displayName, c.state FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: id }],
+      })
+      .fetchAll();
+    const src = resources[0];
+    if (!src) continue;
+    // Verify the source belongs to the caller's tenant.
+    let owned = wsCache.get(src.workspaceId);
+    if (owned === undefined) {
+      try {
+        const ws = await workspacesContainer();
+        const { resource } = await ws.item(src.workspaceId, tenantId).read<Workspace>();
+        owned = !!resource && resource.tenantId === tenantId;
+      } catch { owned = false; }
+      wsCache.set(src.workspaceId, owned);
+    }
+    if (!owned) continue;
+    const lbl = (src.state as any)?.sensitivityLabel;
+    if (typeof lbl === 'string' && lbl && (!best || labelRank(lbl) > labelRank(best.label))) {
+      best = { itemId: src.id, displayName: src.displayName, label: lbl };
+    }
+  }
+
+  if (explicit) {
+    // Caller chose a label explicitly → honored as a manual override.
+    state.sensitivityLabelInherited = false;
+    if (best) state.sensitivityLabelSource = best;
+    return state;
+  }
+  if (best) {
+    state.sensitivityLabel = best.label;
+    state.sensitivityLabelInherited = true;
+    state.sensitivityLabelSource = best;
+  }
+  return state;
 }
 
 /** Load an item by id, verifying the caller's tenant owns the parent workspace. */
@@ -138,13 +253,17 @@ export async function createOwnedItem(
     return { ok: false, status: 404, error: 'workspace not found' };
   }
   const now = new Date().toISOString();
+  // F16 — inherit the sensitivity label from the upstream source this item is
+  // built from (override allowed via an explicit state.sensitivityLabel).
+  const baseState = state && typeof state === 'object' ? { ...state } : {};
+  const inheritedState = await applyLabelInheritance(baseState, session.claims.oid);
   const item: WorkspaceItem = {
     id: crypto.randomUUID(),
     workspaceId,
     itemType,
     displayName: String(displayName).trim(),
     description: description?.trim() || undefined,
-    state: state && typeof state === 'object' ? state : {},
+    state: inheritedState,
     ...(folderId ? { folderId } : {}),
     createdBy: session.claims.upn || session.claims.email || session.claims.oid,
     createdAt: now,
@@ -154,6 +273,8 @@ export async function createOwnedItem(
   const { resource } = await items.items.create<WorkspaceItem>(item);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
+  // Mirror into the governance data-catalog index (best-effort; data types only).
+  void mirrorGovernanceDoc(resource!, session.claims.oid);
   // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
   // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
   void autoOnboardToPurview(resource!, session.claims.oid);
@@ -179,6 +300,7 @@ export async function updateOwnedItem(
   const items = await itemsContainer();
   const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
   void upsertLoomDoc(docForItem(resource!, tenantId));
+  void mirrorGovernanceDoc(resource!, tenantId);
   return resource!;
 }
 
@@ -192,5 +314,6 @@ export async function deleteOwnedItem(
   const items = await itemsContainer();
   await items.item(current.id, current.workspaceId).delete();
   void deleteLoomDoc(`it:${current.id}`);
+  void deleteGovernanceItem(current.id);
   return true;
 }

@@ -1,0 +1,22 @@
+{
+  "name": "fiab-label-propagation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CSA Loom — sensitivity-label downstream propagation timer Function (F15). Polls the Loom lineage graph in Cosmos every N minutes, computes the most-restrictive label each item should inherit from its upstream sources, and writes propagation state to the Cosmos label-propagation container.",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "vitest run",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.1.1",
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  }
+}
