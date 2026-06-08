@@ -228,8 +228,10 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!
 // =====================================================================
 output accountId string = account.id
 output accountNameOut string = account.name
-@description('LOOM_AOAI_ENDPOINT — the account OpenAI inference endpoint.')
-output aoaiEndpoint string = 'https://${account.properties.customSubDomainName}.openai.azure.com/'
+@description('LOOM_AOAI_ENDPOINT — the account OpenAI inference endpoint. Sovereign-aware: GCC-High / IL5 / IL6 (AzureUSGovernment / AzureDOD) use .openai.azure.us.')
+output aoaiEndpoint string = environment().suffixes.storage != 'core.windows.net'
+  ? 'https://${account.properties.customSubDomainName}.openai.azure.us/'
+  : 'https://${account.properties.customSubDomainName}.openai.azure.com/'
 @description('LOOM_FOUNDRY_PROJECT_ENDPOINT — Agent Service project endpoint.')
 output projectEndpoint string = 'https://${account.properties.customSubDomainName}.services.ai.azure.com/api/projects/${project.name}'
 @description('LOOM_FOUNDRY_PROJECT_ID — stable ARM resource id of the project.')
