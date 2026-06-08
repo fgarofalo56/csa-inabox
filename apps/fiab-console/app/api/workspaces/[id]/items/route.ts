@@ -49,7 +49,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
-  const { itemType, displayName, description, folderId } = body || {};
+  const { itemType, displayName, description, folderId, customAttributes } = body || {};
   if (!itemType || typeof itemType !== 'string') return err('itemType is required', 400, 'missing_itemType');
   if (!displayName || typeof displayName !== 'string') return err('displayName is required', 400, 'missing_displayName');
 
@@ -57,6 +57,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const ws = await loadWorkspace(params.id, session.claims.oid);
     if (!ws) return err('Workspace not found', 404, 'not_found');
     const now = new Date().toISOString();
+    // F17: persist admin-defined custom-attribute values on the item state so
+    // they round-trip into the Edit dialog and surface in the catalog.
+    const initialState: Record<string, unknown> = {};
+    if (customAttributes && typeof customAttributes === 'object' && !Array.isArray(customAttributes)) {
+      initialState.customAttributes = customAttributes;
+    }
     const item: WorkspaceItem = {
       id: crypto.randomUUID(),
       workspaceId: ws.id,
@@ -64,7 +70,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       displayName: displayName.trim(),
       description: description?.trim() || undefined,
       folderId: typeof folderId === 'string' && folderId ? folderId : null,
-      state: {},
+      state: initialState,
       createdBy: session.claims.upn || session.claims.email || session.claims.oid,
       createdAt: now,
       updatedAt: now,

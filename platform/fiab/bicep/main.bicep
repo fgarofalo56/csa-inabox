@@ -72,6 +72,12 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. Note: the DLP /beta endpoints are tenant-preview-gated — the Loom panel surfaces a precise 404→501 hint when the tenant has not opted into the Graph DLP preview.')
 param loomDlpEnabled bool = false
 
+@description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
+param loomPowerBiAdminLabels bool = false
+
+@description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
+param loomIdentityPickerEnabled bool = false
+
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
@@ -402,6 +408,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
+    loomPowerBiAdminLabels: loomPowerBiAdminLabels
+    loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
@@ -466,7 +474,22 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
   }
 }
 
+// F8 (Manage Policies) / T14 — let the Console UAMI assign container-scoped
+// Storage Blob Data roles on the lake account when an access request is
+// approved. Constrained RBAC-Administrator (data-plane roles only) — see the
+// module header. Scoped to the DLZ RG where the storage account lives.
+module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = if (deploymentMode == 'single-sub') {
+  name: 'dlz-single-access-policy-rbac'
+  scope: singleDlzRg
+  params: {
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    storageAccountName: singleDlz!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Multi-sub: per-DLZ in separate subs
+
 // NOTE: caller is responsible for creating the per-DLZ RGs in the
 // target subs before this deployment runs (typically via a bootstrap
 // PowerShell or az CLI script — see scripts/csa-loom/bootstrap-dlz-rgs.sh).
@@ -504,8 +527,19 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
   }
 }]
 
-// =====================================================================
-// Deploy-planner service toggles (single-sub mode) — each provisions a
+// Multi-sub: per-DLZ access-policy RBAC-Admin grant (F8 / T14), one per DLZ.
+@batchSize(1)
+module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
+  name: 'dlz-${i}-access-policy-rbac'
+  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
+  params: {
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    storageAccountName: dlz[i]!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}]
+
+
 // real, self-contained Azure resource into the DLZ RG when its flag is on.
 // consolePrincipalId wires the Loom Console UAMI so the matching navigator
 // /editor can drive the resource over Entra-only data/control planes.

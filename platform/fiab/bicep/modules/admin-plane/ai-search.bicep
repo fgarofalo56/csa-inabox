@@ -42,6 +42,23 @@ param skipRoleGrants bool = false
 @description('Compliance tags')
 param complianceTags object
 
+@description('''Deploy the `loom-governance-items` catalog index via a deployment
+script. Default false — the search service is PE-locked (publicNetworkAccess
+disabled), so a public deployment script cannot reach its data plane; the Loom
+BFF self-heals the index from inside the VNet on first catalog load
+(ensureGovernanceCatalogIndex) and on the admin Rebuild-index action. Set true
+only when running the script on a VNet-injected ACI that can reach the PE.''')
+param deployGovernanceIndex bool = false
+
+@description('Console UAMI resource id — deployment-script identity for the index PUT (needs Search Index Data Contributor on this service).')
+param scriptIdentityId string = ''
+
+@description('Console UAMI client id — used by the script to request a search-scoped MSI token.')
+param scriptIdentityClientId string = ''
+
+@description('Location of the deployment script (kept distinct so the script can run in a region with ACI quota).')
+param scriptLocation string = location
+
 var searchName = take('search-loom-${uniqueString(resourceGroup().id)}', 60)
 
 resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
@@ -120,6 +137,72 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// loom-governance-items catalog index (optional deployment-script bootstrap).
+//
+// The Loom BFF is the authoritative path: ensureGovernanceCatalogIndex() PUTs
+// this index from inside the VNet the first time the catalog is queried, and
+// every item write mirrors a doc into it (push-from-BFF — see
+// app/api/items/_lib/item-crud.ts). This script exists so an operator running on
+// a VNet-injected ACI can pre-create the index at deploy time; it is gated off
+// by default because the PE-locked service is unreachable from a public script.
+// ---------------------------------------------------------------------------
+resource governanceIndexScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (deployGovernanceIndex && !empty(scriptIdentityId)) {
+  name: 'script-loom-governance-catalog-index'
+  location: scriptLocation
+  tags: complianceTags
+  kind: 'AzurePowerShell'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${scriptIdentityId}': {}
+    }
+  }
+  dependsOn: [
+    peDnsGroup
+  ]
+  properties: {
+    azPowerShellVersion: '12.0'
+    retentionInterval: 'PT1H'
+    timeout: 'PT10M'
+    environmentVariables: [
+      { name: 'SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+      { name: 'IDENTITY_CLIENT_ID', value: scriptIdentityClientId }
+    ]
+    scriptContent: '''
+$ErrorActionPreference = 'Stop'
+$tokenUri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://search.azure.com/&client_id=$env:IDENTITY_CLIENT_ID"
+$token = (Invoke-RestMethod -Uri $tokenUri -Headers @{ Metadata = 'true' }).access_token
+$index = @{
+  name = 'loom-governance-items'
+  fields = @(
+    @{ name = 'id'; type = 'Edm.String'; key = $true; filterable = $true; retrievable = $true }
+    @{ name = 'tenantId'; type = 'Edm.String'; filterable = $true; retrievable = $true }
+    @{ name = 'workspaceId'; type = 'Edm.String'; filterable = $true; retrievable = $true }
+    @{ name = 'workspaceName'; type = 'Edm.String'; retrievable = $true }
+    @{ name = 'itemType'; type = 'Edm.String'; filterable = $true; facetable = $true; retrievable = $true }
+    @{ name = 'domainId'; type = 'Edm.String'; filterable = $true; facetable = $true; retrievable = $true }
+    @{ name = 'displayName'; type = 'Edm.String'; searchable = $true; sortable = $true; retrievable = $true; analyzer = 'standard.lucene' }
+    @{ name = 'description'; type = 'Edm.String'; searchable = $true; retrievable = $true; analyzer = 'standard.lucene' }
+    @{ name = 'owner'; type = 'Edm.String'; retrievable = $true }
+    @{ name = 'ownerUpn'; type = 'Edm.String'; searchable = $true; retrievable = $true }
+    @{ name = 'classifications'; type = 'Collection(Edm.String)'; filterable = $true; facetable = $true; retrievable = $true }
+    @{ name = 'endorsement'; type = 'Edm.String'; filterable = $true; facetable = $true; retrievable = $true }
+    @{ name = 'sensitivity'; type = 'Edm.String'; filterable = $true; facetable = $true; retrievable = $true }
+    @{ name = 'isDiscoverable'; type = 'Edm.Boolean'; filterable = $true; retrievable = $true }
+    @{ name = 'updatedAt'; type = 'Edm.DateTimeOffset'; sortable = $true; filterable = $true; retrievable = $true }
+    @{ name = 'rowCount'; type = 'Edm.Int64'; sortable = $true; retrievable = $true }
+    @{ name = 'sizeBytes'; type = 'Edm.Int64'; sortable = $true; retrievable = $true }
+  )
+}
+$body = $index | ConvertTo-Json -Depth 10
+$uri = "$env:SEARCH_ENDPOINT/indexes/loom-governance-items?api-version=2024-07-01"
+Invoke-RestMethod -Uri $uri -Method Put -Headers @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' } -Body $body
+Write-Output "loom-governance-items index ensured"
+'''
   }
 }
 

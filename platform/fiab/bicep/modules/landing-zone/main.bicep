@@ -173,9 +173,23 @@ module synapse 'synapse.bicep' = {
 }
 
 // =====================================================================
-// 4b. Synapse Dedicated SQL pool auto-pause (Logic App)
+// 4a2. Console UAMI constrained RBAC Administrator on lakehouse storage
+//      (F16 access-request approval final tier — delegate Storage Blob
+//       Data roles only, via an ABAC condition; no self-escalation).
 // =====================================================================
 
+module storageRbacAdmin 'storage-rbac-admin.bicep' = {
+  name: 'dlz-storage-rbac-admin'
+  params: {
+    storageAccountName: storage.outputs.storageAccountName
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// 4b. Synapse Dedicated SQL pool auto-pause (Logic App)
+// =====================================================================
 module synapseAutoPause 'synapse-auto-pause.bicep' = {
   name: 'dlz-synapse-autopause'
   params: {

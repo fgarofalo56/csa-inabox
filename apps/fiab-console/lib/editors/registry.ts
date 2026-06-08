@@ -94,7 +94,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),
   'apim-product':                reg(() => import('./apim-editors'),           'ApimProductEditor'),
   'apim-policy':                 reg(() => import('./apim-editors'),           'ApimPolicyEditor'),
-  'data-product':                reg(() => import('./apim-editors'),           'DataProductEditor'),
+  // data-product → read-first owner details page (F3). The full working owner
+  // editor (DataProductEditor) is reached from there via ?view=edit.
+  'data-product':                reg(() => import('./data-product-detail'),    'DataProductDetailEditor'),
 
   // v2.x — Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub)
   'ai-foundry-hub':              reg(() => import('./foundry-hub-editor'),     'FoundryHubEditor'),

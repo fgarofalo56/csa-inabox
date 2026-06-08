@@ -12,7 +12,8 @@ import {
   CloudArrowUp24Regular, ShieldCheckmark24Regular, Key24Regular,
   ClipboardTask24Regular, ChartMultiple24Regular, People24Regular,
   Building24Regular, ArrowSync24Regular, PanelLeftContract24Regular,
-  PanelLeftExpand24Regular, Globe24Regular, Heart24Regular, type FluentIcon,
+  PanelLeftExpand24Regular, Globe24Regular, Heart24Regular,
+  Tag24Regular, TagMultiple24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 
 interface Section { href: string; label: string; description: string; icon: FluentIcon; }
@@ -24,9 +25,11 @@ const SECTIONS: Section[] = [
   { href: '/admin/scaling', label: 'Scale by SKU', icon: GaugeRegular, description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },
   { href: '/admin/api-management', label: 'API Management', icon: Settings24Regular, description: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
   { href: '/admin/domains', label: 'Domains', icon: Organization24Regular, description: 'Organize workspaces into business domains and subdomains.' },
+  { href: '/admin/attribute-groups', label: 'Custom attributes', icon: TagMultiple24Regular, description: 'Define per-domain attribute schemas (text, number, date, single-select) that appear in the Create wizard and item Edit dialogs.' },
   { href: '/admin/deploy-planner', label: 'Deployment planner', icon: CloudArrowUp24Regular, description: 'Visually plan what deploys to which subscription and domain; generate the bicepparam for az deployment.' },
   { href: '/admin/security', label: 'Security & governance', icon: ShieldCheckmark24Regular, description: 'Sensitivity labels, DLP policies, Purview hub link, workspace identity.' },
   { href: '/admin/permissions', label: 'Feature permissions', icon: Key24Regular, description: 'Fabric-style RBAC — grant Reader/Contributor/Admin on every editor type, admin page, and workload to Entra users and groups.' },
+  { href: '/admin/batch-labeling', label: 'Batch labeling', icon: Tag24Regular, description: 'Bulk-apply sensitivity labels to many catalog items at once; optionally propagate to Microsoft Purview asset classifications and Power BI via Admin InformationProtection.setLabels.' },
   { href: '/admin/audit-logs', label: 'Audit logs', icon: ClipboardTask24Regular, description: 'Microsoft 365 audit log activity for every Fabric operation.' },
   { href: '/admin/usage', label: 'Usage metrics', icon: ChartMultiple24Regular, description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/users', label: 'Users & licenses', icon: People24Regular, description: 'Power BI / Fabric license assignments and user inventory.' },
