@@ -30,6 +30,7 @@ import {
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DeleteDataProductDialog } from './components/delete-data-product-dialog';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1775,6 +1776,9 @@ interface DataProductState {
   certified: boolean;
   sla: string;
   bundle: string[];
+  // Lifecycle state — mirrors Purview Unified Catalog data-product states
+  // (Draft → Published → Expired). Delete (F13) requires Draft or Expired.
+  lifecycleStatus?: 'Draft' | 'Published' | 'Expired';
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
   datasets?: DataProductDataset[];
   glossaryLinks?: DataProductGlossaryLink[];
@@ -1794,6 +1798,7 @@ const DP_EMPTY: DataProductState = {
   certified: false,
   sla: '',
   bundle: [],
+  lifecycleStatus: 'Draft',
 };
 
 /**
@@ -1902,6 +1907,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // hint payload as a dedicated MessageBar so the operator sees the bicep
   // module path + roles to grant.
   const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
+  // F13 — precondition-gated destructive delete dialog.
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const domains = useGovernanceDomains();
 
@@ -2232,6 +2239,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           onClick: canSave ? save : undefined, disabled: !canSave,
           title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
         { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
+        { label: 'Delete', onClick: !isNew ? () => setDeleteOpen(true) : undefined, disabled: isNew, title: isNew ? 'Create the data product first' : 'Delete this data product (requires Draft/Expired, no assets, terms, or open requests)' },
       ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
@@ -2359,6 +2367,20 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </Field>
               <Field label="Certified" style={{ gridColumn: '1 / -1' }}>
                 <Switch checked={state.certified} onChange={(_, d) => patchState({ certified: d.checked })} label={state.certified ? 'Certified by data governance' : 'Not certified'} />
+              </Field>
+              <Field
+                label="Lifecycle status"
+                hint="Draft (not yet published) · Published (visible in the catalog) · Expired (deprecated, visible only to stewards). Deletion requires Draft or Expired."
+              >
+                <Dropdown
+                  value={state.lifecycleStatus || 'Draft'}
+                  selectedOptions={[state.lifecycleStatus || 'Draft']}
+                  onOptionSelect={(_, d) => d.optionValue && patchState({ lifecycleStatus: d.optionValue as DataProductState['lifecycleStatus'] })}
+                >
+                  <Option value="Draft">Draft</Option>
+                  <Option value="Published">Published</Option>
+                  <Option value="Expired">Expired</Option>
+                </Dropdown>
               </Field>
               <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
                 <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
@@ -2517,6 +2539,14 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             </Table>
           </div>
         )}
+
+        <DeleteDataProductDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          id={id}
+          displayName={state.displayName || 'this data product'}
+          onDeleted={(wsId) => router.push(wsId ? `/workspaces/${encodeURIComponent(wsId)}` : '/workspaces')}
+        />
       </div>
     } />
   );

@@ -956,6 +956,30 @@ export async function listDataProducts(_domain?: string): Promise<PurviewDataPro
 }
 
 /**
+ * Best-effort delete from the Purview Unified Catalog.
+ *
+ * On the deployed CLASSIC Data Map account this always throws
+ * PurviewUnifiedCatalogGateError — the `-api` host and the `/datagovernance`
+ * surface do not exist. The DELETE /api/data-products/[id] route catches this
+ * and logs it WITHOUT failing the authoritative Cosmos delete (per
+ * .claude/rules/no-vaporware.md — honest gate, no fabricated success).
+ *
+ * On a future new-experience unified-catalog account this is where the real
+ * call lands:
+ *   DELETE {account}-api.purview.azure.com/datagovernance/catalog/dataProducts/{id}
+ *       ?api-version=2026-03-20-preview
+ * See https://learn.microsoft.com/purview/unified-catalog-data-products-create-manage#delete-data-products
+ */
+export async function deleteDataProductBestEffort(
+  _purviewDataProductId: string,
+): Promise<{ deleted: boolean; note?: string }> {
+  // Touch the env var so an unset account yields the precise "not configured"
+  // gate before the unified-catalog gate.
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Data products (delete)');
+}
+
+/**
  * Business-domain mirror on CLASSIC Data Map.
  *
  * The unified-catalog `/datagovernance` business-domains surface does NOT exist
