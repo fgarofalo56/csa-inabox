@@ -45,6 +45,7 @@ import {
   Apps20Regular, List20Regular, Open20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
+  Eye20Regular, Form20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -62,6 +63,9 @@ import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
+import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -8222,6 +8226,10 @@ interface WHSchemaResp {
   warehouse?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  views?: { schema: string; name: string }[];
+  procedures?: { schema: string; name: string }[];
+  functions?: { schema: string; name: string; type: string }[];
+  warnings?: string[];
   error?: string;
 }
 
@@ -8307,6 +8315,20 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
   const schemaEntries = Object.entries(schema?.schemas || {});
   const ready = schema?.ok === true;
+  const whViews = schema?.views ?? [];
+  const whProcedures = schema?.procedures ?? [];
+  const whFunctions = schema?.functions ?? [];
+
+  // Script-out: load the real CREATE/ALTER/DROP into the editor buffer.
+  const loadScript = useCallback(async (type: ScriptObjectType, objSchema: string, name: string, mode: ScriptMode) => {
+    const r = await loadSqlScript('warehouse', id, { type, schema: objSchema, name, mode });
+    if (r.ok && r.script != null) { setSqlText(r.script); setResult(null); }
+    else { setResult({ ok: false, error: r.error || 'Could not script object' }); }
+  }, [id]);
+  const countRows = useCallback(
+    (objSchema: string, name: string) => sqlRowCount('warehouse', id, objSchema, name),
+    [id],
+  );
 
   const canRun = ready && !loading;
 
@@ -8513,6 +8535,87 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                         </TreeItem>
                       ))}
                     </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Views */}
+            <TreeItem itemType="branch" value="views">
+              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({whViews.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="v-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whViews.length === 0 && (
+                  <TreeItem itemType="leaf" value="v-empty"><TreeItemLayout><Caption1>No views</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whViews.map((v) => (
+                  <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
+                    onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
+                    <TreeItemLayout iconBefore={<Eye20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
+                        onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
+                        onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
+                        onScriptDrop={() => loadScript('view', v.schema, v.name, 'drop')} />}>
+                      {v.schema}.{v.name}{' '}
+                      <SqlRowCountBadge cacheKey={`v-${v.schema}.${v.name}`} load={() => countRows(v.schema, v.name)} />
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Stored procedures */}
+            <TreeItem itemType="branch" value="procs">
+              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({whProcedures.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="p-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whProcedures.length === 0 && (
+                  <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>No procedures</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whProcedures.map((p) => (
+                  <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
+                    onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
+                    <TreeItemLayout iconBefore={<Form20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
+                        onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
+                        onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
+                        onScriptDrop={() => loadScript('procedure', p.schema, p.name, 'drop')} />}>
+                      {p.schema}.{p.name}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Functions */}
+            <TreeItem itemType="branch" value="funcs">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({whFunctions.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="f-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whFunctions.length === 0 && (
+                  <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>No functions</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whFunctions.map((f) => (
+                  <TreeItem key={`f-${f.schema}.${f.name}`} itemType="leaf" value={`f-${f.schema}.${f.name}`}
+                    onClick={() => setSqlText(
+                      f.type === 'FN'
+                        ? `SELECT [${f.schema}].[${f.name}]();`
+                        : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
+                    )}>
+                    <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
+                        onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
+                        onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
+                        onScriptDrop={() => loadScript('function', f.schema, f.name, 'drop')} />}>
+                      {f.schema}.{f.name}{' '}
+                      <Caption1>· {f.type === 'FN' ? 'scalar' : f.type === 'IF' ? 'inline TVF' : 'TVF'}</Caption1>
+                    </TreeItemLayout>
                   </TreeItem>
                 ))}
               </Tree>
