@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _accessRequests: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +143,13 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Access-request approval workflow (F16) — one row per data-asset access
+  // request, advanced through the manager → privacy → approver → access-provider
+  // tiers. Partitioned by tenant (s.claims.oid) so every per-tier inbox query
+  // hits a single physical partition. Final approval provisions a real Azure
+  // RBAC grant via enforceAccessGrant (access-policy-client) — no Fabric
+  // dependency. Created lazily so a fresh environment needs no extra ARM step.
+  _accessRequests = await mk('access-requests', '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +159,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +222,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'access-requests',
 ];
 
 /** List all Loom containers with their current throughput shape. */
