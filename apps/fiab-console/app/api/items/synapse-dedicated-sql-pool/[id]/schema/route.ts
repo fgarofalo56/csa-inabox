@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { enumerateSqlObjects } from '@/lib/azure/sql-object-scripting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +32,7 @@ export async function GET() {
   }
 
   try {
-    const tables = await executeQuery(
+    const tablesP = executeQuery(
       dedicatedTarget(),
       `SELECT TOP 200 s.name + '.' + t.name AS qualified, t.name AS table_name, s.name AS schema_name,
               CAST(p.rows AS bigint) AS row_count
@@ -40,6 +41,10 @@ export async function GET() {
        LEFT JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0,1)
        ORDER BY s.name, t.name`,
     );
+    // Views / stored procedures / functions enumerate in parallel with tables.
+    const objectsP = enumerateSqlObjects(dedicatedTarget());
+    const [tables, objects] = await Promise.all([tablesP, objectsP]);
+
     const schemas: Record<string, { table: string; rows: number }[]> = {};
     for (const row of tables.rows) {
       const [qualified, tableName, schemaName, rowCount] = row as [string, string, string, number];
@@ -52,6 +57,10 @@ export async function GET() {
       sku: state.sku,
       pool: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
       schemas,
+      views: objects.views,
+      procedures: objects.procedures,
+      functions: objects.functions,
+      ...(objects.warnings.length ? { warnings: objects.warnings } : {}),
     });
   } catch (e: any) {
     return NextResponse.json(

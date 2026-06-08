@@ -13,6 +13,7 @@ import { PanelLeftContract20Regular, PanelLeftExpand20Regular } from '@fluentui/
 import { PageShell } from '@/lib/components/page-shell';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
+import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -114,6 +115,8 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
           {item.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
           {/* Loom Thread — weave this item into upstream/downstream Loom services. */}
           <ThreadMenu type={item.slug} id={id} name={title} />
+          {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}
+          {!isNew && <LineageDrawer type={item.slug} id={id} displayName={item.displayName} />}
           <ItemSidePanel type={item.slug} id={id} />
         </div>
       }
