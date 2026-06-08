@@ -81,6 +81,9 @@ param loomIdentityPickerEnabled bool = false
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
+@description('Grant the Console UAMI "Storage Account Contributor" on each DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default.')
+param consolePrincipalNeedsLifecycleWrite bool = false
+
 @description('OpenAI region for chat models')
 param openaiLocation string
 
@@ -98,6 +101,11 @@ param powerBiSku string
 
 @description('Storage requires CMK (true at IL5)')
 param storageRequireCmk bool = false
+
+@description('Soft-delete retention days for ADLS Gen2 blob/directory recovery (OneLake Recycle bin restore window). 1–365. Default 30. GA all clouds.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
 
 @description('Key Vault Premium HSM isolated (true at IL5)')
 param keyVaultHsmIsolated bool = false
@@ -298,6 +306,9 @@ param loomAmlSubscription string = ''
 @description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to the deployment location.')
 param loomAmlRegion string = ''
 
+@description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT — Fix / Explain / NL→T-SQL + inline ghost text). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true; empty + Foundry off → the SQL Copilot pane shows an honest gate naming this var + the Cognitive Services OpenAI User role.')
+param loomAzureOpenAiEndpoint string = ''
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -377,6 +388,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    recycleRetentionDays: recycleRetentionDays
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     agentFoundryEnabled: agentFoundryEnabled
@@ -429,6 +441,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlResourceGroup: loomAmlResourceGroup
     loomAmlSubscription: loomAmlSubscription
     loomAmlRegion: loomAmlRegion
+    // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
+    loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
   }
 }
 
@@ -479,7 +493,9 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
+    recycleRetentionDays: recycleRetentionDays
   }
 }
 
@@ -532,7 +548,9 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
+    recycleRetentionDays: recycleRetentionDays
   }
 }]
 

@@ -256,12 +256,37 @@ resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
   }
 }
 
+// Grant the Console UAMI Cognitive Services OpenAI User so the BFF can run
+// inference (chat/completions) against AOAI deployments — this is the role the
+// AI Functions surface (sentiment/classify/translate/summarize/extract) needs
+// to call the gpt-4o deployment. Granted explicitly (least-privilege) alongside
+// Contributor, which the model-deploy/quota flows use.
+resource aiServicesOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: aiServices
+  name: guid(aiServices.id, consolePrincipalId, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+  properties: {
+    // Cognitive Services OpenAI User — inference-only
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output hubId string = foundryHub.id
 output hubName string = foundryHub.name
 output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
+// AOAI inference endpoint (the .openai.azure.* host the AI Functions / Copilot
+// clients call — distinct from the generic Cognitive Services endpoint above).
+// Sovereign-aware: GCC-High / IL5 / IL6 use .openai.azure.us. Wired into
+// LOOM_AOAI_ENDPOINT when only the shared Foundry hub is deployed.
+output aoaiInferenceEndpoint string = environment().suffixes.storage != 'core.windows.net'
+  ? 'https://${aiServices.properties.customSubDomainName}.openai.azure.us/'
+  : 'https://${aiServices.properties.customSubDomainName}.openai.azure.com/'
 
 // Foundry Agent Service project wiring (LOOM_FOUNDRY_PROJECT_ENDPOINT / _ID).
 output projectName string = foundryProject.name
