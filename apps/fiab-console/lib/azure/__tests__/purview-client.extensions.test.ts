@@ -135,10 +135,23 @@ describe('purview-client (classic Data Map)', () => {
 
   // --- Honest gates: unified-catalog-only concepts on a classic account ---
 
-  it('listBusinessDomains throws the unified-catalog gate (no fabricated data, no HTTP call)', async () => {
+  it('listBusinessDomains maps non-root Purview collections to business domains', async () => {
+    // Real behavior on a classic account: listBusinessDomains reads
+    // /collections and surfaces every non-root collection as a mirrored domain.
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [
+        { name: 'root', friendlyName: 'Root', parentCollection: null },
+        { name: 'finance', friendlyName: 'Finance', description: 'Finance domain', parentCollection: { referenceName: 'root' } },
+      ],
+    }), { status: 200 }));
     const mod = await import('../purview-client');
-    await expect(mod.listBusinessDomains()).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
-    expect(fetchMock).not.toHaveBeenCalled();
+    const domains = await mod.listBusinessDomains();
+    expect(domains).toHaveLength(1);
+    expect(domains[0]).toMatchObject({ id: 'finance', name: 'Finance', description: 'Finance domain', parentId: 'root' });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('purview-test.purview.azure.com');
+    expect(url).toContain('/collections');
+    expect(url).toContain('api-version=2019-11-01-preview');
   });
 
   it('listDataQualityRules throws the unified-catalog gate (no fabricated data)', async () => {
@@ -160,7 +173,7 @@ describe('purview-client (classic Data Map)', () => {
 
   it('the unified-catalog gate is a subclass of PurviewNotConfiguredError (BFF catch compatibility)', async () => {
     const mod = await import('../purview-client');
-    await expect(mod.listBusinessDomains()).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+    await expect(mod.listDataQualityRules()).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
   });
 
   it('with LOOM_DATAPRODUCTS_BACKEND UNSET, data products do NOT hit the unified-catalog gate (Azure-native Cosmos default)', async () => {

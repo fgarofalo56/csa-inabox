@@ -217,6 +217,55 @@ and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`
   expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
   the admin-consent click above.
 
+## Batch labeling — Power BI Admin setLabels {#batch-labeling-powerbi-setlabels}
+
+The **Admin → Batch labeling** page (`/admin/batch-labeling`) bulk-applies a
+sensitivity label to many catalog items at once. It always writes the label
+assignment to Cosmos (the item's `state.sensitivityLabel`), and — when Microsoft
+Purview is configured — stamps the label as an Atlas asset classification on the
+matching catalog asset. Neither of those needs anything beyond the Purview
+bootstrap above.
+
+The **optional** third sink is the Power BI Admin
+`InformationProtection.setLabels` REST API, which writes the label onto the
+underlying Power BI artifact (semantic model / report / dashboard / dataflow)
+linked to a Loom item. It requires two things that the page surfaces honestly
+(the checkbox only appears when both are satisfied):
+
+1. **A real MIP label GUID.** The Power BI API only accepts Microsoft
+   Information Protection label GUIDs, not Loom-native label ids. So
+   `LOOM_MIP_ENABLED=true` (see the MIP section above) must already be on, and
+   the operator must pick a label sourced from MIP in the dropdown.
+
+2. **The Console UAMI must be a Fabric Administrator.** This is a one-time
+   M365 / Entra admin action and is **NOT an Azure ARM role** — it cannot be
+   granted from bicep. A tenant admin adds the Console UAMI's service principal
+   to the *Fabric administrator* role in the Microsoft 365 admin center
+   (Roles → Role assignments → Fabric administrator), or via the Power BI
+   tenant settings "Service principals can use Fabric APIs" group plus the admin
+   role. Until this is done, `setLabels` returns 401/403, which the results grid
+   shows verbatim in red per row (no fake success).
+
+### Step — Flip the feature flag
+
+```bash
+az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
+  --set-env-vars LOOM_POWERBI_ADMIN_LABELS=true
+```
+
+Or set `loomPowerBiAdminLabels = true` in the `.bicepparam` and re-deploy
+admin-plane (the env wiring is already in `admin-plane/main.bicep`).
+
+### Bicep sync
+
+- Env flag `LOOM_POWERBI_ADMIN_LABELS`:
+  `platform/fiab/bicep/main.bicep` (`loomPowerBiAdminLabels` param) →
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- The Fabric Administrator role assignment is a **Power BI / M365 tenant** grant
+  and intentionally cannot be expressed in ARM/bicep — hence the one-time admin
+  action above. The page hides the Power BI checkbox until `LOOM_POWERBI_ADMIN_LABELS`
+  is set, and any per-artifact 403 is shown verbatim.
+
 ## PostgreSQL in-database query (Entra auth)
 
 The unified SQL editor's **Query** tab and schema browser run real SQL against a
@@ -641,3 +690,109 @@ These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`
 `LOOM_AML_WORKSPACE_ID`, `LOOM_AML_PORTAL_BASE`. The gate is evaluated
 server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
 directly.
+
+## Workspace Manage Access — RBAC-Admin grant + Graph + Fabric opt-in (F5) {#workspace-manage-access}
+
+The workspace **Manage access** pane (Settings → Permissions, and the standalone
+button on the workspace page) is Azure-native: each membership row is stored in
+Cosmos `workspace-roles` AND mirrored to a real Azure RBAC role assignment on
+the DLZ resource group (Admin/Member → Contributor; Contributor/Viewer →
+Reader). No Fabric capacity is required.
+
+### Step 1 — RBAC-Admin grant (bicep, automatic)
+
+`platform/fiab/bicep/modules/admin-plane/workspace-rbac.bicep` grants the
+Console UAMI the **Role Based Access Control Administrator** role
+(`f58310d9-a9f6-439a-9e8d-f62e7b41a168`) on the DLZ RG, CONSTRAINED via an ABAC
+condition (v2.0) so it may only write/delete Contributor + Reader assignments.
+It is wired in `main.bicep` (`module workspaceRbac`, scoped to `loomDlzRg`) and
+runs unless `skipRoleGrants=true`. When skipped (deployer lacks User Access
+Administrator), grant it manually:
+
+```bash
+az role assignment create \
+  --role "Role Based Access Control Administrator" \
+  --assignee <console-uami-principal-id> \
+  --scope /subscriptions/<sub>/resourceGroups/<dlz-rg>
+```
+
+Until the grant exists the pane still works — membership is recorded in Cosmos
+and the **Azure RBAC** column shows `Pending` with the exact remediation in an
+honest-gate MessageBar (per `no-vaporware.md`).
+
+### Step 2 — Graph read permissions (shared with the grant dialog)
+
+Member search + nested-group resolution reuse the Console UAMI's Graph app
+permissions **User.Read.All + Group.Read.All** (granted in the
+[MIP + DLP Graph consent](#graph-admin-consent-mip-dlp) step). `GroupMember.Read.All`
+is sufficient for `transitiveMembers` if you prefer least-privilege. The Graph
+host is cloud-aware (`graphBase()` → `graph.microsoft.us` in Gov).
+
+### Step 3 — (Opt-in) Fabric role mirroring
+
+Strictly optional. To ALSO mirror roles to a Microsoft Fabric workspace, set
+`param loomWorkspaceRolesFabricEnabled = true` (Console env
+`LOOM_WORKSPACE_ROLES_FABRIC=1`) and add the Console UAMI to the target Fabric
+workspace as **Admin**. The flag is forced OFF at IL5 (Fabric is not
+IL5-authorized). With the flag unset, nothing calls `api.fabric.microsoft.com`.
+
+### Verify
+
+Add a real Entra group with **Member** role → the row appears, the **Azure RBAC**
+column reads `Active`, and `az role assignment list --scope /subscriptions/<sub>/resourceGroups/<dlz-rg>`
+shows a Contributor assignment for that group's object id. Remove → both the
+Cosmos row and the ARM assignment are gone.
+
+### Bicep sync
+
+- Module: `platform/fiab/bicep/modules/admin-plane/workspace-rbac.bicep`
+- Wired in `admin-plane/main.bicep` (`module workspaceRbac` + param
+  `loomWorkspaceRolesFabricEnabled` + env `LOOM_WORKSPACE_ROLES_FABRIC`)
+- Cosmos container `workspace-roles` is created lazily by `cosmos-client.ts`.
+
+## SQL endpoint "user's identity" data-access mode {#sql-user-identity-access-mode}
+
+A SQL analytics endpoint (Synapse Dedicated / Serverless SQL pool) has a
+**Data access mode** control in its editor (F10):
+
+- **Delegated (service identity)** — the DEFAULT. Queries run as the Loom
+  console managed identity. Always works; no per-user setup. Nothing below is
+  required for this mode.
+- **User's identity** — queries run under the signed-in user's own Azure
+  identity (so row-level security, `SUSER_NAME()`, and the SQL audit log reflect
+  the real user). This is **opt-in** and needs the one-time tenant config below.
+  Until it's done, the mode is honest-gated: the query route returns
+  `NO_USER_SQL_TOKEN` and the editor shows what to do.
+
+**Step 1 — Delegated SQL permission + admin consent (one-time, per tenant).**
+The Loom console app registration must hold the Azure SQL Database
+`user_impersonation` delegated permission so a SQL-audience token is issued for
+the user at sign-in. The audience host is cloud-portable via
+`LOOM_SYNAPSE_SQL_TOKEN_SCOPE` (`database.windows.net` for Commercial/GCC,
+`database.usgovcloudapi.net` for GCC-High/IL5) — already set per-boundary in
+`admin-plane/main.bicep`, so no new env var.
+
+```bash
+az login   # user/SP with Application.ReadWrite.All on the app
+MSAL_APP_ID=<loom console app registration appId> \
+  scripts/csa-loom/grant-sql-delegated-permission.sh
+# then a Tenant Admin grants consent:
+az ad app permission admin-consent --id <loom console app registration appId>
+```
+
+**Step 2 — Provision the user in the SQL endpoint** (so their token authorizes):
+
+- *Dedicated pool* (run as the Synapse AAD admin / console UAMI):
+  ```sql
+  CREATE USER [user@tenant.onmicrosoft.com] FROM EXTERNAL PROVIDER;
+  ALTER ROLE db_datareader ADD MEMBER [user@tenant.onmicrosoft.com];
+  ALTER ROLE db_datawriter ADD MEMBER [user@tenant.onmicrosoft.com];
+  ```
+- *Serverless (OPENROWSET over ADLS)*: grant the user **Storage Blob Data
+  Reader** on the lake storage account (Azure RBAC). Workspace members often
+  already have it — then no extra step.
+
+**Verify.** With the mode set to *User's identity*, run
+`SELECT SUSER_NAME() AS me;` (Dedicated) — it returns the signed-in user's UPN,
+not the console identity. The chosen mode persists in Cosmos
+(`item.state.accessMode`) and survives reload.

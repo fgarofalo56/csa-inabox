@@ -21,7 +21,18 @@ export const dynamic = 'force-dynamic';
 // consented, AAD simply omits it and login still succeeds (MSAL won't fail the
 // code exchange for the base scopes).
 const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
-const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read', ARM_SCOPE];
+// Delegated Azure SQL Database scope — used to obtain a SQL-audience token for
+// the user so a SQL analytics endpoint set to "user's identity" data-access
+// mode (F10) can run queries under the caller's own identity. The audience host
+// is cloud-portable via LOOM_SYNAPSE_SQL_TOKEN_SCOPE (same env var the TDS
+// service-identity path uses), so a single image serves every sovereign cloud:
+//   Commercial/GCC:  https://database.windows.net/user_impersonation
+//   GCC-High/IL5:    https://database.usgovcloudapi.net/user_impersonation
+// If this scope isn't admin-consented, AAD simply omits it and login still
+// succeeds (MSAL won't fail the code exchange for the base scopes); the query
+// route then surfaces an honest "sign in again / grant consent" gate.
+const SQL_USER_SCOPE = `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net'}/user_impersonation`;
+const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read', ARM_SCOPE, SQL_USER_SCOPE];
 
 function redirectUri(req: NextRequest): string {
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost:3000';

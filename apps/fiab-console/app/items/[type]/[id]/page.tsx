@@ -13,6 +13,7 @@ import { use } from "react";
  */
 
 import { notFound } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Spinner, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
@@ -22,14 +23,24 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
-const GENERIC_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Item', actions: [{ label: 'Save' }, { label: 'Save as' }, { label: 'Refresh' }] },
-    { label: 'Share', actions: [{ label: 'Share' }, { label: 'Permissions' }, { label: 'Sensitivity' }, { label: 'Endorse' }] },
-    { label: 'Run', actions: [{ label: 'Recent runs' }, { label: 'Schedule' }] },
-    { label: 'Source control', actions: [{ label: 'Commit' }, { label: 'Update' }] },
-  ]},
-];
+/** Generic ribbon. The Share group's Share + Permissions actions navigate to
+ *  the universal item-permissions page (/items/[type]/[id]/permissions) which
+ *  hosts the Share dialog + live Manage-permissions list (F6). */
+function genericRibbon(onManagePermissions: () => void): RibbonTab[] {
+  return [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Item', actions: [{ label: 'Save' }, { label: 'Save as' }, { label: 'Refresh' }] },
+      { label: 'Share', actions: [
+        { label: 'Share', onClick: onManagePermissions },
+        { label: 'Permissions', onClick: onManagePermissions },
+        { label: 'Sensitivity' },
+        { label: 'Endorse' },
+      ] },
+      { label: 'Run', actions: [{ label: 'Recent runs' }, { label: 'Schedule' }] },
+      { label: 'Source control', actions: [{ label: 'Commit' }, { label: 'Update' }] },
+    ]},
+  ];
+}
 
 interface Props {
   params: Promise<{ type: string; id: string }>;
@@ -38,6 +49,7 @@ interface Props {
 export default function ItemEditorPage(props: Props) {
   const params = use(props.params);
   const { type, id } = params;
+  const router = useRouter();
   const item = findItemType(type);
   if (!item) notFound();
 
@@ -75,7 +87,7 @@ export default function ItemEditorPage(props: Props) {
     : `${persisted?.displayName ?? item.displayName} (${id.substring(0, 8)})`;
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={GENERIC_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={genericRibbon(() => router.push(`/items/${type}/${id}/permissions`))} main={
       <EmptyState
         icon="◰"
         title={headline}
