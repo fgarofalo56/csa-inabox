@@ -407,9 +407,6 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
-@description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
-param loomGrafanaDashboardUid string = ''
-
 // ---------------------------------------------------------------------------
 // Govern → Admin view (F2) "View more" embedded report backend.
 //   - Power BI Embedded (A1)  : Commercial / GCC "View more" backend.
