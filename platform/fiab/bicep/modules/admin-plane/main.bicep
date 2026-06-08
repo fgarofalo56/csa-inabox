@@ -333,6 +333,19 @@ param loomAmlSubscription string = ''
 @description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to LOOM_FOUNDRY_REGION, then eastus2.')
 param loomAmlRegion string = ''
 
+// ---------------------------------------------------------------------------
+// SQL editor Copilot — Azure OpenAI endpoint (LOOM_AZURE_OPENAI_ENDPOINT).
+// Backs the unified SQL editor's Fix / Explain / NL→T-SQL quick-actions and the
+// Monaco inline ghost-text completion. The route resolves the data-plane host
+// per cloud via getOpenAiSuffix() (openai.azure.com vs openai.azure.us), so this
+// may be a bare account name OR a full inference URL. Empty derives from the
+// Foundry Agent Service account (when agentFoundryEnabled=true); empty + Foundry
+// off → the SQL Copilot pane shows an honest gate MessageBar naming this var and
+// the Cognitive Services OpenAI User role, while the rest of the editor works.
+// ---------------------------------------------------------------------------
+@description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true.')
+param loomAzureOpenAiEndpoint string = ''
+
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
 //
@@ -1483,6 +1496,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            // SQL editor Copilot (Fix / Explain / NL→T-SQL + inline ghost text).
+            // Explicit loomAzureOpenAiEndpoint wins; otherwise reuse the Foundry
+            // Agent Service AOAI endpoint. When both are empty the copilot route
+            // returns an honest 503 gate naming this var + the Cognitive Services
+            // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
+            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '') }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }

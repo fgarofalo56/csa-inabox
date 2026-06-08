@@ -27,9 +27,9 @@
  * ui-parity.md).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label, Field,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label, Field, Textarea,
   Dropdown, Option, Tooltip, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -40,9 +40,12 @@ import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  Sparkle20Regular, Sparkle20Filled, Bug20Regular, TextBulletListSquare20Regular,
+  ArrowEnter20Regular, Dismiss20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { registerInlineCompletion } from '@/lib/components/editor/inline-completion';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -118,6 +121,36 @@ const useStyles = makeStyles({
     borderRadius: '4px', overflow: 'hidden',
   },
   ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
+  // ── Copilot side pane (Query tab) ──
+  queryRow: { display: 'flex', gap: 12, alignItems: 'stretch', minHeight: 0 },
+  queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  copilotPane: {
+    width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10,
+    background: tokens.colorNeutralBackground2, maxHeight: 560,
+  },
+  copilotHead: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
+  copilotLog: {
+    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
+    minHeight: 160, paddingRight: 4,
+  },
+  msgUser: {
+    alignSelf: 'flex-end', maxWidth: '92%', background: tokens.colorBrandBackground2,
+    color: tokens.colorNeutralForeground1, borderRadius: 6, padding: '6px 8px', fontSize: 12,
+  },
+  msgAssistant: {
+    alignSelf: 'flex-start', maxWidth: '100%', background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: '6px 8px',
+    fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  },
+  msgFoot: { display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' },
+  copilotInputRow: { display: 'flex', flexDirection: 'column', gap: 6 },
+  codeBlock: {
+    fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3,
+    borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    margin: '4px 0',
+  },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -557,6 +590,23 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [qResult, setQResult] = useState<QueryResponse | null>(null);
   const [qLoading, setQLoading] = useState(false);
 
+  // ---- Copilot (Fix / Explain / NL→T-SQL + inline ghost text) ----
+  // Only the Azure SQL (T-SQL) family is wired to the SQL Copilot; PostgreSQL /
+  // SQL MI fall outside the T-SQL prompt contract and stay honest-gated.
+  const copilotEligible = family === 'azure-sql' && !!server && !!database;
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotMessages, setCopilotMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotGate, setCopilotGate] = useState<string | null>(null);
+  const [nlInput, setNlInput] = useState('');
+  const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
+  const inlineDisposeRef = useRef<{ dispose(): void } | null>(null);
+  const sqlSelectionRef = useRef<string>('');
+  const schemaRef = useRef<string>('');         // compact schema string for ghost-text grounding
+  const copilotOpenRef = useRef<boolean>(false); // read live inside the inline provider
+  useEffect(() => { copilotOpenRef.current = copilotOpen; }, [copilotOpen]);
+
   const queryUrl = useMemo(() => {
     if (family === 'postgres') return `/api/items/postgres-flexible-server/${encodeURIComponent(id)}/query`;
     return `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`;
@@ -581,6 +631,154 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     setSqlText(sql);
     setTab('query');
   }, []);
+
+  // ---- Copilot ghost-text schema grounding ----
+  // Populate schemaRef with a compact INFORMATION_SCHEMA.COLUMNS catalog over
+  // the SAME live TDS path the Query tab uses, so the inline completion provider
+  // (and the side pane) reference REAL table/column names. Soft-fails to empty.
+  const loadCopilotSchema = useCallback(async () => {
+    if (family !== 'azure-sql' || !server || !database) { schemaRef.current = ''; return; }
+    const j = await fetchJson(queryUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        server, database,
+        sql: 'SELECT TOP 200 TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION',
+      }),
+    });
+    if (j.ok && Array.isArray(j.rows)) {
+      schemaRef.current = j.rows.map((r: unknown[]) => `${r[0]}.${r[1]}.${r[2]} (${r[3]})`).join('\n');
+    } else {
+      schemaRef.current = '';
+    }
+  }, [queryUrl, server, database, family]);
+
+  // Refresh the ghost-text schema cache whenever the Copilot is open against a
+  // new Azure SQL server/database.
+  useEffect(() => {
+    if (copilotOpen && copilotEligible) { loadCopilotSchema(); }
+  }, [copilotOpen, copilotEligible, loadCopilotSchema]);
+
+  // Wire ghost-text inline completion + selection capture onto the Monaco
+  // editor once it mounts. The provider reads copilotOpenRef/schemaRef live so
+  // it always reflects the latest state without re-registering.
+  const handleEditorReady = useCallback((editor: any, monaco: any) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+    inlineDisposeRef.current?.dispose();
+    inlineDisposeRef.current = registerInlineCompletion(editor, monaco, () => ({
+      enabled: copilotOpenRef.current,
+      locked: false,
+      lang: 'tsql',
+      priorCells: [],
+      schemaContext: schemaRef.current,
+    }));
+    editor.onDidChangeCursorSelection?.(() => {
+      const sel = editor.getSelection?.();
+      const model = editor.getModel?.();
+      sqlSelectionRef.current = (sel && model && !sel.isEmpty?.())
+        ? (model.getValueInRange?.(sel) || '')
+        : '';
+    });
+  }, []);
+  useEffect(() => () => { inlineDisposeRef.current?.dispose(); }, []);
+
+  // Extract the first fenced ```sql block (falls back to the whole text).
+  const extractSql = useCallback((text: string): string => {
+    const m = text.match(/```(?:sql|tsql)?\s*([\s\S]*?)```/i);
+    return (m ? m[1] : text).trim();
+  }, []);
+
+  // Replace the whole editor buffer with the Copilot-generated SQL.
+  const insertSql = useCallback((sql: string) => {
+    const editor = editorRef.current;
+    const model = editor?.getModel?.();
+    if (editor && model) {
+      editor.executeEdits?.('sql-copilot', [{ range: model.getFullModelRange(), text: sql }]);
+      editor.focus?.();
+    }
+    setSqlText(sql);
+  }, []);
+
+  // Stream a Fix / Explain / NL→T-SQL turn from the new copilot BFF route.
+  const invokeCopilot = useCallback(async (command: 'fix' | 'explain' | 'nl2sql') => {
+    if (!copilotEligible) return;
+    const selection = sqlSelectionRef.current.trim();
+    const snippet = command === 'nl2sql' ? nlInput.trim() : (selection || sqlText);
+    if (!snippet) {
+      setCopilotMessages((prev) => [...prev, { role: 'assistant', text: command === 'nl2sql' ? 'Type a request above first.' : 'Write or select some SQL first.' }]);
+      return;
+    }
+    setCopilotOpen(true);
+    setCopilotGate(null);
+    setCopilotLoading(true);
+    const userText = command === 'nl2sql'
+      ? nlInput.trim()
+      : `/${command} ${(selection ? '(selection) ' : '')}${snippet.replace(/\s+/g, ' ').slice(0, 80)}${snippet.length > 80 ? '…' : ''}`;
+    setCopilotMessages((prev) => [...prev, { role: 'user', text: userText }]);
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/copilot`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server, database, command, sql: snippet, selection }),
+      });
+    } catch (e: any) {
+      setCopilotMessages((prev) => [...prev, { role: 'assistant', text: `Network error: ${e?.message || String(e)}` }]);
+      setCopilotLoading(false);
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      const j = await res.json().catch(() => ({} as any));
+      if (j?.code === 'no_aoai') setCopilotGate(j.hint || j.error || 'Azure OpenAI not configured.');
+      else setCopilotMessages((prev) => [...prev, { role: 'assistant', text: j?.error || `Request failed (HTTP ${res.status}).` }]);
+      setCopilotLoading(false);
+      return;
+    }
+
+    // Stream the SSE envelope (event: chunk → { delta }).
+    setCopilotMessages((prev) => [...prev, { role: 'assistant', text: '' }]);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            if (j.delta) {
+              full += j.delta;
+              setCopilotMessages((prev) => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { role: 'assistant', text: full };
+                return msgs;
+              });
+            }
+            if (j.error) {
+              setCopilotMessages((prev) => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { role: 'assistant', text: full || `Error: ${j.error}` };
+                return msgs;
+              });
+            }
+          } catch { /* partial JSON across a chunk boundary */ }
+        }
+      }
+    } finally {
+      setCopilotLoading(false);
+      if (command === 'nl2sql') setNlInput('');
+    }
+  }, [copilotEligible, id, server, database, sqlText, nlInput]);
 
   // Azure-native mirroring (change feed → ADLS Bronze Delta; no Fabric).
   const [mirror, setMirror] = useState<any>(null);
@@ -702,6 +900,19 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Query', actions: [
         { label: qLoading ? 'Running…' : 'Run', onClick: !qLoading ? () => run() : undefined, disabled: qLoading || !server },
       ]},
+      { label: 'Copilot', actions: [
+        { label: copilotOpen ? 'Hide Copilot' : 'Copilot', icon: copilotOpen ? <Sparkle20Filled /> : <Sparkle20Regular />,
+          onClick: () => { setTab('query'); setCopilotOpen((v) => !v); },
+          title: 'Toggle the SQL Copilot side pane (Fix / Explain / NL→T-SQL + inline ghost text)' },
+        { label: 'Explain', icon: <TextBulletListSquare20Regular />,
+          onClick: copilotEligible ? () => { setTab('query'); invokeCopilot('explain'); } : undefined,
+          disabled: !copilotEligible,
+          title: family !== 'azure-sql' ? 'Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Annotate the selected SQL with inline comments' },
+        { label: 'Fix', icon: <Bug20Regular />,
+          onClick: copilotEligible ? () => { setTab('query'); invokeCopilot('fix'); } : undefined,
+          disabled: !copilotEligible,
+          title: family !== 'azure-sql' ? 'Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Repair the selected (or full) SQL so it runs' },
+      ]},
       { label: 'Schema', actions: [
         { label: 'Browse objects', onClick: server ? () => { setTab('schema'); loadSchema(); } : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Open the sys.* object navigator' },
       ]},
@@ -717,7 +928,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
     ]},
-  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, copilotOpen, copilotEligible, invokeCopilot]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;
@@ -946,7 +1157,15 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  <Tooltip content={family !== 'azure-sql' ? 'SQL Copilot is Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Fix / Explain / NL→T-SQL + inline ghost text'} relationship="label">
+                    <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={copilotOpen ? <Sparkle20Filled /> : <Sparkle20Regular />}
+                      onClick={() => setCopilotOpen((v) => !v)} disabled={family !== 'azure-sql'}>
+                      Copilot
+                    </Button>
+                  </Tooltip>
+                  <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()}>Run</Button>
+                </div>
               </div>
               {family === 'managed-instance' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
@@ -954,8 +1173,88 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {family === 'postgres' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL query path is gated</MessageBarTitle>Add the <code>pg</code> driver to apps/fiab-console and set <code>LOOM_POSTGRES_QUERY_LIVE=true</code> (with the console UAMI created as a PG AAD principal via <code>pgaadauth_create_principal</code>). ARM inventory, provisioning, databases, and firewall are fully live now.</MessageBarBody></MessageBar>
               )}
-              <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
-              <ResultsPanel result={qResult} loading={qLoading} />
+              <div className={s.queryRow}>
+                <div className={s.queryMain}>
+                  <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" onReady={family === 'azure-sql' ? handleEditorReady : undefined} />
+                  {copilotEligible && (
+                    <Caption1>
+                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: 14 }} /> Copilot inline completion is on while the pane is open —
+                      write <code>-- describe what you want</code> on a new line and press <strong>Tab</strong> to accept the ghost-text T-SQL.
+                    </Caption1>
+                  )}
+                  <ResultsPanel result={qResult} loading={qLoading} />
+                </div>
+                {copilotOpen && family === 'azure-sql' && (
+                  <div className={s.copilotPane} aria-label="SQL Copilot">
+                    <div className={s.copilotHead}>
+                      <Sparkle20Filled />
+                      <Subtitle2>SQL Copilot</Subtitle2>
+                      <div className={s.copilotHeadActions}>
+                        <Tooltip content="Annotate the selected (or full) SQL with inline comments" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<TextBulletListSquare20Regular />} disabled={!copilotEligible || copilotLoading} onClick={() => invokeCopilot('explain')}>Explain</Button>
+                        </Tooltip>
+                        <Tooltip content="Repair the selected (or full) SQL so it runs" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Bug20Regular />} disabled={!copilotEligible || copilotLoading} onClick={() => invokeCopilot('fix')}>Fix</Button>
+                        </Tooltip>
+                        <Tooltip content="Close Copilot" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Dismiss20Regular />} aria-label="Close Copilot" onClick={() => setCopilotOpen(false)} />
+                        </Tooltip>
+                      </div>
+                    </div>
+                    {!copilotEligible && (
+                      <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Connect a database</MessageBarTitle>Pick an Azure SQL server + database on the <strong>Connect</strong> tab to use the Copilot.</MessageBarBody></MessageBar>
+                    )}
+                    {copilotGate && (
+                      <MessageBar intent="warning"><MessageBarBody>
+                        <MessageBarTitle>SQL Copilot not configured</MessageBarTitle>
+                        {copilotGate}
+                      </MessageBarBody></MessageBar>
+                    )}
+                    <div className={s.copilotLog}>
+                      {copilotMessages.length === 0 && !copilotGate && (
+                        <Caption1>
+                          Select a statement and click <strong>Explain</strong> or <strong>Fix</strong>, or describe what you want below and
+                          generate T-SQL. Every answer is grounded in this database's real schema.
+                        </Caption1>
+                      )}
+                      {copilotMessages.map((m, i) => {
+                        if (m.role === 'user') return <div key={i} className={s.msgUser}>{m.text}</div>;
+                        const code = extractSql(m.text);
+                        const hasCode = /```/.test(m.text) || /\bselect\b|\bupdate\b|\binsert\b|\bdelete\b|\bcreate\b/i.test(m.text);
+                        return (
+                          <div key={i} className={s.msgAssistant}>
+                            {m.text || (copilotLoading ? <Spinner size="tiny" label="Thinking…" labelPosition="after" /> : '')}
+                            {m.text && hasCode && code && (
+                              <div className={s.msgFoot}>
+                                <Tooltip content="Replace the editor with this SQL" relationship="label">
+                                  <Button size="small" appearance="primary" icon={<ArrowEnter20Regular />} onClick={() => insertSql(code)}>Insert into editor</Button>
+                                </Tooltip>
+                                <Tooltip content="Copy SQL to clipboard" relationship="label">
+                                  <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => navigator.clipboard?.writeText(code)}>Copy</Button>
+                                </Tooltip>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className={s.copilotInputRow}>
+                      <Field label="Natural language → T-SQL">
+                        <Textarea
+                          value={nlInput}
+                          onChange={(_, d) => setNlInput(d.value)}
+                          placeholder="e.g. top 10 customers by total order amount in 2024"
+                          resize="vertical"
+                          disabled={!copilotEligible || copilotLoading}
+                        />
+                      </Field>
+                      <Button appearance="primary" icon={<Sparkle20Regular />} disabled={!copilotEligible || copilotLoading || !nlInput.trim()} onClick={() => invokeCopilot('nl2sql')}>
+                        {copilotLoading ? 'Generating…' : 'Generate T-SQL'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
 

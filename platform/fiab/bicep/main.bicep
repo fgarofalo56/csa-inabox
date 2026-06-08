@@ -298,6 +298,9 @@ param loomAmlSubscription string = ''
 @description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to the deployment location.')
 param loomAmlRegion string = ''
 
+@description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT — Fix / Explain / NL→T-SQL + inline ghost text). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true; empty + Foundry off → the SQL Copilot pane shows an honest gate naming this var + the Cognitive Services OpenAI User role.')
+param loomAzureOpenAiEndpoint string = ''
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -420,6 +423,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlResourceGroup: loomAmlResourceGroup
     loomAmlSubscription: loomAmlSubscription
     loomAmlRegion: loomAmlRegion
+    // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
+    loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
   }
 }
 
