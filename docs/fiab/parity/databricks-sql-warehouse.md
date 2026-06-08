@@ -17,6 +17,8 @@ Editor: `DatabricksSqlWarehouseEditor` in `apps/fiab-console/lib/editors/databri
 | 8 | Explorer: views + user functions nodes (Unity Catalog) |
 | 9 | Row-count badge on views |
 | 10 | Script object as CREATE / DROP |
+| 11 | Save as table (CTAS) — materialize a SELECT into a Unity Catalog managed Delta table |
+| 12 | Clone table (Delta SHALLOW = zero-copy / DEEP = full copy) |
 
 ## Loom coverage
 
@@ -32,6 +34,8 @@ Editor: `DatabricksSqlWarehouseEditor` in `apps/fiab-console/lib/editors/databri
 | 8 | ✅ | `/schema` leaf level adds `SHOW VIEWS` + `SHOW USER FUNCTIONS`; tree shows Eye/MathFormula leaves. Views subtracted from `SHOW TABLES` so each appears once. |
 | 9 | ✅ | View count: lazy `SELECT COUNT(*)` via `/query` on expand (real statement-execution). |
 | 10 | ✅ | `…` menu → `/script-out` → `SHOW CREATE TABLE` (views) / `SHOW CREATE FUNCTION` (UDFs) for CREATE; server-built `DROP … IF EXISTS` for DROP. |
+| 11 | ✅ | **Save as table (CTAS) built.** Ribbon **Save as table** opens a catalog/schema/name dialog; **Create** → `POST /api/items/databricks-sql-warehouse/[id]/ctas` → `executeStatement()` runs `CREATE TABLE \`cat\`.\`sch\`.\`name\` USING DELTA AS <SELECT>` via `/api/2.0/sql/statements`; success receipt shows the created FQN. |
+| 12 | ✅ | **Clone built (zero-copy verified).** Ribbon **Clone table** + per-table hover Clone button open a dialog (SHALLOW/DEEP + replace toggle); **Clone** → `POST /api/items/databricks-sql-warehouse/[id]/clone` → `CREATE [OR REPLACE] TABLE <target> [SHALLOW|DEEP] CLONE <source>`. The route surfaces `num_copied_files` from the CLONE metrics row, so SHALLOW proves zero-copy (0 files duplicated). SHALLOW dialog warns about VACUUM-on-source dependency. |
 
 ## Backend per control
 - All controls → Databricks SQL Statement Execution + Warehouses REST via Console UAMI.
