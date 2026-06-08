@@ -29,6 +29,7 @@ import {
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -614,6 +615,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  // Top-level surface tab: Query (SQL editor + UC explorer) | Monitoring
+  // (running-clusters chart + recent-query table, both on real backends).
+  const [mainTab, setMainTab] = useState<'query' | 'monitoring'>('query');
 
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -1015,6 +1019,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={mainTab} onTabSelect={(_, d) => setMainTab(d.value as 'query' | 'monitoring')}>
+            <Tab value="query">Query</Tab>
+            <Tab value="monitoring">Monitoring</Tab>
+          </TabList>
+          {mainTab === 'monitoring' ? (
+            <WarehouseMonitoringTab itemId={id} engine="databricks-sql-warehouse" warehouseId={warehouseId || undefined} />
+          ) : (
+          <>
           {warehousesError && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1257,6 +1269,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+          </>
+          )}
         </div>
       }
     />

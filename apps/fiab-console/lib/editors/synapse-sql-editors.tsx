@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip,
+  Tab, TabList,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -25,6 +26,7 @@ import {
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -426,6 +428,9 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [computeId, setComputeId] = useState('');
   // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
   const [secOpen, setSecOpen] = useState(false);
+  // Top-level surface tab: Query (T-SQL editor + schema tree) | Monitoring
+  // (query-load chart + recent requests, on real sys.dm_pdw_exec_requests).
+  const [mainTab, setMainTab] = useState<'query' | 'monitoring'>('query');
 
   const refreshState = useCallback(async () => {
     const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
@@ -624,6 +629,14 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={mainTab} onTabSelect={(_, d) => setMainTab(d.value as 'query' | 'monitoring')}>
+            <Tab value="query">Query</Tab>
+            <Tab value="monitoring">Monitoring</Tab>
+          </TabList>
+          {mainTab === 'monitoring' ? (
+            <WarehouseMonitoringTab itemId={id} engine="synapse-dedicated-sql-pool" />
+          ) : (
+          <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color={poolBadgeColor(state)}>{state}</Badge>
             <Badge appearance="outline">{poolState?.sku || 'DW—'}</Badge>
@@ -697,6 +710,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </DialogBody>
             </DialogSurface>
           </Dialog>
+          </>
+          )}
         </div>
       }
     />

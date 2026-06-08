@@ -61,6 +61,7 @@ import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -8259,6 +8260,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Top-level surface tab: Query (T-SQL editor) | Monitoring (query-load chart +
+  // recent requests, on real sys.dm_pdw_exec_requests via the dedicated pool).
+  const [mainTab, setMainTab] = useState<'query' | 'monitoring'>('query');
   // Seed the SQL editor with the bundle DDL once, when the live warehouse has
   // no tables to show — so the surface lands populated instead of on a smoke
   // test. The user can Run it (creates the schema) against the live compute.
@@ -8522,6 +8526,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={mainTab} onTabSelect={(_, d) => setMainTab(d.value as 'query' | 'monitoring')}>
+            <Tab value="query">Query</Tab>
+            <Tab value="monitoring">Monitoring</Tab>
+          </TabList>
+          {mainTab === 'monitoring' ? (
+            isNew
+              ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
+              : <WarehouseMonitoringTab itemId={id} engine="warehouse" />
+          ) : (
+          <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color={ready ? 'success' : 'warning'}>{schema?.state || 'Unknown'}</Badge>
             <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
@@ -8624,6 +8638,8 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
+          </>
+          )}
         </div>
       }
     />

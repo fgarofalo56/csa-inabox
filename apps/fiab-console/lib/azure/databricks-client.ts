@@ -101,6 +101,56 @@ export async function getWarehouse(id: string): Promise<Warehouse> {
   return (await res.json()) as Warehouse;
 }
 
+// ------------------------------------------------------------
+// Warehouse events (running-clusters timeline for the Monitoring tab)
+//
+// GET /api/2.0/sql/warehouses/{id}/events returns lifecycle events for the
+// warehouse — STARTING / RUNNING / SCALED_UP / SCALED_DOWN / STOPPING /
+// STOPPED — each stamped with `timestamp` (epoch ms) and, where applicable,
+// `cluster_count` (the number of clusters active at that instant). This is
+// the real signal the Databricks SQL warehouse monitoring view plots for
+// "Running clusters over time".
+// Learn: https://learn.microsoft.com/azure/databricks/sql/api/sql-warehouses
+// ------------------------------------------------------------
+export interface WarehouseEvent {
+  /** STARTING | RUNNING | STOPPING | STOPPED | SCALED_UP | SCALED_DOWN | … */
+  event_type?: string;
+  /** Epoch ms (UTC) the event was recorded. */
+  timestamp?: number;
+  /** Number of clusters running at this instant (present on RUNNING/SCALED_* events). */
+  cluster_count?: number;
+  /** Optional human-readable detail Databricks attaches to some events. */
+  message?: string;
+}
+
+/**
+ * List recent warehouse lifecycle events (most-recent first). The Databricks
+ * endpoint paginates with `next_page_token`; we walk pages up to `limit`
+ * total events so the last-hour window is complete even on a busy warehouse.
+ */
+export async function listWarehouseEvents(
+  warehouseId: string,
+  limit = 200,
+): Promise<WarehouseEvent[]> {
+  const out: WarehouseEvent[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams();
+    params.set('max_results', String(Math.min(1000, Math.max(1, limit))));
+    if (pageToken) params.set('page_token', pageToken);
+    const res = await dbxFetch(
+      `/api/2.0/sql/warehouses/${encodeURIComponent(warehouseId)}/events?${params.toString()}`,
+    );
+    const body = await asJsonOrThrow<{ events?: WarehouseEvent[]; next_page_token?: string }>(
+      res,
+      'listWarehouseEvents',
+    );
+    out.push(...(body.events || []));
+    pageToken = body.next_page_token;
+  } while (pageToken && out.length < limit);
+  return out.slice(0, limit);
+}
+
 export async function startWarehouse(id: string): Promise<void> {
   const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/start`, {
     method: 'POST',
