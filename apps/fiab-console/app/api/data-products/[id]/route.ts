@@ -8,7 +8,8 @@
  *
  *   GET   /api/data-products/[id]
  *     → { ok, item, doc, ownerTenantId, isOwner,
- *         product, dqScore, dqGate, subscriberCount }  (+ ETag header)
+ *         product, dqScore, dqGate, subscriberCount,
+ *         displayName, workspaceId, preconditions, current }  (+ ETag header)
  *
  *     `item`/`doc`/`isOwner` drive the F15 consumer read view and the owner edit
  *     dialog. `product` is the owner details (F3) projection of the same record,
@@ -18,6 +19,10 @@
  *                   rules are configured — the UI shows an honest-gate instead
  *                   of a fabricated number (per no-vaporware.md).
  *       - subscriberCount : real count of approved access-requests.
+ *
+ *     `preconditions`/`current` (F13) are the four destructive-delete gates,
+ *     mirroring the Microsoft Purview Unified Catalog "Delete data products"
+ *     procedure — see DELETE below. They drive the delete-dialog preflight.
  *
  *     GET is NOT ownership gated — published data products are discoverable to
  *     any catalog reader (Purview Unified Catalog model). It resolves the owning
@@ -35,6 +40,22 @@
  *     Returns { ok, item, doc, product, patched } (+ ETag). Optimistic
  *     concurrency: an `If-Match` header conditions the replace; a stale ETag
  *     (concurrent write) returns HTTP 409 instead of clobbering.
+ *
+ *   DELETE /api/data-products/[id]  — F13 precondition-gated delete of the
+ *     Cosmos doc. Preconditions mirror the Microsoft Purview Unified Catalog
+ *     "Delete data products" procedure
+ *     (https://learn.microsoft.com/purview/unified-catalog-data-products-create-manage):
+ *       1. lifecycleStatus must be 'Draft' or 'Expired' (NOT 'Published').
+ *       2. Zero data assets attached  (state.datasets empty).
+ *       3. Zero glossary terms linked  (state.glossaryLinks empty).
+ *       4. Zero open access requests   (no audit-log `access-requested` rows).
+ *     Only when ALL four hold may the data product be deleted. The Cosmos delete
+ *     is authoritative; Purview Unified Catalog cleanup is best-effort — on the
+ *     deployed CLASSIC Data Map account it honestly gates and never blocks the
+ *     Cosmos delete, per .claude/rules/no-vaporware.md.
+ *     DELETE : 200 { ok, workspaceId, purviewDeleted, purviewNote? }
+ *              422 { ok:false, error, code:'precondition_failed', blockers, current }
+ *              401 unauthenticated · 404 not found · 500 unexpected.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -44,7 +65,14 @@ import {
   workspacesContainer,
   tenantSettingsContainer,
   accessRequestsContainer,
+  auditLogContainer,
 } from '@/lib/azure/cosmos-client';
+import { deleteOwnedItem } from '../../items/_lib/item-crud';
+import {
+  deleteDataProductBestEffort,
+  PurviewUnifiedCatalogGateError,
+  PurviewNotConfiguredError,
+} from '@/lib/azure/purview-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
@@ -287,6 +315,72 @@ async function countSubscribers(dataProductId: string): Promise<number> {
   }
 }
 
+interface DeletePreconditions {
+  statusAllowed: boolean;
+  datasetsEmpty: boolean;
+  glossaryEmpty: boolean;
+  noOpenAccessRequests: boolean;
+  canDelete: boolean;
+}
+interface DeleteCurrent {
+  lifecycleStatus: string;
+  datasetCount: number;
+  glossaryCount: number;
+  openAccessRequestCount: number;
+}
+
+/**
+ * Resolve the four destructive-delete preconditions (F13) from an already-loaded
+ * item. Shared by the GET preflight and the DELETE enforcement so the checks can
+ * never drift apart.
+ */
+async function computePreconditions(
+  item: WithEtag,
+  id: string,
+): Promise<{ preconditions: DeletePreconditions; current: DeleteCurrent }> {
+  const state = (item.state || {}) as Record<string, unknown>;
+  const lifecycleStatus = (state.lifecycleStatus as string) || 'DRAFT';
+  const datasets = Array.isArray(state.datasets) ? state.datasets : [];
+  const glossaryLinks = Array.isArray(state.glossaryLinks) ? state.glossaryLinks : [];
+
+  // Single-partition aggregate on audit-log (PK = /itemId) — counts the open
+  // access requests recorded by POST /api/catalog/request-access. There is no
+  // resolution tracking today, so every such row counts as "open".
+  let openAccessRequestCount = 0;
+  try {
+    const audit = await auditLogContainer();
+    const { resources: counts } = await audit.items
+      .query<number>(
+        {
+          query: 'SELECT VALUE COUNT(1) FROM c WHERE c.action = @a',
+          parameters: [{ name: '@a', value: 'access-requested' }],
+        },
+        { partitionKey: id },
+      )
+      .fetchAll();
+    openAccessRequestCount = Number(counts?.[0] ?? 0);
+  } catch {
+    // Audit container is best-effort; absence of rows means zero open requests.
+    openAccessRequestCount = 0;
+  }
+
+  const statusAllowed = lifecycleStatus !== 'PUBLISHED';
+  const datasetsEmpty = datasets.length === 0;
+  const glossaryEmpty = glossaryLinks.length === 0;
+  const noOpenAccessRequests = openAccessRequestCount === 0;
+  const canDelete = statusAllowed && datasetsEmpty && glossaryEmpty && noOpenAccessRequests;
+
+  return {
+    preconditions: { statusAllowed, datasetsEmpty, glossaryEmpty, noOpenAccessRequests, canDelete },
+    current: {
+      lifecycleStatus,
+      datasetCount: datasets.length,
+      glossaryCount: glossaryLinks.length,
+      openAccessRequestCount,
+    },
+  };
+}
+
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
   const session = getSession();
@@ -296,9 +390,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!item) return err('Data product not found', 404, 'not_found');
     const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
     const isOwner = ownerTenantId !== null && ownerTenantId === session.claims.oid;
-    const [{ dqScore, dqGate }, subscriberCount] = await Promise.all([
+    const [{ dqScore, dqGate }, subscriberCount, gates] = await Promise.all([
       computeDqScore(session.claims.oid),
       countSubscribers(id),
+      computePreconditions(item, id),
     ]);
     return NextResponse.json(
       {
@@ -311,6 +406,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
         dqScore,
         dqGate,
         subscriberCount,
+        displayName: item.displayName,
+        workspaceId: item.workspaceId,
+        preconditions: gates.preconditions,
+        current: gates.current,
       },
       { headers: { ETag: item._etag ?? '' } },
     );
@@ -503,5 +602,91 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     }
   } catch (e: any) {
     return err(e?.message || 'Failed to update data product', 500, 'cosmos_error');
+  }
+}
+
+/**
+ * Precondition-gated delete (F13). Owner-only: loads the item via the
+ * tenant-scoped path so a consumer (non-owner) gets 404 and can't delete. All
+ * four preconditions must hold; otherwise 422 with the specific blockers. On
+ * success the Cosmos record is the source of truth — Purview cleanup is
+ * best-effort and never blocks.
+ */
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const { id } = await props.params;
+  const session = getSession();
+  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  try {
+    const item = await loadOwnedItem(id, session.claims.oid);
+    if (!item) return err('Data product not found', 404, 'not_found');
+
+    const { preconditions, current } = await computePreconditions(item, id);
+    if (!preconditions.canDelete) {
+      const blockers: string[] = [];
+      if (!preconditions.statusAllowed)
+        blockers.push(
+          `Status is '${current.lifecycleStatus}' — unpublish the data product first (set its lifecycle status to Draft or Expired).`,
+        );
+      if (!preconditions.datasetsEmpty)
+        blockers.push(
+          `${current.datasetCount} data asset(s) attached — remove all data assets (Datasets tab) before deleting.`,
+        );
+      if (!preconditions.glossaryEmpty)
+        blockers.push(
+          `${current.glossaryCount} glossary term(s) linked — unlink all terms (Glossary tab) before deleting.`,
+        );
+      if (!preconditions.noOpenAccessRequests)
+        blockers.push(
+          `${current.openAccessRequestCount} open access request(s) exist — delete all access requests (Governance → Policies) before deleting.`,
+        );
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'Delete blocked: preconditions not met.',
+          code: 'precondition_failed',
+          blockers,
+          current,
+        },
+        { status: 422 },
+      );
+    }
+
+    // 1. Delete from Cosmos (authoritative). deleteOwnedItem also removes the
+    //    AI Search mirror (deleteLoomDoc) on success.
+    const deleted = await deleteOwnedItem(id, ITEM_TYPE, session.claims.oid);
+    if (!deleted) return err('data-product not found or already deleted', 404, 'not_found');
+
+    // 2. Best-effort: delete from the Purview Unified Catalog. The expected
+    //    PurviewUnifiedCatalogGateError on the deployed classic Data Map account
+    //    NEVER fails the Cosmos delete — the Cosmos record is the source of truth.
+    const state = (item.state || {}) as Record<string, unknown>;
+    const purviewId = state.purviewDataProductId as string | undefined;
+    let purviewDeleted = false;
+    let purviewNote: string | undefined;
+    if (purviewId) {
+      try {
+        const r = await deleteDataProductBestEffort(purviewId);
+        purviewDeleted = r.deleted;
+        purviewNote = r.note;
+      } catch (e: any) {
+        if (e instanceof PurviewUnifiedCatalogGateError) {
+          purviewNote =
+            'Purview Unified Catalog delete skipped (classic Data Map account). If this product was registered via a unified-catalog account, delete it manually in the Purview portal.';
+        } else if (e instanceof PurviewNotConfiguredError) {
+          purviewNote = 'Purview not configured (LOOM_PURVIEW_ACCOUNT unset) — no catalog cleanup needed.';
+        } else {
+          purviewNote = `Purview cleanup failed (best-effort, ignored): ${e?.message || String(e)}`;
+        }
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      workspaceId: item.workspaceId,
+      purviewDeleted,
+      ...(purviewNote ? { purviewNote } : {}),
+    });
+  } catch (e: any) {
+    return err(e?.message || 'Failed to delete data product', 500, 'cosmos_error');
   }
 }
