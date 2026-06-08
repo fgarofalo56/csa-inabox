@@ -20,9 +20,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import sql from 'mssql';
-import { armBase } from './cloud-endpoints';
-
-const SQL_SCOPE = 'https://database.windows.net/.default';
+import { armBase, getSqlSuffix } from './cloud-endpoints';
 
 function arm(): string {
   // Sovereign-cloud ARM base (cloud-endpoints honors LOOM_ARM_ENDPOINT + AZURE_CLOUD).
@@ -31,8 +29,16 @@ function arm(): string {
 }
 
 function sqlHostSuffix(): string {
-  // Commercial: database.windows.net   Gov: database.usgovcloudapi.net
-  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || 'database.windows.net';
+  // LOOM_AZURE_SQL_HOST_SUFFIX: explicit per-instance override (rare edge cases).
+  // Default: cloud-aware from LOOM_CLOUD / AZURE_CLOUD via getSqlSuffix().
+  //   Commercial / GCC      → database.windows.net
+  //   GCC-High / IL5 / DoD  → database.usgovcloudapi.net
+  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || getSqlSuffix();
+}
+
+/** TDS AAD token scope, cloud-correct (https://<sql-suffix>/.default). */
+function sqlScope(): string {
+  return `https://${sqlHostSuffix()}/.default`;
 }
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -338,7 +344,7 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   const key = `${server}/${database}`;
   const existing = pools.get(key);
   if (existing?.connected) return existing;
-  const tok = await credential.getToken(SQL_SCOPE);
+  const tok = await credential.getToken(sqlScope());
   if (!tok?.token) throw new AzureSqlError('Failed to acquire AAD token for Azure SQL', 401);
   const host = server.includes('.') ? server : `${server}.${sqlHostSuffix()}`;
   const pool = new sql.ConnectionPool({
