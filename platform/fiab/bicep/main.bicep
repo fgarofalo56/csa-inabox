@@ -320,6 +320,13 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Data mirroring backend selector (LOOM_MIRROR_BACKEND). Default adf-cdc (Azure-native CDC to ADLS Bronze, NO Fabric). synapse-link is Azure-native too; fabric is opt-in only and additionally requires loomDefaultFabricWorkspace.')
+@allowed(['adf-cdc', 'synapse-link', 'fabric'])
+param loomMirrorBackend string = 'adf-cdc'
+
+@description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
+param loomDefaultFabricWorkspace string = ''
+
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
 @secure()
 param shirAdminPassword string = ''
@@ -425,6 +432,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
+    loomMirrorBackend: loomMirrorBackend
+    loomDefaultFabricWorkspace: loomDefaultFabricWorkspace
     loomVersion: loomVersion
     appImageTags: appImageTags
     // Standalone AML workspace coords for the AML control-plane navigator.

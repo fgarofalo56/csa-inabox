@@ -13,7 +13,7 @@
  *   - listServers / listDatabases / getDatabase           — ARM REST
  *   - listManagedInstances                                — ARM REST (list-only)
  *   - executeQuery(server, database, sql)                 — TDS + AAD token
- *   - enableMirroring(server, db, fabricMirrorEndpoint)   — Fabric Mirror provisioning *deferred*: requires Fabric REST + sys.sp_change_feed_enable_db; we surface the toggle but actual execution returns a 501 unless `LOOM_AZURE_SQL_MIRRORING_LIVE=true`.
+ *   - enableMirroring(server, db)                         — Azure-native change replication: runs the REAL `sys.sp_change_feed_enable_db` DDL (the CDC primitive Fabric mirroring consumes, but it is an Azure SQL feature). NO Microsoft Fabric workspace and NO `LOOM_*_LIVE` flag is required — the Azure-native path is the default. Captured changes are landed to ADLS Bronze by the Loom mirroring engine (lib/azure/mirror-engine.ts).
  *   - enableReplication(server, db, replica)              — ARM create geo-secondary
  *   - enableSqlServer2025Features(server, db)             — runs SET options for JSON_AGG / regex / vector (no-op on SQL Server 2022 or older — caller gets a MessageBar).
  */
