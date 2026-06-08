@@ -46,3 +46,37 @@ glossary terms (https://learn.microsoft.com/purview/unified-catalog-glossary-ter
 - Lifecycle (F6) → Cosmos `state.lifecycleStatus` via `updateOwnedItem`; preconditions read `state.datasets`, the governance policies doc (kind=Access, scope `data-product:{id}`), and `state.domain`; consumer-visibility enforced in `/api/governance/catalog`; best-effort Purview push via `updateDataProductStatus` (honest gate).
 - Publish as API → `upsertApi` + `upsertProduct(state:published)` + `addApiToProduct` + `createSubscription(state:active)` + `getSubscriptionKeys` (ARM `Microsoft.ApiManagement/service`, api-version 2024-06-01-preview; Console UAMI "API Management Service Contributor"). Honest gate: `apimConfigGate()` → 503 MessageBar naming the missing env var + `apim.bicep`.
 - Honest gate: Purview unprovisioned → structured 501 hint MessageBar (env var + bicep module + roles).
+
+## F3 — owner details page (`DataProductDetailEditor`)
+
+The `data-product` route now opens a **read-first owner details page** (Azure-native
+parity with the Purview Unified Catalog data-product *details* view), backed by the
+dedicated `dataproducts` Cosmos container (NO Fabric/Purview dependency on the
+default path). The full owner edit form (`DataProductEditor`, documented above) is
+reached from there via `?view=edit` on the same route — "Edit" opens it, "Manage
+policies" opens it on the policies tab (`&tab=policies`).
+
+| # | Details-page capability | Status | Backend |
+|---|-------------------------|--------|---------|
+| 1 | Sticky header: name, status badge (Draft/Published/Expired), Endorsed badge, owner avatars, Edit | built ✅ | `GET /api/data-products/[id]` → `dataproducts` container |
+| 2 | Description + Use case cards | built ✅ | same GET (real Cosmos fields) |
+| 3 | Governance grid (domain / update-frequency / status / type) | built ✅ | same GET |
+| 4 | Owner contacts with **editable** label inputs | built ✅ | `PATCH /api/data-products/[id]` `{ ownerLabels }` → Cosmos replace |
+| 5 | Subscribers count + paginated list | built ✅ | `GET /api/data-products/[id]/subscribers?page&pageSize` → `access-requests` (approved) |
+| 6 | Terms-of-use + Documentation link lists | built ✅ | same GET |
+| 7 | DQ score gauge (real computed score) | built ✅ | DQ rules doc `dq-rules:<tenantId>`; honest-gate MessageBar when no rules |
+| 8 | Health-action cards | built ✅ | derived from real DQ posture; deep-link to Admin › Data Quality Rules |
+| 9 | Custom Attributes with **show-empty toggle** | built ✅ | `customAttributes[]` filtered client-side (real `useMemo`, not CSS hide) |
+| 10 | Data Observability tab | honest-gate ⚠️ | placeholder pending dm-T16; MessageBar names `LOOM_KUSTO_ENDPOINT` + ADX `AllDatabasesViewer` role |
+
+Backend per control: read = `dataproductsContainer()` / `accessRequestsContainer()` /
+`tenantSettingsContainer()` (all clouds, SDK path via Console UAMI — no Fabric host on
+the default path). Owner-label write = `dataproductsContainer().item(id, governanceDomainId).replace()`.
+DQ score = `round(enabledRules / totalRules * 100)`; `null` → honest-gate, never a
+fabricated number (per `no-vaporware.md`).
+
+The Cosmos containers (`dataproducts`, `access-requests`, `governance-domains`,
+`attribute-groups`) are created lazily by `cosmos-client.ts` `createIfNotExists` —
+the sanctioned Cosmos init step per `no-vaporware.md` (same mechanism as every other
+console container), so a fresh environment needs no extra ARM/Bicep step beyond the
+account+database and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.

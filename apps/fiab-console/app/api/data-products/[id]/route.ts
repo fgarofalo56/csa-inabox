@@ -1,52 +1,57 @@
 /**
- * Data-product BFF — consumer (read-only) GET + owner PATCH for ONE marketplace
- * data product, against the SAME `items` Cosmos record (itemType 'data-product')
- * the marketplace lists and the create wizard writes — so an edit here changes
- * exactly what the marketplace shows (no separate copy).
- *
- *   GET   /api/data-products/[id]   → { ok, item, doc, ownerTenantId, isOwner }
- *                                     (+ ETag response header).
- *   PATCH /api/data-products/[id]   → merge ONLY the supplied recognised fields
- *                                     into the Cosmos WorkspaceItem and persist.
- *                                     Returns { ok, item, doc, patched } (+ ETag).
- *
- * GET is the F15 consumer surface: unlike /api/cosmos-items/data-product/[id]
- * (which gates on workspace ownership and 404s for non-owners), this route
- * returns ANY data product to any authenticated user — the Purview Unified
- * Catalog model where published data products are discoverable to catalog
- * readers. It resolves the owning workspace's tenantId so the caller can be told
- * whether they own it (isOwner) and the UI can hide owner-edit controls for
- * non-owners. The same payload carries `doc` + an ETag so an OWNER opening this
- * page can edit in place.
- *
- * PATCH is owner-only: it loads the item via the tenant-scoped path (404s for
- * non-owners) before merging, so a consumer can never write. Two owner callers
- * share PATCH against the SAME record:
- *
- *   1. Attribute right-rail (F5/F11): { updateFrequency }, { termsOfUse[] },
- *      { documentation[] } — merged into item.state without clobbering siblings.
- *   2. Edit dialog (F4 + F7 Endorse): { name, description, type, audience[],
- *      owners[], endorsed, governanceDomainId, useCase, customAttributes } —
- *      name → displayName, description → item.description, the rest → item.state.
- *
- * Unlike the generic /api/cosmos-items PATCH (which REPLACES the whole state),
- * this route MERGES, so a caller sends only the field it changed. Azure-native
- * default: persists to the Cosmos `items` container — no Fabric / Power BI
- * workspace required (.claude/rules/no-fabric-dependency.md). Real Cosmos
+ * Data-product BFF — adaptive consumer + owner surface for ONE marketplace data
+ * product, against the SAME `items` Cosmos record (itemType 'data-product') the
+ * marketplace lists and the create wizard writes — so an edit here changes
+ * exactly what the marketplace shows (no separate copy). No Fabric / Power BI
+ * workspace required (.claude/rules/no-fabric-dependency.md); real Cosmos
  * data-plane, never mocks (.claude/rules/no-vaporware.md).
  *
- * Optimistic concurrency: when the caller sends an `If-Match` header (the edit
- * dialog passes the `_etag` from its last GET), the replace is conditioned on
- * it; a stale ETag (concurrent write) returns HTTP 409 instead of silently
- * clobbering. The attribute right-rail omits the header → a plain merge-replace.
+ *   GET   /api/data-products/[id]
+ *     → { ok, item, doc, ownerTenantId, isOwner,
+ *         product, dqScore, dqGate, subscriberCount }  (+ ETag header)
+ *
+ *     `item`/`doc`/`isOwner` drive the F15 consumer read view and the owner edit
+ *     dialog. `product` is the owner details (F3) projection of the same record,
+ *     plus two best-effort derived fields:
+ *       - dqScore : real data-quality score from the tenant's DQ rules
+ *                   (tenant-settings doc id `dq-rules:<tenantId>`); null when no
+ *                   rules are configured — the UI shows an honest-gate instead
+ *                   of a fabricated number (per no-vaporware.md).
+ *       - subscriberCount : real count of approved access-requests.
+ *
+ *     GET is NOT ownership gated — published data products are discoverable to
+ *     any catalog reader (Purview Unified Catalog model). It resolves the owning
+ *     workspace's tenantId so the caller is told whether they own it (isOwner).
+ *
+ *   PATCH /api/data-products/[id]   → owner-only merge of the supplied fields
+ *     into the same Cosmos WorkspaceItem. Loads via the tenant-scoped path
+ *     (404s for non-owners) so a consumer can never write. Recognised callers:
+ *       1. Attribute right-rail (F5/F11): { updateFrequency }, { termsOfUse[] },
+ *          { documentation[] }.
+ *       2. Edit dialog (F4 + F7 Endorse): { name, description, type, audience[],
+ *          owners[], endorsed, governanceDomainId, useCase, customAttributes }.
+ *       3. Owner details page (F3): { ownerLabels: { <ownerKey>: <label> } } —
+ *          sets a per-owner contact label in place.
+ *     Returns { ok, item, doc, product, patched } (+ ETag). Optimistic
+ *     concurrency: an `If-Match` header conditions the replace; a stale ETag
+ *     (concurrent write) returns HTTP 409 instead of clobbering.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import {
+  itemsContainer,
+  workspacesContainer,
+  tenantSettingsContainer,
+  accessRequestsContainer,
+} from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
-import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
+import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
+import type {
+  DataProductDoc, DataProductOwner, DataProductCustomAttribute,
+  DataProductLink, DataProductStatus,
+} from '@/lib/types/data-product';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,19 +65,26 @@ function err(error: string, status: number, code?: string) {
 /** Cosmos stamps `_etag` on every read; it isn't on the WorkspaceItem type. */
 type WithEtag = WorkspaceItem & { _etag?: string };
 
-/** A stored owner can be a plain string or the rich { id, upn, displayName }. */
-type OwnerRecord = string | { id?: string; upn?: string; displayName?: string };
+/** A stored owner can be a plain string or the rich { id, upn, displayName, label }. */
+type OwnerRecord = string | { id?: string; upn?: string; displayName?: string; label?: string };
 
 function ownerToString(o: OwnerRecord): string {
   if (typeof o === 'string') return o;
   return (o?.upn || o?.displayName || o?.id || '').toString();
 }
 
+/** Stable identity key for an owner record (id → upn → displayName → string). */
+function ownerKey(o: OwnerRecord): string {
+  if (typeof o === 'string') return o;
+  return (o?.id || o?.upn || o?.displayName || '').toString();
+}
+
 /**
  * Map incoming owner strings (the dialog edits owners as comma-separated text)
  * back onto stored owner records — reusing an existing rich record when the
  * string matches its upn/displayName/id, so unchanged owners keep their fidelity
- * and only genuinely new owners become { upn, displayName }.
+ * (including any contact label) and only genuinely new owners become
+ * { upn, displayName }.
  */
 function mergeOwners(incoming: string[], existing: unknown): OwnerRecord[] {
   const existArr: OwnerRecord[] = Array.isArray(existing) ? (existing as OwnerRecord[]) : [];
@@ -84,8 +96,24 @@ function mergeOwners(incoming: string[], existing: unknown): OwnerRecord[] {
   });
 }
 
-/** Project a WorkspaceItem to the editable DataProductDoc the edit dialog reads. */
-function toDoc(item: WithEtag): DataProductDoc {
+/**
+ * Apply { <ownerKey>: <label> } from the F3 owner details page onto the stored
+ * owner records, promoting plain-string owners to rich records so they can hold
+ * a label. Owners whose key isn't in the map are left untouched.
+ */
+function applyOwnerLabels(existing: unknown, labels: Record<string, string>): OwnerRecord[] {
+  const existArr: OwnerRecord[] = Array.isArray(existing) ? (existing as OwnerRecord[]) : [];
+  return existArr.map((o) => {
+    const key = ownerKey(o);
+    if (!Object.prototype.hasOwnProperty.call(labels, key)) return o;
+    const label = String(labels[key] ?? '').trim() || undefined;
+    if (typeof o === 'string') return { id: o, upn: o, displayName: o, label };
+    return { ...o, label };
+  });
+}
+
+/** Project a WorkspaceItem to the editable EditDoc the edit dialog reads. */
+function toDoc(item: WithEtag): EditDoc {
   const st = (item.state ?? {}) as Record<string, unknown>;
   const owners = Array.isArray(st.owners) ? (st.owners as OwnerRecord[]) : [];
   return {
@@ -98,11 +126,74 @@ function toDoc(item: WithEtag): DataProductDoc {
     owners: owners.map(ownerToString).filter(Boolean),
     endorsed: !!st.endorsed,
     useCase: (st.useCase as string) ?? '',
-    customAttributes: (st.customAttributes as DataProductDoc['customAttributes']) ?? {},
-    status: (st.status as DataProductDoc['status']) ?? 'Draft',
+    customAttributes: (st.customAttributes as EditDoc['customAttributes']) ?? {},
+    status: (st.status as EditDoc['status']) ?? 'Draft',
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     createdBy: item.createdBy,
+    _etag: item._etag,
+  };
+}
+
+/** Project stored owner records to the rich DataProductOwner shape (F3 view). */
+function toProductOwners(existing: unknown): DataProductOwner[] {
+  const arr: OwnerRecord[] = Array.isArray(existing) ? (existing as OwnerRecord[]) : [];
+  return arr.map((o) => {
+    if (typeof o === 'string') return { id: o, upn: o, displayName: o };
+    return { id: ownerKey(o), upn: o.upn, displayName: o.displayName, label: o.label };
+  });
+}
+
+/** Normalise stored custom attributes (array OR record) to the F3 array shape. */
+function toCustomAttributes(raw: unknown): DataProductCustomAttribute[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((a) => a && typeof a === 'object')
+      .map((a: any) => ({
+        groupName: String(a.groupName ?? ''),
+        name: String(a.name ?? ''),
+        value: a.value ?? null,
+      }));
+  }
+  if (raw && typeof raw === 'object') {
+    return Object.entries(raw as Record<string, unknown>).map(([name, value]) => ({
+      groupName: '',
+      name,
+      value: (value ?? null) as DataProductCustomAttribute['value'],
+    }));
+  }
+  return [];
+}
+
+function toLinks(raw: unknown): DataProductLink[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw
+    .filter((l) => l && typeof l === 'object' && (l as any).url)
+    .map((l: any) => ({ label: String(l.label ?? l.url), url: String(l.url), assetId: l.assetId }));
+}
+
+/** Project a WorkspaceItem to the owner details (F3) DataProductDoc. */
+function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc {
+  const st = (item.state ?? {}) as Record<string, unknown>;
+  return {
+    id: item.id,
+    tenantId: tenantId ?? '',
+    governanceDomainId: (st.governanceDomainId as string) ?? '',
+    governanceDomainName: st.governanceDomainName as string | undefined,
+    name: item.displayName,
+    description: item.description ?? '',
+    useCase: (st.useCase as string) ?? undefined,
+    type: st.type as string | undefined,
+    audience: Array.isArray(st.audience) ? (st.audience as string[]) : undefined,
+    status: ((st.status as DataProductStatus) ?? 'Draft'),
+    endorsed: !!st.endorsed,
+    updateFrequency: st.updateFrequency as string | undefined,
+    owners: toProductOwners(st.owners),
+    customAttributes: toCustomAttributes(st.customAttributes),
+    termsOfUse: toLinks(st.termsOfUse),
+    documentation: toLinks(st.documentation),
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     _etag: item._etag,
   };
 }
@@ -157,6 +248,45 @@ async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag
   return item;
 }
 
+/** Minimal shape of the DQ-rules document (see /api/admin/data-quality-rules). */
+interface DqRule { id: string; name: string; enabled: boolean; check?: string; scope?: string }
+interface DqRulesDoc { id: string; tenantId: string; items?: DqRule[] }
+
+const DQ_GATE =
+  'No data-quality rules configured for this tenant. Define rules in Admin › Data Quality Rules to compute a real score.';
+
+/** Real DQ score from the caller's tenant rules; honest-gate when none exist. */
+async function computeDqScore(tenantId: string): Promise<{ dqScore: number | null; dqGate: string | null }> {
+  try {
+    const ts = await tenantSettingsContainer();
+    const { resource } = await ts.item(`dq-rules:${tenantId}`, tenantId).read<DqRulesDoc>();
+    const rules = resource?.items ?? [];
+    if (rules.length > 0) {
+      const enabled = rules.filter((r) => r.enabled).length;
+      return { dqScore: Math.round((enabled / rules.length) * 100), dqGate: null };
+    }
+  } catch {
+    // 404 = no rules doc yet → honest-gate, not an error.
+  }
+  return { dqScore: null, dqGate: DQ_GATE };
+}
+
+/** Real count of approved subscribers (access-requests). Best-effort → 0. */
+async function countSubscribers(dataProductId: string): Promise<number> {
+  try {
+    const ar = await accessRequestsContainer();
+    const { resources } = await ar.items
+      .query<{ id: string }>({
+        query: 'SELECT c.id FROM c WHERE c.dataProductId = @id AND c.status = "approved"',
+        parameters: [{ name: '@id', value: dataProductId }],
+      })
+      .fetchAll();
+    return resources.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
   const session = getSession();
@@ -166,8 +296,22 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!item) return err('Data product not found', 404, 'not_found');
     const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
     const isOwner = ownerTenantId !== null && ownerTenantId === session.claims.oid;
+    const [{ dqScore, dqGate }, subscriberCount] = await Promise.all([
+      computeDqScore(session.claims.oid),
+      countSubscribers(id),
+    ]);
     return NextResponse.json(
-      { ok: true, item, doc: toDoc(item), ownerTenantId, isOwner },
+      {
+        ok: true,
+        item,
+        doc: toDoc(item),
+        ownerTenantId,
+        isOwner,
+        product: itemToProduct(item, ownerTenantId),
+        dqScore,
+        dqGate,
+        subscriberCount,
+      },
       { headers: { ETag: item._etag ?? '' } },
     );
   } catch (e: any) {
@@ -270,8 +414,8 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     patched.push('useCase');
   }
   if ('customAttributes' in body) {
-    if (!body.customAttributes || typeof body.customAttributes !== 'object' || Array.isArray(body.customAttributes)) {
-      return err('customAttributes must be an object', 400, 'bad_custom');
+    if (!body.customAttributes || typeof body.customAttributes !== 'object') {
+      return err('customAttributes must be an object or array', 400, 'bad_custom');
     }
     statePatch.customAttributes = body.customAttributes;
     patched.push('customAttributes');
@@ -281,10 +425,19 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   if (ownersProvided && (!Array.isArray(body.owners) || body.owners.some((o: unknown) => typeof o !== 'string'))) {
     return err('owners must be an array of strings', 400, 'bad_owners');
   }
+  // F3 owner details page — per-owner contact labels.
+  const ownerLabelsProvided = 'ownerLabels' in body;
+  if (
+    ownerLabelsProvided &&
+    (!body.ownerLabels || typeof body.ownerLabels !== 'object' || Array.isArray(body.ownerLabels))
+  ) {
+    return err('ownerLabels must be an object of { <ownerKey>: <label> }', 400, 'bad_owner_labels');
+  }
 
   if (
     patched.length === 0 &&
     !ownersProvided &&
+    !ownerLabelsProvided &&
     nextDisplayName === undefined &&
     nextDescription === undefined
   ) {
@@ -303,6 +456,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     if (ownersProvided) {
       mergedState.owners = mergeOwners(body.owners as string[], mergedState.owners);
       patched.push('owners');
+    }
+    if (ownerLabelsProvided) {
+      mergedState.owners = applyOwnerLabels(mergedState.owners, body.ownerLabels as Record<string, string>);
+      patched.push('ownerLabels');
     }
     // Changing the governance domain invalidates any cached domain name.
     if ('governanceDomainId' in statePatch && mergedState.governanceDomainName) {
@@ -328,7 +485,13 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
         );
       const saved = resource as WithEtag;
       return NextResponse.json(
-        { ok: true, item: saved, doc: toDoc(saved), patched },
+        {
+          ok: true,
+          item: saved,
+          doc: toDoc(saved),
+          product: itemToProduct(saved, session.claims.oid),
+          patched,
+        },
         { headers: { ETag: saved._etag ?? '' } },
       );
     } catch (e: any) {
