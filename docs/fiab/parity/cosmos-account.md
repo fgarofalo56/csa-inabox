@@ -29,6 +29,7 @@ Cosmos peer of the ADF / Synapse / Databricks / APIM navigators (parity wave 7).
 | 14 | Indexing policy editor | `resource.indexingPolicy` |
 | 15 | Conflict-resolution policy | `resource.conflictResolutionPolicy` |
 | 16 | Stored procedure / trigger / UDF authoring + execution | data-plane JS editor |
+| 17 | Keys blade — URI + primary/secondary keys + read-only keys + connection strings + regenerate | control-plane `…/listKeys`, `…/listConnectionStrings`, `…/regenerateKey` |
 
 ## Loom coverage
 
@@ -50,6 +51,7 @@ Cosmos peer of the ADF / Synapse / Databricks / APIM navigators (parity wave 7).
 | 14 | Indexing policy editor | ⚠️ honest-gate | "coming" row |
 | 15 | Conflict-resolution policy | ⚠️ honest-gate | "coming" row |
 | 16 | Script authoring + execution | ⚠️ honest-gate | "coming" row — navigator lists scripts read-only |
+| 17 | Keys / Connect blade | ✅ built | `GET/POST /api/items/cosmos-db/[id]/keys` → `CosmosConnectPanel` |
 
 Zero ❌. Item 13 (the Items Data Explorer) is now built on the **real Cosmos
 data plane**: a Monaco SQL query box (default `SELECT * FROM c`, Execute), a
@@ -89,6 +91,40 @@ Contributor**, granted via a Cosmos `sqlRoleAssignments`
 (`Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments`) at the account
 scope — and the full Data Explorer surface still renders.
 
+### Connect (Keys) blade — control-plane key actions (grounded in Microsoft Learn)
+
+The **Connect** card (`CosmosConnectPanel`, the studio peer of the portal "Keys"
+blade) shows the account **URI**, the four **master keys** (primary / secondary +
+read-only pair, masked with reveal + copy), every enabled API's **connection
+string** (NoSQL/SQL always; Mongo when `EnableMongo`; Gremlin when
+`EnableGremlin` — ARM returns them all, labeled), and a **regenerate** (rotate)
+action per read-write key.
+
+| Operation | REST (ARM 2024-11-15) | Required action |
+|-----------|------------------------|-----------------|
+| List keys | `POST …/databaseAccounts/{acct}/listKeys` | `Microsoft.DocumentDB/databaseAccounts/listKeys/action` |
+| List connection strings | `POST …/databaseAccounts/{acct}/listConnectionStrings` | `…/listConnectionStrings/action` |
+| Regenerate key | `POST …/databaseAccounts/{acct}/regenerateKey` `{ keyKind }` | `…/regenerateKey/action` |
+
+The endpoint embedded in each connection string is already cloud-correct
+(`documents.azure.com` / `documents.azure.us`); the panel also builds an
+endpoint fallback from `getCosmosSuffix()` when ARM omits `documentEndpoint`.
+
+**Required role: DocumentDB Account Contributor**
+(`5bd9cd88-fe45-4216-938b-f97437e15450`). Its `databaseAccounts/*` wildcard
+covers all three actions. **Cosmos DB Operator
+(`230815da-be43-4aae-9cb4-875f7bd000aa`) is NOT sufficient** — it explicitly
+excludes key access. A UAMI without the action gets ARM **403**, surfaced by
+`GET /api/items/cosmos-db/[id]/keys` as
+`403 { code:'keys_permission', role:'DocumentDB Account Contributor', roleId, hint }`
+and rendered as a Fluent `MessageBar intent="error"` naming the exact role — the
+full Connect surface still renders.
+
+When the account sets **`disableLocalAuth: true`** (every DLZ Cosmos account
+does), `listKeys` still returns the key bytes (it's a control-plane op) but the
+data plane rejects them. The panel discloses this with an info banner pointing to
+the AAD/RBAC connect pattern `new CosmosClient(endpoint, new DefaultAzureCredential())`.
+
 ## Backend per control
 
 | Control | Backend |
@@ -109,22 +145,28 @@ When the navigator account isn't configured every route returns
 single Fluent `MessageBar intent="warning"` naming:
 
 - env vars: `LOOM_COSMOS_ACCOUNT`, `LOOM_COSMOS_ACCOUNT_RG`, `LOOM_SUBSCRIPTION_ID`
-- role: **Cosmos DB Operator** (or **DocumentDB Account Contributor**) at the account scope
+- role: **DocumentDB Account Contributor** (`5bd9cd88-fe45-4216-938b-f97437e15450`) at the account scope. This single role covers the control-plane navigator AND the Connect (Keys) panel. **Cosmos DB Operator is NOT sufficient for keys** — it explicitly blocks key access.
 
-403 from ARM (UAMI missing the role) is surfaced verbatim with that role hint.
+403 from ARM (UAMI missing the role) is surfaced verbatim with that role hint;
+the keys route surfaces it as `code:'keys_permission'` with the exact role + ID.
 
 ## Files
 
-- `lib/azure/cosmos-account-client.ts` — ARM control-plane client + `cosmosConfigGate()`
+- `lib/azure/cosmos-account-client.ts` — ARM control-plane client + `cosmosConfigGate()` + `listAccountKeys` / `listConnectionStrings` / `regenerateKey` + `accountEndpointFallback()` (`getCosmosSuffix()`)
 - `lib/azure/cosmos-data-client.ts` — **data-plane** client (query / get / upsert / delete; AAD auth; `CosmosDataPlaneRbacError`)
 - `app/api/cosmos/{databases,containers,scripts,account}/route.ts` — session-guarded control-plane BFF
 - `app/api/cosmos/items/route.ts` — data-plane query (POST) + get (GET)
 - `app/api/cosmos/items/action/route.ts` — data-plane upsert / delete
+- `app/api/items/cosmos-db/[id]/keys/route.ts` — Connect panel: `GET` (keys + connection strings) + `POST` (regenerate); honest 403 `keys_permission` gate
 - `app/api/cosmos/_shared.ts` — session / gate / error helpers (incl. 403 data-plane RBAC gate)
 - `lib/components/cosmos/cosmos-tree.tsx` — Fluent v9 Data Explorer tree
 - `lib/components/cosmos/cosmos-data-explorer.tsx` — Items query grid + Monaco JSON item editor
-- `lib/editors/cosmos-account-editor.tsx` — host editor (`azure-cosmos-account` slug); Properties + Data Explorer (Items) tabs
+- `lib/components/cosmos/cosmos-connect-panel.tsx` — Connect (Keys) blade: URI + masked keys (reveal/copy) + connection strings + regenerate
+- `lib/editors/cosmos-account-editor.tsx` — host editor (`azure-cosmos-account` slug); Data Explorer + Connect tabs
 - `lib/azure/__tests__/cosmos-data-client.test.ts` — data-plane REST + AAD-header + 403-gate contract tests
+- `lib/azure/__tests__/cloud-matrix.test.ts` — `getCosmosSuffix()` Commercial/Gov/DoD coverage
+- `platform/fiab/bicep/modules/landing-zone/cosmos.bicep` — DLZ account + `cosmosNavRole` (DocumentDB Account Contributor → listKeys/listConnectionStrings)
+- `platform/fiab/bicep/modules/admin-plane/cosmos-navigator-keys-rbac.bicep` — same grant for an **external/BYO** `LOOM_COSMOS_ACCOUNT`
 
 ## Verification
 

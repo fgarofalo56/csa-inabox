@@ -26,8 +26,20 @@
  *     /sqlDatabases/{db}/containers/{c}/throughputSettings/default  read (RU/s)
  *
  * Auth scope: the sovereign-cloud ARM `.default` scope (cloud-endpoints.armScope()).
- * UAMI role:  "Cosmos DB Operator" (control-plane CRUD on databases/containers)
- *             or "DocumentDB Account Contributor" at the account scope.
+ * UAMI role:  "DocumentDB Account Contributor" at the account scope (covers the
+ *             control-plane CRUD on databases/containers AND the Connect panel's
+ *             ARM listKeys / listConnectionStrings actions). NOTE: "Cosmos DB
+ *             Operator" is NOT sufficient for the Connect panel — it explicitly
+ *             excludes key access (Microsoft.DocumentDB/databaseAccounts/listKeys).
+ *
+ * Keys / connection strings (Connect panel): the control-plane key actions
+ *   POST …/databaseAccounts/{acct}/listKeys                 → 4 master keys
+ *   POST …/databaseAccounts/{acct}/listConnectionStrings    → per-API strings
+ *   POST …/databaseAccounts/{acct}/regenerateKey            → rotate one key
+ * The returned connection strings already embed the cloud-correct data-plane
+ * suffix (getCosmosSuffix() — documents.azure.com / documents.azure.us); no
+ * manual suffix assembly is needed. accountEndpointFallback() uses
+ * getCosmosSuffix() only when ARM omits documentEndpoint.
  *
  * Config gate: cosmosConfigGate() returns the missing env var so the BFF can
  * emit an honest 503 instead of a fake list (per no-vaporware.md).
@@ -41,7 +53,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, getCosmosSuffix } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const COSMOS_ARM_API = '2024-11-15';
@@ -77,8 +89,11 @@ export function cosmosConfigGate(): CosmosConfigGate | null {
     'Set LOOM_COSMOS_ACCOUNT (the Cosmos DB account name to navigate — distinct ' +
     "from Loom's own LOOM_COSMOS_ENDPOINT store), LOOM_COSMOS_ACCOUNT_RG, and " +
     'LOOM_SUBSCRIPTION_ID on the Console Container App, then grant the Console ' +
-    'UAMI the "Cosmos DB Operator" (or "DocumentDB Account Contributor") role at ' +
-    'the account scope.';
+    'UAMI the "DocumentDB Account Contributor" role (role ID ' +
+    '5bd9cd88-fe45-4216-938b-f97437e15450) at the account scope. ' +
+    '"DocumentDB Account Contributor" covers both the control-plane navigator ' +
+    'AND the Connect panel (listKeys / listConnectionStrings); "Cosmos DB ' +
+    'Operator" is NOT sufficient — it explicitly blocks key access.';
   if (!sub) return { missing: 'LOOM_SUBSCRIPTION_ID', hint };
   if (!acct) return { missing: 'LOOM_COSMOS_ACCOUNT', hint };
   if (!rg) return { missing: 'LOOM_COSMOS_ACCOUNT_RG', hint };
@@ -443,6 +458,13 @@ export interface CosmosAccountInfo {
   serverless: boolean;
   provisioningState?: string;
   enableFreeTier?: boolean;
+  /**
+   * True when the account disables key/connection-string (local) auth. ARM
+   * still RETURNS the master keys via listKeys, but the data plane rejects them
+   * — only AAD/RBAC tokens authenticate. The Connect panel discloses this so
+   * operators don't try to use keys that will be refused at the data plane.
+   */
+  disableLocalAuth?: boolean;
 }
 
 export async function getAccountInfo(): Promise<CosmosAccountInfo | null> {
@@ -458,5 +480,92 @@ export async function getAccountInfo(): Promise<CosmosAccountInfo | null> {
     serverless: caps.includes('EnableServerless'),
     provisioningState: j?.properties?.provisioningState,
     enableFreeTier: j?.properties?.enableFreeTier,
+    disableLocalAuth: j?.properties?.disableLocalAuth === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Keys & connection strings (Connect panel) — ARM control-plane key actions.
+//
+// listKeys / listConnectionStrings / regenerateKey are POST actions on the
+// account. They require Microsoft.DocumentDB/databaseAccounts/listKeys/action
+// (and …/listConnectionStrings/action), which "DocumentDB Account Contributor"
+// (5bd9cd88-…) grants via the databaseAccounts/* wildcard. "Cosmos DB Operator"
+// (230815da-…) does NOT — it explicitly excludes key access. A UAMI without the
+// action gets ARM 403, surfaced by the BFF as an honest role gate.
+// Learn: https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts
+// ---------------------------------------------------------------------------
+
+export interface CosmosAccountKeys {
+  primaryMasterKey: string;
+  secondaryMasterKey: string;
+  primaryReadonlyMasterKey: string;
+  secondaryReadonlyMasterKey: string;
+}
+
+export interface CosmosConnectionString {
+  /** The full connection string (AccountEndpoint=…;AccountKey=…;). */
+  connectionString: string;
+  /** ARM-supplied label, e.g. "Primary SQL Connection String". */
+  description: string;
+  /** Mongo/Gremlin/Cassandra/Table strings carry the API kind on newer ARM. */
+  keyKind?: string;
+  type?: string;
+}
+
+export type CosmosKeyKind = 'primary' | 'secondary' | 'primaryReadonly' | 'secondaryReadonly';
+
+/**
+ * Account data-plane endpoint, preferring ARM's reported documentEndpoint and
+ * falling back to the cloud-correct host built from getCosmosSuffix() (the
+ * canonical sovereign suffix — documents.azure.com / documents.azure.us).
+ */
+export function accountEndpointFallback(documentEndpoint?: string): string {
+  if (documentEndpoint) return documentEndpoint;
+  const acct = required('LOOM_COSMOS_ACCOUNT');
+  return `https://${acct}.${getCosmosSuffix()}:443/`;
+}
+
+/** POST …/listKeys — the four master keys (read-write + read-only pairs). */
+export async function listAccountKeys(): Promise<CosmosAccountKeys> {
+  const res = await armFetch('/listKeys', { method: 'POST' });
+  const j = await readJson<any>(res);
+  return {
+    primaryMasterKey: j?.primaryMasterKey ?? '',
+    secondaryMasterKey: j?.secondaryMasterKey ?? '',
+    primaryReadonlyMasterKey: j?.primaryReadonlyMasterKey ?? '',
+    secondaryReadonlyMasterKey: j?.secondaryReadonlyMasterKey ?? '',
+  };
+}
+
+/**
+ * POST …/listConnectionStrings — ARM returns every enabled API's connection
+ * strings in one call (SQL/NoSQL always; Mongo when EnableMongo; Gremlin when
+ * EnableGremlin; etc.), each labeled by `description`. The embedded endpoint is
+ * already cloud-correct — no manual suffix assembly.
+ */
+export async function listConnectionStrings(): Promise<CosmosConnectionString[]> {
+  const res = await armFetch('/listConnectionStrings', { method: 'POST' });
+  const j = await readJson<{ connectionStrings?: any[] }>(res);
+  return (j?.connectionStrings || []).map((c) => ({
+    connectionString: c?.connectionString ?? '',
+    description: c?.description ?? 'Connection String',
+    keyKind: c?.keyKind,
+    type: c?.type,
+  }));
+}
+
+/**
+ * POST …/regenerateKey — rotate one of the four keys. ARM runs this async
+ * (202 + Azure-AsyncOperation); we don't block on completion (the new key is
+ * fetched by the caller via a fresh listKeys). Throws CosmosArmError on a
+ * non-2xx/202 (e.g. 403 when the UAMI lacks the action).
+ */
+export async function regenerateKey(keyKind: CosmosKeyKind): Promise<void> {
+  const res = await armFetch('/regenerateKey', {
+    method: 'POST',
+    body: JSON.stringify({ keyKind }),
+  });
+  if (res.ok || res.status === 202) return;
+  await readJson<unknown>(res); // throws CosmosArmError with ARM's message
 }
