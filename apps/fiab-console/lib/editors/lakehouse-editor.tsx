@@ -40,9 +40,11 @@ import {
   FolderArrowUp20Regular, ShieldTask20Regular,
   Wrench20Regular,
   History20Regular,
+  CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
+import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
 import { LoadToTableWizard } from './components/load-to-table-wizard';
@@ -81,7 +83,7 @@ const useStyles = makeStyles({
 });
 
 interface ContainerInfo { name: string; url: string }
-interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string }
+interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string; tier?: string }
 
 /**
  * Reference-Lakehouse federation (F8) — another in-workspace lakehouse added to
@@ -517,6 +519,12 @@ export function LakehouseEditor({ item, id }: Props) {
   const [lttOpen, setLttOpen] = useState(false);
   const [lttEntry, setLttEntry] = useState<PathEntry | null>(null);
 
+  // Storage-tier (Hot/Cool/Cold) dialog state + per-file tier cache.
+  const [tierDlgOpen, setTierDlgOpen] = useState(false);
+  const [tierDlgEntry, setTierDlgEntry] = useState<PathEntry | null>(null);
+  // key = `${container}::${path}`, value = tier string ('Hot' | 'Cool' | 'Cold' | 'Archive')
+  const [fileTiers, setFileTiers] = useState<Record<string, string>>({});
+
   const openContextMenu = useCallback((e: React.MouseEvent, entry: PathEntry) => {
     e.preventDefault();
     e.stopPropagation();
@@ -524,6 +532,17 @@ export function LakehouseEditor({ item, id }: Props) {
     setCtxPos({ x: e.clientX, y: e.clientY });
     setCtxOpen(true);
   }, []);
+
+  const openTierDialog = useCallback((entry: PathEntry) => {
+    setTierDlgEntry(entry);
+    setTierDlgOpen(true);
+  }, []);
+
+  const onTierChanged = useCallback((entry: PathEntry, newTier: BlobAccessTier) => {
+    if (!activeContainer) return;
+    const key = `${activeContainer}::${entry.name}`;
+    setFileTiers((prev) => ({ ...prev, [key]: newTier }));
+  }, [activeContainer]);
 
   // ---- Shortcuts tab (Azure-native, NO Fabric dependency) ----
   // A shortcut is a named, zero-copy pointer that surfaces external data as a
@@ -2618,6 +2637,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       <TableHeader>
                         <TableRow>
                           <TableHeaderCell>Name</TableHeaderCell>
+                          <TableHeaderCell>Tier (preview)</TableHeaderCell>
                           <TableHeaderCell>Size</TableHeaderCell>
                           <TableHeaderCell>Modified</TableHeaderCell>
                           <TableHeaderCell>Actions</TableHeaderCell>
@@ -2626,7 +2646,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       <TableBody>
                         {currentListing.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={4}>
+                            <TableCell colSpan={5}>
                               <div style={{ padding: 20, textAlign: 'center' }}>
                                 <Body1 style={{ display: 'block', marginBottom: 8 }}>
                                   No files in <strong>/{currentPrefix || ''}</strong> yet.
@@ -2648,6 +2668,14 @@ export function LakehouseEditor({ item, id }: Props) {
                           >
                             <TableCell>
                               {entry.isDirectory ? <Folder20Regular /> : <DocumentTable20Regular />} {leafName(entry.name)}
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              {!entry.isDirectory && (() => {
+                                const t = fileTiers[`${activeContainer}::${entry.name}`] ?? entry.tier;
+                                if (!t) return <Badge appearance="outline" size="small" color="subtle">—</Badge>;
+                                const color = t === 'Hot' ? 'brand' : t === 'Cool' ? 'informative' : t === 'Cold' ? 'subtle' : 'warning';
+                                return <Badge appearance="tint" size="small" color={color}>{t}</Badge>;
+                              })()}
                             </TableCell>
                             <TableCell className={s.cell}>{entry.isDirectory ? '—' : formatBytes(entry.size)}</TableCell>
                             <TableCell className={s.cell}>{entry.lastModified?.replace('T', ' ').replace(/\..*/, '') ?? '—'}</TableCell>
@@ -2686,6 +2714,11 @@ export function LakehouseEditor({ item, id }: Props) {
                                     {!entry.isDirectory && (
                                       <MenuItem icon={<ShieldTask20Regular />} onClick={() => openLabelDialog(entry)}>
                                         Download with label…
+                                      </MenuItem>
+                                    )}
+                                    {!entry.isDirectory && (
+                                      <MenuItem icon={<CloudArrowUp20Regular />} onClick={() => openTierDialog(entry)}>
+                                        Change tier…
                                       </MenuItem>
                                     )}
                                     <MenuItem icon={<Delete20Regular />} onClick={() => onDelete(entry)}>
@@ -4650,6 +4683,17 @@ export function LakehouseEditor({ item, id }: Props) {
                 // Refresh the Tables tab so the new table shows up.
                 if (activeContainer) loadPaths(activeContainer, 'Tables');
               }}
+            />
+          )}
+
+          {/* Storage-tier (Hot/Cool/Cold) dialog */}
+          {tierDlgEntry && activeContainer && (
+            <TierDialog
+              open={tierDlgOpen}
+              onOpenChange={setTierDlgOpen}
+              container={activeContainer}
+              path={tierDlgEntry.name}
+              onTierChanged={(t) => onTierChanged(tierDlgEntry, t)}
             />
           )}
         </>

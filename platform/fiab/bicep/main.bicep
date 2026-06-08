@@ -81,6 +81,9 @@ param loomIdentityPickerEnabled bool = false
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
+@description('Grant the Console UAMI "Storage Account Contributor" on each DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default.')
+param consolePrincipalNeedsLifecycleWrite bool = false
+
 @description('OpenAI region for chat models')
 param openaiLocation string
 
@@ -470,6 +473,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
   }
 }
@@ -523,6 +527,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
   }
 }]
