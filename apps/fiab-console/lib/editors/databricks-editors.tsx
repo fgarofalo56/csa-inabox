@@ -45,6 +45,7 @@ import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipelin
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { downloadResultsCsv, downloadResultsJson } from './components/result-export';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
@@ -1649,13 +1650,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               Context: <strong>{activeCatalog}</strong>{activeSchema ? <> · <strong>{activeSchema}</strong></> : null}
             </Caption1>
           )}
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="databricks-sql-warehouse"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
-            language="sql"
+            language="sparksql"
+            dialectLabel="Spark SQL"
             height={260}
             minHeight={200}
             ariaLabel="Databricks SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            extraBody={{
+              warehouseId: warehouseId || undefined,
+              catalog: activeCatalog || undefined,
+              schema: activeSchema || undefined,
+            }}
+            onApply={() => setResult(null)}
           />
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
           {result?.ok && (result.rows?.length ?? 0) > 0 && (

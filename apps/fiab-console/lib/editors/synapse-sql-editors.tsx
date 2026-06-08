@@ -36,6 +36,7 @@ import { ConnectionDetailsPanel } from './components/connection-details';
 import { ModelViewPanel } from './components/model-view-canvas';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { ComputePicker } from '@/lib/components/compute-picker';
@@ -416,13 +417,19 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             showLifecycle={false}
           />
           <SqlAccessModeSection itemId={id} itemType="synapse-serverless-sql-pool" />
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="synapse-serverless-sql-pool"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
             language="tsql"
+            dialectLabel="T-SQL"
             height={240}
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            extraBody={{ db: database }}
+            onApply={() => setResult(null)}
           />
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() ? openInExcel : undefined} />
@@ -1043,13 +1050,18 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </MessageBarBody>
             </MessageBar>
           )}
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="synapse-dedicated-sql-pool"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
             language="tsql"
+            dialectLabel="T-SQL"
             height={240}
             minHeight={200}
             ariaLabel="Dedicated T-SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            onApply={() => setResult(null)}
           />
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           <ResultsPanel result={result} loading={loading} />
