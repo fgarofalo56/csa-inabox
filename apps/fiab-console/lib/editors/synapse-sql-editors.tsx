@@ -35,6 +35,7 @@ import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
+import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -73,28 +74,16 @@ function formatCell(v: unknown): string {
   return String(v);
 }
 
-// ── Results export (CSV / JSON) — client-side, no extra route ──
-function downloadBlob(filename: string, mime: string, data: string) {
-  const blob = new Blob([data], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function resultsToCsv(columns: string[], rows: unknown[][]): string {
-  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
-}
-function resultsToJson(columns: string[], rows: unknown[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
-
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
+// ── Results export (CSV / JSON / Open-in-Excel) — serializers + blob
+// download live in ./components/result-export (shared with Databricks +
+// Warehouse). Open-in-Excel routes through the per-engine /iqy BFF route.
+function ResultsPanel({
+  result, loading, onOpenExcel,
+}: {
+  result: QueryResponse | null;
+  loading: boolean;
+  onOpenExcel?: () => void | Promise<void>;
+}) {
   const s = useStyles();
   if (loading) {
     return (
@@ -141,6 +130,12 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
               <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                 onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
             </Tooltip>
+            {onOpenExcel && (
+              <Tooltip content="Open in Excel (web query — refresh re-runs against the live endpoint)" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                  onClick={() => void onOpenExcel()}>Excel</Button>
+              </Tooltip>
+            )}
           </div>
         )}
       </div>
@@ -229,6 +224,32 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     }
   }, [id, sqlText, database]);
 
+  // Open-in-Excel — download a .iqy web-query for the current SQL + database.
+  // Excel refreshes by POSTing back to the serverless /query route (real TDS).
+  const openInExcel = useCallback(async () => {
+    if (!sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText, database }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-synapse-serverless-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText, database]);
+
   // Ctrl+S / Cmd+S → Run (SSMS / Azure Data Studio muscle memory). T-SQL text
   // is ephemeral query state, so the surfaced save action is Run.
   useEffect(() => {
@@ -251,6 +272,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
+        { label: 'Open in Excel', onClick: sqlText.trim() && !loading ? openInExcel : undefined, disabled: !sqlText.trim() || loading, title: !sqlText.trim() ? 'Enter a query first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the live endpoint' },
         // Loads a real sys.external_tables / OPENROWSET template; Run executes
         // it via the wired serverless /query path.
         { label: 'External tables', onClick: () => setSqlText(
@@ -286,7 +308,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
         { label: 'GRANT / masking', onClick: () => setSecOpen(true), title: 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
       ]},
     ]},
-  ], [loading, run]);
+  ], [loading, run, openInExcel, sqlText]);
 
   return (
     <ItemEditorChrome
@@ -364,7 +386,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
           />
-          <ResultsPanel result={result} loading={loading} />
+          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() ? openInExcel : undefined} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
