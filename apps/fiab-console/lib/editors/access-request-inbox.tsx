@@ -39,7 +39,7 @@ import {
 import {
   TIER_SEQUENCE, TIER_LABEL,
   type ApprovalTier, type ApprovalStatus, type AccessRequestEnforcement,
-} from '@/lib/types/access-request';
+} from '@/lib/types/access-request-workflow';
 
 // ── Local mirror of the server doc (only the fields the UI reads). ────────────
 interface ApprovalStep {

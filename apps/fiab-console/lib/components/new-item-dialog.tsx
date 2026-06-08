@@ -9,7 +9,7 @@
  * editor handles the create + redirect to /items/[slug]/[id].
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Dialog,
@@ -32,7 +32,12 @@ import {
   Caption1,
 } from '@fluentui/react-components';
 import { Add24Regular, Search20Regular, ArrowLeft20Regular } from '@fluentui/react-icons';
-import { createItem } from '@/lib/api/workspaces';
+import { createItem, getWorkspace } from '@/lib/api/workspaces';
+import { CustomAttributesForm, type AttributeValues } from '@/lib/components/wizard/custom-attributes-form';
+import {
+  type AttributeGroup,
+  missingRequiredAttributes,
+} from '@/lib/types/attribute-groups';
 import {
   FABRIC_ITEM_TYPES,
   WORKLOAD_CATEGORIES,
@@ -111,6 +116,23 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   const [displayName, setDisplayName] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F17: domain-scoped custom attributes for the inline create step. The
+  // workspace's domain drives which admin-defined attribute groups apply.
+  const [wsDomain, setWsDomain] = useState<string | null>(null);
+  const [customAttrs, setCustomAttrs] = useState<AttributeValues>({});
+  const [attrGroups, setAttrGroups] = useState<AttributeGroup[]>([]);
+  const [showAttrValidation, setShowAttrValidation] = useState(false);
+
+  // Resolve the workspace's domain once, so the Custom attributes step knows
+  // which schema to render. Best-effort — failure just means no custom attrs.
+  useEffect(() => {
+    if (!workspaceId || !open) return;
+    let cancelled = false;
+    getWorkspace(workspaceId)
+      .then((ws) => { if (!cancelled) setWsDomain(ws.domain || null); })
+      .catch(() => { if (!cancelled) setWsDomain(null); });
+    return () => { cancelled = true; };
+  }, [workspaceId, open]);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -130,6 +152,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
 
   function reset() {
     setPicked(null); setDisplayName(''); setError(null); setCreating(false);
+    setCustomAttrs({}); setAttrGroups([]); setShowAttrValidation(false);
   }
 
   function onPick(item: FabricItemType) {
@@ -138,19 +161,32 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       setPicked(item);
       setDisplayName('');
       setError(null);
+      setCustomAttrs({}); setShowAttrValidation(false);
       return;
     }
     setOpen(false);
     router.push(`/items/${item.slug}/new`);
   }
 
+  const missingRequired = useMemo(
+    () => missingRequiredAttributes(attrGroups, customAttrs),
+    [attrGroups, customAttrs],
+  );
+
   async function createInline() {
     if (!workspaceId || !picked || !displayName.trim()) return;
+    // F17: block creation when a required custom attribute has no value.
+    if (missingRequired.length > 0) {
+      setShowAttrValidation(true);
+      setError(`Provide a value for required attribute(s): ${missingRequired.join(', ')}`);
+      return;
+    }
     setCreating(true); setError(null);
     try {
       const item = await createItem(workspaceId, {
         itemType: picked.slug,
         displayName: displayName.trim(),
+        customAttributes: Object.keys(customAttrs).length ? customAttrs : undefined,
       });
       setOpen(false);
       reset();
@@ -183,6 +219,15 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
                          placeholder={`My ${picked.displayName.toLowerCase()}`}
                          onKeyDown={(e) => { if (e.key === 'Enter') createInline(); }} />
                 </Field>
+                {/* F17: per-domain custom attributes. Renders nothing when the
+                    workspace has no domain or no group applies. */}
+                <CustomAttributesForm
+                  domainId={wsDomain}
+                  value={customAttrs}
+                  onChange={setCustomAttrs}
+                  showValidation={showAttrValidation}
+                  onGroupsLoaded={setAttrGroups}
+                />
                 {error && (
                   <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
                 )}

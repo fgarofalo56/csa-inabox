@@ -26,13 +26,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  accessRequestsContainer, auditLogContainer, notificationsContainer,
+  accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/rbac-client';
 import {
   TIER_SEQUENCE, TIER_APPROVAL_KEY, TIER_LABEL,
   type AccessRequestDoc, type ApprovalStep, type ApprovalTier,
-} from '@/lib/types/access-request';
+} from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const now = new Date().toISOString();
 
   try {
-    const c = await accessRequestsContainer();
+    const c = await accessRequestWorkflowContainer();
     let doc: AccessRequestDoc;
     try {
       const { resource } = await c.item(id, tenantId).read<AccessRequestDoc>();

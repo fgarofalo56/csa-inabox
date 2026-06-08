@@ -1,100 +1,36 @@
 /**
- * Access-request approval workflow types (F16) — shared by the BFF routes and
- * the inbox editor.
+ * F15 — Data-product access request.
  *
- * A data-asset access request advances through four approval tiers, in order:
+ * One document per consumer "Request access" submission, stored in the
+ * `access-requests` Cosmos container (partition key `/dataProductId`). The
+ * request is bound to a permitted *purpose* — an `Access`-kind governance
+ * policy the owner defined for this data product (scope `data-product:<id>`).
  *
- *   manager → privacy → approver → access-provider
- *
- * Each tier approves or denies. Approval advances to the next tier; the final
- * (access-provider) approval provisions a REAL Azure RBAC grant on the backing
- * data store via enforceAccessGrant (lib/azure/access-policy-client.ts) and
- * marks the requester a subscriber. A denial at any tier closes the request
- * with the supplied reason. Every decision writes an audit-log entry.
- *
- * No Microsoft Fabric / Power BI dependency — the grant is a pure Azure ARM
- * Storage / Synapse SQL / ADX data-plane assignment (no-fabric-dependency.md).
+ * Lifecycle mirrors the Purview Unified Catalog request states:
+ *   pending → approved | rejected, and approved → completed once provisioned.
  */
+export type AccessRequestStatus = 'pending' | 'approved' | 'rejected' | 'completed';
 
-import type { AccessPermission, AccessScopeType, PrincipalType } from '@/lib/azure/access-policy-client';
-
-export type ApprovalTier = 'manager' | 'privacy' | 'approver' | 'access-provider';
-export type ApprovalStatus = 'open' | 'denied' | 'completed';
-
-/** Ordered approval tiers — index drives the state machine. */
-export const TIER_SEQUENCE: ApprovalTier[] = ['manager', 'privacy', 'approver', 'access-provider'];
-
-/** Human label per tier for the inbox tab strip. */
-export const TIER_LABEL: Record<ApprovalTier, string> = {
-  'manager': 'Manager',
-  'privacy': 'Privacy reviewer',
-  'approver': 'Approver',
-  'access-provider': 'Access provider',
-};
-
-/** A single tier's recorded decision. */
-export interface ApprovalStep {
-  decision: 'approved' | 'denied';
-  by: string;       // UPN of the approver
-  byOid: string;    // approver object id
-  at: string;       // ISO-8601
-  reason?: string;
-}
-
-/** Result of the real RBAC grant performed at the final tier. */
-export interface AccessRequestEnforcement {
-  status: 'active' | 'pending' | 'error';
-  roleName?: string;
-  roleAssignmentId?: string;
-  detail?: string;
-}
-
-/** Cosmos doc for one access request (container `access-requests`, PK /tenantId). */
-export interface AccessRequestDoc {
+export interface AccessRequest {
   id: string;
-  tenantId: string;          // partition key — requester's s.claims.oid
-  kind: 'access-request';
-  assetId: string;
-  assetName: string;
-  itemType: string;
-  scopeType: AccessScopeType; // 'adls-container' | 'warehouse' | 'kql-database' | ...
-  scopeRef: string;           // container / db name the grant binds to
-  permission: AccessPermission;
-  justification: string;
-  requesterId: string;        // oid
+  /** Partition key — the data product item id this request targets. */
+  dataProductId: string;
+  /** Human-readable data product name captured at request time. */
+  dataProductName?: string;
+  /** Requester Entra object id (session.claims.oid). */
+  requesterId: string;
+  /** Requester UPN/email captured for the approver inbox. */
   requesterUpn: string;
-  requestedAt: string;
-  tier: ApprovalTier;
-  status: ApprovalStatus;
-  managerApproval?: ApprovalStep;
-  privacyApproval?: ApprovalStep;
-  approverApproval?: ApprovalStep;
-  accessProviderApproval?: ApprovalStep;
-  enforcement?: AccessRequestEnforcement;
-  subscribedAt?: string;
-  deniedAt?: string;
-  denialReason?: string;
-  /** Tier that issued the denial (for the receipt). */
-  deniedAtTier?: ApprovalTier;
-}
-
-/** Map a tier to the doc field that records its decision. */
-export const TIER_APPROVAL_KEY: Record<ApprovalTier, keyof AccessRequestDoc> = {
-  'manager': 'managerApproval',
-  'privacy': 'privacyApproval',
-  'approver': 'approverApproval',
-  'access-provider': 'accessProviderApproval',
-};
-
-/**
- * Infer the Azure-native grant scope type from a catalog item type. Lakehouses
- * map to ADLS containers, warehouses to Synapse SQL, KQL/eventhouse to ADX.
- * Everything else defaults to adls-container (the most common data asset);
- * the access provider can override the scope at the final tier.
- */
-export function inferScopeType(itemType: string): AccessScopeType {
-  const t = (itemType || '').toLowerCase();
-  if (t === 'warehouse' || t === 'mirrored-warehouse') return 'warehouse';
-  if (t === 'kql-database' || t === 'eventhouse' || t === 'kusto-database') return 'kql-database';
-  return 'adls-container';
+  /** The owner's Access-policy id the request is bound to. */
+  policyId: string;
+  /** Human-readable purpose label from the policy (its `name`). */
+  purposeName: string;
+  /** Optional free-text justification typed by the requester. */
+  justification?: string;
+  status: AccessRequestStatus;
+  createdAt: string;
+  updatedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
 }

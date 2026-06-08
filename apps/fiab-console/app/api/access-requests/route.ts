@@ -15,8 +15,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { accessRequestsContainer } from '@/lib/azure/cosmos-client';
-import { TIER_SEQUENCE, type ApprovalStatus, type ApprovalTier } from '@/lib/types/access-request';
+import { accessRequestWorkflowContainer } from '@/lib/azure/cosmos-client';
+import { TIER_SEQUENCE, type ApprovalStatus, type ApprovalTier } from '@/lib/types/access-request-workflow';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
   const tier = TIER_SEQUENCE.includes(tierParam as ApprovalTier) ? (tierParam as ApprovalTier) : null;
 
   try {
-    const c = await accessRequestsContainer();
+    const c = await accessRequestWorkflowContainer();
     const parameters: { name: string; value: string }[] = [
       { name: '@t', value: s.claims.oid },
       { name: '@s', value: status },

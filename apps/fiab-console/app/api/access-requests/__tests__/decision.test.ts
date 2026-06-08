@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
-  accessRequestsContainer: vi.fn(),
+  accessRequestWorkflowContainer: vi.fn(),
   auditLogContainer: vi.fn(),
   notificationsContainer: vi.fn(),
 }));
@@ -26,7 +26,7 @@ vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn() }));
 import { POST } from '../[id]/decision/route';
 import { getSession } from '@/lib/auth/session';
 import {
-  accessRequestsContainer, auditLogContainer, notificationsContainer,
+  accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant } from '@/lib/azure/rbac-client';
 
@@ -90,21 +90,21 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('400 on invalid decision', async () => {
     const { container } = fakeArContainer(baseDoc());
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'maybe' }), ctx('req-1'));
     expect(res.status).toBe(400);
   });
 
   it('400 when denying without a reason', async () => {
     const { container } = fakeArContainer(baseDoc());
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'denied' }), ctx('req-1'));
     expect(res.status).toBe(400);
   });
 
   it('manager approval advances the tier to privacy (still open)', async () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'manager' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
     const j = await res.json();
     expect(res.status).toBe(200);
@@ -116,7 +116,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('privacy → approver → access-provider on successive approvals', async () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'privacy' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
 
     await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
     expect(store.doc.tier).toBe('approver');
@@ -128,7 +128,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('final approval provisions a real RBAC grant and completes the request', async () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     (enforceAccessGrant as any).mockResolvedValue({
       status: 'active',
       roleName: 'Storage Blob Data Reader',
@@ -150,7 +150,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('deny at any tier closes the request with the reason', async () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'approver' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'denied', reason: 'insufficient justification' }), ctx('req-1'));
     const j = await res.json();
     expect(res.status).toBe(200);
@@ -162,7 +162,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('enforcement error at the final tier keeps the request open (502)', async () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     (enforceAccessGrant as any).mockResolvedValue({ status: 'error', detail: 'ARM 403' });
 
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
@@ -176,7 +176,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
 
   it('409 when the request is already closed', async () => {
     const { container } = fakeArContainer(baseDoc({ status: 'completed' }));
-    (accessRequestsContainer as any).mockResolvedValue(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
     expect(res.status).toBe(409);
   });

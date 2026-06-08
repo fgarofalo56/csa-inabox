@@ -136,6 +136,8 @@ export async function createItem(workspaceId: string, input: {
   itemType: string;
   displayName: string;
   description?: string;
+  /** F17 custom-attribute values, keyed by attribute id. Stored on the item's state. */
+  customAttributes?: Record<string, unknown>;
 }): Promise<WorkspaceItem> {
   return fetchJson<WorkspaceItem>(`/api/workspaces/${workspaceId}/items`, {
     method: 'POST',

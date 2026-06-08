@@ -5,10 +5,10 @@
  * approval-workflow row (F16):
  *   1) an audit-log entry on the asset (visible to the owner in item activity),
  *   2) a confirmation notification to the requester,
- *   3) an access-request doc in the `access-requests` container, opened at the
- *      MANAGER tier. Approvers advance it through manager → privacy → approver →
- *      access-provider in the Governance → Access requests inbox; the final
- *      approval provisions a real Azure RBAC grant on the backing store.
+ *   3) an access-request doc in the `access-request-workflow` container, opened
+ *      at the MANAGER tier. Approvers advance it through manager → privacy →
+ *      approver → access-provider in the Governance → Access requests inbox; the
+ *      final approval provisions a real Azure RBAC grant on the backing store.
  *
  * Body: { assetId, assetName, itemType, ownerUpn?, permission, justification?,
  *         scopeType?, scopeRef? }
@@ -17,9 +17,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  auditLogContainer, notificationsContainer, accessRequestsContainer,
+  auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
-import { inferScopeType, type AccessRequestDoc } from '@/lib/types/access-request';
+import { inferScopeType, type AccessRequestDoc } from '@/lib/types/access-request-workflow';
 import type { AccessScopeType } from '@/lib/azure/access-policy-client';
 import crypto from 'node:crypto';
 
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     });
 
     // 3) Durable approval-workflow row — opened at the MANAGER tier.
-    const arContainer = await accessRequestsContainer();
+    const arContainer = await accessRequestWorkflowContainer();
     const requestDoc: AccessRequestDoc = {
       id: crypto.randomUUID(),
       tenantId: s.claims.oid,

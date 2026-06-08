@@ -4,9 +4,10 @@
  * DlpPanel — DLP tab for /admin/security.
  *
  * Sub-tabs:
- *   - Policies   : list Purview DLP policies + drill into rules
- *   - Alerts     : recent DLP alerts via Graph
- *   - Simulate   : evaluate sample content against policies
+ *   - Policies    : list Purview DLP policies + drill into rules
+ *   - Violations  : per-item DLP violations via Graph alerts_v2
+ *   - Alerts      : recent DLP alerts via Graph
+ *   - Simulate    : evaluate sample content against policies
  *
  * Notes on preview status: Graph DLP endpoints are partially in /beta.
  * The simulate endpoint in particular is gated by a tenant-level preview
@@ -62,7 +63,7 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
   } catch (e: any) { return { loading: false, data: null, error: e?.message || String(e) }; }
 }
 
-type SubTab = 'policies' | 'alerts' | 'simulate';
+type SubTab = 'policies' | 'violations' | 'alerts' | 'simulate';
 
 interface PolicyRow {
   id: string; name?: string; displayName?: string; description?: string;
@@ -79,6 +80,12 @@ interface AlertsPayload {
   alerts?: Array<{ id: string; title?: string; severity?: string; status?: string; createdDateTime?: string; detectionSource?: string; category?: string; description?: string }>;
 }
 
+interface Violation {
+  alertId: string; policyName?: string; ruleName?: string; severity?: string; status?: string;
+  user?: string; itemPath?: string; itemType?: string; workload?: string; action?: string; detectedAt?: string;
+}
+interface ViolationsPayload { ok: boolean; violations?: Violation[]; count?: number }
+
 export function DlpPanel() {
   const s = useStyles();
   const [tab, setTab] = useState<SubTab>('policies');
@@ -92,11 +99,13 @@ export function DlpPanel() {
         size="small"
       >
         <Tab value="policies">Policies</Tab>
+        <Tab value="violations">Violations</Tab>
         <Tab value="alerts">Alerts</Tab>
         <Tab value="simulate">Simulate</Tab>
       </TabList>
 
       {tab === 'policies' && <PoliciesSection />}
+      {tab === 'violations' && <ViolationsSection />}
       {tab === 'alerts' && <AlertsSection />}
       {tab === 'simulate' && <SimulateSection />}
     </div>
@@ -221,10 +230,69 @@ function PoliciesSection() {
   );
 }
 
+function ViolationsSection() {
+  const s = useStyles();
+  const [state, setState] = useState<ApiState<ViolationsPayload>>(emptyState());
+
+  const load = useCallback(async () => {
+    setState({ loading: true, data: null });
+    setState(await fetchJson<ViolationsPayload>('/api/admin/security/dlp/violations?top=50'));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const sevColor = (sev?: string): any =>
+    sev === 'high' ? 'danger' : sev === 'medium' ? 'warning' : 'subtle';
+
+  return (
+    <div className={s.section}>
+      <div className={s.toolbar}>
+        <Subtitle2 style={{ marginRight: 'auto' }}>DLP violations (last 30 days)</Subtitle2>
+        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
+      </div>
+      {state.loading && <Spinner label="Loading violations…" />}
+      {state.notConfigured && <NotConfiguredBar surface="DLP violations" hint={state.notConfigured} />}
+      {state.error && !state.notConfigured && (
+        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed (HTTP {state.errorStatus})</MessageBarTitle>{state.error}</MessageBarBody></MessageBar>
+      )}
+      {state.data?.ok && (state.data.violations || []).length === 0 && (
+        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No DLP violations detected in the last 30 days.</Caption1>
+      )}
+      {state.data?.ok && (state.data.violations || []).length > 0 && (
+        <Table size="small" aria-label="DLP violations">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Detected</TableHeaderCell>
+              <TableHeaderCell>Policy</TableHeaderCell>
+              <TableHeaderCell>Item</TableHeaderCell>
+              <TableHeaderCell>User</TableHeaderCell>
+              <TableHeaderCell>Severity</TableHeaderCell>
+              <TableHeaderCell>Action</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {state.data.violations!.map((v) => (
+              <TableRow key={v.alertId}>
+                <TableCell><Caption1>{v.detectedAt?.slice(0, 16) || '—'}</Caption1></TableCell>
+                <TableCell><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</TableCell>
+                <TableCell>
+                  <Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 48)}</Caption1>
+                  {v.itemType ? <Badge appearance="outline" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}
+                </TableCell>
+                <TableCell><Caption1>{v.user || '—'}</Caption1></TableCell>
+                <TableCell><Badge color={sevColor(v.severity)}>{v.severity || '—'}</Badge></TableCell>
+                <TableCell><Caption1>{v.action || v.status || '—'}</Caption1></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
 function AlertsSection() {
   const s = useStyles();
   const [state, setState] = useState<ApiState<AlertsPayload>>(emptyState());
-
   const load = useCallback(async () => {
     setState({ loading: true, data: null });
     setState(await fetchJson<AlertsPayload>('/api/admin/security/dlp/alerts?top=50'));
