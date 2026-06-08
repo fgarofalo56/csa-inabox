@@ -72,6 +72,12 @@ export default function TenantSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ updatedAt?: string; updatedBy?: string }>({});
+  const [dpBackend, setDpBackend] = useState<{
+    backend: 'cosmos' | 'purview-unified';
+    label: string;
+    options: Array<{ id: string; label: string }>;
+    details?: { boundary?: string; govFallThrough?: boolean };
+  } | null>(null);
   const [q, setQ] = useState('');
   // Dirty ref so the Ctrl+S handler sees fresh state.
   const dirtyRef = useRef(false);
@@ -93,6 +99,18 @@ export default function TenantSettingsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Live data-product backend indicator (read-only; reflects deployment env).
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/admin/data-products-backend');
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j.ok) setDpBackend({ backend: j.backend, label: j.label, options: j.options || [], details: j.details });
+      } catch { /* indicator is best-effort */ }
+    })();
+  }, []);
 
   const dirty = useMemo(() => {
     if (!settings || !original) return false;
@@ -247,6 +265,29 @@ export default function TenantSettingsPage() {
 
       {/* Tenant-wide Copilot & Agents config (Foundry account + model deployments). */}
       <CopilotAgentsConfig />
+
+      {/* Data-product store backend indicator (read-only; env-driven routing). */}
+      {dpBackend && (
+        <MessageBar intent={dpBackend.backend === 'purview-unified' ? 'success' : 'info'} style={{ marginBottom: 12 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Data product store backend</MessageBarTitle>
+            Backend:{' '}
+            {dpBackend.options.map((o, i) => (
+              <span key={o.id}>
+                {i > 0 && ' | '}
+                {o.id === dpBackend.backend ? <strong>{o.label}</strong> : o.label}
+              </span>
+            ))}
+            {dpBackend.details?.govFallThrough && (
+              <div style={{ marginTop: 4, fontSize: 12 }}>
+                Purview Unified Catalog was requested but this is a{' '}
+                <code>{dpBackend.details.boundary}</code> deployment — the Unified Catalog
+                data plane is Commercial-only, so data products use Cosmos.
+              </div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {!groups && !loadError && <Spinner label="Loading settings…" />}
 

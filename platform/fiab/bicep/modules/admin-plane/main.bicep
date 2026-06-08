@@ -452,6 +452,13 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Data Products store backend (F22). "cosmos" (default) stores data products as data-product items in Cosmos DB. "purview-unified" routes the data-product list/detail/lifecycle surfaces through the Purview Unified Catalog REST API (2026-03-20-preview). Honored ONLY on the Commercial boundary — GCC / GCC-High / IL5 fall through to cosmos silently (the Unified Catalog data plane is not offered in Azure Government).')
+@allowed(['cosmos', 'purview-unified'])
+param loomDataProductsBackend string = 'cosmos'
+
+@description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataProductsBackend="purview-unified" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
+param loomPurviewUnifiedAccount string = ''
+
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
 // ---------------------------------------------------------------------
@@ -1108,7 +1115,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // F22 — Data Products store backend selector. "cosmos" (default) or
+            // "purview-unified" (opt-in, Commercial only). CSA_LOOM_BOUNDARY is
+            // injected for every app by app-deployments.bicep, so the factory's
+            // Gov fall-through needs no extra var here. The Unified account is
+            // emitted only when set (below) so its absence is a clear signal.
+            { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomDataProductsBackend }
           ],
+          // F22 — Purview Unified Catalog account for the data-product adapter.
+          // Only emitted when set; absence makes the factory keep Cosmos even if
+          // LOOM_DATAPRODUCTS_BACKEND=purview-unified (honest fall-through).
+          !empty(loomPurviewUnifiedAccount) ? [
+            { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
+          ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
