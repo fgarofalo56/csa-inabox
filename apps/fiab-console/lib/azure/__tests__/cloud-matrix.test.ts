@@ -174,3 +174,38 @@ describe('cloud-endpoints — overrides + DoD', () => {
     expect(m.LOGIC_APP_WORKFLOW_SCHEMA).toContain('/workflowdefinition.json#');
   });
 });
+
+/**
+ * Warehouse-alerts backend dispatch — the alerts BFF route
+ * (app/api/items/[type]/[id]/alerts/route.ts) chooses its backend purely on
+ * isGovCloud(): Commercial / GCC → Databricks SQL Alerts; GCC-High / IL5 / DoD
+ * → Azure Monitor scheduled-query alert rule (Databricks is not IL5-authorized).
+ * This matrix locks that decision in so a future cloud-detection regression
+ * can't silently route a Gov deployment to the Databricks alerts path.
+ */
+describe('cloud-matrix — warehouse alerts backend dispatch', () => {
+  it('Commercial → Databricks SQL Alerts path', async () => {
+    const m = await load('AzureCloud');
+    expect(m.isGovCloud()).toBe(false); // route → listDbxAlerts / createDbxAlert
+    expect(m.detectLoomCloud()).toBe('Commercial');
+  });
+
+  it('GCC (runs on Commercial Azure endpoints) → Databricks SQL Alerts path', async () => {
+    const m = await load('AzureCloud');
+    process.env.LOOM_CLOUD = 'GCC';
+    expect(m.detectLoomCloud()).toBe('GCC');
+    expect(m.isGovCloud()).toBe(false); // GCC is not a Gov data-plane → Databricks
+  });
+
+  it('GCC-High / IL5 (AzureUSGovernment) → Azure Monitor scheduled-query rule path', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.isGovCloud()).toBe(true); // route → upsertScheduledQueryRule
+    expect(m.detectLoomCloud()).toBe('GCC-High');
+  });
+
+  it('DoD (AzureDOD) → Azure Monitor scheduled-query rule path', async () => {
+    const m = await load('AzureDOD');
+    expect(m.isGovCloud()).toBe(true); // route → upsertScheduledQueryRule
+    expect(m.detectLoomCloud()).toBe('DoD');
+  });
+});
