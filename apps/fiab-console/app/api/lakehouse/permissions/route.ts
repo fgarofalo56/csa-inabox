@@ -47,6 +47,7 @@ import {
   revokeTableSelect,
   listRlsPolicies,
   createRlsPolicy,
+  createRlsPolicyWithPredicate,
   dropRlsPolicy,
   RLS_SUBJECTS,
   type RlsSubject,
@@ -220,12 +221,29 @@ export async function POST(req: NextRequest) {
     // tab === 'row'
     const objectId = Number(body?.objectId);
     const filterColumnId = Number(body?.filterColumnId);
-    const subject = (RLS_SUBJECTS as readonly string[]).includes(body?.subject)
-      ? (body.subject as RlsSubject)
-      : 'USER_NAME()';
     if (!Number.isInteger(objectId) || !Number.isInteger(filterColumnId)) {
       return NextResponse.json({ ok: false, error: 'objectId and filterColumnId required' }, { status: 400 });
     }
+
+    // F8 — free-form WHERE-predicate path. When the body carries `whereClause`
+    // the policy is built from the custom predicate (validated server-side);
+    // otherwise the original fixed-subject path (USER_NAME()/SUSER_SNAME()).
+    if (body?.whereClause != null) {
+      const whereClause = String(body.whereClause);
+      try {
+        const res = await createRlsPolicyWithPredicate(target, { objectId, filterColumnId, whereClause });
+        return NextResponse.json({ ok: true, ...res });
+      } catch (e: any) {
+        if (e?.code === 'invalid_where_clause') {
+          return NextResponse.json({ ok: false, error: e.message, code: e.code }, { status: 400 });
+        }
+        throw e;
+      }
+    }
+
+    const subject = (RLS_SUBJECTS as readonly string[]).includes(body?.subject)
+      ? (body.subject as RlsSubject)
+      : 'USER_NAME()';
     const res = await createRlsPolicy(target, { objectId, filterColumnId, subject });
     return NextResponse.json({ ok: true, ...res });
   } catch (e: any) {

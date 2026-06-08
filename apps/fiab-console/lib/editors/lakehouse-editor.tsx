@@ -49,6 +49,7 @@ import { LoadToTableWizard } from './components/load-to-table-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { OnelakeRlsPredicateEditor } from '@/lib/panes/onelake-security-tab';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 
@@ -4155,6 +4156,13 @@ export function LakehouseEditor({ item, id }: Props) {
                         <Button appearance="primary" onClick={createRls} disabled={permsBusy || selTableId == null || rlsFilterColId == null}>
                           Create policy
                         </Button>
+                      </div>
+
+                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                        <OnelakeRlsPredicateEditor
+                          tables={sqlTables}
+                          onSaved={() => loadSqlPerms('row')}
+                        />
                       </div>
                     </>
                   )}

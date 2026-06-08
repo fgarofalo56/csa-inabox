@@ -337,6 +337,144 @@ export async function createRlsPolicy(
   return { policyName: `${RLS_SCHEMA}.${polName}`, functionName: `${RLS_SCHEMA}.${fnName}` };
 }
 
+// ── free-form WHERE-predicate RLS (F8 — "OneLake security" custom predicate) ──
+
+// The predicate sanitizer lives in a dependency-free module so it can be
+// unit-tested without dragging in the Azure SDK / mssql. Re-exported here so
+// the BFF route imports validation + DDL from one place.
+export { RLS_WHERE_MAX, validateWhereClause } from './rls-predicate';
+import { validateWhereClause } from './rls-predicate';
+
+function whereClauseError(message: string): Error & { status: number; code: string } {
+  const err = new Error(message) as Error & { status: number; code: string };
+  err.status = 400;
+  err.code = 'invalid_where_clause';
+  return err;
+}
+
+/**
+ * Create a row-level security FILTER predicate from a free-form WHERE clause
+ * (F8). The clause is validated, parse/bind-probed (so an invalid predicate
+ * never drops the existing policy), then embedded in the inline TVF:
+ *
+ *   CREATE FUNCTION LoomSecurity.fn_rls_<table>(@cmp sysname)
+ *     RETURNS TABLE WITH SCHEMABINDING AS
+ *     RETURN SELECT 1 AS rls_result
+ *     WHERE (<user predicate>) OR IS_MEMBER('db_owner') = 1;
+ *
+ * The owner-bypass (`OR IS_MEMBER('db_owner') = 1`) is always appended so a
+ * database owner can still read every row. The filter column is resolved from
+ * the catalog by integer column_id (never user text) and passed positionally
+ * as @cmp. Dedicated SQL pool only.
+ */
+export async function createRlsPolicyWithPredicate(
+  target: SynapseTarget,
+  opts: { objectId: number; filterColumnId: number; whereClause: string },
+): Promise<{ policyName: string; functionName: string; predicate: string }> {
+  const verdict = validateWhereClause(opts.whereClause);
+  if (!verdict.ok) throw whereClauseError(verdict.error!);
+  const clause = opts.whereClause.trim();
+
+  const { schema, name: table } = await resolveTable(target, opts.objectId);
+  const cols = await resolveColumnNames(target, opts.objectId, [opts.filterColumnId]);
+  if (cols.length === 0) throw new Error('The chosen filter column does not exist on the table.');
+  const filterColumn = cols[0];
+
+  const fnName = `fn_rls_${safeSuffix(table)}`;
+  const polName = `pol_rls_${safeSuffix(table)}`;
+  const fnFq = `${sqlBracket(RLS_SCHEMA)}.${sqlBracket(fnName)}`;
+  const polFq = `${sqlBracket(RLS_SCHEMA)}.${sqlBracket(polName)}`;
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+
+  await ensureRlsSchema(target);
+
+  // Parse/bind PROBE first — validate the predicate compiles against a no-FROM
+  // SELECT (only @cmp + identity functions are in scope, exactly like the TVF).
+  // If it throws (precise SQL parse/bind error) we have NOT mutated any policy,
+  // so an invalid predicate can never leave the table unprotected.
+  await synapseExecute(
+    target,
+    `DECLARE @cmp sysname = N'';\n` +
+      `SELECT TOP 0 1 AS rls_result WHERE (${clause}) OR IS_MEMBER('db_owner') = 1;`,
+  );
+
+  // Drop any existing policy first (it depends on the function).
+  await synapseExecute(
+    target,
+    `IF EXISTS (SELECT 1 FROM sys.security_policies WHERE name = ${sqlString(polName)}) DROP SECURITY POLICY ${polFq};`,
+  );
+  await synapseExecute(
+    target,
+    `IF OBJECT_ID('${RLS_SCHEMA}.${fnName.replace(/'/g, "''")}') IS NOT NULL DROP FUNCTION ${fnFq};`,
+  );
+  // CREATE FUNCTION must be the only statement in its batch.
+  await synapseExecute(
+    target,
+    `CREATE FUNCTION ${fnFq}(@cmp sysname)\n` +
+      `RETURNS TABLE WITH SCHEMABINDING AS\n` +
+      `RETURN SELECT 1 AS rls_result\n` +
+      `WHERE (${clause}) OR IS_MEMBER('db_owner') = 1;`,
+  );
+  // CREATE SECURITY POLICY must be the only statement in its batch.
+  await synapseExecute(
+    target,
+    `CREATE SECURITY POLICY ${polFq}\n` +
+      `ADD FILTER PREDICATE ${fnFq}(${sqlBracket(filterColumn)}) ON ${tableFq}\n` +
+      `WITH (STATE = ON);`,
+  );
+  return { policyName: `${RLS_SCHEMA}.${polName}`, functionName: `${RLS_SCHEMA}.${fnName}`, predicate: clause };
+}
+
+/**
+ * Test a free-form RLS predicate against LIVE rows without creating a policy.
+ * Faithfully evaluates the predicate the policy would apply:
+ *   - `@cmp`            → each row's filter-column value (catalog-resolved name)
+ *   - USER_NAME()       → the `testIdentity` (the signed-in admin's UPN by
+ *   - SUSER_SNAME()       default) so the preview shows the rows THAT user would
+ *                         see, not the rows the BFF service identity sees.
+ *
+ * Returns `SELECT TOP <n>` of the live table filtered by the predicate. The
+ * owner-bypass is intentionally omitted here so the predicate's own filtering
+ * is visible (the connecting identity is db_owner and would otherwise match
+ * every row). Read-only — no DDL, no policy mutation.
+ */
+export async function testRlsPredicate(
+  target: SynapseTarget,
+  opts: { objectId: number; filterColumnId: number; whereClause: string; testIdentity: string; sampleRows?: number },
+): Promise<{ schema: string; table: string; filterColumn: string; testIdentity: string; result: QueryResult }> {
+  const verdict = validateWhereClause(opts.whereClause);
+  if (!verdict.ok) throw whereClauseError(verdict.error!);
+  const clause = opts.whereClause.trim();
+
+  const { schema, name: table } = await resolveTable(target, opts.objectId);
+  const cols = await resolveColumnNames(target, opts.objectId, [opts.filterColumnId]);
+  if (cols.length === 0) throw new Error('The chosen filter column does not exist on the table.');
+  const filterColumn = cols[0];
+
+  const testIdentity = (opts.testIdentity || '').trim();
+  const top = Math.min(Math.max(Number(opts.sampleRows) || 20, 1), 200);
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+
+  // Substitute the only user-side tokens with injection-safe values:
+  //   @cmp           → t.[filterColumn]    (bracket-escaped catalog identifier)
+  //   USER_NAME()    → N'testIdentity'     (sqlString-escaped literal)
+  //   SUSER_SNAME()  → N'testIdentity'
+  // The rest of the clause already passed validateWhereClause (no quotes,
+  // comments, semicolons, or DDL/DML keywords) so it is safe to embed verbatim.
+  const probeClause = clause
+    .replace(/@cmp\b/gi, `t.${sqlBracket(filterColumn)}`)
+    .replace(/USER_NAME\s*\(\s*\)/gi, sqlString(testIdentity))
+    .replace(/SUSER_SNAME\s*\(\s*\)/gi, sqlString(testIdentity));
+
+  const result = await synapseExecute(
+    target,
+    `SELECT TOP ${top} * FROM ${tableFq} AS t WHERE (${probeClause});`,
+  );
+  return { schema, table, filterColumn, testIdentity, result };
+}
+
+// ── policy teardown ──────────────────────────────────────────────────────────
+
 /** Drop a row-level security policy (resolved from the catalog by object_id). */
 export async function dropRlsPolicy(target: SynapseTarget, policyObjectId: number): Promise<{ dropped: string }> {
   if (!Number.isInteger(policyObjectId)) throw new Error('policyObjectId must be an integer');
