@@ -31,6 +31,8 @@ export interface ItemTileProps {
   meta?: React.ReactNode;
   /** Optional trailing badge node (Preview tag, status pill, etc.). */
   badge?: React.ReactNode;
+  /** Bottom badge row: endorsement chip, owner avatar, domain chip. Omit → row absent. */
+  footer?: React.ReactNode;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
@@ -104,6 +106,13 @@ const useStyles = makeStyles({
     marginLeft: 'auto',
     flexShrink: 0,
   },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minHeight: '20px',
+  },
 });
 
 export function ItemTile({
@@ -112,6 +121,7 @@ export function ItemTile({
   subtitle,
   meta,
   badge,
+  footer,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -168,6 +178,7 @@ export function ItemTile({
           {meta}
         </Text>
       )}
+      {footer != null && <div className={styles.footer}>{footer}</div>}
     </div>
   );
 }

@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner,
+  Avatar,
   Badge,
   Button,
   Text,
@@ -68,6 +69,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { initials, endorsementOf } from './card-badges';
 
 // ── Item types surfaced by the OneLake catalog Explore tab ────────────────
 // "lakehouses, warehouses, Fabric databases, mirrored items, and other
@@ -94,6 +96,12 @@ interface OwnedItem {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Flattened from state.endorsement by the route. 'Certified' | 'Promoted' | 'Master data' | undefined */
+  endorsement?: string;
+  /** Flattened from state.sensitivityLabel by the route. */
+  sensitivityLabel?: string;
+  /** Domain id from parent workspace.domain; resolved to a display name via domainMap. */
+  workspaceDomain?: string;
 }
 
 interface Workspace {
@@ -145,6 +153,61 @@ function fmtBytes(n: number): string {
   let v = n;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+/** Bottom-row badges for an ItemTile: endorsement chip + owner avatar + domain
+ *  chip. Returns undefined when none apply so the tile renders no empty row. */
+function tileFooter(
+  it: OwnedItem,
+  resolvedDomainName: string | undefined,
+): React.ReactNode | undefined {
+  // Endorsement: prefer the flattened top-level field, fall back to the
+  // legacy state.certified flag (older items predate state.endorsement).
+  const endorse = endorsementOf(it);
+  const hasContent = Boolean(endorse || it.createdBy || resolvedDomainName);
+  if (!hasContent) return undefined;
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {endorse && (
+        <Tooltip
+          content={
+            endorse === 'Certified'
+              ? 'Certified — meets your organization’s quality standards'
+              : endorse === 'Promoted'
+              ? 'Promoted — recommended for sharing and reuse'
+              : endorse
+          }
+          relationship="label"
+        >
+          <Badge
+            appearance={endorse === 'Certified' ? 'filled' : 'outline'}
+            color="brand"
+            size="small"
+          >
+            {endorse}
+          </Badge>
+        </Tooltip>
+      )}
+      {it.createdBy && (
+        <Tooltip content={`Owner: ${it.createdBy}`} relationship="label">
+          <Avatar
+            initials={initials(it.createdBy)}
+            size={16}
+            color="colorful"
+            aria-label={`Owner: ${it.createdBy}`}
+          />
+        </Tooltip>
+      )}
+      {resolvedDomainName && (
+        <Tooltip content={`Domain: ${resolvedDomainName}`} relationship="label">
+          <Badge appearance="tint" color="subtle" size="small">
+            {resolvedDomainName}
+          </Badge>
+        </Tooltip>
+      )}
+    </span>
+  );
 }
 
 const useStyles = makeStyles({
@@ -534,6 +597,7 @@ export default function OneLakeCatalogPage() {
 
   const [items, setItems] = useState<OwnedItem[] | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
   const [unauth, setUnauth] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
@@ -560,6 +624,14 @@ export default function OneLakeCatalogPage() {
       .then((d) => setWorkspaces(Array.isArray(d) ? d : []))
       .catch(() => setWorkspaces([]));
 
+    // Domains resolve workspace.domain ids → display names for the card badge.
+    // Azure-native by default (Cosmos governance-domains); honest-degrades to
+    // no domain badge if the backend is gated (e.g. IL5 fabric opt-in 501).
+    fetch('/api/governance/domains')
+      .then((r) => (r.ok ? r.json() : { ok: false, domains: [] }))
+      .then((d) => setDomains(Array.isArray(d?.domains) ? d.domains : []))
+      .catch(() => setDomains([]));
+
     fetch('/api/me')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -575,6 +647,12 @@ export default function OneLakeCatalogPage() {
     for (const w of workspaces) m.set(w.id, w.name);
     return m;
   }, [workspaces]);
+
+  const domainMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of domains) m.set(d.id, d.name);
+    return m;
+  }, [domains]);
 
   // ── per-type counts (respect scope + workspace filter, ignore type chip) ──
   const scopedItems = useMemo(() => {
@@ -824,6 +902,10 @@ export default function OneLakeCatalogPage() {
                         subtitle={typeLabel(it.itemType)}
                         meta={`Refreshed ${relative(it.updatedAt || it.createdAt)}`}
                         badge={isPreviewType(it.itemType) ? <Badge appearance="tint" color="brand" size="small">Preview</Badge> : undefined}
+                        footer={tileFooter(
+                          it,
+                          it.workspaceDomain ? domainMap.get(it.workspaceDomain) : undefined,
+                        )}
                         onClick={() => setSelected(it)}
                       />
                     ))}
