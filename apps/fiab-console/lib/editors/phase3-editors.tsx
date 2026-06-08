@@ -45,6 +45,8 @@ import {
   Apps20Regular, List20Regular, Open20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
+  DataBarVertical20Regular,
+  Eye20Regular, Form20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -62,11 +64,17 @@ import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
+import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
+import { ResultVisualize } from './components/result-visualize';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -8222,6 +8230,10 @@ interface WHSchemaResp {
   warehouse?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  views?: { schema: string; name: string }[];
+  procedures?: { schema: string; name: string }[];
+  functions?: { schema: string; name: string; type: string }[];
+  warnings?: string[];
   error?: string;
 }
 
@@ -8259,6 +8271,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Visual (no-code) query canvas — Power-Query diagram-view parity.
+  const [vqOpen, setVqOpen] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
+  const [showViz, setShowViz] = useState(false);
   // Seed the SQL editor with the bundle DDL once, when the live warehouse has
   // no tables to show — so the surface lands populated instead of on a smoke
   // test. The user can Run it (creates the schema) against the live compute.
@@ -8293,9 +8310,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const run = useCallback(async () => {
     setLoading(true); setResult(null);
     try {
+      // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
+      const statement = substituteSynapse(sqlText, queryParams);
       const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sqlText }),
+        body: JSON.stringify({ sql: statement, parameters: queryParams }),
       });
       const j = (await r.json()) as WHQueryResult;
       setResult(j);
@@ -8303,10 +8322,31 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) {
       setResult({ ok: false, error: e?.message || String(e) });
     } finally { setLoading(false); }
-  }, [id, sqlText, loadSchema]);
+  }, [id, sqlText, queryParams, loadSchema]);
 
   const schemaEntries = Object.entries(schema?.schemas || {});
   const ready = schema?.ok === true;
+  const whViews = schema?.views ?? [];
+  const whProcedures = schema?.procedures ?? [];
+  const whFunctions = schema?.functions ?? [];
+
+  // Script-out: load the real CREATE/ALTER/DROP into the editor buffer.
+  const loadScript = useCallback(async (type: ScriptObjectType, objSchema: string, name: string, mode: ScriptMode) => {
+    const r = await loadSqlScript('warehouse', id, { type, schema: objSchema, name, mode });
+    if (r.ok && r.script != null) { setSqlText(r.script); setResult(null); }
+    else { setResult({ ok: false, error: r.error || 'Could not script object' }); }
+  }, [id]);
+  const countRows = useCallback(
+    (objSchema: string, name: string) => sqlRowCount('warehouse', id, objSchema, name),
+    [id],
+  );
+
+  // Flatten the schema tree to a {schema, table} list for the visual-query
+  // canvas's Add-table picker.
+  const vqSourceTables = useMemo(
+    () => schemaEntries.flatMap(([sName, tables]) => tables.map((t) => ({ schema: sName, table: t.table }))),
+    [schemaEntries],
+  );
 
   const canRun = ready && !loading;
 
@@ -8381,6 +8421,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — no SQL required' },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
         { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined, disabled: !canRun || !sqlText.trim(), title: !canRun ? 'warehouse compute is not ready' : (!sqlText.trim() ? 'enter a SELECT first' : undefined) },
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
@@ -8507,12 +8548,101 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           value={`t-${schemaName}.${t.table}`}
                           onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
                         >
-                          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                          <TreeItemLayout
+                            iconBefore={<DocumentTable20Regular />}
+                            // Drag onto the visual-query canvas to add a source.
+                            draggable
+                            onDragStart={(e: React.DragEvent) => {
+                              e.dataTransfer.setData('application/loom-vq-table', JSON.stringify({ schema: schemaName, table: t.table }));
+                              e.dataTransfer.effectAllowed = 'copy';
+                            }}
+                          >
                             {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
                           </TreeItemLayout>
                         </TreeItem>
                       ))}
                     </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Views */}
+            <TreeItem itemType="branch" value="views">
+              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({whViews.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="v-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whViews.length === 0 && (
+                  <TreeItem itemType="leaf" value="v-empty"><TreeItemLayout><Caption1>No views</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whViews.map((v) => (
+                  <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
+                    onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
+                    <TreeItemLayout iconBefore={<Eye20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
+                        onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
+                        onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
+                        onScriptDrop={() => loadScript('view', v.schema, v.name, 'drop')} />}>
+                      {v.schema}.{v.name}{' '}
+                      <SqlRowCountBadge cacheKey={`v-${v.schema}.${v.name}`} load={() => countRows(v.schema, v.name)} />
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Stored procedures */}
+            <TreeItem itemType="branch" value="procs">
+              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({whProcedures.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="p-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whProcedures.length === 0 && (
+                  <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>No procedures</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whProcedures.map((p) => (
+                  <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
+                    onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
+                    <TreeItemLayout iconBefore={<Form20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
+                        onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
+                        onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
+                        onScriptDrop={() => loadScript('procedure', p.schema, p.name, 'drop')} />}>
+                      {p.schema}.{p.name}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Functions */}
+            <TreeItem itemType="branch" value="funcs">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({whFunctions.length})</TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="f-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
+                )}
+                {ready && whFunctions.length === 0 && (
+                  <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>No functions</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {whFunctions.map((f) => (
+                  <TreeItem key={`f-${f.schema}.${f.name}`} itemType="leaf" value={`f-${f.schema}.${f.name}`}
+                    onClick={() => setSqlText(
+                      f.type === 'FN'
+                        ? `SELECT [${f.schema}].[${f.name}]();`
+                        : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
+                    )}>
+                    <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
+                        onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
+                        onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
+                        onScriptDrop={() => loadScript('function', f.schema, f.name, 'drop')} />}>
+                      {f.schema}.{f.name}{' '}
+                      <Caption1>· {f.type === 'FN' ? 'scalar' : f.type === 'IF' ? 'inline TVF' : 'TVF'}</Caption1>
+                    </TreeItemLayout>
                   </TreeItem>
                 ))}
               </Tree>
@@ -8557,6 +8687,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             minHeight={200}
             ariaLabel="Warehouse T-SQL editor"
           />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
             <MessageBar intent="error">
@@ -8572,7 +8703,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
                 <Caption1>· {result.executionMs} ms</Caption1>
                 {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+                {(result.rows?.length ?? 0) > 0 && (
+                  <Button size="small" appearance={showViz ? 'primary' : 'outline'} icon={<DataBarVertical20Regular />}
+                    onClick={() => setShowViz((v) => !v)} style={{ marginLeft: 'auto' }}>
+                    {showViz ? 'Hide chart' : 'Visualize'}
+                  </Button>
+                )}
               </div>
+              {showViz && (result.rows?.length ?? 0) > 0 && (
+                <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+              )}
               {(result.rows?.length ?? 0) === 0 ? (
                 <Caption1>Query returned no rows.</Caption1>
               ) : (
@@ -8620,6 +8760,21 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                   <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasTable.trim()}>
                     {ctasBusy ? 'Creating…' : 'Create table'}
                   </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Visual (no-code) query canvas — Power Query diagram-view parity. */}
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — {schema?.warehouse || 'Warehouse'}</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas engine="warehouse" id={id} dialect="tsql" sourceTables={vqSourceTables} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
