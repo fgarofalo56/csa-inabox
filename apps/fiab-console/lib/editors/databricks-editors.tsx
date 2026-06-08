@@ -27,8 +27,10 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  Eye20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -116,6 +118,8 @@ interface SchemaResponse {
   catalogs?: string[];
   schemas?: string[];
   tables?: string[];
+  views?: string[];
+  functions?: string[];
   message?: string;
   error?: string;
 }
@@ -626,6 +630,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string | null>(null);
   const [tables, setTables] = useState<string[]>([]);
+  const [views, setViews] = useState<string[]>([]);
+  const [functions, setFunctions] = useState<string[]>([]);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -688,6 +694,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [warehouseId, refreshState, refreshCatalogs]);
 
@@ -698,6 +706,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
@@ -709,11 +719,50 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) return;
     setActiveSchema(sch);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setTables(j.tables || []);
+    if (j.ok) {
+      setTables(j.tables || []);
+      setViews(j.views || []);
+      setFunctions(j.functions || []);
+    }
+  }, [id, warehouseId]);
+
+  // Script-out (Databricks): load CREATE (SHOW CREATE …) / DROP into the editor.
+  const dbxLoadScript = useCallback(async (
+    cat: string, sch: string, name: string, type: 'view' | 'function', mode: 'create' | 'drop',
+  ) => {
+    if (!warehouseId) { setResult({ ok: false, error: 'No warehouse selected.' }); return; }
+    const params = new URLSearchParams({ warehouseId, catalog: cat, schema: sch, name, type, mode });
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/script-out?${params.toString()}`);
+      const j = await r.json();
+      if (j.ok && typeof j.script === 'string') { setSqlText(j.script); setResult(null); }
+      else setResult({ ok: false, error: j.error || `HTTP ${r.status}` });
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, warehouseId]);
+
+  // Lazy row count for a Databricks view via the real /query route.
+  const dbxCountRows = useCallback(async (cat: string, sch: string, name: string): Promise<number | null> => {
+    if (!warehouseId) return null;
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sql: `SELECT COUNT(*) AS c FROM \`${cat}\`.\`${sch}\`.\`${name}\``,
+          warehouseId, catalog: cat, schema: sch,
+        }),
+      });
+      const j = await r.json();
+      const v = j?.ok ? j?.rows?.[0]?.[0] : null;
+      return v == null ? null : Number(v);
+    } catch { return null; }
   }, [id, warehouseId]);
 
   // ---- Start / Stop with poll ----
@@ -999,6 +1048,45 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                               >
                                 <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
                                   {t}
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Views */}
+                            {activeSchema === sch && views.map((v) => (
+                              <TreeItem
+                                key={`v-${c}.${sch}.${v}`}
+                                itemType="leaf"
+                                value={`v-${c}.${sch}.${v}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${v}\` LIMIT 100;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<Eye20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${v}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, v, 'view', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, v, 'view', 'drop')} />}>
+                                  {v}{' '}
+                                  <SqlRowCountBadge cacheKey={`v-${c}.${sch}.${v}`} load={() => dbxCountRows(c, sch, v)} />
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* User functions */}
+                            {activeSchema === sch && functions.map((f) => (
+                              <TreeItem
+                                key={`f-${c}.${sch}.${f}`}
+                                itemType="leaf"
+                                value={`f-${c}.${sch}.${f}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`-- Unity Catalog function\nDESCRIBE FUNCTION EXTENDED \`${c}\`.\`${sch}\`.\`${f}\`;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${f}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, f, 'function', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, f, 'function', 'drop')} />}>
+                                  {f}
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}

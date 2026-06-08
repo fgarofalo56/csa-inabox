@@ -26,8 +26,8 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 
 | # | Status | Notes |
 |---|---|---|
-| 1 | ✅ | Explorer tree from `/schema` (sys.tables/schemas + row counts) |
-| 2 | ✅ | Tree leaf click loads `SELECT TOP 100`; New measure loads CREATE FUNCTION template |
+| 1 | ✅ | Explorer tree from `/schema`: schemas/tables (sys.partitions row counts) **+ views / stored procedures / functions** (sys.views / sys.procedures / sys.objects FN·IF·TF via `lib/azure/sql-object-scripting.ts`). View leaves carry a lazy `SELECT COUNT_BIG(*)` badge. |
+| 2 | ✅ | Per-node `…` menu → `/script-out` → real OBJECT_DEFINITION (Script as CREATE), CREATE OR ALTER (ALTER), or `DROP … IF EXISTS` (DROP). New measure also loads a CREATE FUNCTION template. |
 | 3 | ✅ | Monaco T-SQL editor + Run via `/query` (Dedicated pool TDS); Results grid |
 | 4 | ❌ MISSING | No-code visual Power-Query canvas not built — SQL editor is the authoring surface today |
 | 5 | ✅ | Save-as-view achievable via CREATE VIEW in editor; CTAS dialog covers table |
@@ -45,4 +45,4 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **B+ — SQL authoring + explorer + CTAS + Excel + permissions/relationships all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
+Grade: **B+ — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
