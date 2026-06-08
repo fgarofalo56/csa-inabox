@@ -716,6 +716,9 @@ export function ShortcutsPanel({ itemType = 'lakehouse', lakehouseId, workspaceI
         onClose={() => setWizardOpen(false)}
         onCreated={() => load()}
       />
+    </div>
+  );
+}
 
 /**
  * Shortcut wizard building blocks — Azure-native parity with Fabric OneLake's
@@ -1186,3 +1189,6 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
       >
         {renderLevel('')}
       </Tree>
+    </div>
+  );
+}
