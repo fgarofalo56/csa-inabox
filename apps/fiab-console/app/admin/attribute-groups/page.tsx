@@ -4,16 +4,17 @@
  * Custom attributes / attribute groups admin (F17).
  *
  * Per-domain attribute schemas that drive the Create wizard's "Custom
- * attributes" step and item Edit dialogs. Azure-native: backed by the Cosmos
- * `attribute-groups` container via /api/attribute-groups. No Microsoft Purview
- * / Fabric account is required.
+ * attributes" step, the data-product create wizard, and item Edit dialogs.
+ * Azure-native: backed by a single per-tenant Cosmos document
+ * (`attribute-groups:<tenantId>` in `tenant-settings`) via /api/attribute-groups.
+ * No Microsoft Purview / Fabric account is required.
  *
  * Parity with Microsoft Purview Unified Catalog → Custom metadata:
  *   - groups scope to governance domains (empty scope = all domains)
- *   - attributes have a name, type (Text/Number/Date/Single-select), required
- *     flag, and (for enum) a value list
+ *   - attributes have a name, field type (Text / Single choice / Multiple
+ *     choice / Date / Boolean / Integer / Double / Rich text), a required flag,
+ *     and (for choice types) a list of allowed values
  *   - attributes are ordered with ↑/↓ reorder controls
- *   - type is immutable after creation; everything else is editable
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -32,13 +33,11 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import {
-  type AttributeGroupDoc, type AttributeDef, type AttributeType,
-  ATTRIBUTE_TYPE_LABELS, validateAttributes,
+  type AttributeGroup, type AttributeDef, type AttributeFieldType,
+  ATTRIBUTE_FIELD_TYPES, CHOICE_FIELD_TYPES, kebab, validateAttributes,
 } from '@/lib/types/attribute-groups';
 
 interface DomainItem { id: string; name: string; }
-
-const TYPE_OPTIONS: AttributeType[] = ['string', 'number', 'date', 'enum'];
 
 const useStyles = makeStyles({
   explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
@@ -57,13 +56,13 @@ const useStyles = makeStyles({
   },
 });
 
-function emptyAttr(order: number): AttributeDef {
-  return { id: `attr-${Math.random().toString(36).slice(2, 10)}`, name: '', type: 'string', required: false, order };
+function emptyAttr(): AttributeDef {
+  return { id: `attr-${Math.random().toString(36).slice(2, 10)}`, name: '', fieldType: 'Text', required: false };
 }
 
 export default function AttributeGroupsPage() {
   const s = useStyles();
-  const [groups, setGroups] = useState<AttributeGroupDoc[] | null>(null);
+  const [groups, setGroups] = useState<AttributeGroup[] | null>(null);
   const [domains, setDomains] = useState<DomainItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +77,8 @@ export default function AttributeGroupsPage() {
   const [newDomains, setNewDomains] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
-  // Edit-group dialog (holds a working draft; Save persists via PATCH)
-  const [editGroup, setEditGroup] = useState<AttributeGroupDoc | null>(null);
+  // Edit-group dialog (holds a working draft; Save persists the whole schema)
+  const [editGroup, setEditGroup] = useState<AttributeGroup | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftDesc, setDraftDesc] = useState('');
   const [draftDomains, setDraftDomains] = useState<string[]>([]);
@@ -111,31 +110,46 @@ export default function AttributeGroupsPage() {
 
   const domainName = useCallback((id: string) => domains.find((d) => d.id === id)?.name || id, [domains]);
 
+  /** Persist the whole attribute-group schema (one per-tenant doc). */
+  const persist = useCallback(async (next: AttributeGroup[]): Promise<boolean> => {
+    setActionErr(null);
+    const r = await fetch('/api/attribute-groups', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ groups: next }),
+    });
+    const j = await r.json();
+    if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return false; }
+    setGroups(j.groups || next);
+    return true;
+  }, []);
+
   async function createGroup() {
     if (!newName.trim()) { setActionErr('Group name is required'); return; }
     setCreating(true); setActionErr(null);
     try {
-      const r = await fetch('/api/attribute-groups', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() || undefined, domainIds: newDomains }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      const id = `${kebab(newName)}-${Date.now().toString(36)}`;
+      const group: AttributeGroup = {
+        id, name: newName.trim(),
+        description: newDesc.trim() || undefined,
+        domainIds: newDomains, attributes: [],
+      };
+      const next = [...(groups || []), group];
+      const ok = await persist(next);
+      if (!ok) return;
       setCreateOpen(false);
       setNewName(''); setNewDesc(''); setNewDomains([]);
-      await load();
       // Open the newly created group so the admin can add attributes.
-      if (j.group) openEdit(j.group);
+      openEdit(group);
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setCreating(false); }
   }
 
-  function openEdit(g: AttributeGroupDoc) {
+  function openEdit(g: AttributeGroup) {
     setEditGroup(g);
     setDraftName(g.name);
     setDraftDesc(g.description || '');
     setDraftDomains(g.domainIds || []);
-    setDraftAttrs((g.attributes || []).slice().sort((a, b) => a.order - b.order));
+    setDraftAttrs((g.attributes || []).slice());
     setEditingAttr(null);
     setActionErr(null);
   }
@@ -147,44 +161,38 @@ export default function AttributeGroupsPage() {
     if (verr) { setActionErr(verr); return; }
     setSaving(true); setActionErr(null);
     try {
-      const r = await fetch(`/api/attribute-groups?groupId=${encodeURIComponent(editGroup.groupId)}`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: draftName.trim(), description: draftDesc.trim() || undefined,
-          domainIds: draftDomains,
-          attributes: draftAttrs.map((a, i) => ({ ...a, order: i })),
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      const updated: AttributeGroup = {
+        id: editGroup.id,
+        name: draftName.trim(),
+        description: draftDesc.trim() || undefined,
+        domainIds: draftDomains,
+        attributes: draftAttrs,
+      };
+      const next = (groups || []).map((g) => (g.id === editGroup.id ? updated : g));
+      const ok = await persist(next);
+      if (!ok) return;
       setEditGroup(null);
-      await load();
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setSaving(false); }
   }
 
-  async function deleteGroup(g: AttributeGroupDoc) {
+  async function deleteGroup(g: AttributeGroup) {
     if (!confirm(`Delete attribute group "${g.name}"? Its attributes will be removed from every domain's Create wizard and Edit dialogs.`)) return;
-    setActionErr(null);
-    try {
-      const r = await fetch(`/api/attribute-groups?groupId=${encodeURIComponent(g.groupId)}`, { method: 'DELETE' });
-      const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
-      await load();
-    } catch (e: any) { setActionErr(e?.message || String(e)); }
+    const next = (groups || []).filter((x) => x.id !== g.id);
+    await persist(next);
   }
 
   // --- attribute draft mutations (local; persisted on Save) ----------------
   function upsertAttr(a: AttributeDef) {
     setDraftAttrs((prev) => {
       const idx = prev.findIndex((x) => x.id === a.id);
-      if (idx === -1) return [...prev, { ...a, order: prev.length }];
+      if (idx === -1) return [...prev, a];
       const next = prev.slice(); next[idx] = a; return next;
     });
     setEditingAttr(null);
   }
   function removeAttr(id: string) {
-    setDraftAttrs((prev) => prev.filter((x) => x.id !== id).map((x, i) => ({ ...x, order: i })));
+    setDraftAttrs((prev) => prev.filter((x) => x.id !== id));
   }
   function moveAttr(id: string, dir: -1 | 1) {
     setDraftAttrs((prev) => {
@@ -193,13 +201,13 @@ export default function AttributeGroupsPage() {
       if (idx === -1 || j < 0 || j >= prev.length) return prev;
       const next = prev.slice();
       [next[idx], next[j]] = [next[j], next[idx]];
-      return next.map((x, i) => ({ ...x, order: i }));
+      return next;
     });
   }
 
   const filtered = useMemo(() => {
     let all = groups || [];
-    if (domainFilter) all = all.filter((g) => g.domainIds.length === 0 || g.domainIds.includes(domainFilter));
+    if (domainFilter) all = all.filter((g) => !g.domainIds || g.domainIds.length === 0 || g.domainIds.includes(domainFilter));
     const f = q.toLowerCase().trim();
     if (!f) return all;
     return all.filter((g) =>
@@ -208,17 +216,16 @@ export default function AttributeGroupsPage() {
       g.attributes.some((a) => a.name.toLowerCase().includes(f)));
   }, [groups, q, domainFilter]);
 
-  const columns: LoomColumn<AttributeGroupDoc>[] = useMemo(() => [
-    { key: 'name', label: 'Group', width: 200, getValue: (g) => g.name, render: (g) => (
+  const columns: LoomColumn<AttributeGroup>[] = useMemo(() => [
+    { key: 'name', label: 'Group', width: 220, getValue: (g) => g.name, render: (g) => (
       <div><strong>{g.name}</strong>{g.description && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{g.description}</Caption1>}</div>
     ) },
     { key: 'attributes', label: 'Attributes', width: 90, getValue: (g) => g.attributes.length, render: (g) => <Badge appearance="tint" color="brand" size="small">{g.attributes.length}</Badge> },
-    { key: 'domains', label: 'Applies to', width: 240, sortable: false, render: (g) => (
-      g.domainIds.length === 0
+    { key: 'domains', label: 'Applies to', width: 280, sortable: false, render: (g) => (
+      !g.domainIds || g.domainIds.length === 0
         ? <Badge appearance="outline" color="informative" size="small">All domains</Badge>
         : <span className={s.attrMeta}>{g.domainIds.map((d) => <Badge key={d} appearance="tint" size="small">{domainName(d)}</Badge>)}</span>
     ) },
-    { key: 'createdBy', label: 'Created by', width: 160, render: (g) => <Caption1>{g.createdBy}</Caption1> },
     { key: 'actions', label: '', width: 150, sortable: false, filterable: false, render: (g) => (
       <span style={{ display: 'flex', gap: 4 }}>
         <Button size="small" appearance="subtle" icon={<Edit20Regular />} onClick={(e) => { e.stopPropagation(); openEdit(g); }} aria-label={`Edit ${g.name}`}>Edit</Button>
@@ -235,8 +242,9 @@ export default function AttributeGroupsPage() {
           <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' }} />
           <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
             Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.
-            Each attribute has a type (<strong>Text</strong>, <strong>Number</strong>, <strong>Date</strong>, or <strong>Single select</strong>),
-            an optional <strong>required</strong> flag, and (for single-select) a list of allowed values.
+            Each attribute has a field type (<strong>Text</strong>, <strong>Single choice</strong>, <strong>Multiple choice</strong>,
+            <strong> Date</strong>, <strong>Boolean</strong>, <strong>Integer</strong>, <strong>Double</strong>, or <strong>Rich text</strong>),
+            an optional <strong>required</strong> flag, and (for choice types) a list of allowed values.
             Scope a group to one or more <strong>domains</strong> — leave the scope empty to apply it to every domain.
             Required attributes appear on the Create wizard&apos;s <strong>Custom attributes</strong> step for items in those domains and
             block completion until they have a value. This is Loom&apos;s Azure-native equivalent of Purview Unified Catalog custom metadata —
@@ -260,7 +268,7 @@ export default function AttributeGroupsPage() {
         } />
         {loading && !error
           ? <Spinner label="Loading attribute groups…" />
-          : <LoomDataTable columns={columns} rows={filtered} getRowId={(g) => g.groupId} onRowClick={(g) => openEdit(g)} empty={q || domainFilter ? 'No groups match your filter.' : 'No attribute groups yet. Click "Add group" to define your first schema.'} ariaLabel="Attribute groups" />}
+          : <LoomDataTable columns={columns} rows={filtered} getRowId={(g) => g.id} onRowClick={(g) => openEdit(g)} empty={q || domainFilter ? 'No groups match your filter.' : 'No attribute groups yet. Click "Add group" to define your first schema.'} ariaLabel="Attribute groups" />}
       </Section>
 
       {/* Create-group dialog */}
@@ -313,7 +321,7 @@ export default function AttributeGroupsPage() {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Attributes ({draftAttrs.length})</Caption1>
-                    <Button size="small" appearance="secondary" icon={<Add24Regular />} onClick={() => setEditingAttr(emptyAttr(draftAttrs.length))} disabled={!!editingAttr}>Add attribute</Button>
+                    <Button size="small" appearance="secondary" icon={<Add24Regular />} onClick={() => setEditingAttr(emptyAttr())} disabled={!!editingAttr}>Add attribute</Button>
                   </div>
 
                   {draftAttrs.length === 0 && !editingAttr && (
@@ -329,9 +337,9 @@ export default function AttributeGroupsPage() {
                       <div className={s.attrMain}>
                         <span className={s.attrName}>{a.name || <em>(unnamed)</em>}</span>
                         <span className={s.attrMeta}>
-                          <Badge appearance="outline" size="small">{ATTRIBUTE_TYPE_LABELS[a.type]}</Badge>
+                          <Badge appearance="outline" size="small">{a.fieldType}</Badge>
                           {a.required && <Badge appearance="tint" color="danger" size="small">Required</Badge>}
-                          {a.type === 'enum' && a.enumValues && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.enumValues.join(', ')}</Caption1>}
+                          {CHOICE_FIELD_TYPES.includes(a.fieldType) && a.choices && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.choices.join(', ')}</Caption1>}
                         </span>
                       </div>
                       <Button size="small" appearance="subtle" icon={<Edit20Regular />} onClick={() => setEditingAttr(a)} aria-label={`Edit ${a.name}`} />
@@ -372,20 +380,22 @@ function AttributeEditor({ attr, isNew, onCancel, onSave, styles }: {
 }) {
   const [name, setName] = useState(attr.name);
   const [description, setDescription] = useState(attr.description || '');
-  const [type, setType] = useState<AttributeType>(attr.type);
-  const [required, setRequired] = useState(attr.required);
-  const [enumText, setEnumText] = useState((attr.enumValues || []).join('\n'));
+  const [fieldType, setFieldType] = useState<AttributeFieldType>(attr.fieldType);
+  const [required, setRequired] = useState(!!attr.required);
+  const [choicesText, setChoicesText] = useState((attr.choices || []).join('\n'));
   const [err, setErr] = useState<string | null>(null);
+
+  const isChoice = CHOICE_FIELD_TYPES.includes(fieldType);
 
   function save() {
     const trimmed = name.trim();
     if (!trimmed) { setErr('Attribute name is required'); return; }
-    let enumValues: string[] | undefined;
-    if (type === 'enum') {
-      enumValues = Array.from(new Set(enumText.split('\n').map((v) => v.trim()).filter(Boolean)));
-      if (enumValues.length === 0) { setErr('Single-select attributes need at least one value (one per line)'); return; }
+    let choices: string[] | undefined;
+    if (isChoice) {
+      choices = Array.from(new Set(choicesText.split('\n').map((v) => v.trim()).filter(Boolean)));
+      if (choices.length === 0) { setErr('Choice attributes need at least one value (one per line)'); return; }
     }
-    onSave({ ...attr, name: trimmed, description: description.trim() || undefined, type, required, enumValues });
+    onSave({ ...attr, name: trimmed, description: description.trim() || undefined, fieldType, required, choices });
   }
 
   return (
@@ -398,14 +408,14 @@ function AttributeEditor({ attr, isNew, onCancel, onSave, styles }: {
       <Field label="Description">
         <Input value={description} onChange={(_, d) => setDescription(d.value)} />
       </Field>
-      <Field label="Type" hint={isNew ? undefined : 'Type cannot change after an attribute is created.'}>
-        <Dropdown disabled={!isNew} value={ATTRIBUTE_TYPE_LABELS[type]} selectedOptions={[type]} onOptionSelect={(_, d) => setType((d.optionValue as AttributeType) || 'string')}>
-          {TYPE_OPTIONS.map((t) => <Option key={t} value={t}>{ATTRIBUTE_TYPE_LABELS[t]}</Option>)}
+      <Field label="Field type">
+        <Dropdown value={fieldType} selectedOptions={[fieldType]} onOptionSelect={(_, d) => setFieldType((d.optionValue as AttributeFieldType) || 'Text')}>
+          {ATTRIBUTE_FIELD_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
         </Dropdown>
       </Field>
-      {type === 'enum' && (
+      {isChoice && (
         <Field label="Allowed values" hint="One value per line.">
-          <Textarea value={enumText} onChange={(_, d) => setEnumText(d.value)} resize="vertical" placeholder={'Bronze\nSilver\nGold'} />
+          <Textarea value={choicesText} onChange={(_, d) => setChoicesText(d.value)} resize="vertical" placeholder={'Bronze\nSilver\nGold'} />
         </Field>
       )}
       <Checkbox checked={required} onChange={(_, d) => setRequired(!!d.checked)} label="Required — must have a value before an item can be created" />

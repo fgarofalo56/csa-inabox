@@ -1,199 +1,148 @@
 /**
- * /api/attribute-groups  (F17 — Custom attributes / Attribute groups)
+ * GET  /api/attribute-groups?domainId=<id>  — custom attribute-group SCHEMA for
+ *      the data-product wizard's "Custom attributes" page (page 3).
+ * POST /api/attribute-groups                 — upsert the tenant's attribute-group
+ *      schema (admin authoring; one doc per tenant).
  *
- * Admin-defined, per-domain attribute schemas that drive the Create wizard's
- * "Custom attributes" step and item Edit dialogs. Azure-native: stored in the
- * Cosmos `attribute-groups` container (PK /tenantId). No live Microsoft
- * Purview / Fabric account is required.
+ * What this is, in Purview terms
+ * ------------------------------------------------------------------------------
+ * In Microsoft Purview Unified Catalog, custom "business concept attributes" are
+ * defined by an admin under Catalog management > Custom metadata > Business
+ * concept attributes, scoped per governance domain. There is no GA Unified
+ * Catalog REST endpoint to read that schema, so Loom keeps the schema in its own
+ * Cosmos store (tenant-settings doc `attribute-groups:<tenantId>`) and the
+ * wizard renders a dynamic form from it. This is the Azure-native default — no
+ * Purview, no Fabric required. When the schema is empty the wizard simply shows
+ * "no custom attributes for this domain" and the create still works.
  *
- *   GET    /api/attribute-groups[?domain=<domainId>]
- *            List the tenant's attribute groups. When ?domain is supplied,
- *            return only groups that apply to that domain (domainIds includes
- *            it, OR the group is unscoped — domainIds empty = all domains).
- *   POST   /api/attribute-groups          body { name, description?, domainIds? }
- *            Create an empty group.
- *   PATCH  /api/attribute-groups?groupId=  body { name?, description?, domainIds?, attributes? }
- *            Update group metadata and/or replace the full attributes array
- *            (handles add / edit / delete / reorder — client sends the whole
- *            sorted array).
- *   DELETE /api/attribute-groups?groupId=
- *            Remove a group (and therefore its attributes) from all domains.
- *
- * All responses are { ok, ... } with proper HTTP status codes.
+ * Each attribute renders by `fieldType` exactly like the portal's per-type
+ * inputs (Text / Single choice / Multiple choice / Date / Boolean / Integer /
+ * Double / Rich text), grounded in:
+ *   https://learn.microsoft.com/purview/unified-catalog-attributes-business-concept
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { attributeGroupsContainer } from '@/lib/azure/cosmos-client';
-import {
-  type AttributeGroupDoc,
-  type AttributeDef,
-  type AttributeType,
-  ATTRIBUTE_TYPES,
-  kebab,
-  validateAttributes,
-} from '@/lib/types/attribute-groups';
+import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
+export type AttributeFieldType =
+  | 'Text'
+  | 'Single choice'
+  | 'Multiple choice'
+  | 'Date'
+  | 'Boolean'
+  | 'Integer'
+  | 'Double'
+  | 'Rich text';
+
+export interface AttributeDef {
+  id: string;
+  name: string;
+  description?: string;
+  fieldType: AttributeFieldType;
+  required?: boolean;
+  /** For Single/Multiple choice. */
+  choices?: string[];
 }
 
-/** Coerce an arbitrary client attribute payload into a clean AttributeDef. */
-function normalizeAttribute(a: any, index: number): AttributeDef {
-  const type = (a?.type ?? 'string') as AttributeType;
-  const def: AttributeDef = {
-    id: typeof a?.id === 'string' && a.id ? a.id : `attr-${Math.random().toString(36).slice(2, 10)}`,
-    name: (a?.name ?? '').toString().trim(),
-    description: a?.description ? a.description.toString() : undefined,
-    type: ATTRIBUTE_TYPES.includes(type) ? type : 'string',
-    required: !!a?.required,
-    order: typeof a?.order === 'number' ? a.order : index,
-  };
-  if (def.type === 'enum') {
-    const vals: string[] = Array.isArray(a?.enumValues) ? a.enumValues : [];
-    def.enumValues = Array.from(
-      new Set(vals.map((v) => (v ?? '').toString().trim()).filter(Boolean)),
-    );
+export interface AttributeGroup {
+  id: string;
+  name: string;
+  description?: string;
+  /** When set, the group only applies to these governance-domain ids. Empty/absent = all. */
+  domainIds?: string[];
+  attributes: AttributeDef[];
+}
+
+interface AttributeGroupsDoc {
+  id: string;
+  tenantId: string;
+  kind: 'attribute-groups';
+  groups: AttributeGroup[];
+  updatedAt: string;
+}
+
+function docId(tenantId: string) { return `attribute-groups:${tenantId}`; }
+
+async function loadDoc(tenantId: string): Promise<AttributeGroupsDoc | null> {
+  const c = await tenantSettingsContainer();
+  try {
+    const { resource } = await c.item(docId(tenantId), tenantId).read<AttributeGroupsDoc>();
+    return resource ?? null;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
   }
-  return def;
 }
 
 export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return err('unauthenticated', 401);
-  const tenantId = s.claims.oid;
-  const domain = req.nextUrl.searchParams.get('domain');
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const tenantId = session.claims.oid;
+  const domainId = req.nextUrl.searchParams.get('domainId') || '';
   try {
-    const c = await attributeGroupsContainer();
-    const { resources } = await c.items
-      .query<AttributeGroupDoc>({
-        query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name',
-        parameters: [{ name: '@t', value: tenantId }],
-      }, { partitionKey: tenantId })
-      .fetchAll();
-    // Normalize attribute ordering on read so the form is deterministic.
-    for (const g of resources) {
-      g.attributes = (g.attributes || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const doc = await loadDoc(tenantId);
+    if (!doc) {
+      return NextResponse.json({ ok: true, groups: [], source: 'cosmos', note: 'No custom attribute groups are defined for this tenant yet.' });
     }
-    const groups = domain
-      ? resources.filter((g) => (g.domainIds?.length ?? 0) === 0 || g.domainIds.includes(domain))
-      : resources;
-    return NextResponse.json({ ok: true, groups });
+    let groups = doc.groups || [];
+    // Filter to groups scoped to this domain (or unscoped/global groups).
+    if (domainId) {
+      groups = groups.filter((g) => !g.domainIds || g.domainIds.length === 0 || g.domainIds.includes(domainId));
+    }
+    return NextResponse.json({ ok: true, groups, source: 'cosmos', updatedAt: doc.updatedAt });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
+
+const VALID_FIELD_TYPES: AttributeFieldType[] = [
+  'Text', 'Single choice', 'Multiple choice', 'Date', 'Boolean', 'Integer', 'Double', 'Rich text',
+];
 
 export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return err('unauthenticated', 401);
-  const tenantId = s.claims.oid;
-  const who = s.claims.upn || s.claims.email || tenantId;
-  const body = await req.json().catch(() => ({}));
-  const name = (body?.name ?? '').toString().trim();
-  if (!name) return err('name is required', 400);
-  const domainIds = Array.isArray(body?.domainIds)
-    ? body.domainIds.map((d: any) => d.toString()).filter(Boolean)
-    : [];
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const tenantId = session.claims.oid;
+  let body: any;
+  try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
 
+  const rawGroups = Array.isArray(body?.groups) ? body.groups : null;
+  if (!rawGroups) return NextResponse.json({ ok: false, error: 'groups[] is required' }, { status: 400 });
+
+  // Normalize + validate the incoming schema (no free-form junk persisted).
+  const groups: AttributeGroup[] = rawGroups.map((g: any, gi: number) => ({
+    id: String(g?.id || `grp-${gi + 1}`),
+    name: String(g?.name || `Group ${gi + 1}`).trim(),
+    description: g?.description ? String(g.description) : undefined,
+    domainIds: Array.isArray(g?.domainIds) ? g.domainIds.map((d: any) => String(d)).filter(Boolean) : undefined,
+    attributes: (Array.isArray(g?.attributes) ? g.attributes : []).map((a: any, ai: number) => {
+      const fieldType: AttributeFieldType = VALID_FIELD_TYPES.includes(a?.fieldType) ? a.fieldType : 'Text';
+      return {
+        id: String(a?.id || `attr-${gi + 1}-${ai + 1}`),
+        name: String(a?.name || `Attribute ${ai + 1}`).trim(),
+        description: a?.description ? String(a.description) : undefined,
+        fieldType,
+        required: !!a?.required,
+        choices: Array.isArray(a?.choices) ? a.choices.map((c: any) => String(c)).filter(Boolean) : undefined,
+      };
+    }),
+  }));
+
+  const next: AttributeGroupsDoc = {
+    id: docId(tenantId),
+    tenantId,
+    kind: 'attribute-groups',
+    groups,
+    updatedAt: new Date().toISOString(),
+  };
   try {
-    const c = await attributeGroupsContainer();
-    const groupId = `${kebab(name)}-${Date.now().toString(36)}`;
-    const now = new Date().toISOString();
-    const doc: AttributeGroupDoc = {
-      id: `attr-group:${tenantId}:${groupId}`,
-      tenantId,
-      groupId,
-      name,
-      description: body?.description ? body.description.toString() : undefined,
-      domainIds,
-      attributes: [],
-      createdAt: now,
-      createdBy: who,
-      updatedAt: now,
-      updatedBy: who,
-    };
-    const { resource } = await c.items.create<AttributeGroupDoc>(doc);
-    return NextResponse.json({ ok: true, group: resource }, { status: 201 });
+    const c = await tenantSettingsContainer();
+    const { resource } = await c.items.upsert<AttributeGroupsDoc>(next);
+    return NextResponse.json({ ok: true, groups: resource?.groups || groups, updatedAt: next.updatedAt });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
-  }
-}
-
-export async function PATCH(req: NextRequest) {
-  const s = getSession();
-  if (!s) return err('unauthenticated', 401);
-  const tenantId = s.claims.oid;
-  const who = s.claims.upn || s.claims.email || tenantId;
-  const groupId = req.nextUrl.searchParams.get('groupId');
-  if (!groupId) return err('groupId query param required', 400);
-  const body = await req.json().catch(() => ({}));
-
-  try {
-    const c = await attributeGroupsContainer();
-    const docId = `attr-group:${tenantId}:${groupId}`;
-    let doc: AttributeGroupDoc | undefined;
-    try {
-      const read = await c.item(docId, tenantId).read<AttributeGroupDoc>();
-      doc = read.resource;
-    } catch (e: any) {
-      if (e?.code !== 404) throw e;
-    }
-    if (!doc) return err('group not found', 404);
-
-    if (body?.name !== undefined) {
-      const n = (body.name ?? '').toString().trim();
-      if (!n) return err('name cannot be empty', 400);
-      doc.name = n;
-    }
-    if (body?.description !== undefined) {
-      doc.description = body.description ? body.description.toString() : undefined;
-    }
-    if (body?.domainIds !== undefined) {
-      doc.domainIds = Array.isArray(body.domainIds)
-        ? body.domainIds.map((d: any) => d.toString()).filter(Boolean)
-        : [];
-    }
-    if (body?.attributes !== undefined) {
-      if (!Array.isArray(body.attributes)) return err('attributes must be an array', 400);
-      const existingById = new Map(doc.attributes.map((a) => [a.id, a]));
-      const normalized = body.attributes.map((a: any, i: number) => {
-        const n = normalizeAttribute(a, i);
-        // Type is immutable once an attribute exists — preserve the stored type.
-        const prev = existingById.get(n.id);
-        if (prev) n.type = prev.type;
-        return n;
-      });
-      const verr = validateAttributes(normalized);
-      if (verr) return err(verr, 400);
-      // Reassign contiguous order to keep the array canonical.
-      normalized.forEach((a: AttributeDef, i: number) => { a.order = i; });
-      doc.attributes = normalized;
-    }
-    doc.updatedAt = new Date().toISOString();
-    doc.updatedBy = who;
-    const { resource } = await c.item(docId, tenantId).replace<AttributeGroupDoc>(doc);
-    return NextResponse.json({ ok: true, group: resource });
-  } catch (e: any) {
-    return err(e?.message || String(e), 500);
-  }
-}
-
-export async function DELETE(req: NextRequest) {
-  const s = getSession();
-  if (!s) return err('unauthenticated', 401);
-  const tenantId = s.claims.oid;
-  const groupId = req.nextUrl.searchParams.get('groupId');
-  if (!groupId) return err('groupId query param required', 400);
-  try {
-    const c = await attributeGroupsContainer();
-    const docId = `attr-group:${tenantId}:${groupId}`;
-    await c.item(docId, tenantId).delete();
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    if (e?.code === 404) return err('group not found', 404);
-    return err(e?.message || String(e), 500);
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }

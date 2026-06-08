@@ -2,85 +2,101 @@
  * Custom Attributes / Attribute Groups (F17)
  * ------------------------------------------
  * Admin-defined, per-domain attribute schemas that drive the Create wizard's
- * "Custom attributes" step and item Edit dialogs. This is Loom's Azure-native
- * equivalent of Microsoft Purview Unified Catalog "Custom metadata" — business-
- * concept attributes scoped to governance domains. The schema is stored in
- * Cosmos (container `attribute-groups`, PK `/tenantId`); no live Purview
- * account is required for any of this to work.
+ * "Custom attributes" step, the data-product create wizard, and item Edit
+ * dialogs. This is Loom's Azure-native equivalent of Microsoft Purview Unified
+ * Catalog "Custom metadata" — business-concept attributes scoped to governance
+ * domains. The schema is stored in Cosmos as a single per-tenant document in
+ * the `tenant-settings` container (`attribute-groups:<tenantId>`); no live
+ * Purview / Fabric account is required for any of this to work.
+ *
+ * Field types mirror the Purview portal vocabulary exactly:
+ *   Text / Single choice / Multiple choice / Date / Boolean / Integer /
+ *   Double / Rich text
+ * grounded in
+ *   https://learn.microsoft.com/purview/unified-catalog-attributes-business-concept
  *
  * Purview rules Loom mirrors:
  *   - Every attribute belongs to an attribute group (no free-standing attrs).
  *   - A group's scope is the set of governance domains it applies to; an empty
- *     `domainIds` array means the group applies to ALL domains.
- *   - Attribute field types: Text (string) / Number (number) / Date (date) /
- *     Single-select (enum). Enum attributes carry their allowed values.
+ *     / absent `domainIds` means the group applies to ALL domains.
+ *   - Single/Multiple choice attributes carry their allowed `choices`.
  *   - Attributes within a group are ordered (UI reorder via ↑/↓).
- *   - An attribute's `type` cannot change after creation; name / description /
- *     enumValues / required / order can. (Loom relaxes Purview's create-time-
- *     only `required` because Loom owns the schema store.)
+ *
+ * The API route (`/api/attribute-groups`) imports these types so the route,
+ * the admin authoring UI, and the wizard consumers all share one schema.
  */
 
-export type AttributeType = 'string' | 'number' | 'date' | 'enum';
+export type AttributeFieldType =
+  | 'Text'
+  | 'Single choice'
+  | 'Multiple choice'
+  | 'Date'
+  | 'Boolean'
+  | 'Integer'
+  | 'Double'
+  | 'Rich text';
 
-export const ATTRIBUTE_TYPES: AttributeType[] = ['string', 'number', 'date', 'enum'];
+export const ATTRIBUTE_FIELD_TYPES: AttributeFieldType[] = [
+  'Text',
+  'Single choice',
+  'Multiple choice',
+  'Date',
+  'Boolean',
+  'Integer',
+  'Double',
+  'Rich text',
+];
 
-/** Human label for a field type — matches the Purview UI vocabulary. */
-export const ATTRIBUTE_TYPE_LABELS: Record<AttributeType, string> = {
-  string: 'Text',
-  number: 'Number',
-  date: 'Date',
-  enum: 'Single select',
-};
+/** Field types that require a non-empty `choices` list. */
+export const CHOICE_FIELD_TYPES: AttributeFieldType[] = ['Single choice', 'Multiple choice'];
 
 export interface AttributeDef {
-  /** Stable slug: `attr-${rand}`. Never changes once created. */
+  /** Stable slug, never changes once created. */
   id: string;
   name: string;
   description?: string;
-  type: AttributeType;
-  required: boolean;
-  /** Populated iff `type === 'enum'`; min 1 entry. */
-  enumValues?: string[];
-  /** 0-based; drives render order in the form. */
-  order: number;
+  fieldType: AttributeFieldType;
+  required?: boolean;
+  /** Populated for Single/Multiple choice; min 1 entry. */
+  choices?: string[];
 }
 
-export interface AttributeGroupDoc {
-  /** Cosmos id: `attr-group:${tenantId}:${groupId}`. */
+export interface AttributeGroup {
   id: string;
-  /** Partition key — all groups for a tenant live in one physical partition. */
-  tenantId: string;
-
-  /** Stable slug set at create (kebab-case), never changes. */
-  groupId: string;
   name: string;
   description?: string;
-  /** Domains this group applies to; empty array = all domains. */
-  domainIds: string[];
-
-  /** Ordered attribute definitions. */
+  /** Governance-domain ids this group applies to; empty/absent = all domains. */
+  domainIds?: string[];
   attributes: AttributeDef[];
+}
 
-  createdAt: string;
-  createdBy: string;
+/** The single per-tenant Cosmos document (in `tenant-settings`). */
+export interface AttributeGroupsDoc {
+  /** `attribute-groups:<tenantId>`. */
+  id: string;
+  /** Partition key. */
+  tenantId: string;
+  kind: 'attribute-groups';
+  groups: AttributeGroup[];
   updatedAt: string;
-  updatedBy: string;
 }
 
 /** kebab-case a display name for use as a stable slug. */
 export function kebab(s: string): string {
-  return s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'group';
+  return (
+    s
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'group'
+  );
 }
 
 /**
  * Validate a proposed attributes array. Returns an error string on the first
- * problem, or null when valid. Shared by the API route and the admin UI so
- * both enforce the same rules.
+ * problem, or null when valid. Shared by the admin UI and the route so both
+ * enforce the same rules (no free-form junk persisted).
  */
 export function validateAttributes(attrs: AttributeDef[]): string | null {
   const seen = new Set<string>();
@@ -88,11 +104,14 @@ export function validateAttributes(attrs: AttributeDef[]): string | null {
     if (!a || typeof a.name !== 'string' || !a.name.trim()) {
       return 'every attribute needs a name';
     }
-    if (!ATTRIBUTE_TYPES.includes(a.type)) {
-      return `invalid attribute type "${a.type}"`;
+    if (!ATTRIBUTE_FIELD_TYPES.includes(a.fieldType)) {
+      return `invalid attribute field type "${a.fieldType}"`;
     }
-    if (a.type === 'enum' && (!Array.isArray(a.enumValues) || a.enumValues.filter((v) => v.trim()).length === 0)) {
-      return `enum attribute "${a.name}" requires at least one value`;
+    if (CHOICE_FIELD_TYPES.includes(a.fieldType)) {
+      const vals = (a.choices || []).filter((v) => (v ?? '').trim());
+      if (vals.length === 0) {
+        return `choice attribute "${a.name}" requires at least one value`;
+      }
     }
     const key = a.name.trim().toLowerCase();
     if (seen.has(key)) return `duplicate attribute name "${a.name}"`;
@@ -104,10 +123,11 @@ export function validateAttributes(attrs: AttributeDef[]): string | null {
 /**
  * Resolve the list of required attribute names that are missing a value, given
  * the groups that apply to a domain and the current value map keyed by
- * attribute id. Used by the wizard to block completion.
+ * attribute id. Used by the wizards to block completion. A `false` Boolean is
+ * considered a filled value (matches the data-product wizard semantics).
  */
 export function missingRequiredAttributes(
-  groups: AttributeGroupDoc[],
+  groups: AttributeGroup[],
   values: Record<string, unknown>,
 ): string[] {
   const missing: string[] = [];
@@ -115,9 +135,12 @@ export function missingRequiredAttributes(
     for (const a of g.attributes) {
       if (!a.required) continue;
       const v = values[a.id];
-      if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) {
-        missing.push(a.name);
-      }
+      const empty =
+        v === undefined ||
+        v === null ||
+        (typeof v === 'string' && v.trim() === '') ||
+        (Array.isArray(v) && v.length === 0);
+      if (empty) missing.push(a.name);
     }
   }
   return missing;

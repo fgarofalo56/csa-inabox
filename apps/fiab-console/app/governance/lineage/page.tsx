@@ -20,15 +20,34 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Search24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import {
+  STATUS_LABEL, STATUS_COLOR, type PropagationStatus,
+} from '@/lib/governance/label-propagation';
 
+interface NodePropagation {
+  status: PropagationStatus;
+  currentLabel: string;
+  expectedLabel: string;
+  lastRunAt?: string;
+}
 interface Node {
   id: string; label: string; type: string; workspaceId: string;
   classifications?: string[]; sensitivity?: string;
+  propagation?: NodePropagation;
 }
 interface Edge { from: string; to: string; via: string; }
 interface WorkspaceNode { id: string; label: string; }
 
 interface LayoutNode extends Node { x: number; y: number; }
+
+/** SVG dot fill per propagation status — mirrors STATUS_COLOR Fluent tokens. */
+const PROP_DOT: Record<PropagationStatus, string> = {
+  'in-sync': '#0e700e',
+  pending: '#bc4b09',
+  overridden: '#0f6cbd',
+  unlabeled: '#8a8886',
+  'no-upstream': '#c8c6c4',
+};
 
 const useStyles = makeStyles({
   toolbar: {
@@ -147,6 +166,7 @@ function LineageInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<string>('');
+  const [propMeta, setPropMeta] = useState<{ source: string; lastRunAt: string | null; pending: number } | null>(null);
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Focus: when arriving from an item (e.g. OneLake → "View lineage"), scope the
@@ -170,6 +190,7 @@ function LineageInner() {
       setNodes(j.nodes || []);
       setEdges(j.edges || []);
       setSource(j.source || 'cosmos');
+      setPropMeta(j.propagation || null);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally { setLoading(false); }
@@ -251,6 +272,20 @@ function LineageInner() {
         <div className={s.spacer} />
         <Caption1 className={s.pill}>{filteredNodes.length} items</Caption1>
         <Caption1 className={s.pill}>{filteredEdges.length} edges</Caption1>
+        {propMeta && (
+          <Badge
+            appearance="tint"
+            color={propMeta.pending > 0 ? 'warning' : 'success'}
+            size="large"
+            title={
+              propMeta.lastRunAt
+                ? `Label propagation last ran ${new Date(propMeta.lastRunAt).toLocaleString()} (source: ${propMeta.source})`
+                : 'Label-propagation timer Function has not written state yet — status shown is computed live'
+            }
+          >
+            {propMeta.pending > 0 ? `${propMeta.pending} label propagation pending` : 'Labels in sync'}
+          </Badge>
+        )}
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
       </div>
 
@@ -326,6 +361,16 @@ function LineageInner() {
                     <text x={14} y={50} fontSize={10} fill="#999">
                       ws: {(wsNameById.get(n.workspaceId) || n.workspaceId).slice(0, 22)}
                     </text>
+                    {/* F15 — propagation status dot (top-right corner of the node). */}
+                    {n.propagation && (
+                      <circle cx={168} cy={12} r={5} fill={PROP_DOT[n.propagation.status]} stroke="#fff" strokeWidth={1}>
+                        <title>
+                          {STATUS_LABEL[n.propagation.status]}
+                          {n.propagation.expectedLabel ? ` — expected: ${n.propagation.expectedLabel}` : ''}
+                          {n.propagation.currentLabel ? ` · current: ${n.propagation.currentLabel}` : ''}
+                        </title>
+                      </circle>
+                    )}
                   </g>
                 );
               })}
@@ -343,12 +388,40 @@ function LineageInner() {
             <span style={{ marginLeft: 'auto' }}>Click a node to focus its lineage</span>
           </div>
 
+          <div className={s.legend} style={{ paddingTop: 0 }}>
+            <strong>Label propagation:</strong>
+            {(['in-sync', 'pending', 'overridden', 'unlabeled', 'no-upstream'] as PropagationStatus[]).map((st) => (
+              <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 10, height: 10, background: PROP_DOT[st], borderRadius: 999, display: 'inline-block' }} />
+                {STATUS_LABEL[st]}
+              </span>
+            ))}
+          </div>
+
           {selected && (
             <div className={s.detail}>
               <Subtitle2>{selected.label}</Subtitle2>
               <Caption1 style={{ display: 'block', marginBottom: 8 }}>
                 {selected.type} · workspace {wsNameById.get(selected.workspaceId) || selected.workspaceId} · rank {ranks.get(selected.id) ?? 0}
               </Caption1>
+              {selected.propagation && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <Badge appearance="filled" color={STATUS_COLOR[selected.propagation.status]} size="small">
+                    {STATUS_LABEL[selected.propagation.status]}
+                  </Badge>
+                  <Caption1>
+                    Current label: <strong>{selected.propagation.currentLabel || '—'}</strong>
+                    {selected.propagation.expectedLabel && (
+                      <> · Inherited (expected): <strong>{selected.propagation.expectedLabel}</strong></>
+                    )}
+                  </Caption1>
+                  {selected.propagation.lastRunAt && (
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      propagated {new Date(selected.propagation.lastRunAt).toLocaleString()}
+                    </Caption1>
+                  )}
+                </div>
+              )}
               <a
                 href={`/items/${selected.type}/${selected.id}`}
                 target="_blank"

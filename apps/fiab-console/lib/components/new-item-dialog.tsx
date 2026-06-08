@@ -35,7 +35,7 @@ import { Add24Regular, Search20Regular, ArrowLeft20Regular } from '@fluentui/rea
 import { createItem, getWorkspace } from '@/lib/api/workspaces';
 import { CustomAttributesForm, type AttributeValues } from '@/lib/components/wizard/custom-attributes-form';
 import {
-  type AttributeGroupDoc,
+  type AttributeGroup,
   missingRequiredAttributes,
 } from '@/lib/types/attribute-groups';
 import {
@@ -120,7 +120,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   // workspace's domain drives which admin-defined attribute groups apply.
   const [wsDomain, setWsDomain] = useState<string | null>(null);
   const [customAttrs, setCustomAttrs] = useState<AttributeValues>({});
-  const [attrGroups, setAttrGroups] = useState<AttributeGroupDoc[]>([]);
+  const [attrGroups, setAttrGroups] = useState<AttributeGroup[]>([]);
   const [showAttrValidation, setShowAttrValidation] = useState(false);
 
   // Resolve the workspace's domain once, so the Custom attributes step knows

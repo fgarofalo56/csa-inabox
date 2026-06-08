@@ -8,7 +8,7 @@
  *   - the Create wizard's "Custom attributes" step (page 3), and
  *   - item Edit dialogs for domain-scoped items.
  *
- * It fetches `GET /api/attribute-groups?domain=<domainId>` on mount / when the
+ * It fetches `GET /api/attribute-groups?domainId=<domainId>` on mount / when the
  * domain changes — no stale cache, so editing the schema in the admin surface
  * is reflected the next time the form opens. Returns `null` when there is no
  * domain or no group applies, so callers can render it unconditionally.
@@ -16,15 +16,19 @@
  * Required attributes render with the Fluent `required` asterisk and surface a
  * validation message when left empty. Use the exported `validateCustomAttributes`
  * (or the `missingRequiredAttributes` helper in lib/types) to block submit.
+ *
+ * Field types mirror the Microsoft Purview Unified Catalog portal vocabulary:
+ *   Text / Single choice / Multiple choice / Date / Boolean / Integer / Double /
+ *   Rich text.
  */
 
 import { useEffect, useState, useCallback } from 'react';
 import {
-  Field, Input, Dropdown, Option, Spinner, MessageBar, MessageBarBody,
-  Caption1, Body1, makeStyles, tokens,
+  Field, Input, Textarea, Checkbox, Dropdown, Option, Spinner,
+  MessageBar, MessageBarBody, Caption1, Body1, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  type AttributeGroupDoc,
+  type AttributeGroup,
   type AttributeDef,
   missingRequiredAttributes,
 } from '@/lib/types/attribute-groups';
@@ -55,12 +59,12 @@ interface Props {
   /** Surfaced after a failed submit so required fields highlight. */
   showValidation?: boolean;
   /** Called once the schema loads so callers can validate before submit. */
-  onGroupsLoaded?: (groups: AttributeGroupDoc[]) => void;
+  onGroupsLoaded?: (groups: AttributeGroup[]) => void;
 }
 
 /** Pure validation helper for callers that hold the loaded groups. */
 export function validateCustomAttributes(
-  groups: AttributeGroupDoc[],
+  groups: AttributeGroup[],
   values: AttributeValues,
 ): string[] {
   return missingRequiredAttributes(groups, values);
@@ -70,7 +74,7 @@ export function CustomAttributesForm({
   domainId, value, onChange, readOnly, showValidation, onGroupsLoaded,
 }: Props) {
   const styles = useStyles();
-  const [groups, setGroups] = useState<AttributeGroupDoc[] | null>(null);
+  const [groups, setGroups] = useState<AttributeGroup[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,12 +83,12 @@ export function CustomAttributesForm({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/attribute-groups?domain=${encodeURIComponent(domainId)}`)
+    fetch(`/api/attribute-groups?domainId=${encodeURIComponent(domainId)}`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
         if (!j.ok) { setError(j.error || 'failed to load attribute schema'); setGroups([]); return; }
-        const g: AttributeGroupDoc[] = (j.groups || []).filter((x: AttributeGroupDoc) => (x.attributes?.length ?? 0) > 0);
+        const g: AttributeGroup[] = (j.groups || []).filter((x: AttributeGroup) => (x.attributes?.length ?? 0) > 0);
         setGroups(g);
         onGroupsLoaded?.(g);
       })
@@ -119,7 +123,7 @@ export function CustomAttributesForm({
   return (
     <div className={styles.root}>
       {groups.map((g) => (
-        <div key={g.groupId} className={styles.group}>
+        <div key={g.id} className={styles.group}>
           <div className={styles.groupHead}>
             <Caption1 className={styles.groupTitle}>{g.name}</Caption1>
             {g.description && (
@@ -151,39 +155,84 @@ function AttributeField({
   readOnly?: boolean;
   showValidation?: boolean;
 }) {
-  const empty = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+  const empty =
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0);
   const invalid = !!(showValidation && attr.required && empty);
   const validationMessage = invalid ? `${attr.name} is required` : undefined;
-  const sVal = value === undefined || value === null ? '' : String(value);
+  const sVal = typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
 
-  return (
-    <Field
-      label={attr.name}
-      required={attr.required}
-      hint={attr.description}
-      validationState={invalid ? 'error' : 'none'}
-      validationMessage={validationMessage}
-    >
-      {attr.type === 'enum' ? (
-        <Dropdown
-          disabled={readOnly}
-          placeholder={`Select ${attr.name.toLowerCase()}`}
-          selectedOptions={sVal ? [sVal] : []}
-          value={sVal}
-          onOptionSelect={(_, d) => onChange(d.optionValue ?? '')}
-        >
-          {(attr.enumValues || []).map((ev) => (
-            <Option key={ev} value={ev}>{ev}</Option>
-          ))}
-        </Dropdown>
-      ) : (
-        <Input
-          disabled={readOnly}
-          type={attr.type === 'number' ? 'number' : attr.type === 'date' ? 'date' : 'text'}
-          value={sVal}
-          onChange={(_, d) => onChange(d.value)}
-        />
-      )}
-    </Field>
-  );
+  const common = {
+    label: attr.name,
+    required: attr.required,
+    hint: attr.description,
+    validationState: invalid ? ('error' as const) : ('none' as const),
+    validationMessage,
+  };
+
+  switch (attr.fieldType) {
+    case 'Boolean':
+      return (
+        <Field {...common}>
+          <Checkbox disabled={readOnly} checked={value === true} onChange={(_, d) => onChange(!!d.checked)} label="Yes" />
+        </Field>
+      );
+    case 'Date':
+      return (
+        <Field {...common}>
+          <Input disabled={readOnly} type="date" value={sVal} onChange={(_, d) => onChange(d.value)} />
+        </Field>
+      );
+    case 'Integer':
+    case 'Double':
+      return (
+        <Field {...common}>
+          <Input disabled={readOnly} type="number" value={sVal} onChange={(_, d) => onChange(d.value)} />
+        </Field>
+      );
+    case 'Rich text':
+      return (
+        <Field {...common}>
+          <Textarea disabled={readOnly} value={sVal} onChange={(_, d) => onChange(d.value)} resize="vertical" />
+        </Field>
+      );
+    case 'Single choice':
+      return (
+        <Field {...common}>
+          <Dropdown
+            disabled={readOnly}
+            placeholder={`Select ${attr.name.toLowerCase()}`}
+            selectedOptions={sVal ? [sVal] : []}
+            value={sVal}
+            onOptionSelect={(_, d) => onChange(d.optionValue ?? '')}
+          >
+            {(attr.choices || []).map((c) => (<Option key={c} value={c}>{c}</Option>))}
+          </Dropdown>
+        </Field>
+      );
+    case 'Multiple choice':
+      return (
+        <Field {...common}>
+          <Dropdown
+            multiselect
+            disabled={readOnly}
+            placeholder={`Select ${attr.name.toLowerCase()}`}
+            selectedOptions={Array.isArray(value) ? (value as string[]) : []}
+            value={Array.isArray(value) ? (value as string[]).join(', ') : ''}
+            onOptionSelect={(_, d) => onChange(d.selectedOptions)}
+          >
+            {(attr.choices || []).map((c) => (<Option key={c} value={c}>{c}</Option>))}
+          </Dropdown>
+        </Field>
+      );
+    case 'Text':
+    default:
+      return (
+        <Field {...common}>
+          <Input disabled={readOnly} value={sVal} onChange={(_, d) => onChange(d.value)} />
+        </Field>
+      );
+  }
 }
