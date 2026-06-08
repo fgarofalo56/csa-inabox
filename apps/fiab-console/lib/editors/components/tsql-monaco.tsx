@@ -212,12 +212,19 @@ export interface TsqlMonacoProps {
   /** Show the New-query template split button (default true). */
   showNewQuery?: boolean;
   busy?: boolean;
+  /**
+   * Optional chained editor-ready callback. Fires AFTER TsqlMonaco wires its
+   * own IntelliSense/snippet providers, so a consumer (e.g. the SQL Copilot
+   * ghost-text + selection capture) can attach to the SAME Monaco editor.
+   */
+  onReady?: (editor: any, monaco: any) => void;
 }
 
 export function TsqlMonaco({
   value, onChange, onRun,
   server = '', database = '', itemId = '', workspaceId = '',
   height = 240, readOnly = false, showNewQuery = true, busy = false,
+  onReady: onReadyExternal,
 }: TsqlMonacoProps) {
   const s = useStyles();
   const editorRef = useRef<any>(null);
@@ -337,7 +344,11 @@ export function TsqlMonaco({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => doRunRef.current());
     // F1 command palette (built-in; wired explicitly so it works inside the cell).
     editor.addCommand(monaco.KeyCode.F1, () => editor.getAction('editor.action.quickCommand')?.run());
-  }, [fetchColumns]);
+
+    // Let a consumer (SQL Copilot ghost-text + selection capture) attach to the
+    // same editor after our own providers are wired.
+    onReadyExternal?.(editor, monaco);
+  }, [fetchColumns, onReadyExternal]);
 
   const insertTemplate = useCallback((group: CreatableGroup) => {
     onChange(CREATE_TEMPLATES[group]);
