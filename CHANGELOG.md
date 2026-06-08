@@ -25,6 +25,54 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.27.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.26.0...csa-inabox-v0.27.0) (2026-06-08)
+
+
+### Features
+
+* **csa-loom:** batch labeling — bulk sensitivity labels (Cosmos + Purview + opt-in Power BI) ([#884](https://github.com/fgarofalo56/csa-inabox/issues/884)) ([7b7d155](https://github.com/fgarofalo56/csa-inabox/commit/7b7d155f13a087cf760df67a91115b1cd210b23e))
+* **csa-loom:** bulk import data products via CSV flyout + polled job monitor ([#898](https://github.com/fgarofalo56/csa-inabox/issues/898)) ([a7fc93d](https://github.com/fgarofalo56/csa-inabox/commit/a7fc93df22b16e390038ad02d6dbca93be427271))
+* **csa-loom:** catalog Explore upgrade — live domains, AI Search facets, discoverable items (F1) ([#877](https://github.com/fgarofalo56/csa-inabox/issues/877)) ([0c4ce02](https://github.com/fgarofalo56/csa-inabox/commit/0c4ce02d76e3f616e230a045dd8d6eec9f574299))
+* **csa-loom:** custom attributes / attribute groups admin (F17) ([#907](https://github.com/fgarofalo56/csa-inabox/issues/907)) ([318de92](https://github.com/fgarofalo56/csa-inabox/commit/318de92f913c64fa24be9aca56c9497bd8ee40eb))
+* **csa-loom:** data marketplace consumer discovery (F14/F18) ([#912](https://github.com/fgarofalo56/csa-inabox/issues/912)) ([6885d5d](https://github.com/fgarofalo56/csa-inabox/commit/6885d5d2061b23f8065f2f3296fff73d12c2094c))
+* **csa-loom:** data product creation wizard (Purview Unified Catalog parity) ([#896](https://github.com/fgarofalo56/csa-inabox/issues/896)) ([84d2349](https://github.com/fgarofalo56/csa-inabox/commit/84d234989e09480d6206e54d03f4d20678a7afe4))
+* **csa-loom:** Data Product Edit Dialog + Endorse (Marketplace F4, F7) ([#901](https://github.com/fgarofalo56/csa-inabox/issues/901)) ([cb7ebd6](https://github.com/fgarofalo56/csa-inabox/commit/cb7ebd6f15c8212eb10fd077213d417035b0222e))
+* **csa-loom:** data product owner details page (F3) — Cosmos-backed read view ([#904](https://github.com/fgarofalo56/csa-inabox/issues/904)) ([26aec30](https://github.com/fgarofalo56/csa-inabox/commit/26aec30e0bedae170b5802af199e8392f79634a8))
+* **csa-loom:** data-product inline attribute panels — Update frequency + Terms of use + Documentation (F5/F11/F12) ([#893](https://github.com/fgarofalo56/csa-inabox/issues/893)) ([30a826c](https://github.com/fgarofalo56/csa-inabox/commit/30a826c5305ad8a2234e463126534c97fbc29a80))
+* **csa-loom:** data-product Linked resources — glossary terms + OKRs + CDEs (F10) ([#908](https://github.com/fgarofalo56/csa-inabox/issues/908)) ([7b18ac0](https://github.com/fgarofalo56/csa-inabox/commit/7b18ac0fa8bf900f8e34c51e1d41e247015920a5))
+* **csa-loom:** data-product observability tab + DQ score gauge + health actions (F19/F20) ([#910](https://github.com/fgarofalo56/csa-inabox/issues/910)) ([bbfa01b](https://github.com/fgarofalo56/csa-inabox/commit/bbfa01b8fca0fef46322bafe01511ec84e8a6609))
+* **csa-loom:** data-product publish/unpublish/expire lifecycle (F6) ([#900](https://github.com/fgarofalo56/csa-inabox/issues/900)) ([f1de99e](https://github.com/fgarofalo56/csa-inabox/commit/f1de99e73093a8473bd40ce693010283ddfdf5f4))
+* **csa-loom:** DataProductStore interface + Cosmos default adapter (replace data-product honest-gates) ([#888](https://github.com/fgarofalo56/csa-inabox/issues/888)) ([e9cd0d1](https://github.com/fgarofalo56/csa-inabox/commit/e9cd0d1145a95055dda58a47f7c8ed8cce8004a0))
+* **csa-loom:** DLP policies + violations, tips, trigger-scan, restrict-access (F22) ([#885](https://github.com/fgarofalo56/csa-inabox/issues/885)) ([90b7d2a](https://github.com/fgarofalo56/csa-inabox/commit/90b7d2accabca78702b6cedbf77027e9d0055d4f))
+* **csa-loom:** Domains F4 — settings side-pane (6 tabs), image gallery, assign-workspaces, governance view ([#889](https://github.com/fgarofalo56/csa-inabox/issues/889)) ([85d5065](https://github.com/fgarofalo56/csa-inabox/commit/85d5065f7dfa01091d3a2d10d26afe9adfa50c2b))
+* **csa-loom:** export protection + protected/label-based access control (F19/F20/F21) ([#913](https://github.com/fgarofalo56/csa-inabox/issues/913)) ([f491a54](https://github.com/fgarofalo56/csa-inabox/commit/f491a54535d76abd7a6ff87b2e158974e6be5cdb))
+* **csa-loom:** F13 precondition-gated delete for data products ([#905](https://github.com/fgarofalo56/csa-inabox/issues/905)) ([79a9845](https://github.com/fgarofalo56/csa-inabox/commit/79a9845ec24f8abab0bed58e94b8aa1d9df0d290))
+* **csa-loom:** F15 consumer data-product view + purpose-bound request access ([#903](https://github.com/fgarofalo56/csa-inabox/issues/903)) ([699d4fc](https://github.com/fgarofalo56/csa-inabox/commit/699d4fca3de0f194015233b825b2ec4fddeddacd))
+* **csa-loom:** F16 access-request approval workflow + real RBAC grant ([#909](https://github.com/fgarofalo56/csa-inabox/issues/909)) ([b5b1f73](https://github.com/fgarofalo56/csa-inabox/commit/b5b1f73eb6cd5d0f4eaf0902564b788d7803496b))
+* **csa-loom:** F21 publish data product as consumable APIM API ([#899](https://github.com/fgarofalo56/csa-inabox/issues/899)) ([46a3f7d](https://github.com/fgarofalo56/csa-inabox/commit/46a3f7dc166977ed8bbea5c9ea7230754981d9e4))
+* **csa-loom:** F4 governance domains — Cosmos CRUD + Purview mirror, opt-in Fabric Admin ([#880](https://github.com/fgarofalo56/csa-inabox/issues/880)) ([50d7ec8](https://github.com/fgarofalo56/csa-inabox/commit/50d7ec8d3a432a0dbfff8fe217883aff6404e20b))
+* **csa-loom:** F5 workspace roles & Manage Access — Cosmos + Azure RBAC mirror ([#883](https://github.com/fgarofalo56/csa-inabox/issues/883)) ([1d20734](https://github.com/fgarofalo56/csa-inabox/commit/1d207347e220977b11ebcee7c2e7f026e3213590))
+* **csa-loom:** F8 Manage Policies — data-product access-policy editor ([#911](https://github.com/fgarofalo56/csa-inabox/issues/911)) ([06a8f2a](https://github.com/fgarofalo56/csa-inabox/commit/06a8f2a89fdf2b73ddc426682c401a383dd9f012))
+* **csa-loom:** F8 OneLake RLS WHERE-predicate editor ([#892](https://github.com/fgarofalo56/csa-inabox/issues/892)) ([7028310](https://github.com/fgarofalo56/csa-inabox/commit/7028310424a62dde25f74d99e47839b01d9a496c))
+* **csa-loom:** F9 add/remove data assets on data products (Purview Data Map) ([#902](https://github.com/fgarofalo56/csa-inabox/issues/902)) ([462337e](https://github.com/fgarofalo56/csa-inabox/commit/462337e169fe59d08acb06b1608400bba0648118))
+* **csa-loom:** Govern tab Admin view (F2) — posture tiles, Copilot, embedded report ([#895](https://github.com/fgarofalo56/csa-inabox/issues/895)) ([aab1616](https://github.com/fgarofalo56/csa-inabox/commit/aab1616a4ec91e0f66ba4b3bd99aa48311aeea47))
+* **csa-loom:** Govern tab data-owner view (F3) — My-items posture, on-open refresh ([#894](https://github.com/fgarofalo56/csa-inabox/issues/894)) ([4465a4b](https://github.com/fgarofalo56/csa-inabox/commit/4465a4be14089e4d90c0fbac37665f57683d8fdc))
+* **csa-loom:** item-level permissions & sharing (F6) — Azure-native default ([#886](https://github.com/fgarofalo56/csa-inabox/issues/886)) ([3556c37](https://github.com/fgarofalo56/csa-inabox/commit/3556c37f387786831416d4bf49afcf70c6dd78fe))
+* **csa-loom:** OneLake column-level security (CLS) — hidden-column editor (F9) ([#878](https://github.com/fgarofalo56/csa-inabox/issues/878)) ([b17f915](https://github.com/fgarofalo56/csa-inabox/commit/b17f9155010b5147a61cad463c777adeb247143a))
+* **csa-loom:** OneLake Security tab + role wizard (F7) — Azure-native ADLS ACL backend ([#891](https://github.com/fgarofalo56/csa-inabox/issues/891)) ([4c4de06](https://github.com/fgarofalo56/csa-inabox/commit/4c4de06623d479225bbd7916dab282c67f59d037))
+* **csa-loom:** Purview Unified Catalog opt-in data-product adapter + Settings backend indicator (F22) ([#906](https://github.com/fgarofalo56/csa-inabox/issues/906)) ([4c15f9e](https://github.com/fgarofalo56/csa-inabox/commit/4c15f9ee443c524aab3f44439ffba85d0b43a04b))
+* **csa-loom:** reusable Graph identity picker (user/group/SPN + nested groups) ([#881](https://github.com/fgarofalo56/csa-inabox/issues/881)) ([3fa0681](https://github.com/fgarofalo56/csa-inabox/commit/3fa06819eaa32d4365c49c1f9d9f1f82722955f8))
+* **csa-loom:** sensitivity-label flyout (F12) + live Graph taxonomy ([#879](https://github.com/fgarofalo56/csa-inabox/issues/879)) ([e42e247](https://github.com/fgarofalo56/csa-inabox/commit/e42e24704d71e5e0a27e87113562809fc4ae6027))
+* **csa-loom:** sensitivity-label inheritance + downstream propagation (F15/F16/F17) ([#897](https://github.com/fgarofalo56/csa-inabox/issues/897)) ([e7600a0](https://github.com/fgarofalo56/csa-inabox/commit/e7600a04492af117fab69c9dafb5ad2f95040f76))
+* **csa-loom:** shared cloud-endpoints resolver for governance clients ([#876](https://github.com/fgarofalo56/csa-inabox/issues/876)) ([af12dc0](https://github.com/fgarofalo56/csa-inabox/commit/af12dc059962347170ae5ce56723fb9f1f4988b8))
+* **csa-loom:** SQL endpoint data-access mode — delegated vs user's identity (F10) ([#882](https://github.com/fgarofalo56/csa-inabox/issues/882)) ([0a3f409](https://github.com/fgarofalo56/csa-inabox/commit/0a3f4097252a53e453b931e69d76a3b1c58f65b6))
+* **csa-loom:** SQL granular security wizards — GRANT/RLS/DDM over TDS (F11) ([#887](https://github.com/fgarofalo56/csa-inabox/issues/887)) ([2a70a75](https://github.com/fgarofalo56/csa-inabox/commit/2a70a75d8c8ce8c9392ea1abc6bbc6b29a6eafe0))
+
+
+### Documentation
+
+* **csa-loom:** per-surface parity docs for the 9 built Governance surfaces + scorecard ([#890](https://github.com/fgarofalo56/csa-inabox/issues/890)) ([e59c554](https://github.com/fgarofalo56/csa-inabox/commit/e59c5547e75c7d0595f74502f4b737513950d6d3))
+
 ## [0.26.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.25.0...csa-inabox-v0.26.0) (2026-06-07)
 
 
