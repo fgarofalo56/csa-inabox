@@ -94,6 +94,9 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const existingId = (state.purviewDataProductId as string) || undefined;
   const payload: PurviewDataProductPayload = {
     id: existingId,
+    // tenantId is the partition key for the Azure-native Cosmos DataProductStore
+    // (the DEFAULT backend). It is ignored by the opt-in unified-catalog adapter.
+    tenantId: session.claims.oid,
     displayName: displayName.trim(),
     description: description || undefined,
     domain: domain.trim(),

@@ -1,30 +1,54 @@
 """Azure Function: CSA Loom Govern posture-refresh.
 
-Pre-computes the Govern -> Admin view (F2) posture aggregates per tenant and
-upserts one document per tenant into the Cosmos `posture-aggregates` container
-(id = ``posture:{tenantId}``, PK ``/tenantId``). The Console BFF
-(``/api/governance/govern/posture``) reads this fast-path doc and surfaces its
-freshness via ``precomputedAt`` while still computing the live values inline.
+This single Function App serves BOTH Govern posture pre-compute paths:
 
-Triggers:
-- TimerTrigger every 5 minutes (``0 */5 * * * *``).
-- HttpTrigger ``GET /api/posture-refresh`` for on-demand refresh.
+Admin view (F2) — tenant-scoped
+  A TimerTrigger (every 5 min) and an on-demand HTTP GET
+  (``/api/posture-refresh-admin``) pre-compute one document per tenant into the
+  Cosmos ``posture-aggregates-admin`` container (id = ``posture:{tenantId}``,
+  PK ``/tenantId``). The Console BFF (``/api/governance/govern/posture``) reads
+  this fast-path doc and surfaces its freshness via ``precomputedAt`` while still
+  computing the live values inline. MIP/DLP/Purview enrichment runs live in the
+  BFF; the Function pre-computes the Cosmos estate + trust/reuse aggregates that
+  dominate read latency.
 
-Backend: Cosmos DB only (Azure-native, no Microsoft Fabric dependency). The
-richer MIP/DLP/Purview enrichment runs in the Console BFF on the live path; the
-Function pre-computes the Cosmos estate + trust/reuse aggregates that dominate
-read latency.
+Data-owner view (F3) — owner-scoped
+  An HTTP POST (``/api/posture-refresh``) recomputes one signed-in owner's
+  governance coverage (label / description / endorsement) and UPSERTs it into the
+  owner-partitioned ``posture-aggregates`` + ``recommended-actions`` containers
+  (id == PK == ownerId). Dispatched fire-and-forget by the Console BFF
+  (``/api/governance/govern/refresh``) on tab-open.
 
-Auth: ``DefaultAzureCredential`` (the Function's user-assigned managed identity
-in production; ``az login`` locally). The MI must hold the Cosmos DB Built-in
-Data Contributor role at account scope.
+Backend: Cosmos DB only (Azure-native, no Microsoft Fabric dependency).
+
+Auth
+  - HTTP: Function-level key (``x-functions-key``), surfaced to the BFF via the
+    ``LOOM_POSTURE_FUNCTION_KEY`` app setting (secretRef). ``/api/health`` is
+    anonymous.
+  - Cosmos: ``DefaultAzureCredential`` (the Function App's managed identity in
+    production; ``az login`` locally). The MI holds the Cosmos DB Built-in Data
+    Contributor role at account scope (granted in ``deploy/main.bicep``).
+
+Cross-owner isolation (F3)
+  ``ownerId`` / ``ownerUpn`` arrive in the request body, but the BFF derives them
+  from the validated session cookie — the browser never sets them. The owner item
+  query filters server-side on the caller's UPN and the aggregate doc is keyed
+  (id == PK == ownerId) on the owner OID, so one owner's posture can never be
+  written to or read from another owner's partition.
+
+Per-cloud
+  ``LOOM_COSMOS_ENDPOINT`` is resolved per boundary by admin-plane/main.bicep
+  (documents.azure.com for Commercial/GCC, documents.azure.us for GCC-High/IL5),
+  so no cloud-specific logic is needed here.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
@@ -33,7 +57,15 @@ from azure.identity import DefaultAzureCredential
 
 app = func.FunctionApp()
 
+logger = logging.getLogger("loom.posture_refresh")
+
 _THIRTY_DAYS = _dt.timedelta(days=30)
+_ENDORSED = ("Certified", "Promoted")
+
+
+# ===========================================================================
+# Admin view (F2) — tenant-scoped pre-compute → posture-aggregates-admin
+# ===========================================================================
 
 
 def _client() -> CosmosClient:
@@ -170,7 +202,7 @@ def _refresh_all() -> int:
     client = _client()
     db = _db(client)
     ws = db.get_container_client("workspaces")
-    posture = db.get_container_client("posture-aggregates")
+    posture = db.get_container_client("posture-aggregates-admin")
 
     tenant_rows = list(
         ws.query_items(
@@ -197,8 +229,8 @@ def posture_refresh_timer(timer: func.TimerRequest) -> None:  # noqa: ARG001
     logging.info("posture-refresh (timer): refreshed %d tenant(s)", n)
 
 
-@app.route(route="posture-refresh", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
-def posture_refresh_http(req: func.HttpRequest) -> func.HttpResponse:  # noqa: ARG001
+@app.route(route="posture-refresh-admin", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def posture_refresh_admin_http(req: func.HttpRequest) -> func.HttpResponse:  # noqa: ARG001
     try:
         n = _refresh_all()
         return func.HttpResponse(
@@ -207,9 +239,141 @@ def posture_refresh_http(req: func.HttpRequest) -> func.HttpResponse:  # noqa: A
             status_code=200,
         )
     except Exception as exc:  # noqa: BLE001
-        logging.exception("posture-refresh (http) failed")
+        logging.exception("posture-refresh-admin (http) failed")
         return func.HttpResponse(
             f'{{"ok": false, "error": "{exc}"}}',
             mimetype="application/json",
             status_code=500,
         )
+
+
+# ===========================================================================
+# Data-owner view (F3) — owner-scoped on-demand → posture-aggregates
+# ===========================================================================
+
+
+def _cosmos_client() -> CosmosClient:
+    endpoint = os.environ["LOOM_COSMOS_ENDPOINT"]
+    cred = DefaultAzureCredential()
+    return CosmosClient(endpoint, credential=cred)
+
+
+def _json(payload: dict, status: int = 200) -> func.HttpResponse:
+    return func.HttpResponse(json.dumps(payload), status_code=status, mimetype="application/json")
+
+
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(req: func.HttpRequest) -> func.HttpResponse:  # noqa: ARG001
+    return _json({"ok": True, "service": "posture-refresh"})
+
+
+@app.route(route="posture-refresh", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def posture_refresh(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except ValueError:
+        return _json({"ok": False, "error": "invalid json body"}, 400)
+
+    scope = (body or {}).get("scope", "owner")
+    if scope == "owner":
+        return _refresh_owner(body)
+    # Tenant scope is owned by the admin Govern view (F2), served by the
+    # TimerTrigger + /api/posture-refresh-admin path above.
+    return _json({"ok": False, "error": "unsupported scope; only 'owner' is implemented"}, 400)
+
+
+def _refresh_owner(body: dict) -> func.HttpResponse:
+    owner_id = (body or {}).get("ownerId", "")
+    owner_upn = (body or {}).get("ownerUpn", "")
+    if not owner_id or not owner_upn:
+        return _json({"ok": False, "error": "missing ownerId or ownerUpn"}, 400)
+
+    try:
+        client = _cosmos_client()
+        db = client.get_database_client(os.environ.get("LOOM_COSMOS_DATABASE", "loom"))
+        items_c = db.get_container_client("items")
+        ws_c = db.get_container_client("workspaces")
+        agg_c = db.get_container_client("posture-aggregates")
+        rec_c = db.get_container_client("recommended-actions")
+
+        # Workspaces for this tenant (Loom convention: workspace.tenantId is the
+        # tenant root that owns the owner OID's data plane).
+        ws_ids = [
+            w["id"]
+            for w in ws_c.query_items(
+                query="SELECT c.id FROM c WHERE c.tenantId = @t",
+                parameters=[{"name": "@t", "value": owner_id}],
+                partition_key=owner_id,
+            )
+        ]
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        owner_items = []
+        if ws_ids:
+            owner_items = list(
+                items_c.query_items(
+                    query=(
+                        "SELECT c.id, c.itemType, c.displayName, c.state, c.createdBy FROM c "
+                        "WHERE ARRAY_CONTAINS(@w, c.workspaceId) "
+                        "AND (c.state.ownerUpn = @upn OR c.state.contact = @upn "
+                        "OR c.state.steward = @upn OR c.createdBy = @upn)"
+                    ),
+                    parameters=[
+                        {"name": "@w", "value": ws_ids},
+                        {"name": "@upn", "value": owner_upn},
+                    ],
+                    enable_cross_partition_query=True,
+                )
+            )
+
+        total = len(owner_items)
+
+        def _state(i: dict) -> dict:
+            return i.get("state") or {}
+
+        def _endorsed(i: dict) -> bool:
+            st = _state(i)
+            return st.get("endorsement") in _ENDORSED or st.get("certified") is True
+
+        labeled = sum(1 for i in owner_items if _state(i).get("sensitivityLabel"))
+        described = sum(1 for i in owner_items if _state(i).get("description"))
+        endorsed = sum(1 for i in owner_items if _endorsed(i))
+
+        def pct(n: int) -> int:
+            return round(100 * n / total) if total > 0 else 0
+
+        agg_doc = {
+            "id": owner_id,
+            "ownerId": owner_id,
+            "totalItems": total,
+            "labelCoveragePct": pct(labeled),
+            "descriptionCoveragePct": pct(described),
+            "endorsementCoveragePct": pct(endorsed),
+            "computedAt": now,
+        }
+        agg_c.upsert_item(agg_doc)
+
+        def _action(i: dict, issue: str) -> dict:
+            return {
+                "id": i.get("id"),
+                "displayName": i.get("displayName"),
+                "itemType": i.get("itemType"),
+                "issue": issue,
+            }
+
+        rec_doc = {
+            "id": owner_id,
+            "ownerId": owner_id,
+            "unlabeled": [_action(i, "no_label") for i in owner_items if not _state(i).get("sensitivityLabel")][:8],
+            "undescribed": [_action(i, "no_description") for i in owner_items if not _state(i).get("description")][:8],
+            "unendorsed": [_action(i, "no_endorsement") for i in owner_items if not _endorsed(i)][:8],
+            "computedAt": now,
+        }
+        rec_c.upsert_item(rec_doc)
+
+        logger.info("posture-refresh owner=%s items=%d", owner_upn, total)
+        return _json({"ok": True, "scope": "owner", "kpis": agg_doc})
+    except Exception as exc:  # noqa: BLE001 — surface as 500 with message
+        logger.exception("posture-refresh failed")
+        return _json({"ok": False, "error": str(exc)}, 500)

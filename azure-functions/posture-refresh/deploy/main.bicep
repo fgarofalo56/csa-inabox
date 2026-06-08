@@ -1,51 +1,62 @@
-// CSA Loom Govern posture-refresh — Function App IaC.
+// CSA Loom — posture-refresh Azure Function (Govern posture pre-compute).
 //
-// Provisions the Consumption (Linux, Python v2) Function App that runs the
-// posture-refresh timer (every 5 min) + on-demand HTTP refresh, writing the
-// Govern -> Admin view (F2) posture aggregates to the existing Loom Cosmos
-// `posture-aggregates` container.
+// Provisions a standalone Python Consumption Function App that serves BOTH
+// Govern posture paths in one app:
+//   - F2 Admin view  — TimerTrigger (every 5 min) + /api/posture-refresh-admin
+//     recompute per tenant → Cosmos ``posture-aggregates-admin``.
+//   - F3 data-owner  — POST /api/posture-refresh recomputes a signed-in owner's
+//     posture on tab-open → Cosmos ``posture-aggregates`` + ``recommended-actions``.
+// AAD-only to Cosmos via system-assigned managed identity (no account keys).
 //
-// Identity: REUSES the existing Console UAMI (which already holds the Cosmos DB
-// Built-in Data Contributor role at account scope) so NO new Cosmos RBAC grant
-// is required. Pass its resource id + client id.
+// What this Bicep creates:
+//   - Storage account (Functions runtime backing store), TLS1.2, no public blob.
+//   - Consumption (Y1 Dynamic) Linux plan.
+//   - Function App (Python 3.12), HTTPS-only, system-assigned MI.
+//   - A cross-RG module that grants the Function MI "Cosmos DB Built-in Data
+//     Contributor" on the existing Loom Cosmos account.
 //
-// Apply (after the admin-plane Cosmos + UAMI exist):
+// What it does NOT do (post-deploy, see DEPLOYMENT.md):
+//   - Push the function code (func azure functionapp publish). The bootstrap
+//     workflow auto-publishes any app named ``func-loom-posture*``.
+//   - Read the generated host key and store it in Key Vault as
+//     ``loom-posture-function-key``.
+//   - Set ``LOOM_POSTURE_FUNCTION_URL`` (= output ``functionUrl``) on the
+//     Console (admin-plane param ``loomPostureFunctionUrl``).
 //
-//   az deployment group create -g <admin-rg> \
+// Apply:
+//   az deployment group create \
+//     -g <function-rg> \
 //     -f azure-functions/posture-refresh/deploy/main.bicep \
-//     -p cosmosEndpoint=<https://...documents.azure.com:443/> \
-//        consoleUamiResourceId=<uami-id> consoleUamiClientId=<uami-client-id>
-//
-// Then publish the code:  func azure functionapp publish <functionAppName>
+//     -p loomCosmosEndpoint=https://<acct>.documents.azure.com:443/ \
+//        loomCosmosAccountName=<acct> \
+//        loomCosmosAccountResourceGroup=<cosmos-rg>
 
-@description('Location for all resources.')
+targetScope = 'resourceGroup'
+
+@description('Region for the Function App + storage. Defaults to the RG location.')
 param location string = resourceGroup().location
 
-@description('Function App name (globally unique).')
-param functionAppName string = 'func-loom-posture-${uniqueString(resourceGroup().id)}'
-
-@description('Storage account name for the Function runtime (3-24 lowercase alnum).')
-@minLength(3)
-@maxLength(24)
-param storageAccountName string = take('stloompost${uniqueString(resourceGroup().id)}', 24)
-
-@description('Loom Cosmos account document endpoint (https://<acct>.documents.azure.com:443/).')
-param cosmosEndpoint string
+@description('Loom Cosmos DB endpoint (https://<acct>.documents.azure.<com|us>:443/).')
+param loomCosmosEndpoint string
 
 @description('Loom Cosmos database name.')
-param cosmosDatabase string = 'loom'
+param loomCosmosDatabase string = 'loom'
 
-@description('Resource id of the existing Console UAMI (already a Cosmos Data Contributor).')
-param consoleUamiResourceId string
+@description('Loom Cosmos account name (for the data-plane RBAC grant).')
+param loomCosmosAccountName string
 
-@description('Client id of the existing Console UAMI.')
-param consoleUamiClientId string
+@description('Resource group of the Loom Cosmos account (may differ from this RG).')
+param loomCosmosAccountResourceGroup string = resourceGroup().name
 
-@description('Tags applied to every resource.')
+@description('Compliance/cost tags applied to all resources.')
 param tags object = {}
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: storageAccountName
+var saName = take('saposture${uniqueString(resourceGroup().id)}', 24)
+var planName = 'plan-posture-refresh-${uniqueString(resourceGroup().id)}'
+var siteName = 'func-loom-posture-refresh-${uniqueString(resourceGroup().id)}'
+
+resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
+  name: saName
   location: location
   tags: tags
   sku: { name: 'Standard_LRS' }
@@ -58,50 +69,50 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 }
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
-  name: '${functionAppName}-plan'
+  name: planName
   location: location
   tags: tags
-  // Consumption (Dynamic) — no always-on cost.
   sku: { name: 'Y1', tier: 'Dynamic' }
-  kind: 'functionapp'
-  properties: {
-    reserved: true // Linux required for Python v2
-  }
+  kind: 'functionapp,linux'
+  properties: { reserved: true }
 }
 
-var storageConnString = 'DefaultEndpointsProtocol=https;AccountName=${storage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storage.listKeys().keys[0].value}'
-
-resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
-  name: functionAppName
+resource site 'Microsoft.Web/sites@2024-04-01' = {
+  name: siteName
   location: location
   tags: tags
   kind: 'functionapp,linux'
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${consoleUamiResourceId}': {}
-    }
-  }
+  identity: { type: 'SystemAssigned' }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
     siteConfig: {
-      linuxFxVersion: 'Python|3.11'
-      ftpsState: 'Disabled'
+      linuxFxVersion: 'Python|3.12'
       minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: storageConnString }
+        { name: 'AzureWebJobsStorage', value: 'DefaultEndpointsProtocol=https;AccountName=${sa.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${sa.listKeys().keys[0].value}' }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: storageConnString }
-        { name: 'WEBSITE_CONTENTSHARE', value: toLower(functionAppName) }
-        { name: 'LOOM_COSMOS_ENDPOINT', value: cosmosEndpoint }
-        { name: 'LOOM_COSMOS_DATABASE', value: cosmosDatabase }
-        { name: 'LOOM_UAMI_CLIENT_ID', value: consoleUamiClientId }
+        { name: 'LOOM_COSMOS_ENDPOINT', value: loomCosmosEndpoint }
+        { name: 'LOOM_COSMOS_DATABASE', value: loomCosmosDatabase }
       ]
     }
   }
 }
 
-output functionAppName string = functionApp.name
-output functionAppPrincipalId string = ''
+// Cross-RG data-plane grant to the existing Loom Cosmos account.
+module cosmosRbac 'cosmos-rbac.bicep' = {
+  name: 'posture-cosmos-rbac'
+  scope: resourceGroup(loomCosmosAccountResourceGroup)
+  params: {
+    loomCosmosAccountName: loomCosmosAccountName
+    functionPrincipalId: site.identity.principalId
+  }
+}
+
+@description('Function base URL — set this as the Console LOOM_POSTURE_FUNCTION_URL.')
+output functionUrl string = 'https://${site.properties.defaultHostName}'
+
+@description('Function App name (for func azure functionapp publish).')
+output functionName string = site.name

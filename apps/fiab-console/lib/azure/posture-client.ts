@@ -32,7 +32,7 @@ import {
   workspacesContainer,
   itemsContainer,
   auditLogContainer,
-  postureAggregatesContainer,
+  postureAggregatesAdminContainer,
 } from './cosmos-client';
 import { listSensitivityLabels, MipNotConfiguredError } from './mip-graph-client';
 import { listDlpAlerts, DlpNotConfiguredError } from './dlp-graph-client';
@@ -387,7 +387,7 @@ export async function computePosture(tenantId: string): Promise<PostureResult> {
 export async function readPostureDoc(tenantId: string, maxAgeMs = 5 * 60_000): Promise<PostureDoc | null> {
   assertCosmosConfigured();
   try {
-    const c = await postureAggregatesContainer();
+    const c = await postureAggregatesAdminContainer();
     const { resource } = await c.item(`posture:${tenantId}`, tenantId).read<PostureDoc>();
     if (!resource?.updatedAt) return null;
     if (Date.parse(resource.updatedAt) < Date.now() - maxAgeMs) return null;
@@ -399,6 +399,6 @@ export async function readPostureDoc(tenantId: string, maxAgeMs = 5 * 60_000): P
 
 /** Upsert a freshly computed posture doc (used by the refresh Function). */
 export async function writePostureDoc(doc: PostureDoc): Promise<void> {
-  const c = await postureAggregatesContainer();
+  const c = await postureAggregatesAdminContainer();
   await c.items.upsert(doc);
 }

@@ -36,7 +36,7 @@ vi.mock('@/lib/azure/cosmos-client', () => {
       },
     }),
     auditLogContainer: async () => ({ items: { query: () => mkQuery([3]) } }),
-    postureAggregatesContainer: async () => ({
+    postureAggregatesAdminContainer: async () => ({
       item: () => ({ read: async () => ({ resource: null }) }),
       items: { upsert: async () => {} },
     }),

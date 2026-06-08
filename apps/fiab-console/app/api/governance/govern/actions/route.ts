@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { recommendedActionsContainer } from '@/lib/azure/cosmos-client';
+import { recommendedActionsAdminContainer } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +31,7 @@ export async function GET() {
   }
   const tenantId = s.claims.oid;
   try {
-    const c = await recommendedActionsContainer();
+    const c = await recommendedActionsAdminContainer();
     const { resource } = await c.item(`actions:${tenantId}`, tenantId).read<{ actions?: RecommendedAction[] }>();
     const actions = Array.isArray(resource?.actions) ? resource!.actions : [];
     return NextResponse.json({ ok: true, actions });

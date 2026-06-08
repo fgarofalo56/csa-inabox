@@ -26,10 +26,11 @@ import {
 } from '@fluentui/react-components';
 import {
   Settings24Regular, Dismiss24Regular, Delete24Regular,
-  Person24Regular, BranchFork24Regular, Database24Regular,
+  BranchFork24Regular, Database24Regular,
   Copy16Regular,
 } from '@fluentui/react-icons';
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
+import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 
 interface Props { workspace: Workspace; }
 
@@ -77,7 +78,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
           </TabList>
           <div style={{ marginTop: 16 }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
-            {tab === 'permissions' && <PermissionsSection workspaceId={workspace.id} />}
+            {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'git' && <GitSection workspaceId={workspace.id} />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'sensitivity' && <DeferredSection
@@ -198,86 +199,10 @@ function DeferredSection({ title, body }: { title: string; body: string }) {
 }
 
 // ------------------------------ Permissions ------------------------------
-
-interface PermissionRow {
-  id: string; upn: string; name?: string; role: 'admin' | 'contributor' | 'viewer';
-  addedBy: string; addedAt: string; implicit?: boolean;
-}
-
-function PermissionsSection({ workspaceId }: { workspaceId: string }) {
-  const styles = useStyles();
-  const [rows, setRows] = useState<PermissionRow[] | null>(null);
-  const [upn, setUpn] = useState('');
-  const [role, setRole] = useState<PermissionRow['role']>('contributor');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = () =>
-    fetch(`/api/workspaces/${workspaceId}/permissions`).then(r => r.json())
-      .then(d => setRows(d?.permissions ?? []))
-      .catch(() => setRows([]));
-
-  useEffect(() => { load(); }, [workspaceId]);
-
-  const add = async () => {
-    if (!upn.trim()) return;
-    setBusy(true); setError(null);
-    const r = await fetch(`/api/workspaces/${workspaceId}/permissions`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ upn: upn.trim(), role }),
-    });
-    const j = await r.json();
-    if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); setBusy(false); return; }
-    setUpn(''); setBusy(false); load();
-  };
-
-  const remove = async (rowUpn: string) => {
-    await fetch(`/api/workspaces/${workspaceId}/permissions?upn=${encodeURIComponent(rowUpn)}`,
-      { method: 'DELETE' });
-    load();
-  };
-
-  return (
-    <div className={styles.section}>
-      <div className={styles.row}>
-        <Field label="UPN (email)" style={{ flex: 2 }}>
-          <Input value={upn} onChange={(_, d) => setUpn(d.value)} placeholder="user@tenant.com" />
-        </Field>
-        <Field label="Role">
-          <Dropdown value={role} selectedOptions={[role]}
-            onOptionSelect={(_, d) => setRole((d.optionValue || 'contributor') as PermissionRow['role'])}>
-            <Option value="admin">Admin</Option>
-            <Option value="contributor">Contributor</Option>
-            <Option value="viewer">Viewer</Option>
-          </Dropdown>
-        </Field>
-        <Button appearance="primary" onClick={add} disabled={!upn.trim() || busy}>
-          {busy ? 'Adding…' : 'Add'}
-        </Button>
-      </div>
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
-      {rows === null && <Spinner size="tiny" label="Loading…" />}
-      {rows !== null && rows.map(r => (
-        <div key={r.id} style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: 8,
-          border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-        }}>
-          <Person24Regular />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{r.upn}</div>
-            <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>
-              {r.role}{r.implicit ? ' (workspace owner)' : ` · added by ${r.addedBy} on ${new Date(r.addedAt).toLocaleDateString()}`}
-            </div>
-          </div>
-          {!r.implicit && (
-            <Button appearance="subtle" size="small" icon={<Delete24Regular />}
-              onClick={() => remove(r.upn)} aria-label={`Remove ${r.upn}`} />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
+// The Permissions tab now embeds ManageAccessPane (F5) — Azure-native
+// workspace RBAC backed by Cosmos `workspace-roles` + real Azure RBAC role
+// assignments, with Entra principal (user/group) search. The legacy UPN-only
+// PermissionsSection was replaced; see lib/panes/manage-access-pane.tsx.
 
 // ------------------------------ Git ------------------------------
 
