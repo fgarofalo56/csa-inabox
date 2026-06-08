@@ -152,6 +152,39 @@ export async function listPaths(
   return out;
 }
 
+/**
+ * Recursively count the live Parquet data files under a Delta table directory,
+ * skipping the `_delta_log/` transaction log. Used by the OPTIMIZE route to
+ * prove compaction occurred (file count before vs after). Walks the table
+ * folder recursively (Delta data files may be nested under partition folders).
+ * `cap` bounds the walk so a pathological table can't hang the request; when the
+ * cap is hit the returned count is `cap` and `capped` is true.
+ */
+export async function countParquetFiles(
+  container: string,
+  prefix: string,
+  account?: string,
+  cap = 100_000,
+): Promise<{ count: number; bytes: number; capped: boolean }> {
+  const fs = getFileSystem(container, account);
+  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const iter = fs.listPaths({ path: cleanPrefix || undefined, recursive: true });
+  let count = 0;
+  let bytes = 0;
+  let capped = false;
+  for await (const p of iter) {
+    if (p.isDirectory) continue;
+    const name = p.name ?? '';
+    // Delta transaction log + checkpoint files are not data files.
+    if (name.includes('/_delta_log/') || name.endsWith('/_delta_log')) continue;
+    if (!name.toLowerCase().endsWith('.parquet')) continue;
+    count++;
+    bytes += typeof p.contentLength === 'number' ? p.contentLength : Number(p.contentLength ?? 0);
+    if (count >= cap) { capped = true; break; }
+  }
+  return { count, bytes, capped };
+}
+
 export interface PathMetadata {
   exists: boolean;
   size: number;

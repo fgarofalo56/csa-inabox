@@ -29,6 +29,7 @@ import {
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -615,6 +616,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
 
+  // Statistics & maintenance dialog (ANALYZE / OPTIMIZE) for a selected table.
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTarget, setStatsTarget] = useState<{ catalog: string; schema: string; table: string } | null>(null);
+
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
   );
@@ -915,8 +920,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
       ]},
+      { label: 'Maintenance', actions: [
+        {
+          label: 'Statistics & maintenance',
+          onClick: statsTarget ? () => setStatsOpen(true) : undefined,
+          disabled: !statsTarget,
+          title: statsTarget
+            ? `ANALYZE / OPTIMIZE ${statsTarget.catalog}.${statsTarget.schema}.${statsTarget.table}`
+            : 'Select a table in the catalog tree first',
+        },
+      ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, statsTarget]);
 
   return (
     <ItemEditorChrome
@@ -994,6 +1009,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 value={`t-${c}.${sch}.${t}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setStatsTarget({ catalog: c, schema: sch, table: t });
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                 }}
                               >
@@ -1257,6 +1273,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+
+          {statsTarget && (
+            <StatsMaintenanceDialog
+              open={statsOpen}
+              onOpenChange={setStatsOpen}
+              engine="databricks-sql-warehouse"
+              itemId={id}
+              catalog={statsTarget.catalog}
+              schema={statsTarget.schema}
+              tableName={statsTarget.table}
+              warehouseId={warehouseId}
+            />
+          )}
         </div>
       }
     />

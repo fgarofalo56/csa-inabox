@@ -62,6 +62,7 @@ import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -8317,6 +8318,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [ctasBusy, setCtasBusy] = useState(false);
   const [ctasError, setCtasError] = useState<string | null>(null);
 
+  // Statistics manager (CREATE / UPDATE / DROP STATISTICS) for a selected table.
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTarget, setStatsTarget] = useState<{ schema: string; table: string } | null>(null);
+
   const newSql = useCallback(() => {
     // Multi-tab is a future v3.x — for now "New SQL query" resets the
     // current tab to a fresh template, matching Fabric Warehouse's
@@ -8419,8 +8424,18 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // workspace Git settings (honest navigation, not a stub).
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
       ]},
+      { label: 'Statistics', actions: [
+        {
+          label: 'Manage statistics',
+          onClick: statsTarget ? () => setStatsOpen(true) : undefined,
+          disabled: !statsTarget,
+          title: statsTarget
+            ? `CREATE / UPDATE / DROP STATISTICS on [${statsTarget.schema}].[${statsTarget.table}]`
+            : 'Select a table in the explorer first',
+        },
+      ]},
     ]},
-  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -8505,7 +8520,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           key={t.table}
                           itemType="leaf"
                           value={`t-${schemaName}.${t.table}`}
-                          onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
+                          onClick={() => { setStatsTarget({ schema: schemaName, table: t.table }); setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); }}
                         >
                           <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
                             {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
@@ -8624,6 +8639,17 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {statsTarget && (
+            <StatsMaintenanceDialog
+              open={statsOpen}
+              onOpenChange={setStatsOpen}
+              engine="warehouse"
+              itemId={id}
+              schema={statsTarget.schema}
+              tableName={statsTarget.table}
+            />
+          )}
         </div>
       }
     />
