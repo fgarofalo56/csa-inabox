@@ -308,6 +308,33 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Cosmos DB (data plane — documents endpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cosmos DB data-plane document-endpoint hostname suffix (no leading dot).
+ *   Commercial / GCC : documents.azure.com
+ *   GCC-High / IL5   : documents.azure.us
+ *
+ * Grounded in the ARM-authoritative expression already used in
+ * admin-plane/main.bicep for LOOM_COSMOS_ENDPOINT:
+ *   environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'
+ * (GCC runs in the Commercial `AzureCloud` ARM environment, so its Cosmos
+ * account is a Commercial `documents.azure.com` account — same as Commercial.)
+ * This helper is the TypeScript canonical mirror so cloud-matrix.test.ts can
+ * assert the suffix independently of the Bicep.
+ * See: https://learn.microsoft.com/azure/cosmos-db/sql/sql-api-sdk-node
+ */
+export function cosmosSuffix(): string {
+  return isGovCloud() ? 'documents.azure.us' : 'documents.azure.com';
+}
+
+/** Build the Cosmos data-plane endpoint URL for a given account name. */
+export function cosmosEndpointFromName(accountName: string): string {
+  return `https://${accountName}.${cosmosSuffix()}:443/`;
+}
+
+// ---------------------------------------------------------------------------
 // Azure Machine Learning data plane (api.azureml.ms / api.ml.azure.us)
 // ---------------------------------------------------------------------------
 
