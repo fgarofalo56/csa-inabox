@@ -1302,6 +1302,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
           ] : []),
+          // Apache Atlas-on-AKS lineage endpoint (DoD / IL5 boundary). Read by
+          // /api/items/[type]/[id]/lineage when detectLoomCloud() === 'DoD'.
+          // STRICTLY the Azure-native lineage backend for sovereign clouds — no
+          // Fabric/OneLake dependency. Empty when atlasOnAksEnabled = false, in
+          // which case the lineage drawer shows an honest "set LOOM_ATLAS_ENDPOINT"
+          // MessageBar gate (never an empty graph).
+          atlasOnAksEnabled ? [
+            { name: 'LOOM_ATLAS_ENDPOINT', value: catalog.outputs.atlasEndpoint }
+          ] : [],
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
