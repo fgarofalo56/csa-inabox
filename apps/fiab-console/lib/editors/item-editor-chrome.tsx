@@ -35,6 +35,14 @@ const useStyles = makeStyles({
     overflow: 'auto',
     minHeight: 0,
   },
+  rightPanel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+    overflow: 'auto',
+    minHeight: 0,
+    padding: '8px',
+  },
   // Thin rail shown when the left panel is collapsed — a single expand button.
   collapsedRail: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4,
@@ -75,16 +83,25 @@ interface Props {
   rightPanel?: ReactNode;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel }: Props) {
   const styles = useStyles();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const isNew = id === 'new';
   const title = isNew ? `New ${item.displayName.toLowerCase()}` : `${item.displayName} (${id.substring(0, 8)})`;
 
-  // When a left panel exists, allow collapsing it to a thin rail so the canvas
-  // gets the full width (ADF/Fabric let you hide the factory-resources pane).
-  const bodyStyle: React.CSSProperties | undefined = leftPanel
-    ? { gridTemplateColumns: leftCollapsed ? '32px 1fr' : 'minmax(220px, 280px) 1fr' }
+  // When a left and/or right panel exists, lay the body out as a grid. The left
+  // panel can collapse to a thin rail so the canvas gets the full width
+  // (ADF/Fabric let you hide the factory-resources pane). The right rail hosts
+  // properties / attribute panels (Fabric details-page right rail).
+  const hasGrid = !!leftPanel || !!rightPanel;
+  const bodyStyle: React.CSSProperties | undefined = hasGrid
+    ? {
+        gridTemplateColumns: [
+          ...(leftPanel ? [leftCollapsed ? '32px' : 'minmax(220px, 280px)'] : []),
+          '1fr',
+          ...(rightPanel ? ['minmax(280px, 340px)'] : []),
+        ].join(' '),
+      }
     : undefined;
 
   return (
@@ -104,7 +121,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
       <div className={styles.layout}>
         <Ribbon tabs={ribbon} />
         <BundleContentBar itemType={item.slug} itemId={id} />
-        <div className={leftPanel ? styles.body : ''} style={bodyStyle}>
+        <div className={hasGrid ? styles.body : ''} style={bodyStyle}>
           {leftPanel && (
             leftCollapsed ? (
               <div className={styles.collapsedRail}>
@@ -124,7 +141,8 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
               </div>
             )
           )}
-          {leftPanel ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}
+          {hasGrid ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}
+          {rightPanel && <div className={styles.rightPanel}>{rightPanel}</div>}
         </div>
       </div>
     </PageShell>

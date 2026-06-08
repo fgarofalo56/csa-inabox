@@ -31,6 +31,10 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ImportDataProductsFlyout } from './components/import-data-products-flyout';
+import {
+  SelectAttributePanel, LinkListAttributePanel, type AttrReceipt,
+} from './components/inline-attribute-panel';
+import { UPDATE_FREQUENCIES, type ExternalLink } from '@/lib/dataproducts/attributes';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1783,6 +1787,12 @@ interface DataProductState {
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
+  // Inline right-rail attributes — 1:1 with the Purview Unified Catalog
+  // data-product details page (F5 / F11 / F12). Persisted to Cosmos state via
+  // the partial-merge PATCH /api/data-products/[id].
+  updateFrequency?: string;
+  termsOfUse?: ExternalLink[];
+  documentation?: ExternalLink[];
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1795,6 +1805,8 @@ const DP_EMPTY: DataProductState = {
   certified: false,
   sla: '',
   bundle: [],
+  termsOfUse: [],
+  documentation: [],
 };
 
 /**
@@ -1959,6 +1971,22 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     setState((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   }, []);
+
+  // Inline right-rail attribute persistence (F5 / F11 / F12). Sends ONLY the
+  // changed field to the partial-merge PATCH /api/data-products/[id] — the
+  // server merges it into the persisted Cosmos state without clobbering other
+  // fields — and returns a receipt (request body + response) for the panel.
+  const patchAttr = useCallback(async (patch: Record<string, unknown>): Promise<AttrReceipt> => {
+    const url = `/api/data-products/${encodeURIComponent(id)}`;
+    const r = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+    return { method: 'PATCH', url, requestBody: patch, status: r.status, response: j, at: new Date().toISOString() };
+  }, [id]);
 
   // v3.27: F-vaporware fix — Cosmos-backed load, removes hardcoded
   // 'Customer 360' / alice@contoso / fixed bundle grid.
@@ -2253,7 +2281,53 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={isNew ? undefined : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <SelectAttributePanel
+          title="Update frequency"
+          value={state.updateFrequency ?? ''}
+          options={UPDATE_FREQUENCIES}
+          placeholder="Not set"
+          onSave={async (v) => {
+            const receipt = await patchAttr({ updateFrequency: v || null });
+            setState((prev) => ({ ...prev, updateFrequency: v || undefined }));
+            return receipt;
+          }}
+        />
+        <LinkListAttributePanel
+          title="Terms of use"
+          entries={state.termsOfUse ?? []}
+          onAdd={async (entry) => {
+            const next = [...(state.termsOfUse ?? []), entry];
+            const receipt = await patchAttr({ termsOfUse: next });
+            setState((prev) => ({ ...prev, termsOfUse: next }));
+            return receipt;
+          }}
+          onRemove={async (idx) => {
+            const next = (state.termsOfUse ?? []).filter((_, i) => i !== idx);
+            const receipt = await patchAttr({ termsOfUse: next });
+            setState((prev) => ({ ...prev, termsOfUse: next }));
+            return receipt;
+          }}
+        />
+        <LinkListAttributePanel
+          title="Documentation"
+          entries={state.documentation ?? []}
+          onAdd={async (entry) => {
+            const next = [...(state.documentation ?? []), entry];
+            const receipt = await patchAttr({ documentation: next });
+            setState((prev) => ({ ...prev, documentation: next }));
+            return receipt;
+          }}
+          onRemove={async (idx) => {
+            const next = (state.documentation ?? []).filter((_, i) => i !== idx);
+            const receipt = await patchAttr({ documentation: next });
+            setState((prev) => ({ ...prev, documentation: next }));
+            return receipt;
+          }}
+        />
+      </div>
+    )} main={
       <div className={s.pad}>
         {state.purviewDataProductId ? (
           <MessageBar intent="success">
