@@ -94,6 +94,18 @@ var databases = [
     ] }
 ]
 
+// NOTE: The Loom Console creates additional containers lazily at runtime via
+// apps/fiab-console/lib/azure/cosmos-client.ts `ensure()` (createIfNotExists),
+// in the `loom` database (id = LOOM_COSMOS_DATABASE || 'loom'). These do not
+// need ARM provisioning here; they only require the Console UAMI to hold the
+// Cosmos DB Built-in Data Contributor role at account scope (data-plane, not
+// ARM RBAC — bootstrapped by scripts/csa-loom/grant-cosmos-rbac.sh). Current
+// lazily-created containers (PK /tenantId unless noted):
+//   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
+//   thread-edges, connections, maintenance-jobs,
+//   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
+
+
 // Databases — one per workload
 resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = [for db in databases: {
   parent: account
