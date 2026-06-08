@@ -39,7 +39,8 @@ import {
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular, ChartMultiple20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular, TopSpeed20Regular,
+  Stop20Regular, ChartMultiple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
@@ -47,6 +48,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { SqlScalePanel } from './components/sql-scale-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -549,6 +551,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [server, setServer] = useState('');
   const [database, setDatabase] = useState('');
   const [databases, setDatabases] = useState<string[]>([]);
+  // Full database objects (incl. sku) so the Compute & Storage tab can show the
+  // currently-bound SKU as the "before" without an extra ARM GET.
+  const [databasesFull, setDatabasesFull] = useState<Array<{ name: string; sku?: { name?: string; tier?: string; family?: string; capacity?: number } }>>([]);
   const [dbLoading, setDbLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [bindMsg, setBindMsg] = useState<string | null>(null);
@@ -577,7 +582,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, []);
 
   const loadDatabases = useCallback(async (fam: Family, srv: string) => {
-    setDatabases([]); setDbError(null);
+    setDatabases([]); setDatabasesFull([]); setDbError(null);
     if (!srv || fam === 'managed-instance') return;
     setDbLoading(true);
     const url = fam === 'postgres'
@@ -585,7 +590,10 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       : `/api/items/azure-sql-server/${encodeURIComponent(id)}/databases?server=${encodeURIComponent(srv)}`;
     const j = await fetchJson(url);
     if (!j.ok) setDbError(j.error || 'databases failed');
-    else setDatabases((j.databases || []).map((d: any) => d.name));
+    else {
+      setDatabases((j.databases || []).map((d: any) => d.name));
+      setDatabasesFull((j.databases || []).map((d: any) => ({ name: d.name, sku: d.sku })));
+    }
     setDbLoading(false);
   }, [id]);
 
@@ -605,7 +613,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'get-data'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -887,6 +895,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Firewall', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Manage firewall rules' },
         { label: 'Entra admin', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Set the Microsoft Entra admin' },
         { label: 'Geo-replication', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Create a geo-secondary' },
+        { label: 'Scale compute', onClick: (family === 'azure-sql' && server && database) ? () => setTab('scale') : undefined, disabled: !(family === 'azure-sql' && server && database), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Change DTU / vCore tier, serverless auto-pause, and max storage' },
       ]},
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
@@ -992,6 +1001,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
             <Tab value="get-data" icon={<ArrowDownload20Regular />}>Get data</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
+            {family === 'azure-sql' && <Tab value="scale" icon={<TopSpeed20Regular />}>Compute &amp; Storage</Tab>}
           </TabList>
 
           {/* ---------------- Connect ---------------- */}
@@ -1518,6 +1528,25 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 )}
               </div>
             </>
+          )}
+
+          {/* ---------------- Compute & Storage (scale) ---------------- */}
+          {tab === 'scale' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <SqlScalePanel
+                      id={id} server={server} database={database}
+                      currentSku={databasesFull.find((d) => d.name === database)?.sku}
+                    />
+                  : <Caption1>Pick a server <strong>and</strong> database on the <strong>Connect</strong> tab to change its compute &amp; storage (DTU / vCore / serverless).</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Compute &amp; Storage scaling applies to Azure SQL Database</MessageBarTitle>
+                    SQL Managed Instance scaling uses the instance SKU (<code>Microsoft.Sql/managedInstances</code> PATCH) and PostgreSQL flexible server uses a distinct compute ARM surface — wire those separately. Select an Azure SQL database to scale its compute and storage here.
+                  </MessageBarBody>
+                </MessageBar>
+              )
           )}
         </div>
       }

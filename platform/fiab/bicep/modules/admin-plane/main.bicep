@@ -250,6 +250,9 @@ param loomHdinsightLinkedService string = ''
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
+@description('Resource group containing the Azure SQL logical servers Loom manages. The Console UAMI is granted SQL DB Contributor here so the Compute & Storage scale tab can PATCH database SKUs (Microsoft.Sql/servers/databases/write). Empty = skip the grant; the tab then surfaces an honest MessageBar naming the role.')
+param loomAzureSqlServerRg string = ''
+
 @description('Opt-in (F5): also mirror workspace role assignments to a Microsoft Fabric workspace via /v1/workspaces/{id}/roleAssignments. Default false: Azure-native only (Cosmos + Azure RBAC). Forced off at IL5 (Fabric is not IL5-authorized).')
 param loomWorkspaceRolesFabricEnabled bool = false
 
@@ -1752,6 +1755,21 @@ resource pbiEmbeddedCapacity 'Microsoft.PowerBIDedicated/capacities@2021-01-01' 
 module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRoleGrants) {
   name: 'console-workspace-rbac'
   scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// Compute & Storage scale tab — SQL DB Contributor on the SQL server RG so
+// the Console UAMI can PATCH database compute SKUs (DTU / vCore / serverless).
+// Delegated to its own module (principalId is a runtime output — BCP177).
+// Opt-in: set loomAzureSqlServerRg to the RG holding your SQL logical servers.
+// =====================================================================
+module sqlRbac 'sql-rbac.bicep' = if (!empty(loomAzureSqlServerRg) && !skipRoleGrants) {
+  name: 'console-sql-scale-rbac'
+  scope: resourceGroup(loomAzureSqlServerRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
