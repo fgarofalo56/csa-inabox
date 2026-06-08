@@ -57,6 +57,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'editor.synapse-serverless-sql-pool', domain: 'Data', workload: 'Warehouse',     name: 'Synapse Serverless SQL',kind: 'editor',   description: 'Serverless SQL pool', parentId: 'workload.warehouse' },
   { id: 'editor.azure-sql-server',   domain: 'Data',      workload: 'Warehouse',         name: 'Azure SQL Server',     kind: 'editor',    description: 'Azure SQL server', parentId: 'workload.warehouse' },
   { id: 'editor.azure-sql-database', domain: 'Data',      workload: 'Warehouse',         name: 'Azure SQL Database',   kind: 'editor',    description: 'Azure SQL database', parentId: 'workload.warehouse' },
+  { id: 'service.sql-security',      domain: 'Data',      workload: 'Warehouse',         name: 'SQL Granular Security', kind: 'service',  description: 'Object/column GRANT, Row-Level Security and Dynamic Data Masking wizards for Synapse Dedicated/Serverless and Azure SQL.', parentId: 'workload.warehouse' },
 
   { id: 'workload.pipelines',        domain: 'Data',      workload: 'Pipelines',         name: 'Data integration',     kind: 'workload',  description: 'Pipelines, dataflows, ADF, copy jobs.' },
   { id: 'editor.data-pipeline',      domain: 'Data',      workload: 'Pipelines',         name: 'Fabric Data Pipeline', kind: 'editor',    description: 'Fabric pipelines', parentId: 'workload.pipelines' },
@@ -187,6 +188,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.security',            domain: 'Admin',     workload: 'Tenant Admin',      name: 'Security & Governance',kind: 'admin',     description: '/admin/security', parentId: 'workload.admin' },
   { id: 'admin.updates',             domain: 'Admin',     workload: 'Tenant Admin',      name: 'Updates / Releases',   kind: 'admin',     description: '/admin/updates', parentId: 'workload.admin' },
   { id: 'admin.permissions',         domain: 'Admin',     workload: 'Tenant Admin',      name: 'Feature Permissions',  kind: 'admin',     description: '/admin/permissions — grant capabilities to users/groups.', parentId: 'workload.admin' },
+  { id: 'item.share',                domain: 'Admin',     workload: 'Tenant Admin',      name: 'Item sharing & permissions', kind: 'admin', description: 'Grant and revoke item-level permissions (F6) — the Share dialog and /items/[type]/[id]/permissions page. Item owners can always manage their own items; this capability delegates sharing to non-owners.', parentId: 'workload.admin' },
   { id: 'admin.deploy-dlz',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Deploy Landing Zone',  kind: 'admin',     description: 'Setup wizard — deploy an additional Data Landing Zone (server-side GitHub Actions dispatch / az deployment). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
 ];
 
