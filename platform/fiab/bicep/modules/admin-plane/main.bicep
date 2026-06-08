@@ -452,6 +452,10 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
+@allowed(['cosmos', 'fabric'])
+param loomDomainsBackend string = 'cosmos'
+
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
 // ---------------------------------------------------------------------
@@ -1118,6 +1122,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
+            // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
+            // gallery blob endpoint emitted by catalog.bicep ('' when Purview/
+            // catalog storage is not deployed — the editor shows an honest gate).
+            { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
+            { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
