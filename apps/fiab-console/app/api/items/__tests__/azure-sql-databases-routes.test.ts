@@ -26,6 +26,7 @@ vi.mock('@/lib/azure/azure-sql-client', async () => {
     listServers: vi.fn(),
     listManagedInstances: vi.fn(),
     createDatabase: vi.fn(),
+    executeQueryBatch: vi.fn(),
   };
 });
 
@@ -50,13 +51,14 @@ vi.mock('../_lib/item-crud', () => ({
 import { GET as inventoryGET } from '../sql-databases/route';
 import { POST as createDbPOST } from '../azure-sql-database/[id]/create-db/route';
 import { POST as connectPOST } from '../azure-sql-database/[id]/connect/route';
+import { POST as sqlQueryPOST } from '../azure-sql-database/[id]/query/route';
 import { GET as pgListGET, POST as pgCreatePOST } from '../postgres-flexible-server/route';
 import { GET as pgDbGET } from '../postgres-flexible-server/[id]/databases/route';
 import { GET as pgFwGET, POST as pgFwPOST, DELETE as pgFwDELETE } from '../postgres-flexible-server/[id]/firewall/route';
 import { POST as pgQueryPOST } from '../postgres-flexible-server/[id]/query/route';
 
 import { getSession } from '@/lib/auth/session';
-import { listServers as listSqlServers, listManagedInstances, createDatabase } from '@/lib/azure/azure-sql-client';
+import { listServers as listSqlServers, listManagedInstances, createDatabase, executeQueryBatch } from '@/lib/azure/azure-sql-client';
 import {
   listServers as listPgServers, createServer as createPgServer,
   listDatabases as listPgDatabases, listFirewallRules as listPgFw,
@@ -260,5 +262,57 @@ describe('PostgreSQL flexible server routes', () => {
     (getSession as any).mockReturnValue(session);
     const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app' }));
     expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------
+describe('POST /azure-sql-database/[id]/query (multi-result-set shape)', () => {
+  it('401 without session', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: 'SELECT 1' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('400 when sql is missing', async () => {
+    (getSession as any).mockReturnValue(session);
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns recordsets[] + messages[] + backward-compat fields on the happy path', async () => {
+    (getSession as any).mockReturnValue(session);
+    (executeQueryBatch as any).mockResolvedValue({
+      recordsets: [
+        { columns: ['a'], rows: [[1]], rowCount: 1, truncated: false },
+        { columns: ['b', 'c'], rows: [[2, 3]], rowCount: 1, truncated: false },
+      ],
+      messages: [{ message: 'batch start', number: 0, severity: 0, lineNumber: 1, serverName: 'srv', procName: '' }],
+      rowsAffected: [0, 1, 1],
+      executionMs: 42,
+    });
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;" }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(true);
+    // Multi-recordset shape
+    expect(j.recordsets).toHaveLength(2);
+    expect(j.messages).toHaveLength(1);
+    expect(j.rowsAffected).toEqual([0, 1, 1]);
+    expect(j.executionMs).toBe(42);
+    // Backward-compat fields promoted from the first recordset
+    expect(j.columns).toEqual(['a']);
+    expect(j.rows).toEqual([[1]]);
+    expect(j.rowCount).toBe(1);
+    expect(executeQueryBatch).toHaveBeenCalledWith('s', 'd', "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;");
+  });
+
+  it('propagates an AzureSqlError status (e.g. 401 token failure)', async () => {
+    (getSession as any).mockReturnValue(session);
+    const { AzureSqlError } = await vi.importActual<any>('@/lib/azure/azure-sql-client');
+    (executeQueryBatch as any).mockRejectedValue(new AzureSqlError('Failed to acquire AAD token for Azure SQL', 401));
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: 'SELECT 1' }));
+    expect(res.status).toBe(401);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
   });
 });

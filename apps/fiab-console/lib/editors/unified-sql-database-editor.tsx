@@ -39,9 +39,11 @@ import {
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  Delete20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ResultsPanel } from './components/results-panel';
+import type { BatchQueryResponse } from './components/results-panel';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
@@ -75,26 +77,9 @@ const PG_SKUS = [
   'Standard_E2s_v3', 'Standard_E4s_v3', 'Standard_E8s_v3', 'Standard_E16s_v3',
 ];
 
-// ── Results export (CSV / JSON) — client-side, no extra route ──
-function downloadBlob(filename: string, mime: string, data: string) {
-  const blob = new Blob([data], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function resultsToCsv(columns: string[], rows: unknown[][]): string {
-  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
-}
-function resultsToJson(columns: string[], rows: unknown[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
+// ── Results export + grid are provided by ./components/results-panel
+//    (10k cap, Messages tab, multi-result-set, Copy/Download incl. XLSX,
+//    in-grid search) — shared by the Query and Schema tabs below. ──
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -157,70 +142,9 @@ interface Inventory {
   postgres: { servers: PgServer[]; error?: string };
 }
 
-interface QueryResponse {
-  ok: boolean; columns?: string[]; rows?: unknown[][]; rowCount?: number;
-  executionMs?: number; truncated?: boolean; error?: string; code?: string; gated?: boolean;
-}
-
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return 'NULL';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
-
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
-  const s = useStyles();
-  if (loading) return <div className={s.resultBox}><Spinner size="small" label="Executing…" labelPosition="after" /></div>;
-  if (!result) return <div className={s.resultBox}><Caption1>Click <strong>Run</strong> to execute.</Caption1></div>;
-  if (!result.ok) {
-    return (
-      <div className={s.resultBox}>
-        <MessageBar intent={result.gated ? 'warning' : 'error'}>
-          <MessageBarBody>
-            <MessageBarTitle>{result.gated ? 'Query path gated' : 'Query failed'}</MessageBarTitle>
-            {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    );
-  }
-  const rows = result.rows || [];
-  const columns = result.columns || [];
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return (
-    <div className={s.resultBox}>
-      <div className={s.resultMeta}>
-        <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
-        <Caption1>· {result.executionMs} ms</Caption1>
-        {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
-        {rows.length > 0 && (
-          <div className={s.resultActions}>
-            <Tooltip content="Download results as CSV" relationship="label">
-              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
-                onClick={() => downloadBlob(`query-results-${stamp}.csv`, 'text/csv', resultsToCsv(columns, rows))}>CSV</Button>
-            </Tooltip>
-            <Tooltip content="Download results as JSON" relationship="label">
-              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
-                onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
-            </Tooltip>
-          </div>
-        )}
-      </div>
-      {rows.length === 0 ? <Caption1>Query returned no rows.</Caption1> : (
-        <div className={s.tableWrap}>
-          <Table aria-label="Query results" size="small">
-            <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-            <TableBody>
-              {rows.map((row, i) => (
-                <TableRow key={i}>{columns.map((_, j) => <TableCell key={j} className={s.cell}>{formatCell(row[j])}</TableCell>)}</TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-    </div>
-  );
-}
+// Query responses now carry the full multi-recordset + messages shape; the
+// ResultsPanel normalises both the new and legacy single-recordset forms.
+type QueryResponse = BatchQueryResponse;
 
 // ---- Server admin panel (Firewall + Entra admin + Geo-replication) -------
 // Every control calls a real, pre-existing BFF route:
