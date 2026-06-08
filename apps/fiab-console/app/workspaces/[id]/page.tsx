@@ -35,6 +35,7 @@ import { useRouter } from 'next/navigation';
 import { PageShell } from '@/lib/components/page-shell';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
+import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import {
   getWorkspace, listItems,
   listFolders, createFolder, renameFolder, deleteFolder,
@@ -486,6 +487,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
       subtitle={ws?.description}
       actions={ws ? (
         <div style={{ display: 'flex', gap: 4 }}>
+          <ManageAccessPane workspaceId={ws.id} />
           <WorkspaceSettingsDrawer workspace={ws} />
           <NewItemDialog workspaceId={ws.id} />
         </div>

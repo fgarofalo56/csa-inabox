@@ -178,6 +178,20 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     ],
   },
   {
+    id: 'dataProducts',
+    label: 'Data Products',
+    description: 'Data product store adapter. Backend: Cosmos (default) | Purview Unified Catalog. The active backend is shown by the indicator below; routing is env-driven (Commercial only for Purview Unified Catalog).',
+    toggles: [
+      {
+        id: 'dataProducts.purviewUnifiedEnabled',
+        label: 'Purview Unified Catalog adapter',
+        help: 'When enabled (LOOM_DATAPRODUCTS_BACKEND=unified-catalog + LOOM_PURVIEW_UNIFIED_ACCOUNT set + cloud=Commercial), data products are stored/retrieved via the Purview Unified Catalog REST API (2026-03-20-preview) instead of Cosmos. On GCC / GCC-High / IL5 the factory silently falls back to Cosmos regardless of this toggle. This switch is informational — actual routing is driven by the deployment env vars, surfaced live by /api/admin/data-products-backend.',
+        default: false,
+        learnUrl: 'https://learn.microsoft.com/rest/api/purview/unified-catalog-api-overview',
+      },
+    ],
+  },
+  {
     id: 'legacyAdla',
     label: 'U-SQL legacy (ADLA)',
     description: 'ADLA reached end-of-life in 2024. This category exists only to surface migration UI.',

@@ -211,6 +211,7 @@ const SECTIONS: {
     group: 'Governance & health',
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
+      { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
       { href: '/catalog/data-quality', label: 'Data quality rules', desc: 'Define + manage data-quality checks (Loom-native).', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
       { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: 'var(--loom-accent-amber)' },
       { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: 'var(--loom-accent-teal)' },

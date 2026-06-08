@@ -59,6 +59,7 @@ import {
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
+import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -9218,6 +9219,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                    {/* F17 — read-only sensitivity label inherited from the model's
+                        upstream lineage source (warehouse / lakehouse it's built on). */}
+                    <UpstreamSensitivityField itemId={id} />
                     <EndorsementControl workspaceId={workspaceId} itemId={datasetId} itemType="datasets" />
                     <GatewayDatasourcesPanel workspaceId={workspaceId} datasetId={datasetId} />
                   </div>
