@@ -57,6 +57,7 @@ import {
   type SchemaGraphNode, type SchemaGraphEdge, type SchemaNodeKind,
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
+import { ModelViewPanel } from './components/model-view-canvas';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
@@ -8259,6 +8260,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Query | Model — the Model view is the Loom-native parity of Fabric/Power BI
+  // model view (table cards + relationship lines + measures), with NO Power BI
+  // dependency. See lib/editors/components/model-view-canvas.tsx.
+  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
   // Seed the SQL editor with the bundle DDL once, when the live warehouse has
   // no tables to show — so the surface lands populated instead of on a smoke
   // test. The user can Run it (creates the schema) against the live compute.
@@ -8386,6 +8391,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Modeling', actions: [
+        // Open the interactive Model view (table cards + relationship lines +
+        // measures) — Loom-native, no Power BI dependency.
+        { label: 'Model view', onClick: () => setEditorTab('model') },
         // Model view: a warehouse "measure" is a persisted scalar/inline TVF.
         // Loads a real CREATE FUNCTION template the user runs via the wired
         // /query path. Run executes it against the warehouse compute.
@@ -8522,6 +8530,22 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+          </TabList>
+          {editorTab === 'model' && (
+            <ModelViewPanel
+              engine="warehouse"
+              id={id}
+              ready={ready}
+              measureKind="tvf"
+              notReadyMessage={schema?.message || 'Resume the Synapse Dedicated SQL pool to load tables.'}
+              onUseInQuery={(sql) => { setSqlText(sql); setResult(null); setEditorTab('query'); }}
+            />
+          )}
+          {editorTab === 'query' && (
+          <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color={ready ? 'success' : 'warning'}>{schema?.state || 'Unknown'}</Badge>
             <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
@@ -8594,6 +8618,8 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 </div>
               )}
             </>
+          )}
+          </>
           )}
 
           <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>

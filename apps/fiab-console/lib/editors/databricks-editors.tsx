@@ -27,7 +27,9 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  Flowchart20Regular,
 } from '@fluentui/react-icons';
+import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -629,6 +631,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
+  // Query | Model — Loom-native Model view; relationships become real Unity
+  // Catalog FK constraints. No Power BI dependency.
+  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -915,6 +920,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
       ]},
+      { label: 'Modeling', actions: [
+        // Loom-native Model view — relationships become real UC FK constraints.
+        { label: 'Model view', onClick: () => setEditorTab('model') },
+      ]},
     ]},
   ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
 
@@ -1015,6 +1024,27 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+          </TabList>
+          {editorTab === 'model' && (
+            <ModelViewPanel
+              engine="databricks-sql-warehouse"
+              id={id}
+              query={{ warehouseId, catalog: activeCatalog || undefined, schema: activeSchema || undefined }}
+              ready={isRunning && !!activeCatalog && !!activeSchema}
+              measureKind="cosmos"
+              notReadyMessage={
+                !isRunning ? 'Start the warehouse to load tables.'
+                  : (!activeCatalog || !activeSchema) ? 'Open a catalog and schema in the left tree to load its tables into the Model view.'
+                  : undefined
+              }
+              onUseInQuery={(sql) => { setSqlText(sql); setResult(null); setEditorTab('query'); }}
+            />
+          )}
+          {editorTab === 'query' && (
+          <>
           {warehousesError && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1120,6 +1150,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Databricks portal (SQL → Warehouses → Create) — Loom will pick it up automatically.
               </Body1>
             </div>
+          )}
+
+          </>
           )}
 
           {/* Edit / scale dialog — POST /api/2.0/sql/warehouses/{id}/edit */}

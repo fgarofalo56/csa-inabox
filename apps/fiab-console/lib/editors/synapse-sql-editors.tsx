@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip,
+  Tab, TabList,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -23,8 +24,10 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
+  Flowchart20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ModelViewPanel } from './components/model-view-canvas';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -418,6 +421,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [resuming, setResuming] = useState(false);
+  // Query | Model — Loom-native Model view (relationships + measures), no Power BI.
+  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
   const pollRef = useRef<number | null>(null);
   // ComputePicker surfaces sibling Dedicated SQL pools so users can switch
   // between pools (multi-pool workspaces) and see lifecycle state at a
@@ -572,6 +577,10 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         // wizards — real T-SQL over TDS (Entra-only) via /sql-security.
         { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Modeling', actions: [
+        // Loom-native Model view (table cards + relationship lines + measures), no Power BI.
+        { label: 'Model view', onClick: () => setEditorTab('model') },
+      ]},
     ]},
   ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema]);
 
@@ -624,6 +633,22 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+          </TabList>
+          {editorTab === 'model' && (
+            <ModelViewPanel
+              engine="synapse-dedicated-sql-pool"
+              id={id}
+              ready={isOnline}
+              measureKind="tvf"
+              notReadyMessage={isOnline ? undefined : 'Resume the pool to load tables and create relationships.'}
+              onUseInQuery={(sql) => { setSqlText(sql); setResult(null); setEditorTab('query'); }}
+            />
+          )}
+          {editorTab === 'query' && (
+          <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color={poolBadgeColor(state)}>{state}</Badge>
             <Badge appearance="outline">{poolState?.sku || 'DW—'}</Badge>
@@ -684,6 +709,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             ariaLabel="Dedicated T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
+          </>
+          )}
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
