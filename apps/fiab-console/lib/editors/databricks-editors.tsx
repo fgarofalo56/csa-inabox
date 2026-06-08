@@ -26,15 +26,27 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
-  Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  Save20Regular, Delete20Regular, Add20Regular, Key20Regular, Sparkle20Regular,
+  Flowchart20Regular,
+  DataBarVertical20Regular,
+  TableAdd20Regular, Copy20Regular,
+  Eye20Regular, MathFormula20Regular,
+  ArrowDownload20Regular,
 } from '@fluentui/react-icons';
+import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
+import { ConnectionDetailsPanel } from './components/connection-details';
+import { AiFunctionsHelper } from './components/ai-functions-helper';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
+import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
+import { downloadResultsCsv, downloadResultsJson } from './components/result-export';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -44,6 +56,8 @@ import {
   parseSource, serializeCells, cellLangToCommandLanguage,
   type DbxBaseLanguage,
 } from './databricks-notebook-source';
+import { QueryParamsBar, substituteDbx, type QueryParam } from './components/query-params';
+import { ResultVisualize } from './components/result-visualize';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -57,6 +71,7 @@ const useStyles = makeStyles({
   },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
   resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
@@ -117,6 +132,8 @@ interface SchemaResponse {
   catalogs?: string[];
   schemas?: string[];
   tables?: string[];
+  views?: string[];
+  functions?: string[];
   message?: string;
   error?: string;
 }
@@ -134,7 +151,13 @@ function stateColor(state?: string): 'success' | 'warning' | 'severe' | 'informa
   return 'severe';
 }
 
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
+function ResultsPanel({
+  result, loading, onOpenExcel,
+}: {
+  result: QueryResponse | null;
+  loading: boolean;
+  onOpenExcel?: () => void | Promise<void>;
+}) {
   const s = useStyles();
   if (loading) {
     return (
@@ -164,12 +187,31 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.truncated && <Badge appearance="outline" color="warning">truncated</Badge>}
+        {rows.length > 0 && (
+          <div className={s.resultActions}>
+            <Tooltip content="Download results as CSV" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadResultsCsv(`query-results-${stamp}`, columns, rows)}>CSV</Button>
+            </Tooltip>
+            <Tooltip content="Download results as JSON" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadResultsJson(`query-results-${stamp}`, columns, rows)}>JSON</Button>
+            </Tooltip>
+            {onOpenExcel && (
+              <Tooltip content="Open in Excel (web query — refresh re-runs against the live warehouse)" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                  onClick={() => void onOpenExcel()}>Excel</Button>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
@@ -608,6 +650,39 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   );
 }
 
+// ---- $/hr estimate (client-side, no extra backend call) --------------------
+// DBU consumption per cluster by warehouse size (Databricks SQL Warehouse sizing
+// table, Microsoft Learn). The autoscaler runs `min_num_clusters` of these.
+const DBU_PER_CLUSTER: Record<string, number> = {
+  '2X-Small': 2, 'X-Small': 4, 'Small': 8, 'Medium': 16, 'Large': 32,
+  'X-Large': 64, '2X-Large': 128, '3X-Large': 256, '4X-Large': 512,
+};
+// Azure list-price DBU/hr rate by warehouse type (USD; serverless is demand-billed
+// at a premium). Static — actual cost varies by region, Photon, and discount.
+const DBU_RATE_USD: Record<string, number> = {
+  SERVERLESS: 0.70,
+  PRO: 0.55,
+  CLASSIC: 0.22,
+};
+function dbuPerHr(size: string): number {
+  return DBU_PER_CLUSTER[size] ?? 4;
+}
+function estimateDbxCostPerHr(size: string, type: string, serverless: boolean, minClusters: number): number {
+  const dbu = dbuPerHr(size);
+  const rate = serverless ? DBU_RATE_USD.SERVERLESS : (DBU_RATE_USD[type] ?? DBU_RATE_USD.PRO);
+  return dbu * rate * Math.max(1, minClusters);
+}
+// Synapse Dedicated SQL pool DWU → $/hr (Azure list price, ~East US 2; linear in
+// DWU: DW100c ≈ $1.51/hr). Static estimate; varies by region and reservation.
+const DWU_COST_USD: Record<string, number> = {
+  'DW100c': 1.51, 'DW200c': 3.02, 'DW300c': 4.53, 'DW400c': 6.04,
+  'DW500c': 7.55, 'DW1000c': 15.10, 'DW1500c': 22.65, 'DW2000c': 30.20,
+  'DW2500c': 37.75, 'DW3000c': 45.30, 'DW5000c': 75.50,
+};
+function estimateDwuCostPerHr(sku: string): number {
+  return DWU_COST_USD[sku] ?? 1.51;
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
@@ -615,9 +690,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
-  // Top-level surface tab: Query (SQL editor + UC explorer) | Monitoring
-  // (running-clusters chart + recent-query table, both on real backends).
-  const [mainTab, setMainTab] = useState<'query' | 'monitoring'>('query');
+  // UC column-mask + row-filter wizards (granular security beyond object grants).
+  const [ucSecOpen, setUcSecOpen] = useState(false);
+  // AI functions helper (sentiment/classify/translate/summarize/extract).
+  const [aiFnOpen, setAiFnOpen] = useState(false);
+  // Last table the user clicked in the tree — context for the AI functions SQL.
+  const [aiTable, setAiTable] = useState<string>('');
+  // Visual (no-code) query canvas — Power-Query diagram-view parity (Spark SQL).
+  const [vqOpen, setVqOpen] = useState(false);
 
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -630,14 +710,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string | null>(null);
   const [tables, setTables] = useState<string[]>([]);
+  const [views, setViews] = useState<string[]>([]);
+  const [functions, setFunctions] = useState<string[]>([]);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
+  const [showViz, setShowViz] = useState(false);
   const [starting, setStarting] = useState(false);
+  // Query | Model — Loom-native Model view; relationships become real Unity
+  // Catalog FK constraints. No Power BI dependency.
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
   // ---- Edit / scale dialog (POST /api/2.0/sql/warehouses/{id}/edit) ----
   const [editOpen, setEditOpen] = useState(false);
+  const [connOpen, setConnOpen] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSize, setEditSize] = useState('X-Small');
@@ -647,6 +736,51 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [editType, setEditType] = useState<'PRO' | 'CLASSIC'>('PRO');
   const [editServerless, setEditServerless] = useState(false);
 
+  // ---- Boundary flag (Comm/GCC → Databricks; Gov → Synapse Dedicated pool) ----
+  const [gov, setGov] = useState(false);
+
+  // ---- Create dialog (POST .../create) ----
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createSize, setCreateSize] = useState('Small');
+  const [createType, setCreateType] = useState<'PRO' | 'CLASSIC'>('PRO');
+  const [createServerless, setCreateServerless] = useState(false);
+  const [createPhoton, setCreatePhoton] = useState(true);
+  const [createChannel, setCreateChannel] = useState<'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW'>('CHANNEL_NAME_CURRENT');
+  const [createAutoStop, setCreateAutoStop] = useState(10);
+  const [createMinClusters, setCreateMinClusters] = useState(1);
+  const [createMaxClusters, setCreateMaxClusters] = useState(1);
+  const [createTagsText, setCreateTagsText] = useState('');
+  const [createSpotPolicy, setCreateSpotPolicy] = useState<'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED'>('COST_OPTIMIZED');
+  // Gov-only: Synapse Dedicated pool DWU SKU.
+  const [createGovSku, setCreateGovSku] = useState('DW100c');
+
+  // ---- Delete confirm dialog (POST .../delete) ----
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // ---- Save as table (CTAS) dialog — CREATE TABLE … USING DELTA AS SELECT … ----
+  const [ctasOpen, setCtasOpen] = useState(false);
+  const [ctasCatalog, setCtasCatalog] = useState('');
+  const [ctasSchema, setCtasSchema] = useState('');
+  const [ctasName, setCtasName] = useState('');
+  const [ctasBusy, setCtasBusy] = useState(false);
+  const [ctasError, setCtasError] = useState<string | null>(null);
+  const [ctasReceipt, setCtasReceipt] = useState<string | null>(null);
+
+  // ---- Clone table dialog — CREATE [OR REPLACE] TABLE … [SHALLOW|DEEP] CLONE … ----
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneSource, setCloneSource] = useState('');
+  const [cloneTarget, setCloneTarget] = useState('');
+  const [cloneKind, setCloneKind] = useState<'SHALLOW' | 'DEEP'>('SHALLOW');
+  const [cloneReplace, setCloneReplace] = useState(false);
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const [cloneReceipt, setCloneReceipt] = useState<string | null>(null);
+
   // ---- Initial: load warehouses, pick first, fetch state ----
   useEffect(() => {
     let cancelled = false;
@@ -655,6 +789,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/warehouses`);
         const j = await r.json();
         if (cancelled) return;
+        if (typeof j.gov === 'boolean') setGov(j.gov);
         if (!j.ok) {
           setWarehousesError(j.error || `HTTP ${r.status}`);
           return;
@@ -692,6 +827,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [warehouseId, refreshState, refreshCatalogs]);
 
@@ -702,6 +839,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
@@ -713,11 +852,50 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) return;
     setActiveSchema(sch);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setTables(j.tables || []);
+    if (j.ok) {
+      setTables(j.tables || []);
+      setViews(j.views || []);
+      setFunctions(j.functions || []);
+    }
+  }, [id, warehouseId]);
+
+  // Script-out (Databricks): load CREATE (SHOW CREATE …) / DROP into the editor.
+  const dbxLoadScript = useCallback(async (
+    cat: string, sch: string, name: string, type: 'view' | 'function', mode: 'create' | 'drop',
+  ) => {
+    if (!warehouseId) { setResult({ ok: false, error: 'No warehouse selected.' }); return; }
+    const params = new URLSearchParams({ warehouseId, catalog: cat, schema: sch, name, type, mode });
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/script-out?${params.toString()}`);
+      const j = await r.json();
+      if (j.ok && typeof j.script === 'string') { setSqlText(j.script); setResult(null); }
+      else setResult({ ok: false, error: j.error || `HTTP ${r.status}` });
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, warehouseId]);
+
+  // Lazy row count for a Databricks view via the real /query route.
+  const dbxCountRows = useCallback(async (cat: string, sch: string, name: string): Promise<number | null> => {
+    if (!warehouseId) return null;
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sql: `SELECT COUNT(*) AS c FROM \`${cat}\`.\`${sch}\`.\`${name}\``,
+          warehouseId, catalog: cat, schema: sch,
+        }),
+      });
+      const j = await r.json();
+      const v = j?.ok ? j?.rows?.[0]?.[0] : null;
+      return v == null ? null : Number(v);
+    } catch { return null; }
   }, [id, warehouseId]);
 
   // ---- Start / Stop with poll ----
@@ -804,6 +982,96 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     }
   }, [id, warehouseId, editSize, editMinClusters, editMaxClusters, editAutoStop, editType, editServerless, refreshState]);
 
+  // ---- Create warehouse (Comm/GCC → Databricks; Gov → Synapse Dedicated pool) ----
+  const saveCreate = useCallback(async () => {
+    const name = createName.trim();
+    if (!name) { setCreateError('Name is required.'); return; }
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const payload: Record<string, unknown> = { name };
+      if (gov) {
+        payload.gov_sku = createGovSku;
+      } else {
+        payload.cluster_size = createSize;
+        payload.warehouse_type = createServerless ? 'PRO' : createType;
+        payload.enable_serverless_compute = createServerless;
+        payload.enable_photon = createPhoton;
+        payload.channel = createChannel;
+        payload.auto_stop_mins = createAutoStop;
+        payload.min_num_clusters = createMinClusters;
+        payload.max_num_clusters = createMaxClusters;
+        payload.spot_instance_policy = createSpotPolicy;
+        // "key=value" per line → { key: value }
+        const tags: Record<string, string> = {};
+        for (const line of createTagsText.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          const eq = t.indexOf('=');
+          if (eq <= 0) continue;
+          const k = t.slice(0, eq).trim();
+          const v = t.slice(eq + 1).trim();
+          if (k && v) tags[k] = v;
+        }
+        if (Object.keys(tags).length > 0) payload.tags = tags;
+      }
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/create`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateError(j.error || `HTTP ${r.status}`); return; }
+      const newId = j.id as string;
+      setWarehouses((prev) => [
+        ...prev,
+        { id: newId, name: j.name || name, state: 'STARTING', cluster_size: gov ? createGovSku : createSize } as Warehouse,
+      ]);
+      setWarehouseId(newId);
+      setCreateOpen(false);
+      // Poll the new resource to RUNNING/Online so the badge reflects reality.
+      startPolling();
+    } catch (e: any) {
+      setCreateError(e?.message || String(e));
+    } finally {
+      setCreateBusy(false);
+    }
+  }, [id, gov, createName, createSize, createType, createServerless, createPhoton, createChannel, createAutoStop, createMinClusters, createMaxClusters, createTagsText, createSpotPolicy, createGovSku, startPolling]);
+
+  // ---- Delete warehouse (running-state guard enforced server-side: 409) ----
+  const confirmDelete = useCallback(async (force = false) => {
+    if (!warehouseId) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, force }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        if (j.code === 'warehouse_running') {
+          setDeleteError(`${j.error} Stop it first, or use "Force delete".`);
+        } else {
+          setDeleteError(j.error || `HTTP ${r.status}`);
+        }
+        return;
+      }
+      setWarehouses((prev) => {
+        const next = prev.filter((w) => w.id !== warehouseId);
+        setWarehouseId(next[0]?.id || '');
+        return next;
+      });
+      setWarehouseState(null);
+      setDeleteOpen(false);
+    } catch (e: any) {
+      setDeleteError(e?.message || String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [id, warehouseId]);
+
   // ---- Run query ----
   const run = useCallback(async () => {
     if (!warehouseId) {
@@ -813,14 +1081,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setLoading(true);
     setResult(null);
     try {
+      // Rewrite {{name}} → :name and pass values out-of-band in parameters[]
+      // (Databricks binds them — never concatenated, so injection-safe).
+      const statement = substituteDbx(sqlText, queryParams);
       const res = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          sql: sqlText,
+          sql: statement,
           warehouseId,
           catalog: activeCatalog || undefined,
           schema: activeSchema || undefined,
+          parameters: queryParams,
         }),
       });
       const json = (await res.json()) as QueryResponse;
@@ -835,7 +1107,39 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     } finally {
       setLoading(false);
     }
-  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, refreshState]);
+  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, queryParams, refreshState]);
+
+  // Open-in-Excel — download a .iqy web-query for the current SQL + warehouse
+  // (and tree context). Excel refreshes by POSTing back to the warehouse
+  // /query route, which re-executes via the Databricks Statement Execution API.
+  const openInExcel = useCallback(async () => {
+    if (!warehouseId || !sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sql: sqlText,
+          warehouseId,
+          ...(activeCatalog && { catalog: activeCatalog }),
+          ...(activeSchema && { schema: activeSchema }),
+        }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-databricks-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText, warehouseId, activeCatalog, activeSchema]);
 
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
@@ -860,11 +1164,66 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     rows_produced?: number;
     error_message?: string;
   }
+  interface QueryProfileMetrics {
+    compilation_time_ms?: number;
+    execution_time_ms?: number;
+    photon_total_time_ms?: number;
+    total_time_ms?: number;
+    result_fetch_time_ms?: number;
+    read_bytes?: number;
+    read_remote_bytes?: number;
+    read_cache_bytes?: number;
+    write_remote_bytes?: number;
+    network_sent_bytes?: number;
+    spill_to_disk_bytes?: number;
+    rows_read_count?: number;
+    rows_produced_count?: number;
+    read_files_count?: number;
+    read_partitions_count?: number;
+    pruned_files_count?: number;
+  }
+  interface QueryProfile {
+    query_id: string;
+    status: string;
+    query_text?: string;
+    duration?: number;
+    error_message?: string;
+    spark_ui_url?: string;
+    statement_type?: string;
+    metrics?: QueryProfileMetrics;
+    photon_coverage_pct?: number | null;
+    plans_state?: string;
+    plans?: unknown;
+  }
   const [qhOpen, setQhOpen] = useState(false);
   const [qhEntries, setQhEntries] = useState<QHEntry[]>([]);
   const [qhBusy, setQhBusy] = useState(false);
   const [qhError, setQhError] = useState<string | null>(null);
   const [qhNext, setQhNext] = useState<string | null>(null);
+
+  // Query-profile drawer — opened from a history row's "Profile" button.
+  // Renders the real per-query metrics (IO / Photon) + Spark-plan deep-link
+  // from /api/2.0/sql/history/queries/{id}?include_metrics=true.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileData, setProfileData] = useState<QueryProfile | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const openProfile = useCallback(async (queryId: string) => {
+    setProfileOpen(true);
+    setProfileBusy(true);
+    setProfileError(null);
+    setProfileData(null);
+    try {
+      const r = await fetch(
+        `/api/items/databricks-sql-warehouse/${id}/query-profile?queryId=${encodeURIComponent(queryId)}`,
+      );
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setProfileData(j as QueryProfile);
+    } catch (e: any) { setProfileError(e?.message || String(e)); }
+    finally { setProfileBusy(false); }
+  }, [id]);
 
   const loadQueryHistory = useCallback(async (append = false, pageToken?: string) => {
     setQhBusy(true); setQhError(null);
@@ -900,27 +1259,119 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     void refreshCatalogs();
   }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
 
+  // Tables drilled-down in the UC tree → {schema, table} for the visual-query
+  // Add-table picker. (Spark SQL session catalog/schema come from props.)
+  const vqSourceTables = useMemo<VqSourceTable[]>(
+    () => tables.map((t) => ({ schema: activeSchema || undefined, table: t })),
+    [tables, activeSchema],
+  );
+
+  // ---- Save as table (CTAS) ----
+  const openCtas = useCallback(() => {
+    setCtasCatalog(activeCatalog || catalogs[0] || '');
+    setCtasSchema(activeSchema || '');
+    setCtasName('');
+    setCtasError(null);
+    setCtasReceipt(null);
+    setCtasOpen(true);
+  }, [activeCatalog, activeSchema, catalogs]);
+
+  const submitCtas = useCallback(async () => {
+    if (!ctasName.trim()) { setCtasError('table name required'); return; }
+    if (!ctasCatalog.trim()) { setCtasError('catalog required'); return; }
+    if (!ctasSchema.trim()) { setCtasError('schema required'); return; }
+    const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+    if (!/^select\b/i.test(cleaned)) {
+      setCtasError('CTAS requires the editor to contain a SELECT statement.');
+      return;
+    }
+    setCtasBusy(true); setCtasError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/ctas`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, sql: cleaned, catalog: ctasCatalog.trim(), schema: ctasSchema.trim(), tableName: ctasName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCtasError(j.error || `HTTP ${r.status}`); return; }
+      setCtasOpen(false);
+      setCtasReceipt(`Delta table created: ${j.table} (${j.executionMs}ms). Queryable in Unity Catalog.`);
+      ucChanged();
+    } catch (e: any) { setCtasError(e?.message || String(e)); }
+    finally { setCtasBusy(false); }
+  }, [id, warehouseId, sqlText, ctasCatalog, ctasSchema, ctasName, ucChanged]);
+
+  // ---- Clone table (SHALLOW = zero-copy / DEEP = full copy) ----
+  const openCloneForTable = useCallback((fqn: string) => {
+    setCloneSource(fqn);
+    setCloneTarget('');
+    setCloneKind('SHALLOW');
+    setCloneReplace(false);
+    setCloneError(null);
+    setCloneReceipt(null);
+    setCloneOpen(true);
+  }, []);
+
+  const submitClone = useCallback(async () => {
+    if (!cloneSource.trim() || !cloneTarget.trim()) { setCloneError('source and target are required'); return; }
+    setCloneBusy(true); setCloneError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/clone`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, source: cloneSource.trim(), target: cloneTarget.trim(), cloneType: cloneKind, replace: cloneReplace }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCloneError(j.error || `HTTP ${r.status}`); return; }
+      setCloneOpen(false);
+      setCloneReceipt(
+        cloneKind === 'SHALLOW'
+          ? `Shallow clone created: ${j.target} — zero-copy, ${j.numCopiedFiles} data files duplicated (source has ${j.sourceNumFiles}). (${j.executionMs}ms)`
+          : `Deep clone created: ${j.target} — ${j.numCopiedFiles} data files copied, independent of source. (${j.executionMs}ms)`,
+      );
+      ucChanged();
+    } catch (e: any) { setCloneError(e?.message || String(e)); }
+    finally { setCloneBusy(false); }
+  }, [id, warehouseId, cloneSource, cloneTarget, cloneKind, cloneReplace, ucChanged]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — compiles to Spark SQL' },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'AI functions', onClick: () => setAiFnOpen(true), title: 'Sentiment / classify / translate / summarize / extract over a text column (Databricks ai_query() or Azure OpenAI)' },
+        { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined,
+          disabled: !canRun || !sqlText.trim(),
+          title: !canRun ? 'Start the warehouse first' : !sqlText.trim() ? 'Enter a SELECT first' : 'CTAS — CREATE TABLE … USING DELTA AS SELECT …' },
+        { label: 'Open in Excel', onClick: sqlText.trim() && warehouseId ? openInExcel : undefined, disabled: !sqlText.trim() || !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the warehouse' },
         { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
       { label: 'Warehouse', actions: [
+        { label: 'Create', onClick: () => { setCreateError(null); setCreateOpen(true); }, title: gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse' },
+        { label: 'Delete', onClick: warehouseId ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
         { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
         { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
+        { label: 'Connection details', onClick: warehouseId ? () => setConnOpen(true) : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Server hostname, HTTP path, JDBC URL + CLI snippet (copy)' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
       { label: 'Unity Catalog', actions: [
         { label: 'Create catalog', onClick: () => setUcCreateCatalogOpen(true), title: 'Create a UC catalog (api 2.1 — requires CREATE CATALOG on the metastore)' },
         { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
+        { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
+            activeCatalog && activeSchema && tables.length > 0
+              ? `${activeCatalog}.${activeSchema}.${tables[0]}`
+              : '',
+          ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
+        { label: 'Column & row security', onClick: () => setUcSecOpen(true), title: 'Unity Catalog column masks + row filters (Commercial / GCC)' },
+      ]},
+      { label: 'Modeling', actions: [
+        // Loom-native Model view — relationships become real UC FK constraints.
+        { label: 'Model view', onClick: () => setEditorTab('model') },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel]);
 
   return (
     <ItemEditorChrome
@@ -998,11 +1449,62 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 value={`t-${c}.${sch}.${t}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setAiTable(`\`${c}\`.\`${sch}\`.\`${t}\``);
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                 }}
                               >
-                                <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                                <TreeItemLayout
+                                  iconBefore={<DocumentTable20Regular />}
+                                  actions={
+                                    <Tooltip content={`Clone ${t}`} relationship="label">
+                                      <Button
+                                        size="small" appearance="subtle" icon={<Copy20Regular />}
+                                        aria-label={`Clone ${t}`}
+                                        onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }}
+                                      />
+                                    </Tooltip>
+                                  }
+                                >
                                   {t}
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Views */}
+                            {activeSchema === sch && views.map((v) => (
+                              <TreeItem
+                                key={`v-${c}.${sch}.${v}`}
+                                itemType="leaf"
+                                value={`v-${c}.${sch}.${v}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${v}\` LIMIT 100;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<Eye20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${v}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, v, 'view', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, v, 'view', 'drop')} />}>
+                                  {v}{' '}
+                                  <SqlRowCountBadge cacheKey={`v-${c}.${sch}.${v}`} load={() => dbxCountRows(c, sch, v)} />
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* User functions */}
+                            {activeSchema === sch && functions.map((f) => (
+                              <TreeItem
+                                key={`f-${c}.${sch}.${f}`}
+                                itemType="leaf"
+                                value={`f-${c}.${sch}.${f}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`-- Unity Catalog function\nDESCRIBE FUNCTION EXTENDED \`${c}\`.\`${sch}\`.\`${f}\`;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${f}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, f, 'function', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, f, 'function', 'drop')} />}>
+                                  {f}
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}
@@ -1019,13 +1521,30 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={mainTab} onTabSelect={(_, d) => setMainTab(d.value as 'query' | 'monitoring')}>
-            <Tab value="query">Query</Tab>
-            <Tab value="monitoring">Monitoring</Tab>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+            <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
           </TabList>
-          {mainTab === 'monitoring' ? (
+          {editorTab === 'monitoring' && (
             <WarehouseMonitoringTab itemId={id} engine="databricks-sql-warehouse" warehouseId={warehouseId || undefined} />
-          ) : (
+          )}
+          {editorTab === 'model' && (
+            <ModelViewPanel
+              engine="databricks-sql-warehouse"
+              id={id}
+              query={{ warehouseId, catalog: activeCatalog || undefined, schema: activeSchema || undefined }}
+              ready={isRunning && !!activeCatalog && !!activeSchema}
+              measureKind="cosmos"
+              notReadyMessage={
+                !isRunning ? 'Start the warehouse to load tables.'
+                  : (!activeCatalog || !activeSchema) ? 'Open a catalog and schema in the left tree to load its tables into the Model view.'
+                  : undefined
+              }
+              onUseInQuery={(sql) => { setSqlText(sql); setResult(null); setEditorTab('query'); }}
+            />
+          )}
+          {editorTab === 'query' && (
           <>
           {warehousesError && (
             <MessageBar intent="error">
@@ -1074,6 +1593,16 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Edit
               </Button>
             </Tooltip>
+            <Tooltip content={gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Add20Regular />} onClick={() => { setCreateError(null); setCreateOpen(true); }}>
+                Create
+              </Button>
+            </Tooltip>
+            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={!warehouseId} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+                Delete
+              </Button>
+            </Tooltip>
             <Tooltip
               content={
                 !warehouseId ? 'Pick a warehouse first'
@@ -1091,6 +1620,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 style={{ marginLeft: 'auto' }}
               >
                 Run
+              </Button>
+            </Tooltip>
+            <Tooltip content="AI functions — sentiment / classify / translate / summarize / extract over a text column" relationship="label">
+              <Button appearance="outline" icon={<Sparkle20Regular />} onClick={() => setAiFnOpen(true)}>
+                AI functions
               </Button>
             </Tooltip>
           </div>
@@ -1123,7 +1657,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             minHeight={200}
             ariaLabel="Databricks SQL editor"
           />
-          <ResultsPanel result={result} loading={loading} />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
+          {result?.ok && (result.rows?.length ?? 0) > 0 && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button
+                size="small"
+                appearance={showViz ? 'primary' : 'outline'}
+                icon={<DataBarVertical20Regular />}
+                onClick={() => setShowViz((v) => !v)}
+              >
+                {showViz ? 'Hide chart' : 'Visualize'}
+              </Button>
+            </div>
+          )}
+          {showViz && result?.ok && (result.rows?.length ?? 0) > 0 && (
+            <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+          )}
+          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() && warehouseId ? openInExcel : undefined} />
           {!warehousesError && warehouses.length === 0 && (
             <div>
               <Subtitle2>No SQL Warehouses found</Subtitle2>
@@ -1132,6 +1682,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Databricks portal (SQL → Warehouses → Create) — Loom will pick it up automatically.
               </Body1>
             </div>
+          )}
+
+          </>
           )}
 
           {/* Edit / scale dialog — POST /api/2.0/sql/warehouses/{id}/edit */}
@@ -1203,6 +1756,206 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             </DialogSurface>
           </Dialog>
 
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '640px' }}>
+              <DialogBody>
+                <DialogTitle>Connection details — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  {warehouseId ? (
+                    <ConnectionDetailsPanel
+                      engine="databricks-sql-warehouse"
+                      id={id}
+                      warehouseId={warehouseId}
+                    />
+                  ) : null}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Create dialog — POST .../create (Databricks SQL Warehouse on Comm/GCC; */}
+          {/* Synapse Dedicated SQL pool on Gov). Azure-native default, no Fabric. */}
+          <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '580px' }}>
+              <DialogBody>
+                <DialogTitle>
+                  {gov ? 'Create dedicated SQL pool' : 'Create SQL warehouse'}
+                  {gov && <Badge appearance="outline" color="brand" style={{ marginLeft: 8 }}>Gov · Synapse Dedicated Pool</Badge>}
+                </DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {createError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>
+                    )}
+                    <Field label="Name" required hint={gov ? 'Synapse Dedicated SQL pool name (letters, digits, hyphen)' : 'SQL Warehouse display name'}>
+                      <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder={gov ? 'loom-warehouse' : 'analytics-wh'} />
+                    </Field>
+
+                    {gov ? (
+                      <>
+                        <Field label="Performance level (DWU)">
+                          <Dropdown
+                            value={createGovSku}
+                            selectedOptions={[createGovSku]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateGovSku(d.optionValue)}
+                          >
+                            {['DW100c', 'DW200c', 'DW300c', 'DW400c', 'DW500c', 'DW1000c', 'DW1500c', 'DW2000c', 'DW2500c', 'DW3000c', 'DW5000c'].map((sku) => (
+                              <Option key={sku} value={sku} text={sku}>{sku}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Estimated ~${estimateDwuCostPerHr(createGovSku).toFixed(2)}/hr</MessageBarTitle>
+                            Azure list price for {createGovSku} (~East US 2). Provisioned via ARM
+                            <code> PUT …/sqlPools/&#123;name&#125;</code>; reaches Online in a few minutes. Compute is
+                            billed while Online — pause to stop compute charges. Varies by region and reservation.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    ) : (
+                      <>
+                        <Field label="Cluster size">
+                          <Dropdown
+                            value={createSize}
+                            selectedOptions={[createSize]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateSize(d.optionValue)}
+                          >
+                            {['2X-Small', 'X-Small', 'Small', 'Medium', 'Large', 'X-Large', '2X-Large', '3X-Large', '4X-Large'].map((sz) => (
+                              <Option key={sz} value={sz} text={sz}>{sz}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Type" hint={createServerless ? 'Serverless requires PRO' : undefined}>
+                          <Dropdown
+                            value={createServerless ? 'PRO' : createType}
+                            disabled={createServerless}
+                            selectedOptions={[createServerless ? 'PRO' : createType]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateType(d.optionValue as 'PRO' | 'CLASSIC')}
+                          >
+                            <Option value="PRO" text="PRO">PRO</Option>
+                            <Option value="CLASSIC" text="CLASSIC">CLASSIC</Option>
+                          </Dropdown>
+                        </Field>
+                        <Switch
+                          checked={createServerless}
+                          label="Serverless compute (Databricks-managed; forces PRO)"
+                          onChange={(_, d) => { setCreateServerless(!!d.checked); if (d.checked) setCreateType('PRO'); }}
+                        />
+                        <Switch
+                          checked={createPhoton}
+                          label="Photon acceleration"
+                          onChange={(_, d) => setCreatePhoton(!!d.checked)}
+                        />
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
+                            <Input type="number" value={String(createMinClusters)}
+                              onChange={(_, d) => setCreateMinClusters(Math.max(1, Number(d.value) || 1))} />
+                          </Field>
+                          <Field label="Max clusters" style={{ flex: 1 }} hint="Scaling ceiling (1–30)">
+                            <Input type="number" value={String(createMaxClusters)}
+                              onChange={(_, d) => setCreateMaxClusters(Math.max(1, Number(d.value) || 1))} />
+                          </Field>
+                        </div>
+                        <Field label="Auto-stop (minutes)" hint="0 disables auto-stop">
+                          <Input type="number" value={String(createAutoStop)}
+                            onChange={(_, d) => setCreateAutoStop(Math.max(0, Number(d.value) || 0))} />
+                        </Field>
+                        <Field label="Channel">
+                          <Dropdown
+                            value={createChannel === 'CHANNEL_NAME_PREVIEW' ? 'Preview' : 'Current'}
+                            selectedOptions={[createChannel]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateChannel(d.optionValue as 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW')}
+                          >
+                            <Option value="CHANNEL_NAME_CURRENT" text="Current">Current</Option>
+                            <Option value="CHANNEL_NAME_PREVIEW" text="Preview">Preview</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Spot instance policy">
+                          <Dropdown
+                            value={createSpotPolicy === 'RELIABILITY_OPTIMIZED' ? 'Reliability optimized' : 'Cost optimized'}
+                            selectedOptions={[createSpotPolicy]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateSpotPolicy(d.optionValue as 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED')}
+                          >
+                            <Option value="COST_OPTIMIZED" text="Cost optimized">Cost optimized</Option>
+                            <Option value="RELIABILITY_OPTIMIZED" text="Reliability optimized">Reliability optimized</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Tags" hint="key=value, one per line">
+                          <Textarea
+                            value={createTagsText}
+                            onChange={(_, d) => setCreateTagsText(d.value)}
+                            placeholder={'team=analytics\nenv=prod'}
+                            rows={3}
+                          />
+                        </Field>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>
+                              Estimated ~${estimateDbxCostPerHr(createSize, createType, createServerless, createMinClusters).toFixed(2)}/hr
+                            </MessageBarTitle>
+                            {dbuPerHr(createSize)} DBU/hr per cluster × {Math.max(1, createMinClusters)} cluster(s) ·{' '}
+                            {createServerless ? 'serverless' : createType.toLowerCase()} list price. Real warehouse via
+                            <code> POST /api/2.0/sql/warehouses</code>. Actual cost varies by region, Photon, spot policy, and discount.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveCreate} disabled={createBusy || !createName.trim()}>
+                    {createBusy ? 'Creating…' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Delete confirm — POST .../delete. Running-state guard returns 409. */}
+          <Dialog open={deleteOpen} onOpenChange={(_, d) => setDeleteOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '520px' }}>
+              <DialogBody>
+                <DialogTitle>Delete {gov ? 'dedicated pool' : 'warehouse'} — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {deleteError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Delete failed</MessageBarTitle>{deleteError}</MessageBarBody></MessageBar>
+                    )}
+                    {isRunning && !gov && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Warehouse is RUNNING</MessageBarTitle>
+                          Stop it first, or use <strong>Force delete</strong> to drop it now — in-flight queries will be cancelled.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <Body1>
+                      Permanently deletes <strong>{selectedWarehouse?.name || warehouseId}</strong> and its configuration.
+                      {gov ? ' Restorable only from an existing backup.' : ' Data in Unity Catalog is not deleted.'}
+                    </Body1>
+                    <Caption1>This action cannot be undone.</Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}>Cancel</Button>
+                  {isRunning && !gov && (
+                    <Button appearance="outline" onClick={() => confirmDelete(true)} disabled={deleteBusy}>
+                      {deleteBusy ? 'Deleting…' : 'Force delete'}
+                    </Button>
+                  )}
+                  <Button appearance="primary" onClick={() => confirmDelete(false)} disabled={deleteBusy}>
+                    {deleteBusy ? 'Deleting…' : 'Delete'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
               <DialogBody>
@@ -1221,10 +1974,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                         <TableHeaderCell>User</TableHeaderCell>
                         <TableHeaderCell>Rows</TableHeaderCell>
                         <TableHeaderCell>Query</TableHeaderCell>
+                        <TableHeaderCell>Profile</TableHeaderCell>
                       </TableRow></TableHeader>
                       <TableBody>
                         {qhEntries.length === 0 && !qhBusy && (
-                          <TableRow><TableCell colSpan={6}><Caption1>No queries yet.</Caption1></TableCell></TableRow>
+                          <TableRow><TableCell colSpan={7}><Caption1>No queries yet.</Caption1></TableCell></TableRow>
                         )}
                         {qhEntries.map((q) => (
                           <TableRow key={q.query_id}>
@@ -1239,6 +1993,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                             <TableCell>{q.rows_produced ?? '—'}</TableCell>
                             <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               <code style={{ fontSize: 11 }}>{q.query_text?.slice(0, 200) || (q.error_message ? `ERR: ${q.error_message}` : '—')}</code>
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                size="small"
+                                appearance="subtle"
+                                disabled={q.status !== 'FINISHED' && q.status !== 'FAILED'}
+                                title={q.status !== 'FINISHED' && q.status !== 'FAILED' ? 'Profile available once the query completes' : 'View execution profile (IO, Photon, Spark plan)'}
+                                onClick={() => openProfile(q.query_id)}
+                              >
+                                Profile
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1257,6 +2022,118 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             </DialogSurface>
           </Dialog>
 
+          <Dialog open={profileOpen} onOpenChange={(_, d) => setProfileOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '920px', width: '95vw' }}>
+              <DialogBody>
+                <DialogTitle>
+                  Query profile{profileData?.query_id ? ` — ${profileData.query_id}` : ''}
+                </DialogTitle>
+                <DialogContent>
+                  {profileBusy && <Spinner size="small" label="Loading profile…" labelPosition="after" />}
+                  {profileError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{profileError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {profileData && !profileBusy && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Badge appearance="filled" color={profileData.status === 'FINISHED' ? 'success' : profileData.status === 'FAILED' ? 'danger' : 'informative'}>
+                          {profileData.status}
+                        </Badge>
+                        {profileData.statement_type && (
+                          <Badge appearance="outline">{profileData.statement_type}</Badge>
+                        )}
+                        {profileData.duration != null && (
+                          <Badge appearance="outline">Total: {(profileData.duration / 1000).toFixed(2)}s</Badge>
+                        )}
+                        {profileData.photon_coverage_pct != null && (
+                          <Badge appearance="outline" color="brand">Photon: {profileData.photon_coverage_pct}%</Badge>
+                        )}
+                        <Caption1>Plans: <strong>{profileData.plans_state ?? '—'}</strong></Caption1>
+                      </div>
+
+                      {profileData.error_message && (
+                        <MessageBar intent="error">
+                          <MessageBarBody>{profileData.error_message}</MessageBarBody>
+                        </MessageBar>
+                      )}
+
+                      {profileData.metrics && (
+                        <>
+                          <Divider>IO &amp; timing</Divider>
+                          <Table aria-label="Query metrics" size="small">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHeaderCell>Metric</TableHeaderCell>
+                                <TableHeaderCell>Value</TableHeaderCell>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {([
+                                ['Compilation', `${profileData.metrics.compilation_time_ms ?? '—'} ms`],
+                                ['Execution', `${profileData.metrics.execution_time_ms ?? '—'} ms`],
+                                ['Photon time', `${profileData.metrics.photon_total_time_ms ?? '—'} ms`],
+                                ['Result fetch', `${profileData.metrics.result_fetch_time_ms ?? '—'} ms`],
+                                ['Bytes read (total)', fmtBytes(profileData.metrics.read_bytes)],
+                                ['Bytes read (remote)', fmtBytes(profileData.metrics.read_remote_bytes)],
+                                ['Bytes read (cache)', fmtBytes(profileData.metrics.read_cache_bytes)],
+                                ['Bytes written', fmtBytes(profileData.metrics.write_remote_bytes)],
+                                ['Spill to disk', fmtBytes(profileData.metrics.spill_to_disk_bytes)],
+                                ['Network sent', fmtBytes(profileData.metrics.network_sent_bytes)],
+                                ['Rows read', profileData.metrics.rows_read_count != null ? profileData.metrics.rows_read_count.toLocaleString() : '—'],
+                                ['Rows produced', profileData.metrics.rows_produced_count != null ? profileData.metrics.rows_produced_count.toLocaleString() : '—'],
+                                ['Files scanned', profileData.metrics.read_files_count ?? '—'],
+                                ['Files pruned', profileData.metrics.pruned_files_count ?? '—'],
+                                ['Partitions scanned', profileData.metrics.read_partitions_count ?? '—'],
+                              ] as [string, string | number][]).map(([label, val]) => (
+                                <TableRow key={label}>
+                                  <TableCell><Caption1>{label}</Caption1></TableCell>
+                                  <TableCell className={s.cell}>{val}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+
+                      <Divider>Spark plan (physical DAG)</Divider>
+                      {profileData.spark_ui_url && (
+                        <Body1>
+                          Open the full physical plan / DAG in the Spark UI:{' '}
+                          <a href={profileData.spark_ui_url} target="_blank" rel="noopener noreferrer">
+                            {profileData.spark_ui_url}
+                          </a>
+                        </Body1>
+                      )}
+                      {profileData.plans != null && (
+                        <pre style={{
+                          fontFamily: 'Consolas, monospace', fontSize: 11, overflow: 'auto',
+                          maxHeight: 320, backgroundColor: tokens.colorNeutralBackground3,
+                          padding: 8, borderRadius: 4, margin: 0,
+                        }}>
+                          {JSON.stringify(profileData.plans, null, 2)}
+                        </pre>
+                      )}
+                      {profileData.plans == null && !profileData.spark_ui_url && (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            No inline plan returned for this query (likely a result-cache hit or a
+                            metadata-only statement). Re-run with a change that bypasses the cache to
+                            capture a plan.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setProfileOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <UnityCatalogWriteDialogs
             catalogs={catalogs}
             activeCatalog={activeCatalog}
@@ -1269,6 +2146,171 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+
+          <Dialog open={ucSecOpen} onOpenChange={(_, d) => setUcSecOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
+              <DialogBody>
+                <DialogTitle>Column &amp; row security — Unity Catalog</DialogTitle>
+                <DialogContent>
+                  <UcSecurityPanel
+                    itemType="databricks-sql-warehouse"
+                    itemId={id}
+                    warehouseId={warehouseId || undefined}
+                    catalog={activeCatalog || undefined}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setUcSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <AiFunctionsHelper
+            open={aiFnOpen}
+            onOpenChange={setAiFnOpen}
+            itemType="databricks-sql-warehouse"
+            itemId={id}
+            warehouseId={warehouseId}
+            catalog={activeCatalog}
+            schema={activeSchema}
+            table={aiTable}
+            onInsert={(sql) => setSqlText(sql)}
+          />
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — Databricks SQL (Spark SQL)</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas
+                    engine="databricks-sql-warehouse"
+                    id={id}
+                    dialect="sparksql"
+                    warehouseId={warehouseId}
+                    catalog={activeCatalog || undefined}
+                    schema={activeSchema || undefined}
+                    sourceTables={vqSourceTables}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {ctasReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Table created</MessageBarTitle>{ctasReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
+          {cloneReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Clone created</MessageBarTitle>{cloneReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          {/* Save as table (CTAS) — CREATE TABLE … USING DELTA AS SELECT … */}
+          <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '600px' }}>
+              <DialogBody>
+                <DialogTitle>Save as table (CTAS)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {ctasError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                    )}
+                    <Caption1>
+                      Wraps the editor SELECT as <code>CREATE TABLE `catalog`.`schema`.`name` USING DELTA AS SELECT …</code>{' '}
+                      and runs it on the warehouse. Requires <code>CREATE TABLE</code> + <code>USE SCHEMA</code> + <code>USE CATALOG</code> on the target.
+                    </Caption1>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Field label="Catalog" required style={{ flex: 1 }}>
+                        {catalogs.length > 0 ? (
+                          <Dropdown value={ctasCatalog} selectedOptions={ctasCatalog ? [ctasCatalog] : []}
+                            onOptionSelect={(_, d) => d.optionValue && setCtasCatalog(d.optionValue)} placeholder="catalog">
+                            {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={ctasCatalog} onChange={(_, d) => setCtasCatalog(d.value)} placeholder="catalog" />
+                        )}
+                      </Field>
+                      <Field label="Schema" required style={{ flex: 1 }}>
+                        {schemas.length > 0 && ctasCatalog === activeCatalog ? (
+                          <Dropdown value={ctasSchema} selectedOptions={ctasSchema ? [ctasSchema] : []}
+                            onOptionSelect={(_, d) => d.optionValue && setCtasSchema(d.optionValue)} placeholder="schema">
+                            {schemas.map((sc) => <Option key={sc} value={sc} text={sc}>{sc}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="schema" />
+                        )}
+                      </Field>
+                      <Field label="Table name" required style={{ flex: 1 }}>
+                        <Input value={ctasName} onChange={(_, d) => setCtasName(d.value)} placeholder="my_table" />
+                      </Field>
+                    </div>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCtasOpen(false)} disabled={ctasBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasName.trim() || !ctasCatalog.trim() || !ctasSchema.trim()}>
+                    {ctasBusy ? 'Creating…' : 'Create table'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Clone table (Delta SHALLOW = zero-copy / DEEP = full copy) */}
+          <Dialog open={cloneOpen} onOpenChange={(_, d) => setCloneOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '620px' }}>
+              <DialogBody>
+                <DialogTitle>Clone table (Delta)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {cloneError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Clone failed</MessageBarTitle>{cloneError}</MessageBarBody></MessageBar>
+                    )}
+                    <Field label="Clone type">
+                      <Dropdown value={cloneKind} selectedOptions={[cloneKind]}
+                        onOptionSelect={(_, d) => d.optionValue && setCloneKind(d.optionValue as 'SHALLOW' | 'DEEP')}>
+                        <Option value="SHALLOW" text="SHALLOW">SHALLOW — zero-copy (metadata only; data files remain in source)</Option>
+                        <Option value="DEEP" text="DEEP">DEEP — full copy (data files duplicated, independent of source)</Option>
+                      </Dropdown>
+                    </Field>
+                    {cloneKind === 'SHALLOW' && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Shallow clone dependency</MessageBarTitle>
+                          The clone references the source table&apos;s Delta data files. Running VACUUM on the source
+                          can break this clone if it removes files the clone still references. Use DEEP clone for
+                          long-term archival or any copy that must survive source VACUUM.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <Field label="Source table" hint="catalog.schema.table" required>
+                      <Input value={cloneSource} onChange={(_, d) => setCloneSource(d.value)} placeholder="main.sales.orders" />
+                    </Field>
+                    <Field label="Target table" hint="catalog.schema.table" required>
+                      <Input value={cloneTarget} onChange={(_, d) => setCloneTarget(d.value)} placeholder="main.dev.orders_clone" />
+                    </Field>
+                    <Switch checked={cloneReplace} label="Replace if target already exists (CREATE OR REPLACE TABLE)"
+                      onChange={(_, d) => setCloneReplace(!!d.checked)} />
+                    <Caption1>
+                      Requires <code>SELECT</code> on the source + <code>CREATE TABLE</code> on the target schema.
+                      Unity Catalog shallow clone requires Databricks Runtime 13.3 LTS or above.
+                    </Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCloneOpen(false)} disabled={cloneBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitClone} disabled={cloneBusy || !cloneSource.trim() || !cloneTarget.trim()}>
+                    {cloneBusy ? 'Cloning…' : 'Clone'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
           </>
           )}
         </div>
@@ -1352,6 +2394,14 @@ function fmtDuration(ms?: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function fmtBytes(b?: number): string {
+  if (b == null) return '—';
+  if (b < 1024) return `${b} B`;
+  if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`;
+  return `${(b / 1_073_741_824).toFixed(2)} GB`;
 }
 
 // ============================================================
