@@ -16,6 +16,9 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | Workload management groups + classifiers | Manage |
 | 8 | Geo backup / restore points | Manage |
 | 9 | Compute picker across pools | Studio |
+| 10 | Explorer: views / stored procedures / functions nodes | Data hub object tree |
+| 11 | Row-count badges on tables + views | Data hub |
+| 12 | Script object as CREATE / ALTER / DROP | Object context menu |
 
 ## Loom coverage
 
@@ -30,9 +33,13 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | ✅ | `Workload mgmt` loads sys.workload_management_workload_groups query |
 | 8 | ✅ | `Geo backup` loads sys.pdw_loader_backup_runs query |
 | 9 | ✅ | `ComputePicker` filtered to dedicated pools |
+| 10 | ✅ | `/schema` enumerates sys.views / sys.procedures / sys.objects(FN/IF/TF) → typed tree branches (Eye/Form/MathFormula icons) |
+| 11 | ✅ | Tables: sys.partitions rows; views: lazy `SELECT COUNT_BIG(*)` via `/query` on expand |
+| 12 | ✅ | `…` menu → `/script-out` returns real OBJECT_DEFINITION (CREATE), CREATE OR ALTER (ALTER), or DROP … IF EXISTS |
 
 ## Backend per control
 - Query / DMV actions → Synapse Dedicated TDS (`executeQuery`/`dedicatedTarget`).
 - Lifecycle → ARM (`synapse-pool-arm` `getPoolState`/resume/pause).
+- Object enumeration + script-out → `sys.views`/`sys.procedures`/`sys.objects`/`sys.sql_modules` via `lib/azure/sql-object-scripting.ts`.
 
-Grade: **A — every inventory row built; all four former "deferred" buttons now wired to real DMV T-SQL through the existing /query TDS path.**
+Grade: **A — every inventory row built; Explorer now covers views/SPs/functions with real row counts and full script-out (CREATE/ALTER/DROP) over OBJECT_DEFINITION.**

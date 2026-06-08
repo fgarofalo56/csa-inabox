@@ -27,13 +27,17 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  Eye20Regular, MathFormula20Regular,
+  ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { downloadResultsCsv, downloadResultsJson } from './components/result-export';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -56,6 +60,7 @@ const useStyles = makeStyles({
   },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
   resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
@@ -116,6 +121,8 @@ interface SchemaResponse {
   catalogs?: string[];
   schemas?: string[];
   tables?: string[];
+  views?: string[];
+  functions?: string[];
   message?: string;
   error?: string;
 }
@@ -133,7 +140,13 @@ function stateColor(state?: string): 'success' | 'warning' | 'severe' | 'informa
   return 'severe';
 }
 
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
+function ResultsPanel({
+  result, loading, onOpenExcel,
+}: {
+  result: QueryResponse | null;
+  loading: boolean;
+  onOpenExcel?: () => void | Promise<void>;
+}) {
   const s = useStyles();
   if (loading) {
     return (
@@ -163,12 +176,31 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.truncated && <Badge appearance="outline" color="warning">truncated</Badge>}
+        {rows.length > 0 && (
+          <div className={s.resultActions}>
+            <Tooltip content="Download results as CSV" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadResultsCsv(`query-results-${stamp}`, columns, rows)}>CSV</Button>
+            </Tooltip>
+            <Tooltip content="Download results as JSON" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadResultsJson(`query-results-${stamp}`, columns, rows)}>JSON</Button>
+            </Tooltip>
+            {onOpenExcel && (
+              <Tooltip content="Open in Excel (web query — refresh re-runs against the live warehouse)" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                  onClick={() => void onOpenExcel()}>Excel</Button>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
@@ -626,6 +658,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string | null>(null);
   const [tables, setTables] = useState<string[]>([]);
+  const [views, setViews] = useState<string[]>([]);
+  const [functions, setFunctions] = useState<string[]>([]);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -688,6 +722,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [warehouseId, refreshState, refreshCatalogs]);
 
@@ -698,6 +734,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setActiveSchema(null);
     setSchemas([]);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
@@ -709,11 +747,50 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) return;
     setActiveSchema(sch);
     setTables([]);
+    setViews([]);
+    setFunctions([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setTables(j.tables || []);
+    if (j.ok) {
+      setTables(j.tables || []);
+      setViews(j.views || []);
+      setFunctions(j.functions || []);
+    }
+  }, [id, warehouseId]);
+
+  // Script-out (Databricks): load CREATE (SHOW CREATE …) / DROP into the editor.
+  const dbxLoadScript = useCallback(async (
+    cat: string, sch: string, name: string, type: 'view' | 'function', mode: 'create' | 'drop',
+  ) => {
+    if (!warehouseId) { setResult({ ok: false, error: 'No warehouse selected.' }); return; }
+    const params = new URLSearchParams({ warehouseId, catalog: cat, schema: sch, name, type, mode });
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/script-out?${params.toString()}`);
+      const j = await r.json();
+      if (j.ok && typeof j.script === 'string') { setSqlText(j.script); setResult(null); }
+      else setResult({ ok: false, error: j.error || `HTTP ${r.status}` });
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, warehouseId]);
+
+  // Lazy row count for a Databricks view via the real /query route.
+  const dbxCountRows = useCallback(async (cat: string, sch: string, name: string): Promise<number | null> => {
+    if (!warehouseId) return null;
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sql: `SELECT COUNT(*) AS c FROM \`${cat}\`.\`${sch}\`.\`${name}\``,
+          warehouseId, catalog: cat, schema: sch,
+        }),
+      });
+      const j = await r.json();
+      const v = j?.ok ? j?.rows?.[0]?.[0] : null;
+      return v == null ? null : Number(v);
+    } catch { return null; }
   }, [id, warehouseId]);
 
   // ---- Start / Stop with poll ----
@@ -833,6 +910,38 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     }
   }, [id, sqlText, warehouseId, activeCatalog, activeSchema, refreshState]);
 
+  // Open-in-Excel — download a .iqy web-query for the current SQL + warehouse
+  // (and tree context). Excel refreshes by POSTing back to the warehouse
+  // /query route, which re-executes via the Databricks Statement Execution API.
+  const openInExcel = useCallback(async () => {
+    if (!warehouseId || !sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sql: sqlText,
+          warehouseId,
+          ...(activeCatalog && { catalog: activeCatalog }),
+          ...(activeSchema && { schema: activeSchema }),
+        }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-databricks-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText, warehouseId, activeCatalog, activeSchema]);
+
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
   const selectedWarehouse = useMemo(
@@ -901,6 +1010,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Open in Excel', onClick: sqlText.trim() && warehouseId ? openInExcel : undefined, disabled: !sqlText.trim() || !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the warehouse' },
         { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
       { label: 'Warehouse', actions: [
@@ -916,7 +1026,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, openInExcel, sqlText]);
 
   return (
     <ItemEditorChrome
@@ -999,6 +1109,45 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                               >
                                 <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
                                   {t}
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Views */}
+                            {activeSchema === sch && views.map((v) => (
+                              <TreeItem
+                                key={`v-${c}.${sch}.${v}`}
+                                itemType="leaf"
+                                value={`v-${c}.${sch}.${v}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${v}\` LIMIT 100;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<Eye20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${v}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, v, 'view', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, v, 'view', 'drop')} />}>
+                                  {v}{' '}
+                                  <SqlRowCountBadge cacheKey={`v-${c}.${sch}.${v}`} load={() => dbxCountRows(c, sch, v)} />
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* User functions */}
+                            {activeSchema === sch && functions.map((f) => (
+                              <TreeItem
+                                key={`f-${c}.${sch}.${f}`}
+                                itemType="leaf"
+                                value={`f-${c}.${sch}.${f}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`-- Unity Catalog function\nDESCRIBE FUNCTION EXTENDED \`${c}\`.\`${sch}\`.\`${f}\`;`);
+                                }}
+                              >
+                                <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                                  actions={<SqlObjectScriptMenu name={`${sch}.${f}`}
+                                    onScriptCreate={() => dbxLoadScript(c, sch, f, 'function', 'create')}
+                                    onScriptDrop={() => dbxLoadScript(c, sch, f, 'function', 'drop')} />}>
+                                  {f}
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}
@@ -1111,7 +1260,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             minHeight={200}
             ariaLabel="Databricks SQL editor"
           />
-          <ResultsPanel result={result} loading={loading} />
+          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() && warehouseId ? openInExcel : undefined} />
           {!warehousesError && warehouses.length === 0 && (
             <div>
               <Subtitle2>No SQL Warehouses found</Subtitle2>

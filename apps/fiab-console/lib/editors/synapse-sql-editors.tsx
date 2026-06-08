@@ -23,6 +23,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
+  Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +32,10 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
+import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
+import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -69,28 +74,16 @@ function formatCell(v: unknown): string {
   return String(v);
 }
 
-// ── Results export (CSV / JSON) — client-side, no extra route ──
-function downloadBlob(filename: string, mime: string, data: string) {
-  const blob = new Blob([data], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function resultsToCsv(columns: string[], rows: unknown[][]): string {
-  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
-}
-function resultsToJson(columns: string[], rows: unknown[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
-
-function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
+// ── Results export (CSV / JSON / Open-in-Excel) — serializers + blob
+// download live in ./components/result-export (shared with Databricks +
+// Warehouse). Open-in-Excel routes through the per-engine /iqy BFF route.
+function ResultsPanel({
+  result, loading, onOpenExcel,
+}: {
+  result: QueryResponse | null;
+  loading: boolean;
+  onOpenExcel?: () => void | Promise<void>;
+}) {
   const s = useStyles();
   if (loading) {
     return (
@@ -137,6 +130,12 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
               <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                 onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
             </Tooltip>
+            {onOpenExcel && (
+              <Tooltip content="Open in Excel (web query — refresh re-runs against the live endpoint)" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                  onClick={() => void onOpenExcel()}>Excel</Button>
+              </Tooltip>
+            )}
           </div>
         )}
       </div>
@@ -225,6 +224,32 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     }
   }, [id, sqlText, database]);
 
+  // Open-in-Excel — download a .iqy web-query for the current SQL + database.
+  // Excel refreshes by POSTing back to the serverless /query route (real TDS).
+  const openInExcel = useCallback(async () => {
+    if (!sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText, database }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-synapse-serverless-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText, database]);
+
   // Ctrl+S / Cmd+S → Run (SSMS / Azure Data Studio muscle memory). T-SQL text
   // is ephemeral query state, so the surfaced save action is Run.
   useEffect(() => {
@@ -247,6 +272,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
+        { label: 'Open in Excel', onClick: sqlText.trim() && !loading ? openInExcel : undefined, disabled: !sqlText.trim() || loading, title: !sqlText.trim() ? 'Enter a query first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the live endpoint' },
         // Loads a real sys.external_tables / OPENROWSET template; Run executes
         // it via the wired serverless /query path.
         { label: 'External tables', onClick: () => setSqlText(
@@ -282,7 +308,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
         { label: 'GRANT / masking', onClick: () => setSecOpen(true), title: 'Object/column GRANT and Dynamic Data Masking (RLS is not supported on Serverless)' },
       ]},
     ]},
-  ], [loading, run]);
+  ], [loading, run, openInExcel, sqlText]);
 
   return (
     <ItemEditorChrome
@@ -360,7 +386,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
           />
-          <ResultsPanel result={result} loading={loading} />
+          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() ? openInExcel : undefined} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
@@ -399,6 +425,10 @@ interface DedicatedSchema {
   pool?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  views?: { schema: string; name: string }[];
+  procedures?: { schema: string; name: string }[];
+  functions?: { schema: string; name: string; type: string }[];
+  warnings?: string[];
 }
 
 function poolBadgeColor(state: string): 'success' | 'warning' | 'severe' | 'informative' {
@@ -503,6 +533,24 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
+  const views = schema?.views ?? [];
+  const procedures = schema?.procedures ?? [];
+  const functions = schema?.functions ?? [];
+
+  // Script-out: load the real CREATE/ALTER/DROP into the editor buffer.
+  const loadScript = useCallback(async (type: ScriptObjectType, objSchema: string, name: string, mode: ScriptMode) => {
+    const r = await loadSqlScript('synapse-dedicated-sql-pool', id, { type, schema: objSchema, name, mode });
+    if (r.ok && r.script != null) {
+      setSqlText(r.script);
+      setResult(null);
+    } else {
+      setResult({ ok: false, error: r.error || 'Could not script object' });
+    }
+  }, [id]);
+  const countRows = useCallback(
+    (objSchema: string, name: string) => sqlRowCount('synapse-dedicated-sql-pool', id, objSchema, name),
+    [id],
+  );
 
   // Ctrl+S / Cmd+S → Run when the pool is Online (SSMS muscle memory).
   useEffect(() => {
@@ -615,6 +663,93 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         </TreeItem>
                       ))}
                     </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Views */}
+            <TreeItem itemType="branch" value="views">
+              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({views.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="v-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && views.length === 0 && (
+                  <TreeItem itemType="leaf" value="v-empty"><TreeItemLayout><Caption1>No views</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {views.map((v) => (
+                  <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
+                    onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Eye20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
+                        onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
+                        onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
+                        onScriptDrop={() => loadScript('view', v.schema, v.name, 'drop')} />}
+                    >
+                      {v.schema}.{v.name}{' '}
+                      <SqlRowCountBadge cacheKey={`v-${v.schema}.${v.name}`} load={() => countRows(v.schema, v.name)} />
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Stored procedures */}
+            <TreeItem itemType="branch" value="procs">
+              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({procedures.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="p-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && procedures.length === 0 && (
+                  <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>No procedures</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {procedures.map((p) => (
+                  <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
+                    onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Form20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
+                        onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
+                        onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
+                        onScriptDrop={() => loadScript('procedure', p.schema, p.name, 'drop')} />}
+                    >
+                      {p.schema}.{p.name}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Functions */}
+            <TreeItem itemType="branch" value="funcs">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({functions.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="f-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && functions.length === 0 && (
+                  <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>No functions</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {functions.map((f) => (
+                  <TreeItem key={`f-${f.schema}.${f.name}`} itemType="leaf" value={`f-${f.schema}.${f.name}`}
+                    onClick={() => setSqlText(
+                      f.type === 'FN'
+                        ? `SELECT [${f.schema}].[${f.name}]();`
+                        : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
+                    )}>
+                    <TreeItemLayout
+                      iconBefore={<MathFormula20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
+                        onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
+                        onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
+                        onScriptDrop={() => loadScript('function', f.schema, f.name, 'drop')} />}
+                    >
+                      {f.schema}.{f.name}{' '}
+                      <Caption1>· {f.type === 'FN' ? 'scalar' : f.type === 'IF' ? 'inline TVF' : 'TVF'}</Caption1>
+                    </TreeItemLayout>
                   </TreeItem>
                 ))}
               </Tree>

@@ -22,6 +22,11 @@ import {
   type DataLakeFileSystemClient,
   type PathAccessControlItem,
 } from '@azure/storage-file-datalake';
+import {
+  BlobServiceClient,
+  type BlobClient as AzureBlobClient,
+} from '@azure/storage-blob';
+import { getBlobSuffix } from './cloud-endpoints';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -115,12 +120,122 @@ export interface PathEntry {
   size: number;
   lastModified?: string;
   etag?: string;
+  tier?: string;
 }
 
 function getFileSystem(container: string, account?: string): DataLakeFileSystemClient {
   const svc = account ? getServiceClientFor(account) : getServiceClient();
   return svc.getFileSystemClient(container);
 }
+
+// ============================================================
+// Blob access tiers (Hot / Cool / Cold) — data-plane blob API.
+//
+// ADLS Gen2 multi-protocol access lets us reach the same files via the
+// .blob endpoint, where Set Blob Tier / Copy Blob / getProperties expose
+// the access tier that the .dfs (DataLake) surface does not.
+//
+//   - Hot → Cool / Cold  : Set Blob Tier (instantaneous, no penalty on write)
+//   - Cool / Cold → Hot  : Copy Blob (avoids the early-deletion penalty that
+//                          Set Blob Tier would charge on the source blob)
+//
+// GA in all four clouds. No Fabric dependency — the .blob host is resolved
+// from getBlobSuffix() (sovereign-cloud-correct).
+// ============================================================
+
+export type BlobAccessTier = 'Hot' | 'Cool' | 'Cold';
+
+export interface TierResult {
+  ok: true;
+  tier: BlobAccessTier;
+  method: 'set' | 'copy';
+}
+
+const blobServiceClients = new Map<string, BlobServiceClient>();
+
+function getBlobServiceClient(account?: string): BlobServiceClient {
+  const acct = account ?? resolveAccountName();
+  const key = acct.toLowerCase();
+  let c = blobServiceClients.get(key);
+  if (!c) {
+    c = new BlobServiceClient(`https://${acct}.${getBlobSuffix()}`, credential);
+    blobServiceClients.set(key, c);
+  }
+  return c;
+}
+
+function getBlobClient(container: string, path: string, account?: string): AzureBlobClient {
+  const clean = path.replace(/^\/+/, '');
+  return getBlobServiceClient(account).getContainerClient(container).getBlobClient(clean);
+}
+
+/** Read the current access tier of a single blob via Get Blob Properties. */
+export async function getBlobTier(
+  container: string,
+  path: string,
+  account?: string,
+): Promise<{ tier: BlobAccessTier | 'Archive' | null }> {
+  const client = getBlobClient(container, path, account);
+  const props = await client.getProperties();
+  return { tier: (props.accessTier as BlobAccessTier | 'Archive' | null) ?? null };
+}
+
+/**
+ * Downgrade to a cooler tier (Hot→Cool / Hot→Cold / Cool→Cold) via Set Blob
+ * Tier. Instantaneous; no early-deletion penalty fires on the destination
+ * (the newly-cooled blob has not yet accrued its minimum retention).
+ */
+export async function setBlobTier(
+  container: string,
+  path: string,
+  tier: 'Cool' | 'Cold',
+  account?: string,
+): Promise<TierResult> {
+  const client = getBlobClient(container, path, account);
+  await client.setAccessTier(tier);
+  return { ok: true, tier, method: 'set' };
+}
+
+const TIER_TMP_PREFIX = '__loom_tier_tmp__';
+
+/**
+ * Upgrade to a warmer tier (Cool/Cold → Hot) using Copy Blob rather than Set
+ * Blob Tier. Set Blob Tier on a still-under-minimum Cool/Cold blob would
+ * charge the early-deletion penalty; Copy Blob writes a fresh Hot blob and
+ * lets us delete + rename the original (the operator is warned before this
+ * runs that the source delete may incur the penalty if below minimum days).
+ *
+ * Steps (HNS / ADLS Gen2 account — DLZ accounts are always HNS-enabled):
+ *   1. Copy source → temp path at the Hot tier (brief dual billing).
+ *   2. Delete the original blob.
+ *   3. Rename temp → original via the DFS Rename Path (atomic on HNS).
+ */
+export async function copyBlobToTier(
+  container: string,
+  path: string,
+  targetTier: 'Hot',
+  account?: string,
+): Promise<TierResult> {
+  const clean = path.replace(/^\/+/, '');
+  const tmpPath = `${TIER_TMP_PREFIX}/${Date.now()}/${clean}`;
+
+  // Step 1 — Copy source → tmp at the target (Hot) tier.
+  const srcClient = getBlobClient(container, clean, account);
+  const dstClient = getBlobClient(container, tmpPath, account);
+  const copyPoller = await dstClient.beginCopyFromURL(srcClient.url, { tier: targetTier });
+  await copyPoller.pollUntilDone();
+
+  // Step 2 — Delete the original (warned: may trigger early-deletion penalty).
+  await srcClient.delete();
+
+  // Step 3 — Rename tmp → original path via DFS (atomic on HNS accounts).
+  const fs = getFileSystem(container, account);
+  const tmpFile = fs.getFileClient(tmpPath);
+  await tmpFile.move(clean);
+
+  return { ok: true, tier: 'Hot', method: 'copy' };
+}
+
 
 /**
  * Flat directory listing — recursive=false so it behaves like a tree level.
