@@ -64,6 +64,7 @@ import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
@@ -8273,10 +8274,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
-  // Query | Model — the Model view is the Loom-native parity of Fabric/Power BI
-  // model view (table cards + relationship lines + measures), with NO Power BI
-  // dependency. See lib/editors/components/model-view-canvas.tsx.
-  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
+  // Query | Model | Monitoring — the Model view is the Loom-native parity of
+  // Fabric/Power BI model view (table cards + relationship lines + measures),
+  // with NO Power BI dependency. Monitoring shows the query-load chart + recent
+  // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -8670,10 +8672,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+            <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
           </TabList>
+          {editorTab === 'monitoring' && (
+            isNew
+              ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
+              : <WarehouseMonitoringTab itemId={id} engine="warehouse" />
+          )}
           {editorTab === 'model' && (
             <ModelViewPanel
               engine="warehouse"

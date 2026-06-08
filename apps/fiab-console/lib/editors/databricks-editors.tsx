@@ -35,6 +35,7 @@ import {
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import { AiFunctionsHelper } from './components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
@@ -719,7 +720,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [starting, setStarting] = useState(false);
   // Query | Model — Loom-native Model view; relationships become real Unity
   // Catalog FK constraints. No Power BI dependency.
-  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -1520,10 +1521,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+            <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
           </TabList>
+          {editorTab === 'monitoring' && (
+            <WarehouseMonitoringTab itemId={id} engine="databricks-sql-warehouse" warehouseId={warehouseId || undefined} />
+          )}
           {editorTab === 'model' && (
             <ModelViewPanel
               engine="databricks-sql-warehouse"

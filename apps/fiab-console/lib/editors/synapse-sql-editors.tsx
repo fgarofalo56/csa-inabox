@@ -31,6 +31,7 @@ import {
   Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import { ModelViewPanel } from './components/model-view-canvas';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -500,7 +501,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [loading, setLoading] = useState(false);
   const [resuming, setResuming] = useState(false);
   // Query | Model — Loom-native Model view (relationships + measures), no Power BI.
-  const [editorTab, setEditorTab] = useState<'query' | 'model'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
   // Query parameters auto-detected from {{name}} tokens in the editor.
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const pollRef = useRef<number | null>(null);
@@ -971,10 +972,14 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+            <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
           </TabList>
+          {editorTab === 'monitoring' && (
+            <WarehouseMonitoringTab itemId={id} engine="synapse-dedicated-sql-pool" />
+          )}
           {editorTab === 'model' && (
             <ModelViewPanel
               engine="synapse-dedicated-sql-pool"
