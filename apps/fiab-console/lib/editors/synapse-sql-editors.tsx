@@ -23,6 +23,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
+  Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -31,6 +32,9 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
+import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
+import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
@@ -421,6 +425,10 @@ interface DedicatedSchema {
   pool?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  views?: { schema: string; name: string }[];
+  procedures?: { schema: string; name: string }[];
+  functions?: { schema: string; name: string; type: string }[];
+  warnings?: string[];
 }
 
 function poolBadgeColor(state: string): 'success' | 'warning' | 'severe' | 'informative' {
@@ -525,6 +533,24 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
+  const views = schema?.views ?? [];
+  const procedures = schema?.procedures ?? [];
+  const functions = schema?.functions ?? [];
+
+  // Script-out: load the real CREATE/ALTER/DROP into the editor buffer.
+  const loadScript = useCallback(async (type: ScriptObjectType, objSchema: string, name: string, mode: ScriptMode) => {
+    const r = await loadSqlScript('synapse-dedicated-sql-pool', id, { type, schema: objSchema, name, mode });
+    if (r.ok && r.script != null) {
+      setSqlText(r.script);
+      setResult(null);
+    } else {
+      setResult({ ok: false, error: r.error || 'Could not script object' });
+    }
+  }, [id]);
+  const countRows = useCallback(
+    (objSchema: string, name: string) => sqlRowCount('synapse-dedicated-sql-pool', id, objSchema, name),
+    [id],
+  );
 
   // Ctrl+S / Cmd+S → Run when the pool is Online (SSMS muscle memory).
   useEffect(() => {
@@ -637,6 +663,93 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         </TreeItem>
                       ))}
                     </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Views */}
+            <TreeItem itemType="branch" value="views">
+              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({views.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="v-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && views.length === 0 && (
+                  <TreeItem itemType="leaf" value="v-empty"><TreeItemLayout><Caption1>No views</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {views.map((v) => (
+                  <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
+                    onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Eye20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
+                        onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
+                        onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
+                        onScriptDrop={() => loadScript('view', v.schema, v.name, 'drop')} />}
+                    >
+                      {v.schema}.{v.name}{' '}
+                      <SqlRowCountBadge cacheKey={`v-${v.schema}.${v.name}`} load={() => countRows(v.schema, v.name)} />
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Stored procedures */}
+            <TreeItem itemType="branch" value="procs">
+              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({procedures.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="p-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && procedures.length === 0 && (
+                  <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>No procedures</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {procedures.map((p) => (
+                  <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
+                    onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
+                    <TreeItemLayout
+                      iconBefore={<Form20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
+                        onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
+                        onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
+                        onScriptDrop={() => loadScript('procedure', p.schema, p.name, 'drop')} />}
+                    >
+                      {p.schema}.{p.name}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+
+            {/* Functions */}
+            <TreeItem itemType="branch" value="funcs">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({functions.length})</TreeItemLayout>
+              <Tree>
+                {!isOnline && (
+                  <TreeItem itemType="leaf" value="f-paused"><TreeItemLayout>Pool {state.toLowerCase()} — resume to browse</TreeItemLayout></TreeItem>
+                )}
+                {isOnline && functions.length === 0 && (
+                  <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>No functions</Caption1></TreeItemLayout></TreeItem>
+                )}
+                {functions.map((f) => (
+                  <TreeItem key={`f-${f.schema}.${f.name}`} itemType="leaf" value={`f-${f.schema}.${f.name}`}
+                    onClick={() => setSqlText(
+                      f.type === 'FN'
+                        ? `SELECT [${f.schema}].[${f.name}]();`
+                        : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
+                    )}>
+                    <TreeItemLayout
+                      iconBefore={<MathFormula20Regular />}
+                      actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
+                        onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
+                        onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
+                        onScriptDrop={() => loadScript('function', f.schema, f.name, 'drop')} />}
+                    >
+                      {f.schema}.{f.name}{' '}
+                      <Caption1>· {f.type === 'FN' ? 'scalar' : f.type === 'IF' ? 'inline TVF' : 'TVF'}</Caption1>
+                    </TreeItemLayout>
                   </TreeItem>
                 ))}
               </Tree>
