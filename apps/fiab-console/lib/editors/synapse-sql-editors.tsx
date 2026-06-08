@@ -27,7 +27,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
@@ -352,13 +352,19 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             showLifecycle={false}
           />
           <SqlAccessModeSection itemId={id} itemType="synapse-serverless-sql-pool" />
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="synapse-serverless-sql-pool"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
             language="tsql"
+            dialectLabel="T-SQL"
             height={240}
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            extraBody={{ db: database }}
+            onApply={() => setResult(null)}
           />
           <ResultsPanel result={result} loading={loading} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
@@ -675,13 +681,18 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </MessageBarBody>
             </MessageBar>
           )}
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="synapse-dedicated-sql-pool"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
             language="tsql"
+            dialectLabel="T-SQL"
             height={240}
             minHeight={200}
             ariaLabel="Dedicated T-SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            onApply={() => setResult(null)}
           />
           <ResultsPanel result={result} loading={loading} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>

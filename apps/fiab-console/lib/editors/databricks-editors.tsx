@@ -34,6 +34,7 @@ import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipelin
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -1103,13 +1104,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               Context: <strong>{activeCatalog}</strong>{activeSchema ? <> · <strong>{activeSchema}</strong></> : null}
             </Caption1>
           )}
-          <MonacoTextarea
+          <SqlCopilotEditor
+            engine="databricks-sql-warehouse"
+            id={id}
             value={sqlText}
             onChange={setSqlText}
-            language="sql"
+            language="sparksql"
+            dialectLabel="Spark SQL"
             height={260}
             minHeight={200}
             ariaLabel="Databricks SQL editor"
+            resultError={result && !result.ok ? result.error || null : null}
+            extraBody={{
+              warehouseId: warehouseId || undefined,
+              catalog: activeCatalog || undefined,
+              schema: activeSchema || undefined,
+            }}
+            onApply={() => setResult(null)}
           />
           <ResultsPanel result={result} loading={loading} />
           {!warehousesError && warehouses.length === 0 && (

@@ -8377,6 +8377,45 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       setResult({ ok: false, error: e?.message || String(e) });
     }
   }, [id, sqlText]);
+
+  // Warehouse Copilot — inline NL→SQL / explain / fix over the Loom AOAI
+  // deployment (no Fabric Copilot). State machine mirrors KqlQuerysetEditor.
+  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
+  const [assistView, setAssistView] = useState<AssistView>('idle');
+  const [assistPrompt, setAssistPrompt] = useState('');
+  const [assistResult, setAssistResult] = useState<string | null>(null);
+  const [assistError, setAssistError] = useState<string | null>(null);
+  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
+
+  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
+    lastModeRef.current = mode;
+    setAssistView('loading'); setAssistError(null);
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/assist`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          sql: sqlText,
+          prompt: mode === 'generate' ? assistPrompt : undefined,
+          errorText: mode === 'fix' ? (result?.error || '') : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setAssistView('idle');
+        setAssistError(j?.code === 'no_aoai'
+          ? `Warehouse Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
+          : (j?.error || 'AI assist failed'));
+        return;
+      }
+      setAssistResult(j.result);
+      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
+    } catch (e: any) {
+      setAssistView('idle');
+      setAssistError(e?.message || String(e));
+    }
+  }, [id, sqlText, assistPrompt, result]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
@@ -8384,6 +8423,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
         { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined, disabled: !canRun || !sqlText.trim(), title: !canRun ? 'warehouse compute is not ready' : (!sqlText.trim() ? 'enter a SELECT first' : undefined) },
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
+      ]},
+      { label: 'Copilot', actions: [
+        { label: 'Ask Copilot', onClick: () => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }, title: 'Generate T-SQL from natural language' },
+        { label: 'Explain', onClick: sqlText.trim() ? () => callAssist('explain') : undefined, disabled: !sqlText.trim(), title: 'Explain this T-SQL query' },
       ]},
       { label: 'Modeling', actions: [
         // Model view: a warehouse "measure" is a persisted scalar/inline TVF.
@@ -8420,7 +8463,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
       ]},
     ]},
-  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, callAssist]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -8527,6 +8570,28 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
             <Badge appearance="outline">{schema?.sku || 'DW—'}</Badge>
             <Button appearance="outline" onClick={loadSchema}>Refresh</Button>
+            <Tooltip content="Generate T-SQL from a description" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
+                disabled={assistView === 'loading'}
+                onClick={() => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
+                aria-label="Ask Copilot to generate T-SQL">Ask Copilot</Button>
+            </Tooltip>
+            <Tooltip content="Explain this query" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Info16Regular />}
+                disabled={!sqlText.trim() || assistView === 'loading'}
+                onClick={() => callAssist('explain')}
+                aria-label="Explain T-SQL">Explain</Button>
+            </Tooltip>
+            {result && !result.ok && result.error && (
+              <Tooltip content="Fix the T-SQL error" relationship="label">
+                <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
+                  disabled={assistView === 'loading'}
+                  onClick={() => callAssist('fix')}
+                  aria-label="Fix T-SQL error">
+                  {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
+                </Button>
+              </Tooltip>
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !ready} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
           </div>
           {schema && !ready && (
@@ -8549,6 +8614,30 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             value={computeId}
             onChange={setComputeId}
           />
+          {/* NL prompt input — generate mode */}
+          {assistView === 'prompt' && (
+            <div className={s.assistBar}>
+              <Input size="small" autoFocus style={{ flex: 1 }}
+                placeholder="Describe the query (e.g. 'top 10 customers by revenue last quarter')…"
+                value={assistPrompt}
+                onChange={(_: unknown, d: any) => setAssistPrompt(d.value)}
+                onKeyDown={(e: any) => {
+                  if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
+                  if (e.key === 'Escape') setAssistView('idle');
+                }}
+                aria-label="AI T-SQL generation prompt" />
+              <Button size="small" appearance="primary"
+                disabled={!assistPrompt.trim()}
+                onClick={() => callAssist('generate')}>Generate</Button>
+              <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
+            </div>
+          )}
+          {assistView === 'loading' && (
+            <div className={s.assistBar}>
+              <Spinner size="tiny" labelPosition="after"
+                label={lastModeRef.current === 'generate' ? 'Generating T-SQL…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
+            </div>
+          )}
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}
@@ -8557,6 +8646,32 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             minHeight={200}
             ariaLabel="Warehouse T-SQL editor"
           />
+          {/* Suggestion / explanation result */}
+          {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
+            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>
+                <pre className={s.assistResult}>{assistResult}</pre>
+              </MessageBarBody>
+              <MessageBarActions>
+                {assistView === 'suggestion' && (
+                  <Button size="small" appearance="primary"
+                    onClick={() => { setSqlText(assistResult); setResult(null); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
+                    Apply
+                  </Button>
+                )}
+                <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {/* Honest config gate / error */}
+          {assistError && (
+            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>{assistError}</MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
             <MessageBar intent="error">
