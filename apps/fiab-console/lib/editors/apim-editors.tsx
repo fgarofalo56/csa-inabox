@@ -28,8 +28,10 @@ import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
+  Pulse20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useObservability, DqScoreGauge, ObservabilityTabContent } from './data-product-detail';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1905,8 +1907,12 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const domains = useGovernanceDomains();
 
-  // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
-  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
+  // Tabs: Overview | Datasets | Glossary | Lineage | Access policies | Observability
+  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies' | 'observability'>('overview');
+
+  // F19/F20 — Data Observability: live GET feeds the Overview DQ gauge AND the
+  // Observability tab (lineage + health charts + DQ breakdown). One source of truth.
+  const observability = useObservability(id);
 
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');
@@ -2238,6 +2244,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Glossary', onClick: () => setTab('glossary') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
+        { label: 'Observability', onClick: () => setTab('observability') },
       ]},
     ]},
   ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
@@ -2289,6 +2296,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+          {!isNew && <DqScoreGauge obs={observability.data} loading={observability.loading} />}
           <Button appearance={isNew ? 'primary' : 'secondary'} icon={<Save20Regular />} onClick={save} disabled={!canSave}>
             {status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : isNew ? 'Create' : 'Save'}
           </Button>
@@ -2316,6 +2324,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
+          <Tab value="observability" icon={<Pulse20Regular />}>Observability</Tab>
         </TabList>
 
         {tab === 'overview' && (
@@ -2516,6 +2525,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </TableBody>
             </Table>
           </div>
+        )}
+
+        {tab === 'observability' && (
+          <ObservabilityTabContent
+            id={id}
+            obs={observability.data}
+            loading={observability.loading}
+            err={observability.err}
+            refresh={observability.refresh}
+          />
         )}
       </div>
     } />
