@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field, Dropdown, Option, Divider, Checkbox,
-  Tree, TreeItem, TreeItemLayout, Select,
+  Tree, TreeItem, TreeItemLayout, Select, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -27,9 +27,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
-  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled, ShieldTask20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -124,6 +125,8 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  // Top-level view: the mirroring surface vs the OneLake Security (F7) tab.
+  const [secView, setSecView] = useState<'mirror' | 'security'>('mirror');
   // Edit-existing-mirror + Test-connection state.
   const [editing, setEditing] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -381,6 +384,15 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       }
       main={
         <div className={s.pad}>
+          <TabList selectedValue={secView} onTabSelect={(_, d) => setSecView(d.value as 'mirror' | 'security')}>
+            <Tab value="mirror" icon={<Database20Regular />}>Mirroring</Tab>
+            <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
+          </TabList>
+          {secView === 'security' && (
+            <OneLakeSecurityTab itemId={id} itemType="mirrored-database" container="bronze" workspaceId={workspaceId || undefined} fabricItemId={mirrorId || undefined} />
+          )}
+          {secView === 'mirror' && (
+          <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Mirrored Database</Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
@@ -641,6 +653,8 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 </Table>
               </div>
             </>
+          )}
+          </>
           )}
         </div>
       }

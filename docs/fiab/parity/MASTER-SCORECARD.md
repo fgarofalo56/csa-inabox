@@ -92,6 +92,41 @@ is still missing, not because anything is faked.
 
 ---
 
+## Governance & Security experience — per-surface parity (rev.4 — 2026-06-07)
+
+> The **Governance & Security** experience (Microsoft Purview governance
+> framework + Fabric OneLake Catalog, Azure-native per `no-fabric-dependency.md`)
+> ships nine surfaces under `/governance/*`. Each now has its own parity doc with
+> a full inventory, Loom coverage, and a **backend-per-control** column — every
+> row built ✅ or honest-gate ⚠️, **zero ❌**. All nine work with
+> `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET and no Purview account on the default
+> path; Purview legs (catalog classification merge, lineage Atlas merge, Data
+> Map scans, DLP live-violations) are the *allowed* honest infra-gate
+> (`PurviewGate` names the env var + bicep module + UAMI roles).
+
+| Surface | Doc | Grade | Default backend | Purview leg |
+|---|---|:--:|---|---|
+| Governance landing / posture | `governance-overview.md` | **A** | Cosmos insights + audit-log | connection chip ⚠️ |
+| Data catalog (Unified Catalog / Explore) | `governance-catalog.md` | **A** | Cosmos `workspace-items` ⋈ `workspaces` + `request-access` | classification merge ⚠️ |
+| Classifications + label taxonomy | `governance-classifications.md` | **A** | Cosmos `tenant-settings` + `state.classifications` rollup | none (fully native) |
+| Insights & reports (Data Health / Govern) | `governance-insights.md` | **A** | Cosmos catalog/audit aggregates | none (fully native) |
+| Lineage | `governance-lineage.md` | **A** | Cosmos typed-reference graph | Atlas merge ⚠️ |
+| Access & DLP policies | `governance-policies.md` | **A** | Cosmos defs + real RBAC (Storage / Synapse SQL / ADX) | DLP live-violations ⚠️ |
+| Microsoft Purview connection | `governance-purview.md` | **A** | `probePurview()` status + portal launch | the subject (honest gate ⚠️ when unbound) |
+| Data Map — scans & sources | `governance-scans.md` | **A-when-wired** | — (Purview scan plane by nature) | register/scan/run/history ⚠️ |
+| Sensitivity labels (MIP) | `governance-sensitivity.md` | **A** | Cosmos `state.sensitivityLabel` distribution | taxonomy admin deep-link |
+
+**Distribution:** 8 × A + 1 × A-when-wired. **Zero ❌ across all nine docs**
+(grep-clean), backend-per-control on every row, no stub banners, no dead
+controls. These nine are the **shipped/built** governance surfaces; the broader
+governance-security PRP (`docs/fiab/prp/governance-security.md`) tracks further
+feature build-out (Govern Admin/Owner sub-tabs F2/F3, Workspace-roles F5,
+Item-sharing F6, OneLake security F7–F10, SQL granular security F11, label
+inheritance/batch F15–F18) as separate in-flight tasks — those surfaces are not
+yet built and are intentionally **not** documented here as parity.
+
+---
+
 ## Overall honest assessment: how far is Loom from 1:1 Azure parity?
 
 **Loom is roughly one-third of the way to 1:1 Azure parity, and not close to

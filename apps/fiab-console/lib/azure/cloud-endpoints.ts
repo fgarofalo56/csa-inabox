@@ -36,14 +36,60 @@
 
 export type CloudName = 'AzureCloud' | 'AzureUSGovernment' | 'AzureDOD';
 
-/** Normalise the `AZURE_CLOUD` env value to a known cloud. Defaults Commercial. */
-export function detectCloud(): CloudName {
+/**
+ * The four sovereign boundaries Loom targets, as a single canonical
+ * discriminator. Unlike `CloudName` (which collapses GCC into `AzureCloud`
+ * because GCC runs on Commercial Azure endpoints), `LoomCloud` keeps GCC
+ * distinct so the console can badge it correctly and `getGraphHost()` can make
+ * the 3-way Graph split (Commercial+GCC share, GCC-High differs, DoD differs
+ * again).
+ */
+export type LoomCloud = 'Commercial' | 'GCC' | 'GCC-High' | 'DoD';
+
+/**
+ * Detect the active sovereign boundary. `LOOM_CLOUD` is the canonical, enum
+ * signal (`Commercial | GCC | GCC-High | DoD`; `IL5` is accepted as an alias of
+ * `GCC-High` since both run on `AzureUSGovernment` endpoints). When `LOOM_CLOUD`
+ * is absent we fall back to the legacy `AZURE_CLOUD` value so existing
+ * deployments keep their exact behaviour. Unknown values default to Commercial
+ * (never crash — this is a host resolver, not a validator).
+ */
+export function detectLoomCloud(): LoomCloud {
+  const lc = (process.env.LOOM_CLOUD || '').trim().toLowerCase();
+  if (lc) {
+    switch (lc) {
+      case 'commercial':
+        return 'Commercial';
+      case 'gcc':
+        return 'GCC';
+      case 'gcc-high':
+      case 'gcchigh':
+      case 'il5':
+        return 'GCC-High';
+      case 'dod':
+        return 'DoD';
+      // Unknown LOOM_CLOUD value — fall through to AZURE_CLOUD below.
+    }
+  }
   switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
     case 'azureusgovernment':
-      return 'AzureUSGovernment';
+      return 'GCC-High';
     case 'azuredod':
+      return 'DoD';
+    default:
+      return 'Commercial';
+  }
+}
+
+/** Normalise to the Azure-endpoint cloud (GCC collapses to Commercial). */
+export function detectCloud(): CloudName {
+  switch (detectLoomCloud()) {
+    case 'GCC-High':
+      return 'AzureUSGovernment';
+    case 'DoD':
       return 'AzureDOD';
     default:
+      // Commercial + GCC both run on Commercial Azure endpoints.
       return 'AzureCloud';
   }
 }
@@ -96,6 +142,55 @@ export function armAudience(): string {
 export function stripArmBase(url: string): string {
   const base = armBase();
   return url.startsWith(base) ? url.slice(base.length) : url;
+}
+
+// ---------------------------------------------------------------------------
+// Microsoft Graph (national-cloud aware)
+// ---------------------------------------------------------------------------
+//
+// Graph has DISTINCT service roots per sovereign cloud (verified against
+// Microsoft Learn — https://learn.microsoft.com/graph/deployments):
+//
+//   | National cloud                      | Microsoft Graph root            |
+//   |-------------------------------------|---------------------------------|
+//   | Global (Commercial / GCC)           | https://graph.microsoft.com     |
+//   | US Government L4 (GCC High)          | https://graph.microsoft.us      |
+//   | US Government L5 (DoD / IL5)         | https://dod-graph.microsoft.us  |
+//
+// Access tokens are NOT interchangeable across roots, so the scope must match
+// the chosen base. A client that hard-codes graph.microsoft.com fails in Gov.
+
+/** Friendly cloud-boundary label for UI/MessageBar copy (e.g. "GCC High (L4)"). */
+export function cloudBoundaryLabel(): string {
+  // Prefer the explicit deployment boundary when bicep wires it through; this
+  // distinguishes GCC-High from IL5 (both map to AzureUSGovernment otherwise).
+  const explicit = (process.env.LOOM_CLOUD_BOUNDARY || '').trim();
+  if (explicit) {
+    switch (explicit.toLowerCase()) {
+      case 'commercial': return 'Commercial';
+      case 'gcc': return 'GCC';
+      case 'gcc-high': case 'gcchigh': return 'GCC High (L4)';
+      case 'il5': case 'dod': return 'DoD (IL5/L5)';
+      default: return explicit;
+    }
+  }
+  switch (detectCloud()) {
+    case 'AzureUSGovernment': return 'US Government (GCC High / IL5)';
+    case 'AzureDOD': return 'DoD (IL5/L5)';
+    default: return 'Commercial';
+  }
+}
+
+/**
+ * Whether Microsoft Graph exposes the `/beta/security/dataLossPreventionPolicies`
+ * policy-management surface for the active cloud. This preview segment is NOT
+ * available in the US Government / DoD Graph roots as of 2026 — DLP policy
+ * authoring there remains Purview-compliance-portal + Security & Compliance
+ * PowerShell only. DLP ALERTS (`/v1.0/security/alerts_v2`) and restrict-access
+ * RBAC enforcement still work in every cloud.
+ */
+export function graphDlpPolicyApiAvailable(): boolean {
+  return !isGovCloud();
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +286,38 @@ export function dfsUrl(account: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure AI Search (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * AI Search data-plane hostname suffix (no leading dot).
+ *
+ * Commercial / GCC (GCC runs on Commercial Azure) → `search.windows.net`.
+ * GCC-High / IL5 (`AzureUSGovernment`) → `search.usgovcloudapi.net`. Hard-coding
+ * the Commercial suffix silently fails AI Search auth + data-plane in Gov, so
+ * every search client builds its base URL from this helper.
+ */
+export function searchSuffix(): string {
+  return isGovCloud() ? 'search.usgovcloudapi.net' : 'search.windows.net';
+}
+
+/** Build the AI Search data-plane base URL from a bare service name (FQDNs pass through). */
+export function searchEndpointBase(serviceName: string): string {
+  if (serviceName.includes('.')) {
+    return `https://${serviceName.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  }
+  return `https://${serviceName}.${searchSuffix()}`;
+}
+
+/**
+ * AAD scope for AI Search data-plane tokens. `https://search.azure.com/.default`
+ * is cloud-invariant — the resource audience is byte-identical in Commercial,
+ * GCC, GCC-High and IL5 (only the token issuer changes, not the resource). Kept
+ * here so the separate literals across the search clients share one source.
+ */
+export const SEARCH_AAD_SCOPE = 'https://search.azure.com/.default';
+
+// ---------------------------------------------------------------------------
 // ADX / Kusto (data plane)
 // ---------------------------------------------------------------------------
 
@@ -202,6 +329,33 @@ export function kustoSuffix(): string {
 /** Build a cluster URI from `name` + `region` (e.g. `adx-loom`, `eastus2`). */
 export function kustoClusterUri(clusterName: string, region: string): string {
   return `https://${clusterName}.${region}.${kustoSuffix()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Azure Cosmos DB (data plane — documents endpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cosmos DB data-plane document-endpoint hostname suffix (no leading dot).
+ *   Commercial / GCC : documents.azure.com
+ *   GCC-High / IL5   : documents.azure.us
+ *
+ * Grounded in the ARM-authoritative expression already used in
+ * admin-plane/main.bicep for LOOM_COSMOS_ENDPOINT:
+ *   environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'
+ * (GCC runs in the Commercial `AzureCloud` ARM environment, so its Cosmos
+ * account is a Commercial `documents.azure.com` account — same as Commercial.)
+ * This helper is the TypeScript canonical mirror so cloud-matrix.test.ts can
+ * assert the suffix independently of the Bicep.
+ * See: https://learn.microsoft.com/azure/cosmos-db/sql/sql-api-sdk-node
+ */
+export function cosmosSuffix(): string {
+  return isGovCloud() ? 'documents.azure.us' : 'documents.azure.com';
+}
+
+/** Build the Cosmos data-plane endpoint URL for a given account name. */
+export function cosmosEndpointFromName(accountName: string): string {
+  return `https://${accountName}.${cosmosSuffix()}:443/`;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +391,137 @@ export function amlDataPlaneHost(region: string): string {
     default:
       return `${region}.api.azureml.ms`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Microsoft Graph (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * Microsoft Graph v1.0 base URL for the active cloud.
+ *
+ * Commercial / GCC use `graph.microsoft.com`; GCC-High / IL5 (both
+ * `AzureUSGovernment`) use `graph.microsoft.us`. Hard-coding the Commercial
+ * host silently fails Graph queries (principal search, transitive group
+ * membership) in the US Government clouds — every Graph call builds from this
+ * helper instead. (DoD Graph also resolves to `graph.microsoft.us`.)
+ */
+export function graphBase(): string {
+  return isGovCloud()
+    ? 'https://graph.microsoft.us/v1.0'
+    : 'https://graph.microsoft.com/v1.0';
+}
+
+/** AAD `.default` scope for Microsoft Graph app-only tokens, per cloud. */
+export function graphScope(): string {
+  return isGovCloud()
+    ? 'https://graph.microsoft.us/.default'
+    : 'https://graph.microsoft.com/.default';
+}
+
+// ---------------------------------------------------------------------------
+// Governance-client data-plane getters (the canonical `get*` surface)
+// ---------------------------------------------------------------------------
+//
+// One getter per sovereign-variant suffix/host that the governance clients
+// (cosmos, AI Search, MIP/DLP Graph, Synapse SQL) used to hard-code. Every
+// suffix is verified against Microsoft Learn:
+//   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
+//   https://learn.microsoft.com/graph/deployments
+//
+//  | getter                | Commercial / GCC          | GCC-High (USGov)        | DoD                        |
+//  |-----------------------|---------------------------|-------------------------|----------------------------|
+//  | getArmHost            | management.azure.com      | management.usgovcloudapi.net | management.azure.microsoft.scloud |
+//  | getCosmosSuffix       | documents.azure.com       | documents.azure.us      | documents.azure.us         |
+//  | getSearchSuffix       | search.windows.net        | search.azure.us         | search.azure.us            |
+//  | getGraphHost          | graph.microsoft.com       | graph.microsoft.us      | dod-graph.microsoft.us     |
+//  | getSqlSuffix          | database.windows.net      | database.usgovcloudapi.net | database.usgovcloudapi.net |
+//  | getLogAnalyticsHost   | api.loganalytics.azure.com| api.loganalytics.us     | api.loganalytics.us        |
+//  | getBlobSuffix         | blob.core.windows.net     | blob.core.usgovcloudapi.net | blob.core.usgovcloudapi.net |
+//  | getOpenAiSuffix       | openai.azure.com          | openai.azure.us         | openai.azure.us            |
+//  | getPbiGovHost         | api.powerbi.com           | api.powerbigov.us       | api.powerbigov.us          |
+//
+// Only `getGraphHost()` is a 3-way split (Graph has a distinct DoD host); the
+// rest follow the Commercial-vs-Gov binary, so they key off `isGovCloud()`.
+
+/** Bare ARM control-plane host (no scheme). Alias of `armHost()`. */
+export function getArmHost(): string {
+  return armHost();
+}
+
+/** Cosmos DB data-plane hostname suffix (no leading dot, no account prefix). */
+export function getCosmosSuffix(): string {
+  return isGovCloud() ? 'documents.azure.us' : 'documents.azure.com';
+}
+
+/** Azure AI Search data-plane hostname suffix (no leading dot). */
+export function getSearchSuffix(): string {
+  return isGovCloud() ? 'search.azure.us' : 'search.windows.net';
+}
+
+/**
+ * Microsoft Graph host (full URL with scheme, no trailing slash). Per
+ * Microsoft Learn `graph/deployments`, GCC uses the worldwide
+ * `graph.microsoft.com` host (same as Commercial); GCC-High uses
+ * `graph.microsoft.us`; DoD uses `dod-graph.microsoft.us`.
+ */
+export function getGraphHost(): string {
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://dod-graph.microsoft.us';
+    case 'GCC-High':
+      return 'https://graph.microsoft.us';
+    default:
+      // Commercial + GCC both use the worldwide Graph endpoint.
+      return 'https://graph.microsoft.com';
+  }
+}
+
+/** AAD `.default` scope for Microsoft Graph tokens (host-derived per cloud). */
+export function getGraphScope(): string {
+  return `${getGraphHost()}/.default`;
+}
+
+/**
+ * Azure SQL / Synapse TDS AAD token audience host (no scheme, no `.default`).
+ * This is the generic SQL token resource — Synapse adds its own FQDN suffix
+ * (`sql.azuresynapse.*`) on top, see `synapseSqlSuffix()`.
+ */
+export function getSqlSuffix(): string {
+  return isGovCloud() ? 'database.usgovcloudapi.net' : 'database.windows.net';
+}
+
+/**
+ * Synapse SQL endpoint domain suffix (no leading dot). Synapse uses a
+ * service-specific suffix that differs from the generic SQL token audience,
+ * so it gets its own getter rather than reusing `getSqlSuffix()`.
+ */
+export function synapseSqlSuffix(): string {
+  return isGovCloud() ? 'sql.azuresynapse.usgovcloudapi.net' : 'sql.azuresynapse.net';
+}
+
+/** Log Analytics query-API host (full URL with scheme). */
+export function getLogAnalyticsHost(): string {
+  return isGovCloud() ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com';
+}
+
+/** Azure Blob storage hostname suffix (no leading dot, no account prefix). */
+export function getBlobSuffix(): string {
+  return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';
+}
+
+/** Azure OpenAI data-plane hostname suffix (no scheme, no account prefix). */
+export function getOpenAiSuffix(): string {
+  return isGovCloud() ? 'openai.azure.us' : 'openai.azure.com';
+}
+
+/**
+ * Power BI REST API host (full URL, no `/v1.0/myorg` suffix). This is the
+ * Azure-Government-backed Power BI REST host — NOT a Fabric API host — so it
+ * is permitted here per no-fabric-dependency.md.
+ */
+export function getPbiGovHost(): string {
+  return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
 }
 
 // ---------------------------------------------------------------------------
