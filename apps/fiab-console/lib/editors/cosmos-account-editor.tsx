@@ -36,6 +36,7 @@ import {
   Home16Regular, DocumentBulletList16Regular, Settings20Regular,
   Search16Regular, Code16Regular, MathFormula20Regular, Flow20Regular,
   Organization20Regular,
+  Table20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -45,6 +46,8 @@ import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
 import { CosmosSettings } from '@/lib/components/cosmos/cosmos-settings';
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
+import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
+import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -116,8 +119,26 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   const [activeKey, setActiveKey] = useState<string>('home');
   // Bumped when the Home "New Container" card / Connect card needs the tree to act.
   const [treeNewContainer, setTreeNewContainer] = useState(0);
+  // Multi-step New Container wizard (richer than the tree's inline create dialog).
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardDatabases, setWizardDatabases] = useState<{ name: string }[]>([]);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  /** Open the New Container wizard, loading the live database list first. */
+  const openContainerWizard = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cosmos/databases');
+      const text = await res.text();
+      const body = text ? JSON.parse(text) : {};
+      setWizardDatabases(body.ok && Array.isArray(body.databases)
+        ? body.databases.map((d: { name: string }) => ({ name: d.name }))
+        : []);
+    } catch {
+      setWizardDatabases([]);
+    }
+    setWizardOpen(true);
+  }, []);
 
   /** Open (or focus) a work-area tab for a tree selection. */
   const openTab = useCallback((sel: CosmosSelection) => {
@@ -190,12 +211,13 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Data Explorer', actions: [
+        { label: 'New Container', icon: <Table20Regular />, onClick: () => { void openContainerWizard(); } },
         { label: 'New SQL Query', icon: <Search16Regular />, onClick: () => openTab({ action: 'newSqlQuery' }) },
         { label: 'Graph explorer', icon: <Organization20Regular />, onClick: () => openTab({ action: 'graph' }) },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refresh },
       ]},
     ]},
-  ], [refresh, openTab]);
+  ], [refresh, openTab, openContainerWizard]);
 
   return (
     <ItemEditorChrome
@@ -241,7 +263,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.panel}>
             {active.kind === 'home' && (
               <CosmosHome
-                onNewContainer={() => { setTreeNewContainer((n) => n + 1); refresh(); }}
+                onNewContainer={() => { void openContainerWizard(); }}
                 onConnect={() => openTab({ action: 'settings', db: '', container: '' })}
               />
             )}
@@ -281,7 +303,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
             )}
 
             {active.kind === 'settings' && active.container && (
-              <CosmosSettings
+              <CosmosSettingsPanel
                 key={active.key}
                 db={active.db as string}
                 container={active.container}
@@ -301,6 +323,26 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
               <ScriptGate kind={active.kind} db={active.db} container={active.container} scriptName={active.scriptName} />
             )}
           </div>
+
+          {/* Multi-step New Container wizard (Home card / future ribbon entry). */}
+          <CosmosContainerWizard
+            open={wizardOpen}
+            onOpenChange={setWizardOpen}
+            databases={wizardDatabases}
+            onCreated={(_container, db) => {
+              // Refresh the tree so the new container (and its db) appear, then
+              // open the new container's Settings tab to show the control-plane receipt.
+              setTreeNewContainer((n) => n + 1);
+              refresh();
+              if (_container?.name) {
+                openTab({
+                  action: 'settings', db, container: _container.name,
+                  partitionKey: _container.partitionKey, defaultTtl: _container.defaultTtl,
+                  throughput: _container.throughput,
+                });
+              }
+            }}
+          />
         </div>
       }
     />
