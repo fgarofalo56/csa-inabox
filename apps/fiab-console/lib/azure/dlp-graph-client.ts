@@ -54,21 +54,23 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import {
-  graphBase as cloudGraphBase,
-  graphScope as cloudGraphScope,
+  getGraphHost,
+  getGraphScope,
   graphDlpPolicyApiAvailable,
   cloudBoundaryLabel,
 } from './cloud-endpoints';
 
-/** National-cloud-aware Graph base. LOOM_DLP_GRAPH_BASE override wins (tests). */
-function dlpGraphBase(): string {
-  return (process.env.LOOM_DLP_GRAPH_BASE || cloudGraphBase()).replace(/\/+$/, '');
+/**
+ * Graph host + AAD scope are resolved at CALL time (not import time) so the
+ * sovereign-cloud signal (`LOOM_CLOUD` / `AZURE_CLOUD`) is honoured even when
+ * env is mutated after module load (e.g. vitest). `LOOM_DLP_GRAPH_BASE`
+ * overrides the host outright for private-link / unenumerated clouds.
+ */
+function graphBase(): string {
+  return process.env.LOOM_DLP_GRAPH_BASE || getGraphHost();
 }
-/** AAD scope matching the active Graph root. */
-function dlpGraphScope(): string {
-  return process.env.LOOM_DLP_GRAPH_BASE
-    ? `${process.env.LOOM_DLP_GRAPH_BASE.replace(/\/+$/, '')}/.default`
-    : cloudGraphScope();
+function graphScope(): string {
+  return getGraphScope();
 }
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -193,9 +195,9 @@ function isDlpSegmentUnavailable(e: unknown): boolean {  if (!(e instanceof DlpE
 // ============================================================
 
 async function graphFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = await credential.getToken(dlpGraphScope());
+  const token = await credential.getToken(graphScope());
   if (!token?.token) throw new DlpError(500, null, 'Failed to acquire Microsoft Graph token');
-  const url = `${dlpGraphBase()}${path}`;
+  const url = `${graphBase()}${path}`;
   return fetch(url, {
     ...init,
     headers: {
