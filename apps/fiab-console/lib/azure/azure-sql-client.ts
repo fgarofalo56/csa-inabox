@@ -330,6 +330,24 @@ async function defaultServerScopePath(serverName: string, suffix: string): Promi
 
 const pools: Map<string, sql.ConnectionPool> = new Map();
 
+/**
+ * Registry of live mssql `Request` objects, keyed by a caller-supplied request
+ * id. The cancel route (`/query/cancel`) looks the request up and calls
+ * `.cancel()`, which makes tedious send a TDS ATTENTION packet on the same
+ * connection — SQL Server acknowledges (error 3617 / SYS_ATTN) and the in-flight
+ * `.query()` promise rejects with `RequestError('Canceled.', 'ECANCEL')`.
+ *
+ * This is in-process Node.js state scoped to ONE Container App replica. For a
+ * scaled-out console the cancel POST must reach the SAME replica that started
+ * the query — enable ingress sticky sessions
+ * (`ingress.stickySessions.affinity: 'sticky'`) or run a single replica. There
+ * is no cross-replica cancel because the mssql connection itself is per-replica.
+ *
+ * Entries are removed on completion, error, or explicit cancel (in the `finally`
+ * of `executeQuery` and in the cancel route after `.cancel()`).
+ */
+export const liveRequests: Map<string, sql.Request> = new Map();
+
 export interface QueryResult {
   columns: string[];
   rows: unknown[][];
@@ -365,20 +383,34 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   return pool;
 }
 
-export async function executeQuery(server: string, database: string, sqlText: string): Promise<QueryResult> {
+export async function executeQuery(
+  server: string,
+  database: string,
+  sqlText: string,
+  opts?: { requestId?: string },
+): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(server, database);
-  const result = await pool.request().query(sqlText);
-  const recordset = result.recordset || [];
-  const columns = recordset.length ? Object.keys(recordset[0]) : [];
-  const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
-  return {
-    columns,
-    rows,
-    rowCount: recordset.length,
-    executionMs: Date.now() - started,
-    truncated: recordset.length > MAX_ROWS,
-  };
+  const request = pool.request();
+  // Register the live Request so the cancel route can send a TDS ATTENTION
+  // packet for this exact in-flight query. Registered BEFORE .query() so a
+  // cancel that races the start still lands on the right Request.
+  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  try {
+    const result = await request.query(sqlText);
+    const recordset = result.recordset || [];
+    const columns = recordset.length ? Object.keys(recordset[0]) : [];
+    const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+    return {
+      columns,
+      rows,
+      rowCount: recordset.length,
+      executionMs: Date.now() - started,
+      truncated: recordset.length > MAX_ROWS,
+    };
+  } finally {
+    if (opts?.requestId) liveRequests.delete(opts.requestId);
+  }
 }
 
 /**

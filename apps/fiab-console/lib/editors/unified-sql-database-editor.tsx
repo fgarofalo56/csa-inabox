@@ -39,7 +39,7 @@ import {
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular, ChartMultiple20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular, ChartMultiple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
@@ -47,6 +47,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -611,24 +612,76 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   );
   const [qResult, setQResult] = useState<QueryResponse | null>(null);
   const [qLoading, setQLoading] = useState(false);
+  // Background-job continuity: the query runs in the module-scope jobs-store so
+  // it survives this editor unmounting (tab switch / close). activeJobId lets us
+  // recover the result on remount; activeRequestId is the TDS cancel token.
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const startSqlQuery = useJobsStore((st) => st.startSqlQuery);
+  const jobs = useJobsStore((st) => st.jobs);
 
   const queryUrl = useMemo(() => {
     if (family === 'postgres') return `/api/items/postgres-flexible-server/${encodeURIComponent(id)}/query`;
     return `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`;
   }, [family, id]);
 
-  const run = useCallback(async (sqlOverride?: string) => {
+  const run = useCallback((sqlOverride?: string) => {
     const sqlToRun = sqlOverride ?? sqlText;
     if (!server) { setQResult({ ok: false, error: 'select a server first' }); return; }
     if (family !== 'postgres' && !database) { setQResult({ ok: false, error: 'select a database first' }); return; }
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActiveRequestId(reqId);
     setQLoading(true); setQResult(null);
-    const j = await fetchJson(queryUrl, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server, database: database || 'postgres', sql: sqlToRun }),
+    const jobId = startSqlQuery({
+      databaseName: database || 'postgres',
+      server,
+      sqlLabel: sqlToRun.slice(0, 80),
+      sqlText: sqlToRun,
+      queryUrl,
+      requestId: reqId,
+      onDone: ({ ok, queryResult, error, code }) => {
+        // Fires whether or not we're still mounted; React no-ops setState on an
+        // unmounted component. The remount useEffect recovers a backgrounded
+        // result from the store.
+        setQLoading(false); setActiveJobId(null); setActiveRequestId(null);
+        setQResult(ok && queryResult
+          ? { ok: true, ...queryResult }
+          : { ok: false, error: error || 'query failed', code });
+      },
     });
-    setQResult(j);
+    setActiveJobId(jobId);
+  }, [queryUrl, server, database, family, sqlText, startSqlQuery]);
+
+  // Cancel an in-flight query by sending a TDS ATTENTION packet to the BFF. The
+  // running fetch in the jobs-store then resolves with { ok:false, code:'ECANCEL' }
+  // and onDone restores the UI — no AbortController, the server actually stops.
+  const cancelQuery = useCallback(async () => {
+    if (!activeRequestId || family === 'postgres') return;
+    try {
+      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: activeRequestId }),
+      });
+    } catch { /* cancel is best-effort; the query promise still settles */ }
+  }, [id, activeRequestId, family]);
+
+  // Recover a result for a query that completed while this editor was unmounted
+  // (the user navigated away and came back). onDone was a no-op on the unmounted
+  // component, but the finished job is still in the store.
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = jobs.find((j) => j.id === activeJobId);
+    if (!job || job.status === 'running') return;
     setQLoading(false);
-  }, [queryUrl, server, database, family, sqlText]);
+    setQResult(job.status === 'success' && job.queryResult
+      ? { ok: true, ...job.queryResult }
+      : { ok: false, error: job.error || 'query failed' });
+    setActiveJobId(null);
+    setActiveRequestId(null);
+  }, [jobs, activeJobId]);
 
   // Load a statement from the object navigator into the Query tab (SELECT
   // TOP 1000, EXEC, CREATE templates) — matches the SSMS / portal flow.
@@ -1192,7 +1245,16 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
+                <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
+                {qLoading && (
+                  <Button appearance="secondary" icon={<Stop20Regular />} onClick={cancelQuery} disabled={family === 'postgres' || !activeRequestId} title={family === 'postgres' ? 'Cancel is available on the Azure SQL TDS path' : 'Send a TDS ATTENTION packet — cancels the running query on the server'}>Cancel</Button>
+                )}
               </div>
+              {qLoading && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Running in background — switch tabs or close this editor freely; a toast fires when the query completes.
+                </Caption1>
+              )}
               {family === 'managed-instance' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
               )}
