@@ -394,32 +394,6 @@ export function amlDataPlaneHost(region: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Microsoft Graph (data plane)
-// ---------------------------------------------------------------------------
-
-/**
- * Microsoft Graph v1.0 base URL for the active cloud.
- *
- * Commercial / GCC use `graph.microsoft.com`; GCC-High / IL5 (both
- * `AzureUSGovernment`) use `graph.microsoft.us`. Hard-coding the Commercial
- * host silently fails Graph queries (principal search, transitive group
- * membership) in the US Government clouds — every Graph call builds from this
- * helper instead. (DoD Graph also resolves to `graph.microsoft.us`.)
- */
-export function graphBase(): string {
-  return isGovCloud()
-    ? 'https://graph.microsoft.us/v1.0'
-    : 'https://graph.microsoft.com/v1.0';
-}
-
-/** AAD `.default` scope for Microsoft Graph app-only tokens, per cloud. */
-export function graphScope(): string {
-  return isGovCloud()
-    ? 'https://graph.microsoft.us/.default'
-    : 'https://graph.microsoft.com/.default';
-}
-
-// ---------------------------------------------------------------------------
 // Governance-client data-plane getters (the canonical `get*` surface)
 // ---------------------------------------------------------------------------
 //
