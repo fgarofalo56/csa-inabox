@@ -44,6 +44,8 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _postureAggregates: Container | null = null;
+let _recommendedActions: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +144,15 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Govern admin posture — one pre-computed aggregate doc per tenant
+  // (id = `posture:${tenantId}`), refreshed by the posture-refresh Azure
+  // Function and read on the fast path by /api/governance/govern/posture.
+  // Partitioned by /tenantId so the read hits a single physical partition.
+  _postureAggregates = await mk('posture-aggregates', '/tenantId');
+  // Govern admin "recommended actions" — governance remediation cards per
+  // tenant (id = `actions:${tenantId}`), surfaced on the Discover/Trust/Reuse
+  // sub-tab. Partitioned by /tenantId.
+  _recommendedActions = await mk('recommended-actions', '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +162,8 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
+export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +226,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'posture-aggregates', 'recommended-actions',
 ];
 
 /** List all Loom containers with their current throughput shape. */
