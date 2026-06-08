@@ -29,6 +29,9 @@ importers:
       '@azure/msal-node':
         specifier: ^2.16.0
         version: 2.16.3
+      '@azure/storage-blob':
+        specifier: 12.31.0
+        version: 12.31.0
       '@azure/storage-file-datalake':
         specifier: ^12.27.0
         version: 12.29.0

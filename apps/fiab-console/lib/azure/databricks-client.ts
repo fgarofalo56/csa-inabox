@@ -127,6 +127,14 @@ export interface WarehouseCreateSpec {
   auto_stop_mins?: number;
   warehouse_type?: 'CLASSIC' | 'PRO';
   enable_serverless_compute?: boolean;
+  // Advanced options (parity with the Databricks "Create SQL warehouse" dialog —
+  // every field below is accepted by POST /api/2.0/sql/warehouses, verified
+  // against Microsoft Learn `warehouses/create` + the createWarehouse audit
+  // request_params list).
+  enable_photon?: boolean;        // Photon vectorized engine (default on for serverless)
+  channel?: { name: 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW' };
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
+  spot_instance_policy?: 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED' | 'POLICY_UNSPECIFIED';
 }
 
 /** Create a SQL Warehouse. POST /api/2.0/sql/warehouses → { id }. */
@@ -141,6 +149,18 @@ export async function createWarehouse(spec: WarehouseCreateSpec): Promise<{ id: 
   };
   if (typeof spec.enable_serverless_compute === 'boolean') {
     payload.enable_serverless_compute = spec.enable_serverless_compute;
+  }
+  if (typeof spec.enable_photon === 'boolean') {
+    payload.enable_photon = spec.enable_photon;
+  }
+  if (spec.channel?.name) {
+    payload.channel = { name: spec.channel.name };
+  }
+  if (spec.tags?.custom_tags && spec.tags.custom_tags.length > 0) {
+    payload.tags = { custom_tags: spec.tags.custom_tags };
+  }
+  if (spec.spot_instance_policy) {
+    payload.spot_instance_policy = spec.spot_instance_policy;
   }
   const res = await dbxFetch('/api/2.0/sql/warehouses', {
     method: 'POST',
@@ -250,6 +270,97 @@ export async function listQueryHistory(
     error_message: r.error_message,
   }));
   return { entries, nextPageToken: body.next_page_token };
+}
+
+/**
+ * Per-query execution metrics, returned by the Query History API when
+ * `include_metrics=true`. Field set per the Databricks `QueryMetrics`
+ * object (the same numbers the Databricks Query Profile UI renders).
+ * https://docs.databricks.com/api/workspace/queryhistory/get
+ */
+export interface DbxQueryMetrics {
+  compilation_time_ms?: number;
+  execution_time_ms?: number;
+  photon_total_time_ms?: number;
+  total_time_ms?: number;
+  read_bytes?: number;
+  read_remote_bytes?: number;
+  write_remote_bytes?: number;
+  read_cache_bytes?: number;
+  rows_read_count?: number;
+  rows_produced_count?: number;
+  result_fetch_time_ms?: number;
+  read_files_count?: number;
+  read_partitions_count?: number;
+  pruned_files_count?: number;
+  pruned_bytes?: number;
+  network_sent_bytes?: number;
+  spill_to_disk_bytes?: number;
+  task_total_time_ms?: number;
+  result_from_cache?: boolean;
+}
+
+/**
+ * Single-query execution profile. The `metrics` object carries the IO/Photon
+ * stats; `spark_ui_url` is the authoritative deep-link to the full physical
+ * plan DAG in the Spark UI (the same data the Databricks Query Profile view
+ * renders). `plans_state` reports whether the plan tree is available; when the
+ * workspace returns the structured plan inline it lands on `plans` (opaque
+ * JSON, passed straight through to the UI).
+ */
+export interface DbxQueryProfile {
+  query_id: string;
+  status: string;
+  query_text?: string;
+  query_start_time_ms?: number;
+  query_end_time_ms?: number;
+  duration?: number; // ms
+  user_name?: string;
+  warehouse_id?: string;
+  rows_produced?: number;
+  error_message?: string;
+  spark_ui_url?: string;
+  statement_type?: string;
+  metrics?: DbxQueryMetrics;
+  plans_state?: string;
+  plans?: unknown;
+}
+
+/**
+ * GET /api/2.0/sql/history/queries/{statement_id}?include_metrics=true
+ *
+ * Fetches a single query's execution profile (metrics + plan state + Spark UI
+ * deep-link). The caller MI must own the query or hold CAN MONITOR on the
+ * warehouse.
+ */
+export async function getQueryProfile(queryId: string): Promise<DbxQueryProfile> {
+  const res = await dbxFetch(
+    `/api/2.0/sql/history/queries/${encodeURIComponent(queryId)}?include_metrics=true`,
+  );
+  if (!res.ok) {
+    throw new Error(`getQueryProfile failed ${res.status}: ${await res.text()}`);
+  }
+  // The single-query endpoint returns the QueryInfo object directly; some
+  // workspace versions nest it under `res`. Accept either shape.
+  const body = (await res.json()) as any;
+  const q = body?.query_id ? body : body?.res || body;
+  return {
+    query_id: q.query_id,
+    status: q.status,
+    query_text: q.query_text,
+    query_start_time_ms: q.query_start_time_ms,
+    query_end_time_ms: q.query_end_time_ms,
+    duration: q.duration,
+    user_name: q.user_name,
+    warehouse_id: q.warehouse_id,
+    rows_produced: q.rows_produced,
+    error_message: q.error_message,
+    spark_ui_url: q.spark_ui_url,
+    statement_type: q.statement_type,
+    metrics: q.metrics,
+    plans_state: q.plans_state,
+    plans: q.plans,
+  };
 }
 
 // ------------------------------------------------------------
