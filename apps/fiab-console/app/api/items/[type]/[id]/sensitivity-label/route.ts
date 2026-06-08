@@ -1,13 +1,13 @@
 /**
- * Sensitivity-label flyout (F12) — manual label application to a Loom item.
+ * Sensitivity-label routes for a Loom workspace item.
  *
- *   GET  /api/items/[type]/[id]/sensitivity-label
+ *   GET  /api/items/[type]/[id]/sensitivity-label   (F12 flyout)
  *        → { ok, currentLabelId, currentLabelName, labels[], source, gov }
  *        Live taxonomy from Microsoft Graph Information Protection
  *        (GET /beta/security/informationProtection/sensitivityLabels via
  *        mip-graph-client.listSensitivityLabels). Never a static list.
  *
- *   PUT  /api/items/[type]/[id]/sensitivity-label   body { labelId }
+ *   PUT  /api/items/[type]/[id]/sensitivity-label   body { labelId }  (F12 flyout)
  *        → applies the label:
  *          1. validates labelId against the live taxonomy AND isAppliable
  *             (policy-blocked labels are rejected 400 with the restriction
@@ -20,6 +20,32 @@
  *          4. appends an audit-log row + a tenant-partitioned
  *             label-assignments row.
  *        body { labelId: '' } clears the label.
+ *
+ *   PATCH /api/items/[type]/[id]/sensitivity-label  (F20/F21 protection)
+ *        Applies (or changes) the sensitivity label with two protections wired
+ *        to real backends:
+ *
+ *          F20 — Change-label rights gate. If the item currently carries a
+ *                PROTECTED label (Graph beta `hasProtection`), the caller must
+ *                hold EXPORT or EDIT usage rights on that label (verified via
+ *                Microsoft Graph) or the request is rejected 403. No Fabric
+ *                dependency — pure Graph + Cosmos.
+ *
+ *          F21 — Label → RBAC enforcement. When a `principalId` is supplied,
+ *                the new label's sensitivity tier is enforced as a REAL Azure
+ *                RBAC grant on the item's backing store (ADLS container /
+ *                Synapse pool / ADX db) via `enforceLabelRbac` →
+ *                `enforceAccessGrant`. The resulting grant is persisted in
+ *                `state.labelRbacGrant`.
+ *
+ *        Body:
+ *          {
+ *            labelId: string;                 // required — Graph sensitivity label id
+ *            labelName?: string;              // optional — display name to persist
+ *            principalId?: string;            // optional — Entra principal to (re)scope
+ *            principalName?: string;          // optional — UPN/name (required for warehouse)
+ *            principalType?: 'User'|'Group'|'ServicePrincipal';
+ *          }
  *
  * Azure-native by default: there is NO Fabric/Power BI dependency. The label
  * taxonomy is Microsoft 365 / Purview Information Protection, reachable in
@@ -38,6 +64,7 @@ import {
 } from '@/lib/azure/cosmos-client';
 import {
   listSensitivityLabels,
+  getSensitivityLabel,
   MipNotConfiguredError,
   MipError,
   type SensitivityLabel,
@@ -48,6 +75,13 @@ import {
   getAssetDetail,
 } from '@/lib/azure/purview-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { handleSecurityError } from '@/app/api/admin/security/_lib/error-handling';
+import {
+  isProtectedLabel,
+  checkLabelChangeRights,
+  enforceLabelRbac,
+  resolveItemBackingScope,
+} from '@/lib/azure/label-protection';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -263,6 +297,105 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
 
     return NextResponse.json({ ok: true, labelId: label.id, labelName, purviewStatus });
   } catch (e: any) {
+    return err(e?.message || 'Failed to apply sensitivity label', 500, 'cosmos_error');
+  }
+}
+
+/**
+ * PATCH — F20/F21 protected/label-based access control. Applies a label while
+ * enforcing change-rights (F20) and propagating the new tier to real Azure
+ * RBAC (F21).
+ */
+export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
+  const params = await props.params;
+  const session = getSession();
+  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  const callerUpn = session.claims.upn || session.claims.email || '';
+
+  let body: any;
+  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
+  const labelId = typeof body?.labelId === 'string' ? body.labelId.trim() : '';
+  if (!labelId) return err('labelId is required', 400, 'bad_input');
+
+  try {
+    const item = await loadItem(params.id, params.type, session.claims.oid);
+    if (!item) return err('Item not found', 404, 'not_found');
+
+    const state = (item.state || {}) as Record<string, unknown>;
+    const currentLabelId = typeof state.sensitivityLabelId === 'string' ? state.sensitivityLabelId : '';
+
+    // ── F20: if the CURRENT label is protected, gate the change by caller rights.
+    if (currentLabelId && currentLabelId !== labelId) {
+      const currentLabel = await getSensitivityLabel(currentLabelId);
+      if (currentLabel && isProtectedLabel(currentLabel)) {
+        if (!callerUpn) {
+          return err(
+            'Your session has no UPN; cannot verify usage rights to change a protected label.',
+            403,
+            'protected_label_no_upn',
+            { hint: 'Sign in with a user identity that carries a UPN, or have an administrator change this protected label.' },
+          );
+        }
+        const gate = await checkLabelChangeRights(currentLabelId, currentLabel, callerUpn);
+        if (!gate.allowed) {
+          return err(gate.reason || 'You are not permitted to change this protected label.', 403, 'protected_label_denied', { hint: gate.hint });
+        }
+      }
+    }
+
+    // ── Resolve the NEW label (must exist).
+    const newLabel = await getSensitivityLabel(labelId);
+    if (!newLabel) return err(`Sensitivity label "${labelId}" was not found.`, 400, 'label_not_found');
+    const labelName =
+      (typeof body?.labelName === 'string' && body.labelName.trim()) ||
+      newLabel.name || newLabel.displayName || labelId;
+
+    // ── F21: enforce the new label's protection tier as real Azure RBAC.
+    let rbac: import('@/lib/azure/access-policy-client').AccessGrantResult | undefined;
+    let grant: import('@/lib/azure/label-protection').LabelRbacGrant | undefined;
+    const principalId = typeof body?.principalId === 'string' ? body.principalId.trim() : '';
+    if (principalId) {
+      const scope = resolveItemBackingScope(item);
+      if ('pending' in scope) {
+        rbac = { status: 'pending', detail: scope.pending };
+      } else {
+        const principalType = (body?.principalType === 'Group' || body?.principalType === 'ServicePrincipal')
+          ? body.principalType : 'User';
+        const res = await enforceLabelRbac({
+          label: newLabel,
+          principalId,
+          principalName: typeof body?.principalName === 'string' ? body.principalName.trim() : undefined,
+          principalType,
+          scopeType: scope.scopeType,
+          scopeRef: scope.scopeRef,
+        });
+        grant = res.grant;
+        rbac = { status: res.status, roleName: res.roleName, roleAssignmentId: res.roleAssignmentId, detail: res.detail };
+      }
+    }
+
+    // ── Persist the label + grant on the item.
+    const nextState: Record<string, unknown> = { ...state, sensitivityLabel: labelName, sensitivityLabelId: labelId };
+    nextState.sensitivityLabelProtected = isProtectedLabel(newLabel);
+    if (grant) nextState.labelRbacGrant = grant;
+    const next: WorkspaceItem = { ...item, state: nextState, updatedAt: new Date().toISOString() };
+    const items = await itemsContainer();
+    const { resource } = await items.item(item.id, item.workspaceId).replace<WorkspaceItem>(next);
+
+    await writeAudit(params, item, session, 'sensitivity-label-applied', labelName);
+
+    return NextResponse.json({
+      ok: true,
+      label: { id: labelId, name: labelName, hasProtection: isProtectedLabel(newLabel) },
+      rbac,
+      grant,
+      item: resource,
+    });
+  } catch (e: any) {
+    // MIP not configured / Graph upstream errors → structured 503/4xx via shared mapper.
+    if (e?.constructor?.name === 'MipNotConfiguredError' || e?.constructor?.name === 'MipError') {
+      return handleSecurityError(e);
+    }
     return err(e?.message || 'Failed to apply sensitivity label', 500, 'cosmos_error');
   }
 }

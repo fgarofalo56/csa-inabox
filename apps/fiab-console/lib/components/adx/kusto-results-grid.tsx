@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Input, Caption1, Badge, Tooltip, Divider,
   Popover, PopoverTrigger, PopoverSurface,
+  MessageBar, MessageBarBody,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -55,6 +56,13 @@ export interface KustoResultsGridProps {
   renderCap?: number;
   /** Base name for the exported CSV file (no extension). */
   exportName?: string;
+  /**
+   * Optional pre-flight hook invoked before a CSV export. When it resolves
+   * `{ blocked: true, reason }` the download is cancelled and `reason` is shown
+   * in an error MessageBar — used by labeled items to enforce sensitivity-label
+   * export protection (F19). Omit for surfaces with no label protection.
+   */
+  onExportCheck?: () => Promise<{ blocked: boolean; reason?: string }>;
 }
 
 type SortDir = 'asc' | 'desc' | null;
@@ -469,6 +477,7 @@ export function KustoResultsGrid({
   totalRowCount,
   renderCap = 1000,
   exportName = 'kusto-results',
+  onExportCheck,
 }: KustoResultsGridProps) {
   const s = useStyles();
   const [sortCol, setSortCol] = useState<number | null>(null);
@@ -476,6 +485,7 @@ export function KustoResultsGrid({
   const [globalSearch, setGlobalSearch] = useState('');
   const [colFilters, setColFilters] = useState<Record<number, string>>({});
   const [showColFilters, setShowColFilters] = useState(false);
+  const [exportBlockMsg, setExportBlockMsg] = useState<string | null>(null);
   const linkRef = useRef<HTMLAnchorElement | null>(null);
   // Column resize — drag the right edge of any header to set an explicit
   // column width, one-for-one with the ADX web-UI results grid. Empty by
@@ -584,7 +594,18 @@ export function KustoResultsGrid({
     setGlobalSearch('');
   }, []);
 
-  const downloadCsv = useCallback(() => {
+  const downloadCsv = useCallback(async () => {
+    setExportBlockMsg(null);
+    if (onExportCheck) {
+      // Sensitivity-label export protection (F19). On a thrown/failed check we
+      // fail OPEN to a non-block (the route itself surfaces config gates), but
+      // an explicit { blocked: true } stops the download with the given reason.
+      const check = await onExportCheck().catch(() => ({ blocked: false as const }));
+      if (check.blocked) {
+        setExportBlockMsg(check.reason || 'Export blocked by sensitivity-label protection policy.');
+        return;
+      }
+    }
     const csv = buildCsv(columns, sorted);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -593,7 +614,7 @@ export function KustoResultsGrid({
     a.download = `${exportName}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-  }, [columns, sorted, exportName]);
+  }, [columns, sorted, exportName, onExportCheck]);
 
   const copyTsv = useCallback(async () => {
     const tsv = buildTsv(columns, sorted);
@@ -667,6 +688,13 @@ export function KustoResultsGrid({
         {/* eslint-disable-next-line jsx-a11y/anchor-has-content */}
         <a ref={linkRef} style={{ display: 'none' }} aria-hidden />
       </div>
+
+      {/* F19 — sensitivity-label export protection: blocked CSV export. */}
+      {exportBlockMsg && (
+        <MessageBar intent="error" style={{ marginBottom: '8px' }}>
+          <MessageBarBody>{exportBlockMsg}</MessageBarBody>
+        </MessageBar>
+      )}
 
       {/* Grid */}
       <div className={s.scroll} role="region" aria-label="KQL results grid">

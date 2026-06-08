@@ -560,8 +560,28 @@ const KQL_VIZ_CHOICES: { value: TileViz; label: string }[] = [
   { value: 'map', label: 'Map' },
 ];
 
-function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loading: boolean }) {
+function KqlResultsPanel({ result, loading, itemId, itemType }: { result: KqlResult | null; loading: boolean; itemId?: string; itemType?: string }) {
   const s = useStyles();
+  // F19 — sensitivity-label export protection. When this panel belongs to a
+  // labeled item, gate CSV export through the real /export-check BFF route so a
+  // protected label blocks the download (encryption can't survive CSV/TXT).
+  const onExportCheck = useMemo(() => {
+    if (!itemId || !itemType) return undefined;
+    return async (): Promise<{ blocked: boolean; reason?: string }> => {
+      try {
+        const r = await fetch(`/api/items/${itemType}/${itemId}/export-check`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ format: 'csv' }),
+        });
+        const j = await r.json().catch(() => ({}));
+        return { blocked: !!j?.blocked, reason: j?.reason };
+      } catch {
+        // Network/route failure must not silently block a legitimate export.
+        return { blocked: false };
+      }
+    };
+  }, [itemId, itemType]);
   // Default visual follows the cluster's `| render` annotation; the user can
   // override with the chart picker. Re-derive whenever a new result arrives.
   const renderViz = vizFromRender(result?.visualization?.Visualization);
@@ -638,6 +658,7 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
           rows={rows}
           totalRowCount={result.rowCount}
           exportName={`kql-${result.database || 'results'}`}
+          onExportCheck={onExportCheck}
         />
       )}
     </div>
@@ -4144,7 +4165,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             minHeight={180}
             ariaLabel="KQL query editor"
           />
-          <KqlResultsPanel result={result} loading={loading} />
+          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" />
 
           {/* Starter schema + queries from the app-install template. Surfaced
               when the live ADX object isn't provisioned yet so a bundle-
@@ -5358,7 +5379,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} />
+          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-queryset" />
 
           <Dialog open={pinDlgOpen} onOpenChange={(_: unknown, d: any) => setPinDlgOpen(d.open)}>
             <DialogSurface>

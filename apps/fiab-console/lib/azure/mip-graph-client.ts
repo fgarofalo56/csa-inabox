@@ -178,7 +178,22 @@ export interface SensitivityLabel {
   isAppliable?: boolean;
   parentId?: string | null;
   applicableTo?: string;
+  /** True when the label carries an AIP/RMS encryption policy (Graph beta `hasProtection`). */
+  hasProtection?: boolean;
   raw?: unknown;
+}
+
+/**
+ * Per-user usage rights for a protected (encrypted) sensitivity label.
+ * Mirrors the Graph beta `usageRightsInfo` sub-object returned when the
+ * sensitivityLabels list is queried with the `ownerEmail` filter.
+ */
+export interface SensitivityLabelUsageRights {
+  allowView: boolean;
+  allowEdit: boolean;
+  allowExport: boolean;
+  allowCopy: boolean;
+  allowPrint: boolean;
 }
 
 export interface SensitivityLabelPolicy {
@@ -218,6 +233,7 @@ export async function listSensitivityLabels(): Promise<SensitivityLabel[]> {
     isAppliable: raw?.isAppliable,
     parentId: raw?.parent?.id ?? null,
     applicableTo: raw?.applicableTo,
+    hasProtection: raw?.hasProtection ?? false,
     raw,
   }));
 }
@@ -246,6 +262,7 @@ export async function getSensitivityLabel(id: string): Promise<SensitivityLabel 
     isAppliable: raw.isAppliable,
     parentId: raw.parent?.id ?? null,
     applicableTo: raw.applicableTo,
+    hasProtection: raw.hasProtection ?? false,
     raw,
   };
 }
@@ -304,6 +321,62 @@ export async function evaluateLabel(payload: {
     body: JSON.stringify(payload),
   });
   return readJson<unknown>(res, endpoint);
+}
+
+/**
+ * Get the sensitivity label with the calling user's per-user usage rights.
+ *
+ * Backing call (Graph beta), filtered to one label + one owner:
+ *   GET /beta/security/informationProtection/sensitivityLabels
+ *       ?$filter=(id eq '{guid}' and ownerEmail eq '{upn}')
+ *
+ * The matching label carries a `usageRightsInfo` sub-object (allowView /
+ * allowEdit / allowExport / allowCopy / allowPrint) describing what the
+ * `ownerEmail` user may do with content protected by this label. This is the
+ * Azure-native, Fabric-free source of truth for the F19/F20 rights gates.
+ *
+ * Returns `null` (the honest-gate signal) when:
+ *   - the filter matches no label (404 / empty value array);
+ *   - the response carries no usageRightsInfo;
+ *   - the ownerEmail rights filter is not available for this cloud boundary
+ *     (GCC-High / IL5 / DoD return a non-2xx that we catch and degrade).
+ *
+ * Callers MUST treat `null` as "rights unavailable" and fall back to a
+ * conservative gate (e.g. require an admin) rather than implicitly allowing.
+ */
+export async function getSensitivityLabelWithRights(
+  labelId: string,
+  ownerEmail: string,
+): Promise<SensitivityLabelUsageRights | null> {
+  assertEnabled();
+  if (!labelId || !ownerEmail) return null;
+  const filter = `(id eq '${labelId.replace(/'/g, "''")}' and ownerEmail eq '${ownerEmail.replace(/'/g, "''")}')`;
+  const endpoint = `/beta/security/informationProtection/sensitivityLabels?$filter=${encodeURIComponent(filter)}`;
+  let res: Response;
+  try {
+    res = await graphFetch(endpoint);
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null; // 400/403/404 → rights filter unavailable (Gov clouds)
+  let j: { value?: any[] } | null;
+  try {
+    const text = await res.text();
+    j = text ? (JSON.parse(text) as { value?: any[] }) : null;
+  } catch {
+    return null;
+  }
+  if (!j?.value?.length) return null;
+  const raw = j.value[0];
+  const ri = raw?.rights?.usageRightsInfo || raw?.usageRightsInfo;
+  if (!ri) return null;
+  return {
+    allowView: !!ri.allowView,
+    allowEdit: !!ri.allowEdit,
+    allowExport: !!ri.allowExport,
+    allowCopy: !!ri.allowCopy,
+    allowPrint: !!ri.allowPrint,
+  };
 }
 
 // Test-only: expose internal helpers for unit tests

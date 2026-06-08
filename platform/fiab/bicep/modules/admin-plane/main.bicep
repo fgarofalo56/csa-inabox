@@ -823,6 +823,22 @@ module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingA
   }
 }
 
+// F21 — Protected-label → RBAC enforcement. Grant the Console UAMI "Role Based
+// Access Control Administrator" on the DLZ ADLS account so enforceLabelRbac()
+// can create/revoke Storage Blob Data role assignments when a sensitivity label
+// is applied/changed (lib/azure/label-protection.ts). Scoped to the DLZ RG (the
+// lake account usually lives outside the admin RG). Skipped (honest gate in the
+// editor) when loomStorageAccount is unset.
+module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount)) {
+  name: 'label-rbac-grants'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Workspace-monitoring ADX database + Azure Monitor diagnostic-export pipeline.
 // Read-only telemetry store (Fabric workspace-monitoring parity, no Fabric).
 // Console UAMI gets Admin (provisioner seeds tables); admin group gets Viewer.
