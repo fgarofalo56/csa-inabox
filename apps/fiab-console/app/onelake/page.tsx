@@ -30,8 +30,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner,
+  Avatar,
   Badge,
   Button,
+  Dropdown,
+  Option,
   Text,
   Title3,
   Caption1,
@@ -44,6 +47,11 @@ import {
   MessageBarBody,
   MessageBarTitle,
   Tooltip,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
   Dialog,
   DialogSurface,
   DialogTitle,
@@ -64,6 +72,13 @@ import {
   Person20Regular,
   Delete20Regular,
   BinRecycle20Regular,
+  ShieldCheckmark20Regular,
+  ShieldKeyhole16Regular,
+  MoreHorizontal20Regular,
+  Copy16Regular,
+  Link16Regular,
+  BranchFork16Regular,
+  Info16Regular,
 } from '@fluentui/react-icons';
 
 import { PageShell } from '@/lib/components/page-shell';
@@ -75,9 +90,13 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
+import { SecureView } from '@/lib/components/onelake/secure-view';
+import { GovernView } from '@/lib/components/onelake/govern-view';
+import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { RecycleView } from '@/lib/components/onelake/recycle-view';
 import { ONELAKE_TYPES } from '@/lib/catalog/onelake-types';
+import { initials, endorsementOf } from './card-badges';
 
 const TABLE_BACKED_TYPES = new Set(['lakehouse']);
 
@@ -91,6 +110,12 @@ interface OwnedItem {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Flattened from state.endorsement by the route. 'Certified' | 'Promoted' | 'Master data' | undefined */
+  endorsement?: string;
+  /** Flattened from state.sensitivityLabel by the route. */
+  sensitivityLabel?: string;
+  /** Domain id from parent workspace.domain; resolved to a display name via domainMap. */
+  workspaceDomain?: string;
 }
 
 interface Workspace {
@@ -106,6 +131,13 @@ interface DeltaTable {
   sizeBytes: number;
   format: 'delta' | 'parquet' | 'iceberg';
   latestVersion: number;
+}
+
+/** A MIP sensitivity label from the Purview Data Map (GET /sensitivity). */
+interface SensitivityLabelOption {
+  id: string;
+  displayName: string;
+  typedefName: string;
 }
 
 // ── relative-time (Refreshed / Created) ───────────────────────────────────
@@ -144,7 +176,108 @@ function fmtBytes(n: number): string {
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
+// ── OneLake addressing ─────────────────────────────────────────────────────
+// Map a Loom item to the {container, itemPath} tuple used by the OneLake path
+// helper. Container = the workspace (OneLake's "workspace" == ADLS container);
+// itemPath = "<displayName>.<itemType>" (Fabric's "<item>.<type>" convention).
+function onelakeAddress(it: OwnedItem, workspaceName: string) {
+  return {
+    container: workspaceName || it.workspaceId,
+    itemPath: `${it.displayName}.${it.itemType}`,
+    workspaceGuid: it.workspaceId,
+    itemGuid: it.id,
+  };
+}
+
+/**
+ * Resolve a OneLake URI form for an item via the BFF (which holds the storage
+ * account name) and write it to the clipboard. Returns silently on failure —
+ * the menu item is fire-and-forget; the Properties panel surfaces any gate.
+ */
+async function copyOnelakeForm(
+  it: OwnedItem,
+  workspaceName: string,
+  form: 'abfs' | 'dfs',
+): Promise<void> {
+  const a = onelakeAddress(it, workspaceName);
+  const qs = new URLSearchParams({
+    container: a.container,
+    itemPath: a.itemPath,
+    workspaceGuid: a.workspaceGuid,
+    itemGuid: a.itemGuid,
+  });
+  try {
+    const r = await fetch(`/api/onelake/paths?${qs.toString()}`);
+    const j = await r.json();
+    if (j?.ok && j.paths?.[form]) {
+      await navigator.clipboard.writeText(j.paths[form] as string);
+    }
+  } catch {
+    // network/clipboard failure — no-op (Properties panel shows the honest gate)
+  }
+}
+
+/** Bottom-row badges for an ItemTile: endorsement chip + owner avatar + domain
+ *  chip. Returns undefined when none apply so the tile renders no empty row. */
+function tileFooter(
+  it: OwnedItem,
+  resolvedDomainName: string | undefined,
+): React.ReactNode | undefined {
+  // Endorsement: prefer the flattened top-level field, fall back to the
+  // legacy state.certified flag (older items predate state.endorsement).
+  const endorse = endorsementOf(it);
+  const hasContent = Boolean(endorse || it.createdBy || resolvedDomainName);
+  if (!hasContent) return undefined;
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {endorse && (
+        <Tooltip
+          content={
+            endorse === 'Certified'
+              ? 'Certified — meets your organization’s quality standards'
+              : endorse === 'Promoted'
+              ? 'Promoted — recommended for sharing and reuse'
+              : endorse
+          }
+          relationship="label"
+        >
+          <Badge
+            appearance={endorse === 'Certified' ? 'filled' : 'outline'}
+            color="brand"
+            size="small"
+          >
+            {endorse}
+          </Badge>
+        </Tooltip>
+      )}
+      {it.createdBy && (
+        <Tooltip content={`Owner: ${it.createdBy}`} relationship="label">
+          <Avatar
+            initials={initials(it.createdBy)}
+            size={16}
+            color="colorful"
+            aria-label={`Owner: ${it.createdBy}`}
+          />
+        </Tooltip>
+      )}
+      {resolvedDomainName && (
+        <Tooltip content={`Domain: ${resolvedDomainName}`} relationship="label">
+          <Badge appearance="tint" color="subtle" size="small">
+            {resolvedDomainName}
+          </Badge>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
 const useStyles = makeStyles({
+  // top-level page pivot: Explore | Govern
+  pageTabBar: {
+    marginBottom: tokens.spacingVerticalL,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   // three-column Explore layout: filters | items | details
   layout: {
     display: 'grid',
@@ -393,13 +526,17 @@ function TablesTab({ itemId }: { itemId: string }) {
 function ItemDetails({
   item,
   workspaceName,
+  me,
   onClose,
   onDeleted,
+  onLabelChange,
 }: {
   item: OwnedItem;
   workspaceName: string;
+  me: string | null;
   onClose: () => void;
   onDeleted: (id: string) => void;
+  onLabelChange: (itemId: string, labelName: string | null, labelId: string | null) => void;
 }) {
   const styles = useStyles();
   const router = useRouter();
@@ -430,6 +567,14 @@ function ItemDetails({
       setDeleting(false);
     }
   };
+  const isOwner = !!me && item.createdBy === me;
+
+  // ── Set-label state (Purview MIP via GET/PUT /sensitivity) ──
+  const [labelPhase, setLabelPhase] = useState<'idle' | 'loading' | 'ready' | 'saving'>('idle');
+  const [labelOptions, setLabelOptions] = useState<SensitivityLabelOption[]>([]);
+  const [labelGate, setLabelGate] = useState<{ govNote?: string; missingEnvVar?: string } | null>(null);
+  const [labelError, setLabelError] = useState<string | null>(null);
+
   const stateLabel =
     typeof item.state?.['provisioningStatus'] === 'string'
       ? String(item.state['provisioningStatus'])
@@ -440,6 +585,58 @@ function ItemDetails({
   const endorsement = (item.state?.['endorsement'] as string) || (item.state?.['certified'] ? 'Certified' : null);
   const sensitivity = (item.state?.['sensitivityLabel'] as string) || null;
   const classifications = Array.isArray(item.state?.['classifications']) ? (item.state!['classifications'] as string[]) : [];
+
+  // Load the live MIP label taxonomy from the Purview Data Map. On an honest
+  // gate (no LOOM_PURVIEW_ACCOUNT) surface the named MessageBar instead of a
+  // crash; the picker simply doesn't open.
+  async function openLabelPicker() {
+    setLabelPhase('loading');
+    setLabelError(null);
+    setLabelGate(null);
+    try {
+      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`);
+      const j = await r.json();
+      if (!j?.ok) {
+        if (j?.code === 'purview_not_configured') {
+          setLabelGate({ govNote: j.govNote, missingEnvVar: j.hint?.missingEnvVar || 'LOOM_PURVIEW_ACCOUNT' });
+        } else {
+          setLabelError(j?.error || `Failed to load labels (HTTP ${r.status}).`);
+        }
+        setLabelPhase('idle');
+        return;
+      }
+      setLabelOptions(Array.isArray(j.labels) ? j.labels : []);
+      setLabelPhase('ready');
+    } catch (e: any) {
+      setLabelError(e?.message || 'Failed to load sensitivity labels.');
+      setLabelPhase('idle');
+    }
+  }
+
+  // Persist the chosen label (Cosmos + best-effort Purview Atlas tag) and lift
+  // the change so the tile chip + details badge update without a reload.
+  async function applyLabel(opt: SensitivityLabelOption | null) {
+    setLabelPhase('saving');
+    setLabelError(null);
+    try {
+      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(opt ? { labelId: opt.id, labelName: opt.displayName } : { labelId: '' }),
+      });
+      const j = await r.json();
+      if (!j?.ok) {
+        setLabelError(j?.error || `Failed to apply label (HTTP ${r.status}).`);
+        setLabelPhase('ready');
+        return;
+      }
+      onLabelChange(item.id, opt ? opt.displayName : null, opt ? opt.id : null);
+      setLabelPhase('idle');
+    } catch (e: any) {
+      setLabelError(e?.message || 'Failed to apply sensitivity label.');
+      setLabelPhase('ready');
+    }
+  }
 
   return (
     <aside className={styles.details} aria-label={`Details for ${item.displayName}`}>
@@ -570,7 +767,75 @@ function ItemDetails({
             <span className={styles.metaVal}>
               <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(item.id)}`)}>View lineage</Button>
             </span>
+            {isOwner && (
+              <>
+                <span className={styles.metaKey}>Set label</span>
+                <span className={styles.metaVal}>
+                  {labelPhase === 'idle' && (
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      icon={<ShieldKeyhole16Regular />}
+                      onClick={openLabelPicker}
+                    >
+                      {sensitivity ? 'Change' : 'Set'} sensitivity label
+                    </Button>
+                  )}
+                  {labelPhase === 'loading' && <Spinner size="tiny" label="Loading labels…" />}
+                  {labelPhase === 'saving' && <Spinner size="tiny" label="Applying…" />}
+                  {labelPhase === 'ready' && (
+                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {labelOptions.length === 0 ? (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          No MIP labels are registered in the Purview Data Map yet. Enable
+                          Information Protection + run a scan, then retry.
+                        </Caption1>
+                      ) : (
+                        <Dropdown
+                          size="small"
+                          placeholder="Select a label…"
+                          aria-label="Select sensitivity label"
+                          selectedOptions={item.state?.['sensitivityLabelId'] ? [String(item.state['sensitivityLabelId'])] : []}
+                          onOptionSelect={(_e, d) => {
+                            const opt = labelOptions.find((l) => l.id === d.optionValue);
+                            if (opt) applyLabel(opt);
+                          }}
+                        >
+                          {labelOptions.map((l) => (
+                            <Option key={l.id} value={l.id} text={l.displayName}>
+                              {l.displayName}
+                            </Option>
+                          ))}
+                        </Dropdown>
+                      )}
+                      {sensitivity && (
+                        <Button size="small" appearance="subtle" onClick={() => applyLabel(null)}>
+                          Clear
+                        </Button>
+                      )}
+                      <Button size="small" appearance="transparent" onClick={() => setLabelPhase('idle')}>
+                        Cancel
+                      </Button>
+                    </span>
+                  )}
+                </span>
+              </>
+            )}
           </div>
+          {labelError && (
+            <MessageBar intent="error">
+              <MessageBarBody>{labelError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {labelGate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Microsoft Purview not configured</MessageBarTitle>
+                {labelGate.govNote ||
+                  `Sensitivity-label management reads the live MIP taxonomy from the Microsoft Purview Data Map. Set ${labelGate.missingEnvVar || 'LOOM_PURVIEW_ACCOUNT'} to a provisioned Purview account (and grant the Console UAMI the Data Curator role) to enable it.`}
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
             Set endorsement, sensitivity &amp; classifications in the item editor or Governance. Microsoft Purview
             enriches these with scan-based classifications &amp; cross-asset lineage when connected.
@@ -590,9 +855,11 @@ export default function OneLakeCatalogPage() {
 
   const [items, setItems] = useState<OwnedItem[] | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
   const [unauth, setUnauth] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
+  const [pageTab, setPageTab] = useState<'explore' | 'secure' | 'govern'>('explore');
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
   const [typeFilter, setTypeFilter] = useState<string>('all'); // 'all' | itemType slug
@@ -600,6 +867,7 @@ export default function OneLakeCatalogPage() {
   const [wsFilter, setWsFilter] = useState<string | null>(null); // workspaceId or null
   const [selected, setSelected] = useState<OwnedItem | null>(null);
   const [activeSection, setActiveSection] = useState<'explore' | 'recycle'>('explore');
+  const [propsItem, setPropsItem] = useState<OwnedItem | null>(null);
 
   // ── load items + workspaces + identity ──
   useEffect(() => {
@@ -617,6 +885,14 @@ export default function OneLakeCatalogPage() {
       .then((d) => setWorkspaces(Array.isArray(d) ? d : []))
       .catch(() => setWorkspaces([]));
 
+    // Domains resolve workspace.domain ids → display names for the card badge.
+    // Azure-native by default (Cosmos governance-domains); honest-degrades to
+    // no domain badge if the backend is gated (e.g. IL5 fabric opt-in 501).
+    fetch('/api/governance/domains')
+      .then((r) => (r.ok ? r.json() : { ok: false, domains: [] }))
+      .then((d) => setDomains(Array.isArray(d?.domains) ? d.domains : []))
+      .catch(() => setDomains([]));
+
     fetch('/api/me')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -632,6 +908,12 @@ export default function OneLakeCatalogPage() {
     for (const w of workspaces) m.set(w.id, w.name);
     return m;
   }, [workspaces]);
+
+  const domainMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of domains) m.set(d.id, d.name);
+    return m;
+  }, [domains]);
 
   // ── per-type counts (respect scope + workspace filter, ignore type chip) ──
   const scopedItems = useMemo(() => {
@@ -742,10 +1024,67 @@ export default function OneLakeCatalogPage() {
   const subtitle =
     'Find, explore, and open the data items your tenant exposes — lakehouses, warehouses, databases, mirrored and KQL stores — without losing your place.';
 
+  // Per-tile overflow (kebab) — Fabric OneLake item context menu, themed.
+  function renderOverflow(it: OwnedItem) {
+    const workspaceName = wsName.get(it.workspaceId) ?? it.workspaceId;
+    return (
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<MoreHorizontal20Regular />}
+            aria-label={`More actions for ${it.displayName}`}
+          />
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem icon={<Open16Regular />} onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}>
+              Open
+            </MenuItem>
+            <MenuItem icon={<Copy16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'abfs'); }}>
+              Copy OneLake path
+            </MenuItem>
+            <MenuItem icon={<Link16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'dfs'); }}>
+              Get URL (DFS)
+            </MenuItem>
+            <MenuItem
+              icon={<BranchFork16Regular />}
+              onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(it.id)}`)}
+            >
+              View lineage
+            </MenuItem>
+            <MenuItem icon={<Info16Regular />} onClick={() => setPropsItem(it)}>
+              Properties
+            </MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  }
+
   return (
     <PageShell title="OneLake catalog" subtitle={subtitle}>
       {unauth && <SignInRequired subject="catalog items" />}
 
+      {/* Page-level pivot: Explore (find/open items) vs Secure (access matrix) vs Govern (posture) */}
+      <div className={styles.pageTabBar}>
+        <TabList
+          selectedValue={pageTab}
+          onTabSelect={(_e, d) => setPageTab(d.value as 'explore' | 'secure' | 'govern')}
+          size="medium"
+        >
+          <Tab value="explore" icon={<AppsList20Regular />}>Explore</Tab>
+          <Tab value="secure" icon={<ShieldKeyhole16Regular />}>Secure</Tab>
+          <Tab value="govern" icon={<ShieldCheckmark20Regular />}>Govern</Tab>
+        </TabList>
+      </div>
+
+      {pageTab === 'secure' && <SecureView workspaces={workspaces} items={items ?? []} />}
+      {pageTab === 'govern' && <GovernView />}
+
+      {pageTab === 'explore' && (
+        <>
       {/* Toolbar: search + category chips + view toggle (Explore only) */}
       {activeSection === 'explore' && (
       <Toolbar
@@ -894,6 +1233,12 @@ export default function OneLakeCatalogPage() {
                         subtitle={typeLabel(it.itemType)}
                         meta={`Refreshed ${relative(it.updatedAt || it.createdAt)}`}
                         badge={isPreviewType(it.itemType) ? <Badge appearance="tint" color="brand" size="small">Preview</Badge> : undefined}
+                        sensitivityLabel={(it.state?.['sensitivityLabel'] as string | undefined) || undefined}
+                        overflowMenu={renderOverflow(it)}
+                        footer={tileFooter(
+                          it,
+                          it.workspaceDomain ? domainMap.get(it.workspaceDomain) : undefined,
+                        )}
                         onClick={() => setSelected(it)}
                       />
                     ))}
@@ -926,14 +1271,50 @@ export default function OneLakeCatalogPage() {
           <ItemDetails
             item={selected}
             workspaceName={wsName.get(selected.workspaceId) ?? 'Unknown workspace'}
+            me={me}
             onClose={() => setSelected(null)}
             onDeleted={(id) => {
               setItems((prev) => (prev ? prev.filter((it) => it.id !== id) : prev));
               setSelected(null);
             }}
+            onLabelChange={(itemId, labelName, labelId) => {
+              const patch = (it: OwnedItem): OwnedItem =>
+                it.id === itemId
+                  ? {
+                      ...it,
+                      state: {
+                        ...(it.state || {}),
+                        sensitivityLabel: labelName ?? undefined,
+                        sensitivityLabelId: labelId ?? undefined,
+                      },
+                    }
+                  : it;
+              setItems((prev) => (prev ? prev.map(patch) : prev));
+              setSelected((prev) => (prev ? patch(prev) : prev));
+            }}
           />
         )}
       </div>
+
+      {/* Properties dialog — Paths (DFS/Blob/ABFS/GUID) + Connect snippets */}
+      <Dialog open={Boolean(propsItem)} onOpenChange={(_e, d) => { if (!d.open) setPropsItem(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogContent>
+              {propsItem && (
+                <PropertiesPanel
+                  {...onelakeAddress(propsItem, wsName.get(propsItem.workspaceId) ?? propsItem.workspaceId)}
+                  itemName={propsItem.displayName}
+                  itemType={typeLabel(propsItem.itemType)}
+                  onClose={() => setPropsItem(null)}
+                />
+              )}
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+        </>
+      )}
     </PageShell>
   );
 }

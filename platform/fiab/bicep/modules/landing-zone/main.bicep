@@ -101,6 +101,9 @@ param skipRoleGrants bool = false
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default; set true when the lifecycle feature is enabled.')
+param consolePrincipalNeedsLifecycleWrite bool = false
+
 // =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
@@ -189,6 +192,23 @@ module storageRbacAdmin 'storage-rbac-admin.bicep' = {
   params: {
     storageAccountName: storage.outputs.storageAccountName
     consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// 4a3. Console UAMI "Storage Account Contributor" on lakehouse storage
+//      (OneLake Lifecycle Management rules editor — read/write
+//       managementPolicies/default via the ARM management plane). Off by
+//       default; enabled via consolePrincipalNeedsLifecycleWrite.
+// =====================================================================
+
+module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
+  name: 'dlz-storage-lifecycle-rbac'
+  params: {
+    storageAccountName: storage.outputs.storageAccountName
+    consolePrincipalId: consolePrincipalId
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     skipRoleGrants: skipRoleGrants
   }
 }

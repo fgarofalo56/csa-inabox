@@ -18,7 +18,7 @@
  */
 
 import * as React from 'react';
-import { Text, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
+import { Text, Badge, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
 import { itemVisual } from './item-type-visual';
 
 export interface ItemTileProps {
@@ -31,9 +31,31 @@ export interface ItemTileProps {
   meta?: React.ReactNode;
   /** Optional trailing badge node (Preview tag, status pill, etc.). */
   badge?: React.ReactNode;
+  /**
+   * MIP sensitivity label name (e.g. 'Confidential'). Renders as a tinted
+   * Fluent Badge chip below the title, colour-tiered by sensitivity.
+   */
+  sensitivityLabel?: string;
+  /**
+   * Optional overflow menu node (e.g. a Fluent `<Menu>…</Menu>`). Rendered
+   * top-right of the tile head. Clicks inside it are stopped from bubbling to
+   * the tile's own `onClick`, so the kebab opens its menu without "opening"
+   * the item. Coexists with `badge` (badge sits to its left).
+   */
+  overflowMenu?: React.ReactNode;
+  /** Bottom badge row: endorsement chip, owner avatar, domain chip. Omit → row absent. */
+  footer?: React.ReactNode;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
+}
+
+/** Tier a sensitivity-label name onto a Fluent Badge colour. */
+export function sensitivityBadgeColor(name: string): 'danger' | 'warning' | 'subtle' {
+  const n = (name || '').toLowerCase();
+  if (n.includes('highly confidential') || n.includes('restricted') || n.includes('secret')) return 'danger';
+  if (n.includes('confidential')) return 'warning';
+  return 'subtle';
 }
 
 const useStyles = makeStyles({
@@ -97,12 +119,35 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  labelChip: {
+    alignSelf: 'flex-start',
+    marginTop: '2px',
+    maxWidth: '100%',
+  },
   meta: {
     color: tokens.colorNeutralForeground4,
   },
   badge: {
     marginLeft: 'auto',
     flexShrink: 0,
+  },
+  overflow: {
+    flexShrink: 0,
+    display: 'inline-flex',
+  },
+  headTrailing: {
+    marginLeft: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minHeight: '20px',
   },
 });
 
@@ -112,6 +157,9 @@ export function ItemTile({
   subtitle,
   meta,
   badge,
+  sensitivityLabel,
+  overflowMenu,
+  footer,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -160,14 +208,41 @@ export function ItemTile({
               {subtitle}
             </Text>
           )}
+          {sensitivityLabel && (
+            <Badge
+              className={styles.labelChip}
+              appearance="tint"
+              size="small"
+              color={sensitivityBadgeColor(sensitivityLabel)}
+              aria-label={`Sensitivity: ${sensitivityLabel}`}
+              title={`Sensitivity label: ${sensitivityLabel}`}
+            >
+              {sensitivityLabel}
+            </Badge>
+          )}
         </span>
-        {badge != null && <span className={styles.badge}>{badge}</span>}
+        {(badge != null || overflowMenu != null) && (
+          <span className={styles.headTrailing}>
+            {badge != null && <span className={styles.badge}>{badge}</span>}
+            {overflowMenu != null && (
+              <span
+                className={styles.overflow}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
+              >
+                {overflowMenu}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       {meta != null && (
         <Text size={200} className={styles.meta}>
           {meta}
         </Text>
       )}
+      {footer != null && <div className={styles.footer}>{footer}</div>}
     </div>
   );
 }

@@ -238,6 +238,9 @@ param loomApprovalLogicAppRg string = ''
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
+@description('Key Vault URI for external-source SHORTCUT credentials (S3/GCS/SAS/Synapse-Link). Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault to isolate shortcut credentials — keep it the SAME vault the shortcut engine binding reads, or unset to default.')
+param loomShortcutKeyVaultUri string = ''
+
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
@@ -959,6 +962,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // Deployment region — used as the `location` for on-demand ARM PUTs
+            // that require it (e.g. the Gov warehouse-create path that provisions
+            // a Synapse Dedicated SQL pool via createDedicatedSqlPool). Read by
+            // synapse-dev-client / the warehouse create BFF route.
+            { name: 'LOOM_LOCATION', value: location }
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
@@ -1025,6 +1033,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // point at a separate vault by overriding loomParamKeyVaultUri and
             // granting the Console identity "Key Vault Secrets User" on it.
             { name: 'LOOM_PARAM_KEYVAULT', value: !empty(loomParamKeyVaultUri) ? loomParamKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // External-source shortcut credentials (S3/GCS/SAS/Synapse-Link). KV
+            // defaults to the admin-plane vault (Console UAMI has Secrets Officer);
+            // override loomShortcutKeyVaultUri to isolate them in a dedicated vault
+            // (keep it the same vault the shortcut engine binding reads).
+            { name: 'LOOM_SHORTCUT_KEYVAULT', value: !empty(loomShortcutKeyVaultUri) ? loomShortcutKeyVaultUri : keyvault.outputs.keyVaultUri }
             // App Configuration source for parameter overrides. Empty disables
             // the App Config path; set to an App Configuration endpoint and grant
             // the Console identity "App Configuration Data Reader" to enable.
@@ -1312,6 +1325,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
           ] : []),
+          // Apache Atlas-on-AKS lineage endpoint (DoD / IL5 boundary). Read by
+          // /api/items/[type]/[id]/lineage when detectLoomCloud() === 'DoD'.
+          // STRICTLY the Azure-native lineage backend for sovereign clouds — no
+          // Fabric/OneLake dependency. Empty when atlasOnAksEnabled = false, in
+          // which case the lineage drawer shows an honest "set LOOM_ATLAS_ENDPOINT"
+          // MessageBar gate (never an empty graph).
+          atlasOnAksEnabled ? [
+            { name: 'LOOM_ATLAS_ENDPOINT', value: catalog.outputs.atlasEndpoint }
+          ] : [],
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
