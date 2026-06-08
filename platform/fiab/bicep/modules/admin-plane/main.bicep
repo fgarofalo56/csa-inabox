@@ -386,6 +386,9 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar.')
+param loomIdentityPickerEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -1176,6 +1179,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
+          // Identity Picker (Entra user/group/SPN search + transitive nested
+          // groups) — gated on the Console UAMI's Graph User.Read.All +
+          // Group.Read.All + Application.Read.All grants. When false the BFF
+          // returns 503 with the exact remediation (no mock principals).
+          loomIdentityPickerEnabled ? [
+            { name: 'LOOM_IDENTITY_PICKER_ENABLED', value: 'true' }
+          ] : [],
+          // Sovereign Microsoft Graph endpoint. Commercial/GCC use the global
+          // host; GCC-High uses graph.microsoft.us; IL5/DoD uses
+          // dod-graph.microsoft.us. The identity-picker client derives BOTH the
+          // base AND the token scope from this value so gov tenants mint a
+          // sovereign-scoped token. Existing Graph callers (admin/users,
+          // lakehouse/permissions) already read LOOM_GRAPH_BASE, so setting it
+          // here also fixes their gov-cloud endpoint in one shot.
+          [
+            { name: 'LOOM_GRAPH_BASE', value: boundary == 'GCC-High' ? 'https://graph.microsoft.us' : (boundary == 'IL5' ? 'https://dod-graph.microsoft.us' : 'https://graph.microsoft.com') }
+          ],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
             // Unity Catalog federation hostname list. Uses the REAL workspace
             // hostname (same source as the singular LOOM_DATABRICKS_HOSTNAME) —
@@ -1447,6 +1467,19 @@ module scalingRbac 'scaling-rbac.bicep' = {
   name: 'console-scaling-rbac'
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Identity Picker Graph AppRole documentation/wiring. AppRoles are granted
+// out-of-band by grant-identity-graph-approles.sh (ARM can't grant Graph
+// AppRoles); this module surfaces the required grants + sovereign Graph
+// endpoint as deterministic outputs for the post-deploy bootstrap.
+module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled) {
+  name: 'console-identity-graph-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    boundary: boundary
     skipRoleGrants: skipRoleGrants
   }
 }
