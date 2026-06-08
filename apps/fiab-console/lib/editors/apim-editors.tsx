@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
   Tab, TabList,
@@ -1891,6 +1891,7 @@ function useGovernanceDomains() {
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const ws = useDataProductWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
@@ -1906,7 +1907,13 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const domains = useGovernanceDomains();
 
   // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
-  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
+  // Initial tab can be deep-linked via ?tab= (e.g. the details page's
+  // "Manage policies" action opens directly on the policies tab).
+  const initialTab = ((): 'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies' => {
+    const t = searchParams?.get('tab');
+    return t === 'datasets' || t === 'glossary' || t === 'lineage' || t === 'policies' ? t : 'overview';
+  })();
+  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>(initialTab);
 
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');

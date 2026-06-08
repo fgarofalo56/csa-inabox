@@ -44,6 +44,12 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+// Data Marketplace (Purview-Unified-Catalog parity, Azure-native) — data
+// products + access requests + governance domains + custom-attribute groups.
+let _dataproducts: Container | null = null;
+let _accessRequests: Container | null = null;
+let _governanceDomains: Container | null = null;
+let _attributeGroups: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +148,17 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Data Marketplace (F-series) — Azure-native parity with Purview Unified
+  // Catalog "data products". No Fabric/Purview dependency on the default path:
+  // these are plain Cosmos containers created lazily so a fresh environment
+  // needs no extra ARM/Bicep step beyond the account+database. Data products
+  // are partitioned by their governance domain so a domain's catalog view hits
+  // a single physical partition; access-requests by the data product so a
+  // product's subscriber list is single-partition.
+  _dataproducts = await mk('dataproducts', '/governanceDomainId');
+  _accessRequests = await mk('access-requests', '/dataProductId');
+  _governanceDomains = await mk('governance-domains', '/tenantId');
+  _attributeGroups = await mk('attribute-groups', '/governanceDomainId');
   _ensured = true;
 }
 
@@ -151,6 +168,12 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+
+// Data Marketplace (Purview-Unified-Catalog parity, Azure-native)
+export async function dataproductsContainer(): Promise<Container> { await ensure(); return _dataproducts!; }
+export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
+export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
+export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -214,6 +237,7 @@ const KNOWN_CONTAINER_IDS = [
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
   'maintenance-jobs',
+  'dataproducts', 'access-requests', 'governance-domains', 'attribute-groups',
 ];
 
 /** List all Loom containers with their current throughput shape. */
