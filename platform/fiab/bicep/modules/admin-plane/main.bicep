@@ -954,6 +954,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // Deployment region — used as the `location` for on-demand ARM PUTs
+            // that require it (e.g. the Gov warehouse-create path that provisions
+            // a Synapse Dedicated SQL pool via createDedicatedSqlPool). Read by
+            // synapse-dev-client / the warehouse create BFF route.
+            { name: 'LOOM_LOCATION', value: location }
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }

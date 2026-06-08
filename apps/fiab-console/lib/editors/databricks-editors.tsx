@@ -640,6 +640,39 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   );
 }
 
+// ---- $/hr estimate (client-side, no extra backend call) --------------------
+// DBU consumption per cluster by warehouse size (Databricks SQL Warehouse sizing
+// table, Microsoft Learn). The autoscaler runs `min_num_clusters` of these.
+const DBU_PER_CLUSTER: Record<string, number> = {
+  '2X-Small': 2, 'X-Small': 4, 'Small': 8, 'Medium': 16, 'Large': 32,
+  'X-Large': 64, '2X-Large': 128, '3X-Large': 256, '4X-Large': 512,
+};
+// Azure list-price DBU/hr rate by warehouse type (USD; serverless is demand-billed
+// at a premium). Static — actual cost varies by region, Photon, and discount.
+const DBU_RATE_USD: Record<string, number> = {
+  SERVERLESS: 0.70,
+  PRO: 0.55,
+  CLASSIC: 0.22,
+};
+function dbuPerHr(size: string): number {
+  return DBU_PER_CLUSTER[size] ?? 4;
+}
+function estimateDbxCostPerHr(size: string, type: string, serverless: boolean, minClusters: number): number {
+  const dbu = dbuPerHr(size);
+  const rate = serverless ? DBU_RATE_USD.SERVERLESS : (DBU_RATE_USD[type] ?? DBU_RATE_USD.PRO);
+  return dbu * rate * Math.max(1, minClusters);
+}
+// Synapse Dedicated SQL pool DWU → $/hr (Azure list price, ~East US 2; linear in
+// DWU: DW100c ≈ $1.51/hr). Static estimate; varies by region and reservation.
+const DWU_COST_USD: Record<string, number> = {
+  'DW100c': 1.51, 'DW200c': 3.02, 'DW300c': 4.53, 'DW400c': 6.04,
+  'DW500c': 7.55, 'DW1000c': 15.10, 'DW1500c': 22.65, 'DW2000c': 30.20,
+  'DW2500c': 37.75, 'DW3000c': 45.30, 'DW5000c': 75.50,
+};
+function estimateDwuCostPerHr(sku: string): number {
+  return DWU_COST_USD[sku] ?? 1.51;
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
@@ -678,6 +711,32 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [editType, setEditType] = useState<'PRO' | 'CLASSIC'>('PRO');
   const [editServerless, setEditServerless] = useState(false);
 
+  // ---- Boundary flag (Comm/GCC → Databricks; Gov → Synapse Dedicated pool) ----
+  const [gov, setGov] = useState(false);
+
+  // ---- Create dialog (POST .../create) ----
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createSize, setCreateSize] = useState('Small');
+  const [createType, setCreateType] = useState<'PRO' | 'CLASSIC'>('PRO');
+  const [createServerless, setCreateServerless] = useState(false);
+  const [createPhoton, setCreatePhoton] = useState(true);
+  const [createChannel, setCreateChannel] = useState<'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW'>('CHANNEL_NAME_CURRENT');
+  const [createAutoStop, setCreateAutoStop] = useState(10);
+  const [createMinClusters, setCreateMinClusters] = useState(1);
+  const [createMaxClusters, setCreateMaxClusters] = useState(1);
+  const [createTagsText, setCreateTagsText] = useState('');
+  const [createSpotPolicy, setCreateSpotPolicy] = useState<'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED'>('COST_OPTIMIZED');
+  // Gov-only: Synapse Dedicated pool DWU SKU.
+  const [createGovSku, setCreateGovSku] = useState('DW100c');
+
+  // ---- Delete confirm dialog (POST .../delete) ----
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   // ---- Save as table (CTAS) dialog — CREATE TABLE … USING DELTA AS SELECT … ----
   const [ctasOpen, setCtasOpen] = useState(false);
   const [ctasCatalog, setCtasCatalog] = useState('');
@@ -705,6 +764,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/warehouses`);
         const j = await r.json();
         if (cancelled) return;
+        if (typeof j.gov === 'boolean') setGov(j.gov);
         if (!j.ok) {
           setWarehousesError(j.error || `HTTP ${r.status}`);
           return;
@@ -896,6 +956,96 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       setEditBusy(false);
     }
   }, [id, warehouseId, editSize, editMinClusters, editMaxClusters, editAutoStop, editType, editServerless, refreshState]);
+
+  // ---- Create warehouse (Comm/GCC → Databricks; Gov → Synapse Dedicated pool) ----
+  const saveCreate = useCallback(async () => {
+    const name = createName.trim();
+    if (!name) { setCreateError('Name is required.'); return; }
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const payload: Record<string, unknown> = { name };
+      if (gov) {
+        payload.gov_sku = createGovSku;
+      } else {
+        payload.cluster_size = createSize;
+        payload.warehouse_type = createServerless ? 'PRO' : createType;
+        payload.enable_serverless_compute = createServerless;
+        payload.enable_photon = createPhoton;
+        payload.channel = createChannel;
+        payload.auto_stop_mins = createAutoStop;
+        payload.min_num_clusters = createMinClusters;
+        payload.max_num_clusters = createMaxClusters;
+        payload.spot_instance_policy = createSpotPolicy;
+        // "key=value" per line → { key: value }
+        const tags: Record<string, string> = {};
+        for (const line of createTagsText.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          const eq = t.indexOf('=');
+          if (eq <= 0) continue;
+          const k = t.slice(0, eq).trim();
+          const v = t.slice(eq + 1).trim();
+          if (k && v) tags[k] = v;
+        }
+        if (Object.keys(tags).length > 0) payload.tags = tags;
+      }
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/create`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateError(j.error || `HTTP ${r.status}`); return; }
+      const newId = j.id as string;
+      setWarehouses((prev) => [
+        ...prev,
+        { id: newId, name: j.name || name, state: 'STARTING', cluster_size: gov ? createGovSku : createSize } as Warehouse,
+      ]);
+      setWarehouseId(newId);
+      setCreateOpen(false);
+      // Poll the new resource to RUNNING/Online so the badge reflects reality.
+      startPolling();
+    } catch (e: any) {
+      setCreateError(e?.message || String(e));
+    } finally {
+      setCreateBusy(false);
+    }
+  }, [id, gov, createName, createSize, createType, createServerless, createPhoton, createChannel, createAutoStop, createMinClusters, createMaxClusters, createTagsText, createSpotPolicy, createGovSku, startPolling]);
+
+  // ---- Delete warehouse (running-state guard enforced server-side: 409) ----
+  const confirmDelete = useCallback(async (force = false) => {
+    if (!warehouseId) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, force }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        if (j.code === 'warehouse_running') {
+          setDeleteError(`${j.error} Stop it first, or use "Force delete".`);
+        } else {
+          setDeleteError(j.error || `HTTP ${r.status}`);
+        }
+        return;
+      }
+      setWarehouses((prev) => {
+        const next = prev.filter((w) => w.id !== warehouseId);
+        setWarehouseId(next[0]?.id || '');
+        return next;
+      });
+      setWarehouseState(null);
+      setDeleteOpen(false);
+    } catch (e: any) {
+      setDeleteError(e?.message || String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [id, warehouseId]);
 
   // ---- Run query ----
   const run = useCallback(async () => {
@@ -1103,6 +1253,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
       { label: 'Warehouse', actions: [
+        { label: 'Create', onClick: () => { setCreateError(null); setCreateOpen(true); }, title: gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse' },
+        { label: 'Delete', onClick: warehouseId ? () => { setDeleteError(null); setDeleteOpen(true); } : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse' },
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
         { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
         { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
@@ -1120,7 +1272,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel]);
 
   return (
     <ItemEditorChrome
@@ -1316,6 +1468,16 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Edit
               </Button>
             </Tooltip>
+            <Tooltip content={gov ? 'Create a new Synapse Dedicated SQL pool' : 'Create a new SQL Warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Add20Regular />} onClick={() => { setCreateError(null); setCreateOpen(true); }}>
+                Create
+              </Button>
+            </Tooltip>
+            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
+              <Button appearance="outline" icon={<Delete20Regular />} disabled={!warehouseId} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+                Delete
+              </Button>
+            </Tooltip>
             <Tooltip
               content={
                 !warehouseId ? 'Pick a warehouse first'
@@ -1439,6 +1601,186 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                   <Button appearance="secondary" onClick={() => setEditOpen(false)} disabled={editBusy}>Cancel</Button>
                   <Button appearance="primary" onClick={saveEdit} disabled={editBusy}>
                     {editBusy ? 'Saving…' : 'Save changes'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Create dialog — POST .../create (Databricks SQL Warehouse on Comm/GCC; */}
+          {/* Synapse Dedicated SQL pool on Gov). Azure-native default, no Fabric. */}
+          <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '580px' }}>
+              <DialogBody>
+                <DialogTitle>
+                  {gov ? 'Create dedicated SQL pool' : 'Create SQL warehouse'}
+                  {gov && <Badge appearance="outline" color="brand" style={{ marginLeft: 8 }}>Gov · Synapse Dedicated Pool</Badge>}
+                </DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {createError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>
+                    )}
+                    <Field label="Name" required hint={gov ? 'Synapse Dedicated SQL pool name (letters, digits, hyphen)' : 'SQL Warehouse display name'}>
+                      <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder={gov ? 'loom-warehouse' : 'analytics-wh'} />
+                    </Field>
+
+                    {gov ? (
+                      <>
+                        <Field label="Performance level (DWU)">
+                          <Dropdown
+                            value={createGovSku}
+                            selectedOptions={[createGovSku]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateGovSku(d.optionValue)}
+                          >
+                            {['DW100c', 'DW200c', 'DW300c', 'DW400c', 'DW500c', 'DW1000c', 'DW1500c', 'DW2000c', 'DW2500c', 'DW3000c', 'DW5000c'].map((sku) => (
+                              <Option key={sku} value={sku} text={sku}>{sku}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Estimated ~${estimateDwuCostPerHr(createGovSku).toFixed(2)}/hr</MessageBarTitle>
+                            Azure list price for {createGovSku} (~East US 2). Provisioned via ARM
+                            <code> PUT …/sqlPools/&#123;name&#125;</code>; reaches Online in a few minutes. Compute is
+                            billed while Online — pause to stop compute charges. Varies by region and reservation.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    ) : (
+                      <>
+                        <Field label="Cluster size">
+                          <Dropdown
+                            value={createSize}
+                            selectedOptions={[createSize]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateSize(d.optionValue)}
+                          >
+                            {['2X-Small', 'X-Small', 'Small', 'Medium', 'Large', 'X-Large', '2X-Large', '3X-Large', '4X-Large'].map((sz) => (
+                              <Option key={sz} value={sz} text={sz}>{sz}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                        <Field label="Type" hint={createServerless ? 'Serverless requires PRO' : undefined}>
+                          <Dropdown
+                            value={createServerless ? 'PRO' : createType}
+                            disabled={createServerless}
+                            selectedOptions={[createServerless ? 'PRO' : createType]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateType(d.optionValue as 'PRO' | 'CLASSIC')}
+                          >
+                            <Option value="PRO" text="PRO">PRO</Option>
+                            <Option value="CLASSIC" text="CLASSIC">CLASSIC</Option>
+                          </Dropdown>
+                        </Field>
+                        <Switch
+                          checked={createServerless}
+                          label="Serverless compute (Databricks-managed; forces PRO)"
+                          onChange={(_, d) => { setCreateServerless(!!d.checked); if (d.checked) setCreateType('PRO'); }}
+                        />
+                        <Switch
+                          checked={createPhoton}
+                          label="Photon acceleration"
+                          onChange={(_, d) => setCreatePhoton(!!d.checked)}
+                        />
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
+                            <Input type="number" value={String(createMinClusters)}
+                              onChange={(_, d) => setCreateMinClusters(Math.max(1, Number(d.value) || 1))} />
+                          </Field>
+                          <Field label="Max clusters" style={{ flex: 1 }} hint="Scaling ceiling (1–30)">
+                            <Input type="number" value={String(createMaxClusters)}
+                              onChange={(_, d) => setCreateMaxClusters(Math.max(1, Number(d.value) || 1))} />
+                          </Field>
+                        </div>
+                        <Field label="Auto-stop (minutes)" hint="0 disables auto-stop">
+                          <Input type="number" value={String(createAutoStop)}
+                            onChange={(_, d) => setCreateAutoStop(Math.max(0, Number(d.value) || 0))} />
+                        </Field>
+                        <Field label="Channel">
+                          <Dropdown
+                            value={createChannel === 'CHANNEL_NAME_PREVIEW' ? 'Preview' : 'Current'}
+                            selectedOptions={[createChannel]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateChannel(d.optionValue as 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW')}
+                          >
+                            <Option value="CHANNEL_NAME_CURRENT" text="Current">Current</Option>
+                            <Option value="CHANNEL_NAME_PREVIEW" text="Preview">Preview</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Spot instance policy">
+                          <Dropdown
+                            value={createSpotPolicy === 'RELIABILITY_OPTIMIZED' ? 'Reliability optimized' : 'Cost optimized'}
+                            selectedOptions={[createSpotPolicy]}
+                            onOptionSelect={(_, d) => d.optionValue && setCreateSpotPolicy(d.optionValue as 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED')}
+                          >
+                            <Option value="COST_OPTIMIZED" text="Cost optimized">Cost optimized</Option>
+                            <Option value="RELIABILITY_OPTIMIZED" text="Reliability optimized">Reliability optimized</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Tags" hint="key=value, one per line">
+                          <Textarea
+                            value={createTagsText}
+                            onChange={(_, d) => setCreateTagsText(d.value)}
+                            placeholder={'team=analytics\nenv=prod'}
+                            rows={3}
+                          />
+                        </Field>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>
+                              Estimated ~${estimateDbxCostPerHr(createSize, createType, createServerless, createMinClusters).toFixed(2)}/hr
+                            </MessageBarTitle>
+                            {dbuPerHr(createSize)} DBU/hr per cluster × {Math.max(1, createMinClusters)} cluster(s) ·{' '}
+                            {createServerless ? 'serverless' : createType.toLowerCase()} list price. Real warehouse via
+                            <code> POST /api/2.0/sql/warehouses</code>. Actual cost varies by region, Photon, spot policy, and discount.
+                          </MessageBarBody>
+                        </MessageBar>
+                      </>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveCreate} disabled={createBusy || !createName.trim()}>
+                    {createBusy ? 'Creating…' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Delete confirm — POST .../delete. Running-state guard returns 409. */}
+          <Dialog open={deleteOpen} onOpenChange={(_, d) => setDeleteOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '520px' }}>
+              <DialogBody>
+                <DialogTitle>Delete {gov ? 'dedicated pool' : 'warehouse'} — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {deleteError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Delete failed</MessageBarTitle>{deleteError}</MessageBarBody></MessageBar>
+                    )}
+                    {isRunning && !gov && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Warehouse is RUNNING</MessageBarTitle>
+                          Stop it first, or use <strong>Force delete</strong> to drop it now — in-flight queries will be cancelled.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <Body1>
+                      Permanently deletes <strong>{selectedWarehouse?.name || warehouseId}</strong> and its configuration.
+                      {gov ? ' Restorable only from an existing backup.' : ' Data in Unity Catalog is not deleted.'}
+                    </Body1>
+                    <Caption1>This action cannot be undone.</Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}>Cancel</Button>
+                  {isRunning && !gov && (
+                    <Button appearance="outline" onClick={() => confirmDelete(true)} disabled={deleteBusy}>
+                      {deleteBusy ? 'Deleting…' : 'Force delete'}
+                    </Button>
+                  )}
+                  <Button appearance="primary" onClick={() => confirmDelete(false)} disabled={deleteBusy}>
+                    {deleteBusy ? 'Deleting…' : 'Delete'}
                   </Button>
                 </DialogActions>
               </DialogBody>
