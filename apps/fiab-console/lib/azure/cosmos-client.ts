@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _wsRoles: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _labelAssignments: Container | null = null;
 let _ensured = false;
@@ -144,6 +145,13 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
+  // One row per principal (user / group / SP) per workspace, partitioned by the
+  // workspace so the Manage Access pane hits a single physical partition. Keyed
+  // by principalId (NOT UPN) so groups — which have no UPN — are first-class.
+  // Distinct from the legacy UPN-keyed `workspace-permissions` container, which
+  // is left untouched for the data-agent config authz path.
+  _wsRoles = await mk('workspace-roles', '/workspaceId');
   // Governance Domains (F4) — one doc per domain, partitioned by tenant so
   // every Governance "Domains" list lookup hits a single physical partition.
   // Created lazily; no pre-step beyond the Cosmos account + database. The
@@ -166,6 +174,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
 
@@ -230,7 +239,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'governance-domains',
+  'maintenance-jobs', 'workspace-roles', 'governance-domains',
 ];
 
 /** List all Loom containers with their current throughput shape. */

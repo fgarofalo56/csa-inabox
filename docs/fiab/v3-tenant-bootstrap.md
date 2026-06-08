@@ -642,6 +642,65 @@ These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`
 server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
 directly.
 
+## Workspace Manage Access — RBAC-Admin grant + Graph + Fabric opt-in (F5) {#workspace-manage-access}
+
+The workspace **Manage access** pane (Settings → Permissions, and the standalone
+button on the workspace page) is Azure-native: each membership row is stored in
+Cosmos `workspace-roles` AND mirrored to a real Azure RBAC role assignment on
+the DLZ resource group (Admin/Member → Contributor; Contributor/Viewer →
+Reader). No Fabric capacity is required.
+
+### Step 1 — RBAC-Admin grant (bicep, automatic)
+
+`platform/fiab/bicep/modules/admin-plane/workspace-rbac.bicep` grants the
+Console UAMI the **Role Based Access Control Administrator** role
+(`f58310d9-a9f6-439a-9e8d-f62e7b41a168`) on the DLZ RG, CONSTRAINED via an ABAC
+condition (v2.0) so it may only write/delete Contributor + Reader assignments.
+It is wired in `main.bicep` (`module workspaceRbac`, scoped to `loomDlzRg`) and
+runs unless `skipRoleGrants=true`. When skipped (deployer lacks User Access
+Administrator), grant it manually:
+
+```bash
+az role assignment create \
+  --role "Role Based Access Control Administrator" \
+  --assignee <console-uami-principal-id> \
+  --scope /subscriptions/<sub>/resourceGroups/<dlz-rg>
+```
+
+Until the grant exists the pane still works — membership is recorded in Cosmos
+and the **Azure RBAC** column shows `Pending` with the exact remediation in an
+honest-gate MessageBar (per `no-vaporware.md`).
+
+### Step 2 — Graph read permissions (shared with the grant dialog)
+
+Member search + nested-group resolution reuse the Console UAMI's Graph app
+permissions **User.Read.All + Group.Read.All** (granted in the
+[MIP + DLP Graph consent](#graph-admin-consent-mip-dlp) step). `GroupMember.Read.All`
+is sufficient for `transitiveMembers` if you prefer least-privilege. The Graph
+host is cloud-aware (`graphBase()` → `graph.microsoft.us` in Gov).
+
+### Step 3 — (Opt-in) Fabric role mirroring
+
+Strictly optional. To ALSO mirror roles to a Microsoft Fabric workspace, set
+`param loomWorkspaceRolesFabricEnabled = true` (Console env
+`LOOM_WORKSPACE_ROLES_FABRIC=1`) and add the Console UAMI to the target Fabric
+workspace as **Admin**. The flag is forced OFF at IL5 (Fabric is not
+IL5-authorized). With the flag unset, nothing calls `api.fabric.microsoft.com`.
+
+### Verify
+
+Add a real Entra group with **Member** role → the row appears, the **Azure RBAC**
+column reads `Active`, and `az role assignment list --scope /subscriptions/<sub>/resourceGroups/<dlz-rg>`
+shows a Contributor assignment for that group's object id. Remove → both the
+Cosmos row and the ARM assignment are gone.
+
+### Bicep sync
+
+- Module: `platform/fiab/bicep/modules/admin-plane/workspace-rbac.bicep`
+- Wired in `admin-plane/main.bicep` (`module workspaceRbac` + param
+  `loomWorkspaceRolesFabricEnabled` + env `LOOM_WORKSPACE_ROLES_FABRIC`)
+- Cosmos container `workspace-roles` is created lazily by `cosmos-client.ts`.
+
 ## SQL endpoint "user's identity" data-access mode {#sql-user-identity-access-mode}
 
 A SQL analytics endpoint (Synapse Dedicated / Serverless SQL pool) has a

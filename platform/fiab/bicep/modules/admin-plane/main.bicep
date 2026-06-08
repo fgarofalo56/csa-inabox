@@ -230,6 +230,9 @@ param loomHdinsightLinkedService string = ''
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
+@description('Opt-in (F5): also mirror workspace role assignments to a Microsoft Fabric workspace via /v1/workspaces/{id}/roleAssignments. Default false: Azure-native only (Cosmos + Azure RBAC). Forced off at IL5 (Fabric is not IL5-authorized).')
+param loomWorkspaceRolesFabricEnabled bool = false
+
 @description('Loom Stream Analytics resource group (backs the stream-analytics-job editor). Empty defaults to LOOM_DLZ_RG.')
 param loomAsaRg string = ''
 
@@ -1209,6 +1212,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           [
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
+            // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
+            // (Fabric is not IL5-authorized). Unset → Azure-native only.
+            { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary != 'IL5') ? '1' : '' }
           ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
@@ -1465,6 +1471,22 @@ param loomVanityDomain string = ''
 // =====================================================================
 module scalingRbac 'scaling-rbac.bicep' = {
   name: 'console-scaling-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// F5 Manage Access — constrained Role Based Access Control Administrator on
+// the DLZ RG so the Console can mirror workspace membership to real Azure RBAC
+// role assignments (Contributor + Reader only, enforced via ABAC condition).
+// Scoped to the DLZ RG (where the workspace backing resources live), so the
+// module is invoked at that RG scope.
+// =====================================================================
+module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRoleGrants) {
+  name: 'console-workspace-rbac'
+  scope: resourceGroup(loomDlzRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
