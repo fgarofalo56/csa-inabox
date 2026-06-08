@@ -27,11 +27,20 @@ vi.mock('@/lib/azure/synapse-sql-client', () => {
       const rows = ids.filter((id) => fixture[id]).map((id) => [id, fixture[id]]);
       return { columns: ['columnId', 'name'], rows, rowCount: rows.length, executionMs: 1, truncated: false };
     }
+    // listSqlColumns — full column list for one object (object_id, no IN-list)
+    if (/FROM sys\.columns c\b/.test(sqlText) && /c\.object_id =/.test(sqlText)) {
+      return {
+        columns: ['columnId', 'name', 'dataType'],
+        rows: [[1, 'OrderId', 'int'], [2, 'SalesRep', 'nvarchar'], [3, 'Region', 'nvarchar']],
+        rowCount: 3, executionMs: 1, truncated: false,
+      };
+    }
     return { columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false };
   });
   return {
     executeQuery,
     dedicatedTarget: () => ({ server: 'ws.sql.azuresynapse.net', database: 'pool', cacheKey: 'k' }),
+    serverlessTarget: () => ({ server: 'ws-ondemand.sql.azuresynapse.net', database: 'master', cacheKey: 'sk' }),
   };
 });
 
@@ -40,6 +49,10 @@ import {
   grantTableSelect,
   revokeTableSelect,
   createRlsPolicy,
+  denyColumnSelect,
+  revokeColumnDeny,
+  listColumnDenyGrants,
+  generateMaskedView,
 } from '@/lib/azure/synapse-permissions-client';
 
 const target = { server: 'ws.sql.azuresynapse.net', database: 'pool', cacheKey: 'k' } as any;
@@ -107,5 +120,51 @@ describe('createRlsPolicy', () => {
     const fn = sent.find((s) => s.includes('CREATE FUNCTION'))!;
     expect(fn).toContain('@cmp = USER_NAME()');
     expect(fn).not.toContain('DROP TABLE');
+  });
+});
+
+describe('denyColumnSelect (column-level security — hide columns)', () => {
+  it('emits a table GRANT + column-scope DENY and ensures the EXTERNAL PROVIDER user', async () => {
+    const res = await denyColumnSelect(target, 'analyst@contoso.com', 100, [2, 3]);
+    const ddl = sent.find((s) => s.includes('DENY SELECT'))!;
+    expect(ddl).toContain('CREATE USER [analyst@contoso.com] FROM EXTERNAL PROVIDER');
+    // table-level GRANT so the role can still query the table
+    expect(ddl).toContain('GRANT SELECT ON [dbo].[Orders] TO [analyst@contoso.com];');
+    // column-scope DENY hides the named columns
+    expect(ddl).toContain('DENY SELECT ON [dbo].[Orders]([SalesRep], [Region]) TO [analyst@contoso.com];');
+    expect(res.hiddenColumns).toEqual(['SalesRep', 'Region']);
+  });
+
+  it('throws when no columns are supplied (a column-level DENY needs ≥1 column)', async () => {
+    await expect(denyColumnSelect(target, 'analyst@contoso.com', 100, [])).rejects.toThrow(/at least one column/i);
+  });
+});
+
+describe('revokeColumnDeny (un-hide columns)', () => {
+  it('emits a column-level REVOKE that clears the DENY', async () => {
+    await revokeColumnDeny(target, 'analyst@contoso.com', 100, [2]);
+    const revoke = sent.find((s) => s.includes('REVOKE SELECT'))!;
+    expect(revoke).toContain('REVOKE SELECT ON [dbo].[Orders]([SalesRep]) FROM [analyst@contoso.com];');
+  });
+});
+
+describe('listColumnDenyGrants', () => {
+  it('queries column-level DENY rows only (state DENY, minor_id > 0)', async () => {
+    await listColumnDenyGrants(target);
+    const q = sent.find((s) => /sys\.database_permissions/.test(s))!;
+    expect(q).toContain("perm.state_desc = 'DENY'");
+    expect(q).toContain('perm.minor_id > 0');
+  });
+});
+
+describe('generateMaskedView (Serverless parity path)', () => {
+  it('CREATE OR ALTER VIEW NULL-projects the hidden columns, keeps the rest', async () => {
+    const res = await generateMaskedView(target, 100, [2], 'analyst');
+    const view = sent.find((s) => s.includes('CREATE OR ALTER VIEW'))!;
+    expect(view).toContain('CREATE OR ALTER VIEW [dbo].[v_Orders_analyst] AS');
+    expect(view).toContain('[OrderId], NULL AS [SalesRep], [Region]');
+    expect(view).toContain('FROM [dbo].[Orders];');
+    expect(res.viewFqn).toBe('dbo.v_Orders_analyst');
+    expect(res.hiddenColumns).toEqual(['SalesRep']);
   });
 });
