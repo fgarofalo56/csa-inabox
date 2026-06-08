@@ -29,6 +29,7 @@ import {
   Add20Regular, ArrowSync20Regular, Database20Regular, Delete20Regular, Save20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -244,10 +245,14 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
               <Tab value="overview">Overview</Tab>
               <Tab value="catalog">Catalog</Tab>
               <Tab value="tables">Tables</Tab>
+              <Tab value="security">Security</Tab>
               <Tab value="settings">Settings</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
+            {tab === 'security' && (
+              <OneLakeSecurityTab itemId={id} itemType="mirrored-catalog" container="bronze" workspaceId={workspaceId || undefined} fabricItemId={mirrorId || undefined} />
+            )}
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">MirroredAzureDatabricksCatalog</Badge>
               <div className={s.field}>

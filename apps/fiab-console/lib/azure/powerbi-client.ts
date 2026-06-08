@@ -1264,3 +1264,77 @@ export async function updateDatasetDatasources(
   );
   return { ok: true };
 }
+
+// ============================================================
+// Information Protection — bulk set sensitivity labels (Admin)
+//
+//   POST /v1.0/myorg/admin/informationprotection/setLabels
+//   body: { artifacts: { dashboards?, reports?, datasets?, dataflows? },
+//           labelId, assignmentMethod?, delegatedUser? }
+//
+// labelId MUST be a real Microsoft Information Protection (MIP) label GUID
+// (from Graph /security/informationProtection/sensitivityLabels), NOT a
+// Loom-native label id. The calling principal (Console UAMI) must be a
+// **Fabric Administrator** in the tenant.
+//
+// Limits (per the API docs): max 25 requests/hour, up to 2000 artifacts per
+// request. The response reports a per-artifact ChangeLabelStatus.
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/admin/information-protection-set-labels-as-admin
+// ============================================================
+
+export type PbiArtifactType = 'reports' | 'datasets' | 'dashboards' | 'dataflows';
+
+export interface PbiSetLabelArtifacts {
+  dashboards?: { id: string }[];
+  reports?: { id: string }[];
+  datasets?: { id: string }[];
+  dataflows?: { id: string }[];
+}
+
+/** Per-artifact status values per the API spec. */
+export type PbiLabelChangeStatus =
+  | 'Succeeded'
+  | 'Failed'
+  | 'NotFound'
+  | 'InsufficientUsageRights'
+  | 'FailedToGetUsageRights';
+
+export interface PbiLabelChangeResult {
+  id: string;
+  status: PbiLabelChangeStatus;
+}
+
+export interface PbiSetLabelsResponse {
+  dashboards?: PbiLabelChangeResult[];
+  reports?: PbiLabelChangeResult[];
+  datasets?: PbiLabelChangeResult[];
+  dataflows?: PbiLabelChangeResult[];
+}
+
+/**
+ * POST /admin/informationprotection/setLabels — set a sensitivity label on
+ * Power BI items in bulk. `labelId` must be a real MIP GUID. Requires the
+ * Console UAMI to be a Fabric Administrator; otherwise Power BI returns
+ * 401/403 which the route surfaces as an honest admin-gate.
+ */
+export async function setLabelsAsAdmin(
+  artifacts: PbiSetLabelArtifacts,
+  labelId: string,
+  assignmentMethod: 'Standard' | 'Priviledged' = 'Standard',
+  delegatedUser?: { emailAddress: string },
+): Promise<PbiSetLabelsResponse> {
+  if (!labelId) throw new PowerBiError('labelId (MIP label GUID) is required', 400);
+  return call<PbiSetLabelsResponse>(
+    '/admin/informationprotection/setLabels',
+    {
+      method: 'POST',
+      body: {
+        artifacts,
+        labelId,
+        assignmentMethod,
+        ...(delegatedUser ? { delegatedUser } : {}),
+      },
+    },
+  );
+}

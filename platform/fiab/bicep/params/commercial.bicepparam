@@ -48,6 +48,7 @@ param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
 // flip these to true and redeploy admin-plane.
 param loomMipEnabled = false
 param loomDlpEnabled = false
+param loomIdentityPickerEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 
