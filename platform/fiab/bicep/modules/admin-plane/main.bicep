@@ -389,6 +389,9 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('ADLS Gen2 / Blob container URL for custom domain images (optional). When set, the /admin/domains Image tab shows a gallery of image blobs in this container alongside the always-available preset color swatches + icon tiles. Format: https://<account>.dfs.core.windows.net/<container>[/<prefix>]. Grant the Console UAMI Storage Blob Data Reader on the container. When empty, only preset swatches and icons are offered (honest gate — no Fabric/OneLake dependency).')
+param loomDomainImageStorage string = ''
+
 @description('OPT-IN ONLY: additively mirror item-level permission grants (F6 Share / Manage permissions) to the Fabric item /share endpoint, on TOP of the always-on Azure-native backing (Cosmos item-permissions + ADLS POSIX ACL + Storage data-plane RBAC). Requires the Console UAMI to be a member of each Fabric workspace + the "Service principals can use Fabric APIs" tenant setting. Ignored in GCC-High / IL5 (no Fabric API). When false (default), F6 is 100% Azure-native — no Fabric workspace required (per no-fabric-dependency.md).')
 param loomFabricPermissionsEnabled bool = false
 
@@ -1197,6 +1200,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : []),
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
+          ] : [],
+          // Sovereign Graph base for MIP — GCC-High / IL5 use graph.microsoft.us.
+          // mip-graph-client reads LOOM_MIP_GRAPH_BASE (defaults to graph.microsoft.com).
+          boundary == 'GCC-High' || boundary == 'IL5' ? [
+            { name: 'LOOM_MIP_GRAPH_BASE', value: 'https://graph.microsoft.us' }
+          ] : [],
+          // Custom domain-image gallery storage (optional, honest-gated). The
+          // /admin/domains Image tab lists image blobs here; preset swatches +
+          // icons work regardless. No Fabric/OneLake dependency.
+          !empty(loomDomainImageStorage) ? [
+            { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: loomDomainImageStorage }
           ] : [],
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
