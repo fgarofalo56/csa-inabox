@@ -33,6 +33,8 @@ import {
   Avatar,
   Badge,
   Button,
+  Dropdown,
+  Option,
   Text,
   Title3,
   Caption1,
@@ -66,6 +68,7 @@ import {
   DatabaseStack16Regular,
   AppsList20Regular,
   Person20Regular,
+  ShieldKeyhole16Regular,
   MoreHorizontal20Regular,
   Copy16Regular,
   Link16Regular,
@@ -132,6 +135,13 @@ interface DeltaTable {
   sizeBytes: number;
   format: 'delta' | 'parquet' | 'iceberg';
   latestVersion: number;
+}
+
+/** A MIP sensitivity label from the Purview Data Map (GET /sensitivity). */
+interface SensitivityLabelOption {
+  id: string;
+  displayName: string;
+  typedefName: string;
 }
 
 // ── relative-time (Refreshed / Created) ───────────────────────────────────
@@ -515,11 +525,15 @@ function TablesTab({ itemId }: { itemId: string }) {
 function ItemDetails({
   item,
   workspaceName,
+  me,
   onClose,
+  onLabelChange,
 }: {
   item: OwnedItem;
   workspaceName: string;
+  me: string | null;
   onClose: () => void;
+  onLabelChange: (itemId: string, labelName: string | null, labelId: string | null) => void;
 }) {
   const styles = useStyles();
   const router = useRouter();
@@ -527,6 +541,14 @@ function ItemDetails({
   const Icon = visual.icon;
   const hasTables = TABLE_BACKED_TYPES.has(item.itemType);
   const [tab, setTab] = useState<'overview' | 'tables' | 'security'>('overview');
+  const isOwner = !!me && item.createdBy === me;
+
+  // ── Set-label state (Purview MIP via GET/PUT /sensitivity) ──
+  const [labelPhase, setLabelPhase] = useState<'idle' | 'loading' | 'ready' | 'saving'>('idle');
+  const [labelOptions, setLabelOptions] = useState<SensitivityLabelOption[]>([]);
+  const [labelGate, setLabelGate] = useState<{ govNote?: string; missingEnvVar?: string } | null>(null);
+  const [labelError, setLabelError] = useState<string | null>(null);
+
   const stateLabel =
     typeof item.state?.['provisioningStatus'] === 'string'
       ? String(item.state['provisioningStatus'])
@@ -537,6 +559,58 @@ function ItemDetails({
   const endorsement = (item.state?.['endorsement'] as string) || (item.state?.['certified'] ? 'Certified' : null);
   const sensitivity = (item.state?.['sensitivityLabel'] as string) || null;
   const classifications = Array.isArray(item.state?.['classifications']) ? (item.state!['classifications'] as string[]) : [];
+
+  // Load the live MIP label taxonomy from the Purview Data Map. On an honest
+  // gate (no LOOM_PURVIEW_ACCOUNT) surface the named MessageBar instead of a
+  // crash; the picker simply doesn't open.
+  async function openLabelPicker() {
+    setLabelPhase('loading');
+    setLabelError(null);
+    setLabelGate(null);
+    try {
+      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`);
+      const j = await r.json();
+      if (!j?.ok) {
+        if (j?.code === 'purview_not_configured') {
+          setLabelGate({ govNote: j.govNote, missingEnvVar: j.hint?.missingEnvVar || 'LOOM_PURVIEW_ACCOUNT' });
+        } else {
+          setLabelError(j?.error || `Failed to load labels (HTTP ${r.status}).`);
+        }
+        setLabelPhase('idle');
+        return;
+      }
+      setLabelOptions(Array.isArray(j.labels) ? j.labels : []);
+      setLabelPhase('ready');
+    } catch (e: any) {
+      setLabelError(e?.message || 'Failed to load sensitivity labels.');
+      setLabelPhase('idle');
+    }
+  }
+
+  // Persist the chosen label (Cosmos + best-effort Purview Atlas tag) and lift
+  // the change so the tile chip + details badge update without a reload.
+  async function applyLabel(opt: SensitivityLabelOption | null) {
+    setLabelPhase('saving');
+    setLabelError(null);
+    try {
+      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(opt ? { labelId: opt.id, labelName: opt.displayName } : { labelId: '' }),
+      });
+      const j = await r.json();
+      if (!j?.ok) {
+        setLabelError(j?.error || `Failed to apply label (HTTP ${r.status}).`);
+        setLabelPhase('ready');
+        return;
+      }
+      onLabelChange(item.id, opt ? opt.displayName : null, opt ? opt.id : null);
+      setLabelPhase('idle');
+    } catch (e: any) {
+      setLabelError(e?.message || 'Failed to apply sensitivity label.');
+      setLabelPhase('ready');
+    }
+  }
 
   return (
     <aside className={styles.details} aria-label={`Details for ${item.displayName}`}>
@@ -633,7 +707,75 @@ function ItemDetails({
             <span className={styles.metaVal}>
               <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(item.id)}`)}>View lineage</Button>
             </span>
+            {isOwner && (
+              <>
+                <span className={styles.metaKey}>Set label</span>
+                <span className={styles.metaVal}>
+                  {labelPhase === 'idle' && (
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      icon={<ShieldKeyhole16Regular />}
+                      onClick={openLabelPicker}
+                    >
+                      {sensitivity ? 'Change' : 'Set'} sensitivity label
+                    </Button>
+                  )}
+                  {labelPhase === 'loading' && <Spinner size="tiny" label="Loading labels…" />}
+                  {labelPhase === 'saving' && <Spinner size="tiny" label="Applying…" />}
+                  {labelPhase === 'ready' && (
+                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {labelOptions.length === 0 ? (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          No MIP labels are registered in the Purview Data Map yet. Enable
+                          Information Protection + run a scan, then retry.
+                        </Caption1>
+                      ) : (
+                        <Dropdown
+                          size="small"
+                          placeholder="Select a label…"
+                          aria-label="Select sensitivity label"
+                          selectedOptions={item.state?.['sensitivityLabelId'] ? [String(item.state['sensitivityLabelId'])] : []}
+                          onOptionSelect={(_e, d) => {
+                            const opt = labelOptions.find((l) => l.id === d.optionValue);
+                            if (opt) applyLabel(opt);
+                          }}
+                        >
+                          {labelOptions.map((l) => (
+                            <Option key={l.id} value={l.id} text={l.displayName}>
+                              {l.displayName}
+                            </Option>
+                          ))}
+                        </Dropdown>
+                      )}
+                      {sensitivity && (
+                        <Button size="small" appearance="subtle" onClick={() => applyLabel(null)}>
+                          Clear
+                        </Button>
+                      )}
+                      <Button size="small" appearance="transparent" onClick={() => setLabelPhase('idle')}>
+                        Cancel
+                      </Button>
+                    </span>
+                  )}
+                </span>
+              </>
+            )}
           </div>
+          {labelError && (
+            <MessageBar intent="error">
+              <MessageBarBody>{labelError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {labelGate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Microsoft Purview not configured</MessageBarTitle>
+                {labelGate.govNote ||
+                  `Sensitivity-label management reads the live MIP taxonomy from the Microsoft Purview Data Map. Set ${labelGate.missingEnvVar || 'LOOM_PURVIEW_ACCOUNT'} to a provisioned Purview account (and grant the Console UAMI the Data Curator role) to enable it.`}
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
             Set endorsement, sensitivity &amp; classifications in the item editor or Governance. Microsoft Purview
             enriches these with scan-based classifications &amp; cross-asset lineage when connected.
@@ -998,6 +1140,7 @@ export default function OneLakeCatalogPage() {
                         subtitle={typeLabel(it.itemType)}
                         meta={`Refreshed ${relative(it.updatedAt || it.createdAt)}`}
                         badge={isPreviewType(it.itemType) ? <Badge appearance="tint" color="brand" size="small">Preview</Badge> : undefined}
+                        sensitivityLabel={(it.state?.['sensitivityLabel'] as string | undefined) || undefined}
                         overflowMenu={renderOverflow(it)}
                         footer={tileFooter(
                           it,
@@ -1035,7 +1178,23 @@ export default function OneLakeCatalogPage() {
           <ItemDetails
             item={selected}
             workspaceName={wsName.get(selected.workspaceId) ?? 'Unknown workspace'}
+            me={me}
             onClose={() => setSelected(null)}
+            onLabelChange={(itemId, labelName, labelId) => {
+              const patch = (it: OwnedItem): OwnedItem =>
+                it.id === itemId
+                  ? {
+                      ...it,
+                      state: {
+                        ...(it.state || {}),
+                        sensitivityLabel: labelName ?? undefined,
+                        sensitivityLabelId: labelId ?? undefined,
+                      },
+                    }
+                  : it;
+              setItems((prev) => (prev ? prev.map(patch) : prev));
+              setSelected((prev) => (prev ? patch(prev) : prev));
+            }}
           />
         )}
       </div>
