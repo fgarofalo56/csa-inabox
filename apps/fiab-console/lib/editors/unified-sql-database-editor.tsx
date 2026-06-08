@@ -43,6 +43,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1049,7 +1050,6 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
               </div>
               {family === 'managed-instance' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
@@ -1057,7 +1057,29 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {family === 'postgres' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL query path is gated</MessageBarTitle>Add the <code>pg</code> driver to apps/fiab-console and set <code>LOOM_POSTGRES_QUERY_LIVE=true</code> (with the console UAMI created as a PG AAD principal via <code>pgaadauth_create_principal</code>). ARM inventory, provisioning, databases, and firewall are fully live now.</MessageBarBody></MessageBar>
               )}
-              <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+              {family === 'postgres' ? (
+                // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are
+                // T-SQL-specific, so the PG path keeps the plain Monaco surface
+                // until a pg-catalog provider lands. Run still posts the script.
+                <>
+                  <div className={s.toolbar}>
+                    <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()} style={{ marginLeft: 'auto' }}>Run</Button>
+                  </div>
+                  <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+                </>
+              ) : (
+                <TsqlMonaco
+                  value={sqlText}
+                  onChange={setSqlText}
+                  onRun={(sql) => run(sql)}
+                  server={server}
+                  database={database}
+                  itemId={id}
+                  height={240}
+                  readOnly={family === 'managed-instance'}
+                  busy={qLoading}
+                />
+              )}
               <ResultsPanel result={qResult} loading={qLoading} />
             </>
           )}
