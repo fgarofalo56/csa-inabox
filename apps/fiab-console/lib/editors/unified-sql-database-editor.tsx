@@ -42,6 +42,7 @@ import {
   ArrowDownload20Regular, Delete20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
@@ -118,6 +119,10 @@ const useStyles = makeStyles({
     borderRadius: '4px', overflow: 'hidden',
   },
   ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
+  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 },
+  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: 4, padding: 8 },
+  connCode: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
+  connCopyBtn: { position: 'absolute', top: 4, right: 4 },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -520,6 +525,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     return inv.mi.instances.find((x) => x.name === server)?.fqdn || '';
   }, [inv, family, server]);
 
+  // ---- connection strings (Connect tab card) ----
+  type ConnDriverKey = 'adonet' | 'jdbc' | 'odbc' | 'php' | 'go';
+  const [connDriver, setConnDriver] = useState<ConnDriverKey>('adonet');
+  const [connCopied, setConnCopied] = useState<ConnDriverKey | null>(null);
+  const connStrings = useMemo(
+    () => ((family === 'azure-sql' && serverFqdn && database)
+      ? buildConnectionStrings({ fqdn: serverFqdn, database })
+      : null),
+    [family, serverFqdn, database],
+  );
+  const copyConnStr = useCallback(async (key: ConnDriverKey, value: string) => {
+    await navigator.clipboard?.writeText(value);
+    setConnCopied(key);
+    setTimeout(() => setConnCopied(null), 2000);
+  }, []);
+
   const loadDatabases = useCallback(async (fam: Family, srv: string) => {
     setDatabases([]); setDbError(null);
     if (!srv || fam === 'managed-instance') return;
@@ -856,6 +877,56 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
               <Caption1>Pick a server, then <strong>Bind connection</strong> (ribbon) to persist it to this item, or open the <strong>Query</strong> tab.</Caption1>
+
+              {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
+              {family === 'azure-sql' && serverFqdn && (
+                <div className={s.connCard}>
+                  <Subtitle2>Connection strings</Subtitle2>
+                  {!database ? (
+                    <Caption1>Select a database (left pane or a <strong>Connect</strong> button above) to generate driver-ready strings.</Caption1>
+                  ) : (
+                    <>
+                      <Caption1>
+                        FQDN: <code>{serverFqdn}</code> · DB: <code>{database}</code> · Auth: Microsoft Entra Managed Identity (password-free)
+                      </Caption1>
+                      <TabList
+                        size="small"
+                        selectedValue={connDriver}
+                        onTabSelect={(_, d) => setConnDriver(d.value as ConnDriverKey)}
+                      >
+                        <Tab value="adonet">ADO.NET</Tab>
+                        <Tab value="jdbc">JDBC</Tab>
+                        <Tab value="odbc">ODBC</Tab>
+                        <Tab value="php">PHP</Tab>
+                        <Tab value="go">Go</Tab>
+                      </TabList>
+                      {connStrings && (
+                        <div className={s.connCodeWrap}>
+                          <pre className={s.connCode}>{connStrings[connDriver]}</pre>
+                          <Tooltip content={connCopied === connDriver ? 'Copied!' : 'Copy to clipboard'} relationship="label">
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              icon={<Copy20Regular />}
+                              aria-label={`Copy ${connDriver} connection string`}
+                              className={s.connCopyBtn}
+                              onClick={() => copyConnStr(connDriver, connStrings[connDriver])}
+                            />
+                          </Tooltip>
+                        </div>
+                      )}
+                      <Caption1>
+                        All strings use password-free Microsoft Entra authentication (Managed Identity / Default).
+                        Grant the connecting identity <code>db_datareader</code> / <code>db_datawriter</code> in the database via{' '}
+                        <code>CREATE USER [&lt;entra-principal&gt;] FROM EXTERNAL PROVIDER;</code>.
+                        {getSqlHostSuffix(serverFqdn).includes('usgovcloudapi') && (
+                          <> Gov cloud detected — endpoint suffix is <code>{getSqlHostSuffix(serverFqdn)}</code> (GCC-High / IL5 / DoD).</>
+                        )}
+                      </Caption1>
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
 
