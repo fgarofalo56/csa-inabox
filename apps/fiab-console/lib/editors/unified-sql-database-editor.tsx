@@ -549,7 +549,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring' | 'get-data'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -581,6 +581,41 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     setSqlText(sql);
     setTab('query');
   }, []);
+
+  // ---- Get data → ADF ingestion deep-links (Copy / pipeline / dataflow) ----
+  // Opens REAL Azure Data Factory Studio with THIS database pre-wired as the
+  // copy sink. New pipeline/dataflow first upsert the AzureSqlDatabase linked
+  // service + AzureSqlTable dataset + artifact via ARM, then window.open the
+  // authoring canvas. No toasts — real navigation (per ui-parity.md).
+  type GetDataAction = 'copy-data' | 'new-pipeline' | 'new-dataflow';
+  const [getDataBusy, setGetDataBusy] = useState(false);
+  const [getDataMsg, setGetDataMsg] = useState<
+    { ok: boolean; text: string; url?: string; factoryName?: string; privateNetworkGate?: boolean; factoryMiPrincipalHint?: string } | null
+  >(null);
+  const [receiptRunId, setReceiptRunId] = useState('');
+
+  const openGetData = useCallback(async (action: GetDataAction) => {
+    if (!server || !database) { setGetDataMsg({ ok: false, text: 'Pick a server + database on the Connect tab first.' }); setTab('get-data'); return; }
+    setGetDataBusy(true); setGetDataMsg(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/get-data`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, family, server, serverFqdn, database }),
+    });
+    setGetDataBusy(false);
+    setTab('get-data');
+    if (!j.ok) { setGetDataMsg({ ok: false, text: j.error || 'Get data failed' }); return; }
+    // Real navigation — open ADF Studio in a new tab. No toast.
+    if (j.url) window.open(j.url, '_blank', 'noopener,noreferrer');
+    const label = action === 'copy-data' ? 'Copy Data Tool'
+      : action === 'new-pipeline' ? `pipeline ${j.pipelineName}`
+      : `dataflow ${j.dataflowName}`;
+    setGetDataMsg({
+      ok: true,
+      text: `Opened ADF Studio — ${label}. This database is the pre-wired copy sink.`,
+      url: j.url, factoryName: j.factoryName, privateNetworkGate: j.privateNetworkGate,
+      factoryMiPrincipalHint: j.factoryMiPrincipalHint,
+    });
+  }, [id, family, server, serverFqdn, database]);
 
   // Azure-native mirroring (change feed → ADLS Bronze Delta; no Fabric).
   const [mirror, setMirror] = useState<any>(null);
@@ -716,8 +751,38 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
+      { label: 'Get data', actions: [
+        {
+          label: 'Get data',
+          disabled: getDataBusy || !server,
+          title: !server ? 'Pick a server first' : 'Open Azure Data Factory ingestion surfaces with this database as the sink',
+          dropdownItems: [
+            {
+              label: getDataBusy ? 'Opening…' : 'Copy data',
+              icon: <ArrowDownload20Regular />,
+              onClick: (server && database && !getDataBusy) ? () => openGetData('copy-data') : undefined,
+              disabled: getDataBusy || !(server && database),
+              title: !database ? 'Pick a database first' : 'Open the ADF Copy Data Tool (this DB is the sink)',
+            },
+            {
+              label: 'New pipeline',
+              icon: <Play20Regular />,
+              onClick: (server && database && family === 'azure-sql' && !getDataBusy) ? () => openGetData('new-pipeline') : undefined,
+              disabled: getDataBusy || !(server && database && family === 'azure-sql'),
+              title: family !== 'azure-sql' ? 'Azure SQL sink only — use Copy data for other engines' : !database ? 'Pick a database first' : 'Create an ADF pipeline with this DB as the Copy sink',
+            },
+            {
+              label: 'New dataflow',
+              icon: <Database20Regular />,
+              onClick: (server && database && family === 'azure-sql' && !getDataBusy) ? () => openGetData('new-dataflow') : undefined,
+              disabled: getDataBusy || !(server && database && family === 'azure-sql'),
+              title: family !== 'azure-sql' ? 'Azure SQL sink only — use Copy data for other engines' : !database ? 'Pick a database first' : 'Create an ADF Mapping Data Flow with this DB as the sink',
+            },
+          ],
+        },
+      ]},
     ]},
-  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, getDataBusy, openGetData]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;
@@ -778,6 +843,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
+            <Tab value="get-data" icon={<ArrowDownload20Regular />}>Get data</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
           </TabList>
 
@@ -1058,6 +1124,89 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     </MessageBarBody>
                   </MessageBar>
                 )}
+              </div>
+            </>
+          )}
+
+          {/* ---------------- Get data → ADF ingestion deep-links ---------------- */}
+          {tab === 'get-data' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Get data — Azure Data Factory ingestion surfaces</MessageBarTitle>
+                  Opens Azure Data Factory Studio with this database (<code>{database || 'select one'}</code>) pre-wired
+                  as the copy <strong>sink</strong> — Azure-native, no Microsoft Fabric. <strong>Copy data</strong> opens
+                  the stepped Copy Data Tool; <strong>New pipeline</strong> / <strong>New dataflow</strong> create the
+                  AzureSqlDatabase linked service + AzureSqlTable dataset + artifact via ARM, then open the authoring
+                  canvas. The factory uses its system-assigned managed identity — grant it <code>db_datareader</code> +{' '}
+                  <code>db_datawriter</code> on <code>{database || 'the target database'}</code> via Microsoft Entra so the
+                  Copy activity can write rows.
+                </MessageBarBody>
+              </MessageBar>
+
+              <div className={s.toolbar}>
+                <Button appearance="primary" icon={<ArrowDownload20Regular />} disabled={getDataBusy || !server || !database}
+                  onClick={() => openGetData('copy-data')}>{getDataBusy ? 'Opening…' : 'Copy data'}</Button>
+                <Button appearance="outline" icon={<Play20Regular />} disabled={getDataBusy || !(server && database && family === 'azure-sql')}
+                  onClick={() => openGetData('new-pipeline')} title={family !== 'azure-sql' ? 'Azure SQL sink only' : undefined}>New pipeline</Button>
+                <Button appearance="outline" icon={<Database20Regular />} disabled={getDataBusy || !(server && database && family === 'azure-sql')}
+                  onClick={() => openGetData('new-dataflow')} title={family !== 'azure-sql' ? 'Azure SQL sink only' : undefined}>New dataflow</Button>
+              </div>
+
+              {getDataMsg && (
+                <MessageBar intent={getDataMsg.ok ? 'success' : 'error'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>{getDataMsg.ok ? 'ADF Studio opened' : 'Get data failed'}</MessageBarTitle>
+                    {getDataMsg.text}
+                    {getDataMsg.factoryName && <> · factory <code>{getDataMsg.factoryName}</code></>}
+                    {getDataMsg.url && <> · <a href={getDataMsg.url} target="_blank" rel="noreferrer">Re-open in ADF Studio</a></>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {getDataMsg?.ok && getDataMsg.privateNetworkGate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>ADF Studio requires private-network access</MessageBarTitle>
+                    The factory has <code>publicNetworkAccess: Disabled</code> (private link only). Reach ADF Studio's
+                    management plane from the corporate VPN or an Azure Bastion session on the hub VNet.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {getDataMsg?.ok && getDataMsg.factoryMiPrincipalHint && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>One-time: grant the factory managed identity write access</MessageBarTitle>
+                    <code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {/* Run receipt — verify rows landed via a COUNT(*) in the Query tab. */}
+              <div className={s.card}>
+                <Subtitle2>Pipeline run receipt</Subtitle2>
+                <Caption1>
+                  After running the pipeline / dataflow in ADF Studio, paste its <strong>Run ID</strong> and click{' '}
+                  <strong>Check count delta</strong> — it switches to the Query tab with a <code>SELECT COUNT(*)</code>{' '}
+                  template so you can confirm new rows landed in <code>{database || 'the target database'}</code>.
+                </Caption1>
+                <Field label="ADF pipeline run ID">
+                  <Input value={receiptRunId} onChange={(_, d) => setReceiptRunId(d.value)}
+                    placeholder="00000000-0000-0000-0000-000000000000" />
+                </Field>
+                <Button appearance="primary" icon={<Play20Regular />}
+                  disabled={!receiptRunId.trim() || !server || !database}
+                  onClick={() => {
+                    const countSql =
+                      `-- Verify rows landed from ADF pipeline run ${receiptRunId.trim()}\n` +
+                      `-- Replace <your_target_table> with the table the Copy/dataflow sink wrote to.\n` +
+                      `SELECT COUNT(*) AS row_count FROM dbo.[<your_target_table>];`;
+                    setSqlText(countSql);
+                    setTab('query');
+                  }}>
+                  Check count delta (open in Query)
+                </Button>
               </div>
             </>
           )}
