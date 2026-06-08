@@ -88,7 +88,8 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | **Open in** SSMS / VS Code | ❌ MISSING | — |
 | Object Explorer tree beside query window | ✅ built | **Now reachable.** Schema tab mounts the rich `SqlDbTree` (tables + expandable columns, views, procs, functions, table types, schemas with counts; Select-top-1000 / EXEC template / Drop / New-object) over live `sys.*`-via-TDS (`unified-sql-database-editor.tsx:824-832`; routes `/api/sqldb/*`). Double-click loads a statement into the Query tab. INFORMATION_SCHEMA grid retained as a fallback below the tree |
 | 5-min timeout / multi-statement last-result | ⚠️ partial | 60s timeout; single recordset |
-| Cancel running query | ❌ MISSING | — |
+| Cancel running query | ✅ built | Query tab **Cancel** button → `POST /azure-sql-database/[id]/query/cancel` with the client `requestId`. The BFF looks the in-flight `mssql.Request` up in `liveRequests` and calls `.cancel()`, sending a real **TDS ATTENTION** packet; SQL Server acks (err 3617) and the query rejects with `RequestError('Canceled.','ECANCEL')`, surfaced to the grid. Verified with `WAITFOR DELAY '00:00:30'` |
+| Run query in background (survives tab switch/close) | ✅ built | `run()` delegates to module-scope `jobsStore.startSqlQuery()`; the fetch outlives the editor unmount. A backgrounded query that completes raises a Fluent completion toast naming the DB + row count/exec-ms via `GlobalJobToaster`. On remount the editor recovers the result from the store. (Portal Query editor has no equivalent — Loom exceeds parity here) |
 
 ### C. Settings → Compute & storage (scale)
 | Azure capability | Loom | Where / backend |
@@ -97,15 +98,17 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Change vCores / DTUs (slider) | ❌ MISSING | — |
 | Serverless min/max vCores + auto-pause delay | ❌ MISSING | — |
 | Max data size | ❌ MISSING | create-only (`maxSizeBytes`) |
-| Backup storage redundancy (LRS/ZRS/GRS/GZRS) | ❌ MISSING | — |
-| Zone redundant | ⚠️ partial | `createDatabase` accepts at create; no UI checkbox, no post-create edit |
+| Backup storage redundancy (LRS/ZRS/GRS/GZRS) | ✅ built (create-time) | Provision tab dropdown → `requestedBackupStorageRedundancy` (Local/Zone/Geo/GeoZone) → ARM PUT. Post-create edit still MISSING |
+| Zone redundant | ✅ built (create-time) | Provision tab checkbox → `zoneRedundant` → ARM PUT. Post-create edit still MISSING |
 
 ### D. Create / provision
 | Azure capability | Loom | Where / backend |
 | --- | --- | --- |
 | Create DB on existing server (name, SKU, tier, sample) | ✅ built | Provision tab → `POST /create-db` → ARM PUT `Microsoft.Sql/servers/databases`. Real |
 | Seed AdventureWorksLT | ✅ built | `sampleName` → ARM |
-| Collation / maintenance window / Ledger / elastic-pool placement / workload env | ❌ MISSING | form is name+SKU+tier+sample only |
+| Collation (enumerated, default `SQL_Latin1_General_CP1_CI_AS`) | ✅ built | Provision tab dropdown → `collation` → ARM PUT. Validated client + route (`/^[A-Za-z0-9_]+$/`). Immutable after create |
+| Maintenance window | ✅ built | Provision tab dropdown, options from `GET /maintenance-configs?location=` (ARM Maintenance API, scope=SQLDB) → `maintenanceConfigurationId` → ARM PUT. Empty region ⇒ System default only |
+| Ledger / elastic-pool placement / workload env | ❌ MISSING | not yet surfaced |
 
 ### E. Security blade
 | Azure capability | Loom | Where / backend |
@@ -140,6 +143,7 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Fabric mirroring toggle | ❌ MISSING (not reachable) + honest-gate | `enableMirroring` gated on `LOOM_AZURE_SQL_MIRRORING_LIVE`; UI tab in unwired `AzureSqlDatabaseEditor` — no mirroring control on registered surface |
 | Purview/OneLake catalog register | ⚠️ partial / honest-gate | Catalog tab → `POST /api/catalog/register`; 501 honest-gate unless `LOOM_PURVIEW_ACCOUNT`. Real, but not a portal-native blade feature |
 | SQL Server 2025 vector / feature probe | ⚠️ partial (separate item) | real `/sql2025-features` + vector-index editor — a **separate item type**, not the SQL DB blade |
+| Get data / ingest into DB (Copy data, pipeline, dataflow) | ✅ built (Azure-native, no Fabric) | Ribbon **Get data ▾** + **Get data** tab → `POST /api/items/azure-sql-database/[id]/get-data`. `copy-data` returns the ADF Studio **Copy Data Tool** deep-link (this DB is the sink); `new-pipeline`/`new-dataflow` idempotently upsert an `AzureSqlDatabase` linked service (SystemAssignedManagedIdentity) + `AzureSqlTable` dataset + a Copy-activity pipeline / MappingDataFlow with that sink via real ARM (`upsertLinkedService`/`upsertDataset`/`upsertPipeline`/`upsertDataFlow`), then `window.open` the authoring canvas. Sovereign-aware (`adfStudioBase()` → `adf.azure.us` on Gov). Honest-gates: 503 naming the missing `LOOM_SUBSCRIPTION_ID`/`LOOM_DLZ_RG`/`LOOM_ADF_NAME`; warning when the factory is `publicNetworkAccess: Disabled`; one-time hint to grant the factory MI `db_datareader`+`db_datawriter`. Run receipt: paste ADF run id → COUNT(\*) template in Query tab |
 
 ### H. Object navigator — now reachable on the registered `azure-sql-database` editor (rev.2)
 As of PR #541 the rich `SqlDbTree` is mounted by `UnifiedSqlDatabaseEditor` (Schema tab) **and** the Fabric `sql-database` editor; both share the same `sys.*`-over-TDS backend (`/api/sqldb/*`, with the Unified editor passing an explicit `?server=&database=` override):
