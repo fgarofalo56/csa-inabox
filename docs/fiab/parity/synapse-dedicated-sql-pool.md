@@ -16,6 +16,8 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | Workload management groups + classifiers | Manage |
 | 8 | Geo backup / restore points | Manage |
 | 9 | Compute picker across pools | Studio |
+| 10 | Save as table (CTAS) — distribution + index strategy | Develop hub |
+| 11 | Select into (copy a table — full physical copy; Dedicated has no zero-copy clone) | Develop hub |
 
 ## Loom coverage
 
@@ -30,9 +32,12 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | ✅ | `Workload mgmt` loads sys.workload_management_workload_groups query |
 | 8 | ✅ | `Geo backup` loads sys.pdw_loader_backup_runs query |
 | 9 | ✅ | `ComputePicker` filtered to dedicated pools |
+| 10 | ✅ | **CTAS built.** Ribbon **Save as table** opens a schema/name/distribution/index dialog; **Create** posts `CREATE TABLE [sch].[name] WITH (DISTRIBUTION = …, …INDEX) AS <SELECT>` to `/query` (TDS); ROUND_ROBIN/HASH(col)/REPLICATE + CCI/HEAP/CLUSTERED INDEX(col) selectable. Receipt shows the distribution. |
+| 11 | ✅ | **SELECT INTO built (honest note).** Ribbon **Select into** + per-table hover button open a source/target dialog; **Copy** → `POST /api/items/synapse-dedicated-sql-pool/[id]/clone` → `SELECT * INTO [ts].[tt] FROM [ss].[st]` (TDS). Dialog + response `note` disclose: Synapse Dedicated has **no zero-copy clone** — SELECT INTO is a full physical copy (ROUND_ROBIN + CCI). Receipt shows rows copied. |
 
 ## Backend per control
-- Query / DMV actions → Synapse Dedicated TDS (`executeQuery`/`dedicatedTarget`).
+- Query / DMV / CTAS actions → Synapse Dedicated TDS (`executeQuery`/`dedicatedTarget`).
+- SELECT INTO → `/clone` route → TDS `SELECT * INTO`.
 - Lifecycle → ARM (`synapse-pool-arm` `getPoolState`/resume/pause).
 
-Grade: **A — every inventory row built; all four former "deferred" buttons now wired to real DMV T-SQL through the existing /query TDS path.**
+Grade: **A — every inventory row built; CTAS (distribution+index) and SELECT INTO copy now wired through the TDS path, with an honest no-zero-copy-clone disclosure for Dedicated.**

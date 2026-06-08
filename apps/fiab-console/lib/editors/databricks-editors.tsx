@@ -27,6 +27,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
   Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  TableAdd20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
@@ -643,6 +644,25 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [editType, setEditType] = useState<'PRO' | 'CLASSIC'>('PRO');
   const [editServerless, setEditServerless] = useState(false);
 
+  // ---- Save as table (CTAS) dialog — CREATE TABLE … USING DELTA AS SELECT … ----
+  const [ctasOpen, setCtasOpen] = useState(false);
+  const [ctasCatalog, setCtasCatalog] = useState('');
+  const [ctasSchema, setCtasSchema] = useState('');
+  const [ctasName, setCtasName] = useState('');
+  const [ctasBusy, setCtasBusy] = useState(false);
+  const [ctasError, setCtasError] = useState<string | null>(null);
+  const [ctasReceipt, setCtasReceipt] = useState<string | null>(null);
+
+  // ---- Clone table dialog — CREATE [OR REPLACE] TABLE … [SHALLOW|DEEP] CLONE … ----
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneSource, setCloneSource] = useState('');
+  const [cloneTarget, setCloneTarget] = useState('');
+  const [cloneKind, setCloneKind] = useState<'SHALLOW' | 'DEEP'>('SHALLOW');
+  const [cloneReplace, setCloneReplace] = useState(false);
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const [cloneReceipt, setCloneReceipt] = useState<string | null>(null);
+
   // ---- Initial: load warehouses, pick first, fetch state ----
   useEffect(() => {
     let cancelled = false;
@@ -896,11 +916,80 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     void refreshCatalogs();
   }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
 
+  // ---- Save as table (CTAS) ----
+  const openCtas = useCallback(() => {
+    setCtasCatalog(activeCatalog || catalogs[0] || '');
+    setCtasSchema(activeSchema || '');
+    setCtasName('');
+    setCtasError(null);
+    setCtasReceipt(null);
+    setCtasOpen(true);
+  }, [activeCatalog, activeSchema, catalogs]);
+
+  const submitCtas = useCallback(async () => {
+    if (!ctasName.trim()) { setCtasError('table name required'); return; }
+    if (!ctasCatalog.trim()) { setCtasError('catalog required'); return; }
+    if (!ctasSchema.trim()) { setCtasError('schema required'); return; }
+    const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+    if (!/^select\b/i.test(cleaned)) {
+      setCtasError('CTAS requires the editor to contain a SELECT statement.');
+      return;
+    }
+    setCtasBusy(true); setCtasError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/ctas`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, sql: cleaned, catalog: ctasCatalog.trim(), schema: ctasSchema.trim(), tableName: ctasName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCtasError(j.error || `HTTP ${r.status}`); return; }
+      setCtasOpen(false);
+      setCtasReceipt(`Delta table created: ${j.table} (${j.executionMs}ms). Queryable in Unity Catalog.`);
+      ucChanged();
+    } catch (e: any) { setCtasError(e?.message || String(e)); }
+    finally { setCtasBusy(false); }
+  }, [id, warehouseId, sqlText, ctasCatalog, ctasSchema, ctasName, ucChanged]);
+
+  // ---- Clone table (SHALLOW = zero-copy / DEEP = full copy) ----
+  const openCloneForTable = useCallback((fqn: string) => {
+    setCloneSource(fqn);
+    setCloneTarget('');
+    setCloneKind('SHALLOW');
+    setCloneReplace(false);
+    setCloneError(null);
+    setCloneReceipt(null);
+    setCloneOpen(true);
+  }, []);
+
+  const submitClone = useCallback(async () => {
+    if (!cloneSource.trim() || !cloneTarget.trim()) { setCloneError('source and target are required'); return; }
+    setCloneBusy(true); setCloneError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/clone`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, source: cloneSource.trim(), target: cloneTarget.trim(), cloneType: cloneKind, replace: cloneReplace }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCloneError(j.error || `HTTP ${r.status}`); return; }
+      setCloneOpen(false);
+      setCloneReceipt(
+        cloneKind === 'SHALLOW'
+          ? `Shallow clone created: ${j.target} — zero-copy, ${j.numCopiedFiles} data files duplicated (source has ${j.sourceNumFiles}). (${j.executionMs}ms)`
+          : `Deep clone created: ${j.target} — ${j.numCopiedFiles} data files copied, independent of source. (${j.executionMs}ms)`,
+      );
+      ucChanged();
+    } catch (e: any) { setCloneError(e?.message || String(e)); }
+    finally { setCloneBusy(false); }
+  }, [id, warehouseId, cloneSource, cloneTarget, cloneKind, cloneReplace, ucChanged]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined,
+          disabled: !canRun || !sqlText.trim(),
+          title: !canRun ? 'Start the warehouse first' : !sqlText.trim() ? 'Enter a SELECT first' : 'CTAS — CREATE TABLE … USING DELTA AS SELECT …' },
         { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
       { label: 'Warehouse', actions: [
@@ -913,10 +1002,15 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create catalog', onClick: () => setUcCreateCatalogOpen(true), title: 'Create a UC catalog (api 2.1 — requires CREATE CATALOG on the metastore)' },
         { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
+        { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
+            activeCatalog && activeSchema && tables.length > 0
+              ? `${activeCatalog}.${activeSchema}.${tables[0]}`
+              : '',
+          ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables]);
 
   return (
     <ItemEditorChrome
@@ -997,7 +1091,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                 }}
                               >
-                                <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                                <TreeItemLayout
+                                  iconBefore={<DocumentTable20Regular />}
+                                  actions={
+                                    <Tooltip content={`Clone ${t}`} relationship="label">
+                                      <Button
+                                        size="small" appearance="subtle" icon={<Copy20Regular />}
+                                        aria-label={`Clone ${t}`}
+                                        onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }}
+                                      />
+                                    </Tooltip>
+                                  }
+                                >
                                   {t}
                                 </TreeItemLayout>
                               </TreeItem>
@@ -1257,6 +1362,119 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+
+          {ctasReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Table created</MessageBarTitle>{ctasReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
+          {cloneReceipt && (
+            <MessageBar intent="success">
+              <MessageBarBody><MessageBarTitle>Clone created</MessageBarTitle>{cloneReceipt}</MessageBarBody>
+            </MessageBar>
+          )}
+
+          {/* Save as table (CTAS) — CREATE TABLE … USING DELTA AS SELECT … */}
+          <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '600px' }}>
+              <DialogBody>
+                <DialogTitle>Save as table (CTAS)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {ctasError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                    )}
+                    <Caption1>
+                      Wraps the editor SELECT as <code>CREATE TABLE `catalog`.`schema`.`name` USING DELTA AS SELECT …</code>{' '}
+                      and runs it on the warehouse. Requires <code>CREATE TABLE</code> + <code>USE SCHEMA</code> + <code>USE CATALOG</code> on the target.
+                    </Caption1>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Field label="Catalog" required style={{ flex: 1 }}>
+                        {catalogs.length > 0 ? (
+                          <Dropdown value={ctasCatalog} selectedOptions={ctasCatalog ? [ctasCatalog] : []}
+                            onOptionSelect={(_, d) => d.optionValue && setCtasCatalog(d.optionValue)} placeholder="catalog">
+                            {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={ctasCatalog} onChange={(_, d) => setCtasCatalog(d.value)} placeholder="catalog" />
+                        )}
+                      </Field>
+                      <Field label="Schema" required style={{ flex: 1 }}>
+                        {schemas.length > 0 && ctasCatalog === activeCatalog ? (
+                          <Dropdown value={ctasSchema} selectedOptions={ctasSchema ? [ctasSchema] : []}
+                            onOptionSelect={(_, d) => d.optionValue && setCtasSchema(d.optionValue)} placeholder="schema">
+                            {schemas.map((sc) => <Option key={sc} value={sc} text={sc}>{sc}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="schema" />
+                        )}
+                      </Field>
+                      <Field label="Table name" required style={{ flex: 1 }}>
+                        <Input value={ctasName} onChange={(_, d) => setCtasName(d.value)} placeholder="my_table" />
+                      </Field>
+                    </div>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCtasOpen(false)} disabled={ctasBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasName.trim() || !ctasCatalog.trim() || !ctasSchema.trim()}>
+                    {ctasBusy ? 'Creating…' : 'Create table'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Clone table (Delta SHALLOW = zero-copy / DEEP = full copy) */}
+          <Dialog open={cloneOpen} onOpenChange={(_, d) => setCloneOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '620px' }}>
+              <DialogBody>
+                <DialogTitle>Clone table (Delta)</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {cloneError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Clone failed</MessageBarTitle>{cloneError}</MessageBarBody></MessageBar>
+                    )}
+                    <Field label="Clone type">
+                      <Dropdown value={cloneKind} selectedOptions={[cloneKind]}
+                        onOptionSelect={(_, d) => d.optionValue && setCloneKind(d.optionValue as 'SHALLOW' | 'DEEP')}>
+                        <Option value="SHALLOW" text="SHALLOW">SHALLOW — zero-copy (metadata only; data files remain in source)</Option>
+                        <Option value="DEEP" text="DEEP">DEEP — full copy (data files duplicated, independent of source)</Option>
+                      </Dropdown>
+                    </Field>
+                    {cloneKind === 'SHALLOW' && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Shallow clone dependency</MessageBarTitle>
+                          The clone references the source table&apos;s Delta data files. Running VACUUM on the source
+                          can break this clone if it removes files the clone still references. Use DEEP clone for
+                          long-term archival or any copy that must survive source VACUUM.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <Field label="Source table" hint="catalog.schema.table" required>
+                      <Input value={cloneSource} onChange={(_, d) => setCloneSource(d.value)} placeholder="main.sales.orders" />
+                    </Field>
+                    <Field label="Target table" hint="catalog.schema.table" required>
+                      <Input value={cloneTarget} onChange={(_, d) => setCloneTarget(d.value)} placeholder="main.dev.orders_clone" />
+                    </Field>
+                    <Switch checked={cloneReplace} label="Replace if target already exists (CREATE OR REPLACE TABLE)"
+                      onChange={(_, d) => setCloneReplace(!!d.checked)} />
+                    <Caption1>
+                      Requires <code>SELECT</code> on the source + <code>CREATE TABLE</code> on the target schema.
+                      Unity Catalog shallow clone requires Databricks Runtime 13.3 LTS or above.
+                    </Caption1>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCloneOpen(false)} disabled={cloneBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitClone} disabled={cloneBusy || !cloneSource.trim() || !cloneTarget.trim()}>
+                    {cloneBusy ? 'Cloning…' : 'Clone'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
