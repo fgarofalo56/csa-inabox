@@ -15,6 +15,7 @@
  */
 
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 import {
   adfConfigGate,
   upsertLinkedService,
@@ -55,8 +56,7 @@ function resolveAdls(): { account: string; dfsBase: string } | null {
   }
   const acct = process.env.LOOM_ADLS_ACCOUNT;
   if (acct) {
-    const suffix = process.env.AZURE_CLOUD === 'AzureUSGovernment' ? 'core.usgovcloudapi.net' : 'core.windows.net';
-    return { account: acct, dfsBase: `https://${acct}.dfs.${suffix}` };
+    return { account: acct, dfsBase: dfsUrl(acct) };
   }
   return null;
 }
