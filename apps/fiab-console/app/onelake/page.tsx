@@ -66,6 +66,7 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 // ── Item types surfaced by the OneLake catalog Explore tab ────────────────
@@ -406,7 +407,7 @@ function ItemDetails({
   const visual = itemVisual(item.itemType);
   const Icon = visual.icon;
   const hasTables = TABLE_BACKED_TYPES.has(item.itemType);
-  const [tab, setTab] = useState<'overview' | 'tables'>('overview');
+  const [tab, setTab] = useState<'overview' | 'tables' | 'security'>('overview');
   const stateLabel =
     typeof item.state?.['provisioningStatus'] === 'string'
       ? String(item.state['provisioningStatus'])
@@ -458,11 +459,12 @@ function ItemDetails({
 
       <TabList
         selectedValue={tab}
-        onTabSelect={(_e, d) => setTab(d.value as 'overview' | 'tables')}
+        onTabSelect={(_e, d) => setTab(d.value as 'overview' | 'tables' | 'security')}
         size="small"
       >
         <Tab value="overview">Overview</Tab>
         {hasTables && <Tab value="tables">Tables</Tab>}
+        {hasTables && <Tab value="security">Security</Tab>}
       </TabList>
 
       {tab === 'overview' && (
@@ -521,6 +523,7 @@ function ItemDetails({
       )}
 
       {tab === 'tables' && hasTables && <TablesTab itemId={item.id} />}
+      {tab === 'security' && hasTables && <OneLakeSecurityTab lakehouseId={item.id} />}
     </aside>
   );
 }

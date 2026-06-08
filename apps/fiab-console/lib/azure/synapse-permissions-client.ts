@@ -27,13 +27,14 @@
 
 import {
   dedicatedTarget,
+  serverlessTarget,
   executeQuery as synapseExecute,
   type SynapseTarget,
   type QueryResult,
 } from './synapse-sql-client';
 
 // Re-export so the BFF route can resolve the target + honest-gate in one import.
-export { dedicatedTarget, type SynapseTarget };
+export { dedicatedTarget, serverlessTarget, type SynapseTarget };
 
 // ── identifier / literal escaping (no string injection) ──────────────────────
 export function sqlBracket(ident: string): string {
@@ -226,6 +227,145 @@ export async function revokeTableSelect(
   }
   await synapseExecute(target, `REVOKE SELECT ON ${target_clause} FROM ${sqlBracket(name)};`);
   return { revoked: `${label} ↛ ${name}` };
+}
+
+// ── column-level security (CLS): hidden columns via column-scope DENY ─────────
+//
+// Fabric's OneLake "Column-level security" hides specific columns from a role.
+// The Azure-native (no-Fabric) equivalent on the Synapse Dedicated SQL pool is
+// a **table-level GRANT + column-level DENY**:
+//
+//   GRANT SELECT ON [s].[t] TO [role];           -- role can query the table
+//   DENY  SELECT ON [s].[t]([SSN],[Phone]) TO [role];  -- but NOT these columns
+//
+// DENY semantics (DENY Object Permissions, T-SQL):
+//   • Column-level DENY takes precedence over column-level GRANT.
+//   • A table-level DENY does NOT override a column-level GRANT (backward-compat
+//     quirk) — so the "hide columns" model is table GRANT + column DENY, which
+//     also means newly-added columns stay visible (they inherit the table GRANT)
+//     until explicitly denied. Querying a denied column yields Msg 230.
+//
+// A column that carries BOTH a GRANT and a DENY for the same principal is a
+// conflict: DENY wins, the GRANT is dead weight. {@link listColumnDenyGrants}
+// + {@link listTableGrants} let the UI detect and warn on the overlap.
+
+/**
+ * List column-level **DENY** SELECT entries on user tables/views — the rows
+ * that hide columns from a principal. `minor_id > 0` → column-level (joined to
+ * sys.columns); `state_desc = 'DENY'`.
+ */
+export async function listColumnDenyGrants(target: SynapseTarget): Promise<TableGrantRow[]> {
+  const qr = await synapseExecute(
+    target,
+    `SELECT dp.name AS principal, dp.type_desc AS principalType,
+            s.name AS [schema], o.name AS [table],
+            col.name AS [column], perm.permission_name AS permissionName
+     FROM sys.database_permissions perm
+     JOIN sys.objects o ON o.object_id = perm.major_id
+     JOIN sys.schemas s ON s.schema_id = o.schema_id
+     JOIN sys.database_principals dp ON dp.principal_id = perm.grantee_principal_id
+     JOIN sys.columns col ON col.object_id = perm.major_id AND col.column_id = perm.minor_id
+     WHERE perm.class = 1
+       AND perm.permission_name = 'SELECT'
+       AND perm.state_desc = 'DENY'
+       AND perm.minor_id > 0
+       AND o.type IN ('U','V')
+       AND o.is_ms_shipped = 0
+     ORDER BY s.name, o.name, dp.name, perm.minor_id;`,
+  );
+  return toObjects(qr).map((r) => ({
+    principal: String(r.principal),
+    principalType: String(r.principalType || ''),
+    schema: String(r.schema),
+    table: String(r.table),
+    column: r.column == null ? null : String(r.column),
+    permissionName: String(r.permissionName),
+  }));
+}
+
+/**
+ * Hide columns from `upn` — issue a table-level GRANT SELECT (so the principal
+ * can still query the table) and a column-level DENY SELECT on the hidden
+ * columns. At least one column is required (a column-level DENY is meaningless
+ * without one). Identifiers resolved from the catalog by id.
+ */
+export async function denyColumnSelect(
+  target: SynapseTarget,
+  upn: string,
+  objectId: number,
+  columnIds: number[],
+): Promise<{ denied: string; hiddenColumns: string[] }> {
+  const name = (upn || '').trim();
+  if (!name) throw new Error('A principal UPN is required to hide columns.');
+  if (!Array.isArray(columnIds) || columnIds.length === 0) {
+    throw new Error('At least one column is required to hide (column-level DENY).');
+  }
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const cols = await resolveColumnNames(target, objectId, columnIds);
+  if (cols.length === 0) throw new Error('None of the requested columns exist on the table.');
+  const fq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  const sql =
+    ensureUserClause(name) +
+    `GRANT SELECT ON ${fq} TO ${sqlBracket(name)};\n` +
+    `DENY SELECT ON ${fq}${columnList(cols)} TO ${sqlBracket(name)};`;
+  await synapseExecute(target, sql);
+  return { denied: `${schema}.${table}(${cols.join(', ')}) ⊘ ${name}`, hiddenColumns: cols };
+}
+
+/**
+ * Un-hide columns — REVOKE the column-level SELECT entry (removes both any
+ * GRANT and the DENY at column scope) so the principal can see them again.
+ */
+export async function revokeColumnDeny(
+  target: SynapseTarget,
+  upn: string,
+  objectId: number,
+  columnIds: number[],
+): Promise<{ revoked: string; columns: string[] }> {
+  const name = (upn || '').trim();
+  if (!name) throw new Error('A principal UPN is required to un-hide columns.');
+  if (!Array.isArray(columnIds) || columnIds.length === 0) {
+    throw new Error('At least one column is required to un-hide.');
+  }
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const cols = await resolveColumnNames(target, objectId, columnIds);
+  if (cols.length === 0) throw new Error('None of the requested columns exist on the table.');
+  const fq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  await synapseExecute(target, `REVOKE SELECT ON ${fq}${columnList(cols)} FROM ${sqlBracket(name)};`);
+  return { revoked: `${schema}.${table}(${cols.join(', ')}) ↺ ${name}`, columns: cols };
+}
+
+/**
+ * Generate a **masked view** that projects NULL for the hidden columns —
+ * the Serverless SQL pool path (column-level DENY on base tables is not
+ * supported on Serverless, so a view is the parity mechanism there). The
+ * caller passes a {@link serverlessTarget}; columns are catalog-resolved from
+ * that same target. `CREATE OR ALTER VIEW` must be the only statement in its
+ * batch, so it runs as a single executeQuery call.
+ */
+export async function generateMaskedView(
+  target: SynapseTarget,
+  objectId: number,
+  hiddenColumnIds: number[],
+  viewSuffix: string,
+): Promise<{ viewFqn: string; sql: string; hiddenColumns: string[] }> {
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const allCols = await listSqlColumns(target, objectId);
+  if (allCols.length === 0) throw new Error('The table/view has no columns to project.');
+  const hidden = new Set((hiddenColumnIds || []).filter((n) => Number.isInteger(n)));
+  const hiddenNames = allCols.filter((c) => hidden.has(c.columnId)).map((c) => c.name);
+  const viewName = `v_${safeSuffix(table)}_${safeSuffix(viewSuffix || 'masked')}`;
+  const viewFq = `${sqlBracket(schema)}.${sqlBracket(viewName)}`;
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  const projection = allCols
+    .map((c) => (hidden.has(c.columnId) ? `NULL AS ${sqlBracket(c.name)}` : sqlBracket(c.name)))
+    .join(', ');
+  const sql =
+    `CREATE OR ALTER VIEW ${viewFq} AS\n` +
+    `SELECT ${projection}\n` +
+    `FROM ${tableFq};`;
+  await synapseExecute(target, sql);
+  return { viewFqn: `${schema}.${viewName}`, sql, hiddenColumns: hiddenNames };
 }
 
 // ── row-level security (Dedicated SQL pool only) ─────────────────────────────

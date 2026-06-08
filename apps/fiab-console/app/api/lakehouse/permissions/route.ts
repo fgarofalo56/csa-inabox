@@ -7,6 +7,9 @@
  *   tab=table             Object-level `GRANT SELECT ON [s].[t] TO [upn]`.
  *   tab=column            Column-level `GRANT SELECT ON [s].[t](cols) TO [upn]`.
  *   tab=row               Row-level security via `CREATE SECURITY POLICY` + TVF.
+ *   tab=cls               Column-level security (hide columns): table-level
+ *                         `GRANT` + column-scope `DENY SELECT` (+ optional
+ *                         Serverless masked view). DENY hides the columns.
  *
  * The SQL-plane tabs run real T-SQL against the **Synapse Dedicated SQL pool**
  * (Azure-native — NO Fabric dependency). When the pool isn't configured the
@@ -40,11 +43,16 @@ import {
 } from '@/lib/azure/adls-client';
 import {
   dedicatedTarget,
+  serverlessTarget,
   listSqlTables,
   listSqlColumns,
   listTableGrants,
   grantTableSelect,
   revokeTableSelect,
+  listColumnDenyGrants,
+  denyColumnSelect,
+  revokeColumnDeny,
+  generateMaskedView,
   listRlsPolicies,
   createRlsPolicy,
   createRlsPolicyWithPredicate,
@@ -58,9 +66,9 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type Tab = 'object' | 'table' | 'column' | 'row';
+type Tab = 'object' | 'table' | 'column' | 'row' | 'cls';
 function parseTab(v: string | null | undefined): Tab {
-  return v === 'table' || v === 'column' || v === 'row' ? v : 'object';
+  return v === 'table' || v === 'column' || v === 'row' || v === 'cls' ? v : 'object';
 }
 
 /** Honest infra-gate when the Synapse Dedicated SQL pool isn't configured. */
@@ -171,6 +179,13 @@ export async function GET(req: NextRequest) {
       const policies = await listRlsPolicies(target);
       return NextResponse.json({ ok: true, policies, subjects: RLS_SUBJECTS });
     }
+    if (tab === 'cls') {
+      // Column-level security: hidden-column DENY entries + (for the conflict
+      // detector) the column-level GRANT entries that overlap them.
+      const denyGrants = await listColumnDenyGrants(target);
+      const grants = (await listTableGrants(target)).filter((g) => g.column != null);
+      return NextResponse.json({ ok: true, denyGrants, grants });
+    }
     // tab=table | tab=column → object-level + column-level grants
     const grants = await listTableGrants(target);
     return NextResponse.json({ ok: true, grants });
@@ -216,6 +231,30 @@ export async function POST(req: NextRequest) {
       }
       const res = await grantTableSelect(target, upn, objectId, tab === 'column' ? columnIds : []);
       return NextResponse.json({ ok: true, ...res });
+    }
+
+    if (tab === 'cls') {
+      // Hide columns from a principal: table-level GRANT + column-level DENY on
+      // the Dedicated pool. Optionally also generate a Serverless masked view.
+      const upn = String(body?.upn || '').trim();
+      const objectId = Number(body?.objectId);
+      const columnIds: number[] = Array.isArray(body?.columnIds) ? body.columnIds.map((n: any) => Number(n)) : [];
+      if (!upn || !Number.isInteger(objectId)) {
+        return NextResponse.json({ ok: false, error: 'upn and objectId required' }, { status: 400 });
+      }
+      if (columnIds.length === 0) {
+        return NextResponse.json({ ok: false, error: 'at least one columnId required to hide a column' }, { status: 400 });
+      }
+      const res = await denyColumnSelect(target, upn, objectId, columnIds);
+      let maskedView: { viewFqn: string; hiddenColumns: string[] } | undefined;
+      if (body?.maskView === true) {
+        // Serverless masked view = NULL-projection of the hidden columns. Needs
+        // LOOM_SYNAPSE_WORKSPACE; serverlessTarget() throws (caught below) when unset.
+        const db = String(body?.serverlessDatabase || 'master');
+        const mv = await generateMaskedView(serverlessTarget(db), objectId, columnIds, body?.viewSuffix || upn);
+        maskedView = { viewFqn: mv.viewFqn, hiddenColumns: mv.hiddenColumns };
+      }
+      return NextResponse.json({ ok: true, ...res, maskedView });
     }
 
     // tab === 'row'
@@ -278,6 +317,19 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'upn and objectId required' }, { status: 400 });
       }
       const res = await revokeTableSelect(target, upn, objectId, columnIds);
+      return NextResponse.json({ ok: true, ...res });
+    }
+
+    if (tab === 'cls') {
+      // Un-hide columns: REVOKE the column-level SELECT entry (clears the DENY).
+      const body = await req.json().catch(() => ({}));
+      const upn = String(body?.upn || '').trim();
+      const objectId = Number(body?.objectId);
+      const columnIds: number[] = Array.isArray(body?.columnIds) ? body.columnIds.map((n: any) => Number(n)) : [];
+      if (!upn || !Number.isInteger(objectId) || columnIds.length === 0) {
+        return NextResponse.json({ ok: false, error: 'upn, objectId and at least one columnId required' }, { status: 400 });
+      }
+      const res = await revokeColumnDeny(target, upn, objectId, columnIds);
       return NextResponse.json({ ok: true, ...res });
     }
 
