@@ -222,7 +222,11 @@ async function ensure() {
   _dataProductJobs   = await mk('dataproduct-jobs',    '/dataProductId');
   _accessRequests    = await mk('access-requests',     '/dataProductId');
   _attributeGroups   = await mk('attribute-groups',    '/tenantId');
-  _okrs              = await mk('okrs',                '/tenantId');
+  // Data-product OKRs (F10 "Linked resources") — Loom-native objectives &
+  // key-results store, one row per OKR, partitioned by the parent data-product
+  // item id so the editor's OKR list hits a single physical partition. The F10
+  // linked-resources route is the live consumer (PK /dataProductId).
+  _okrs              = await mk('okrs',                '/dataProductId');
   // Item-level permissions & sharing (F6) — one row per (item, principal),
   // partitioned by the item id so every per-item permission lookup hits a
   // single physical partition. The Azure-native default mirrors each grant to

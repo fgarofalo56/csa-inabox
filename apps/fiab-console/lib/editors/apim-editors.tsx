@@ -29,7 +29,7 @@ import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
-  Database20Regular, Warning20Filled, MoreHorizontal20Regular,
+  Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DeleteDataProductDialog } from './components/delete-data-product-dialog';
@@ -44,6 +44,7 @@ import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataProductEditDialog } from './data-product-edit-dialog';
 
 const useStyles = makeStyles({
@@ -2070,13 +2071,13 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const domains = useGovernanceDomains();
 
-  // Tabs: Overview | Datasets | Data assets | Glossary | Lineage | Access policies
+  // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies
   // Initial tab can be deep-linked via ?tab= (e.g. the details page's
   // "Manage policies" action opens directly on the policies tab).
-  type DpTab = 'overview' | 'datasets' | 'data-assets' | 'glossary' | 'lineage' | 'policies';
+  type DpTab = 'overview' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies';
   const initialTab = ((): DpTab => {
     const t = searchParams?.get('tab');
-    return t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'lineage' || t === 'policies'
+    return t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies'
       ? t
       : 'overview';
   })();
@@ -2622,6 +2623,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Datasets', onClick: () => setTab('datasets') },
         { label: 'Data assets', onClick: () => setTab('data-assets') },
         { label: 'Glossary', onClick: () => setTab('glossary') },
+        { label: 'Linked resources', onClick: () => setTab('linked-resources') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
@@ -2831,6 +2833,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="datasets" icon={<Code20Regular />}>Datasets</Tab>
           <Tab value="data-assets" icon={<Database20Regular />}>Data assets</Tab>
           <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
+          <Tab value="linked-resources" icon={<Link20Regular />}>Linked resources</Tab>
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
         </TabList>
@@ -2960,6 +2963,15 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </TableBody>
             </Table>
           </div>
+        )}
+
+        {tab === 'linked-resources' && (
+          <LinkedResourcesPanel
+            dataProductId={id}
+            glossaryLinks={state.glossaryLinks || []}
+            onGlossaryLinksChange={(links) => patchState({ glossaryLinks: links })}
+            datasetsKey={(state.datasets || []).length}
+          />
         )}
 
         {tab === 'data-assets' && (
