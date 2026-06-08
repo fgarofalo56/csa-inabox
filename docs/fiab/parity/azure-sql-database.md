@@ -137,7 +137,7 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Query Performance Insight | ❌ MISSING | — |
 | Automatic tuning / recommendations | ❌ MISSING | — |
 | Activity log / Diagnostic settings / Alerts | ❌ MISSING | — |
-| Fabric mirroring toggle | ❌ MISSING (not reachable) + honest-gate | `enableMirroring` gated on `LOOM_AZURE_SQL_MIRRORING_LIVE`; UI tab in unwired `AzureSqlDatabaseEditor` — no mirroring control on registered surface |
+| Azure-native mirroring (change feed → ADLS Bronze) | ✅ built (registered editor) | Mirroring tab → `POST /api/items/azure-sql-database/[id]/mirroring`. Runs real `sys.sp_change_feed_enable_db` (Azure-native CDC, **no** Fabric, **no** `LOOM_*_LIVE` flag), then — when `LOOM_BRONZE_URL` is set — snapshots each table to ADLS Bronze via `mirror-engine` and returns a Synapse Serverless OPENROWSET per table. Honest gate (`intent="info"`) when Bronze isn't configured |
 | Purview/OneLake catalog register | ⚠️ partial / honest-gate | Catalog tab → `POST /api/catalog/register`; 501 honest-gate unless `LOOM_PURVIEW_ACCOUNT`. Real, but not a portal-native blade feature |
 | SQL Server 2025 vector / feature probe | ⚠️ partial (separate item) | real `/sql2025-features` + vector-index editor — a **separate item type**, not the SQL DB blade |
 
@@ -159,7 +159,7 @@ Real backends confirmed — TDS via `mssql`+AAD, or ARM REST:
 - ARM: list servers/databases/MIs, create DB (PUT), firewall CRUD, AAD-admin get/set, geo-replica create (`createMode=Secondary`) — REAL.
 - PostgreSQL flex: list/create/databases/firewall REAL; **query gated** (`LOOM_POSTGRES_QUERY_LIVE`, no `pg` driver).
 - Managed Instance: list-only REAL; query honest-gated (needs private endpoint).
-- Mirroring honest-gated; Catalog register honest-gated.
+- Mirroring is **Azure-native and real** (no Fabric): the Mirroring tab enables the change feed via `sys.sp_change_feed_enable_db` and, when `LOOM_BRONZE_URL` is configured, lands a real per-table snapshot to ADLS Bronze (TDS read + ADLS write) with a ready-to-run Synapse Serverless query per table; the next run syncs only Change-Tracking deltas. Catalog register honest-gated.
 
 No mock arrays / `return []` placeholders in the SQL backends. As of rev.2 the **reachability** problem is fixed: the object tree, firewall, Entra admin, and geo-replication are all mounted on the registered editor. The remaining vaporware-adjacent risk is **breadth** — large portal pillars (scale, backups/restore, monitoring, export/import) are still absent.
 

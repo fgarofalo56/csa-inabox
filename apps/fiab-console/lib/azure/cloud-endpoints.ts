@@ -285,6 +285,29 @@ export function dfsUrl(account: string): string {
   return `https://${account}.${dfsSuffix()}`;
 }
 
+/**
+ * Convert a landed snapshot's https dfs URL into the abfss form Spark reads:
+ *   https://ACCT.dfs.core.windows.net/CONTAINER/PATH
+ *     → abfss://CONTAINER@ACCT.dfs.core.windows.net/PATH
+ *
+ * Sovereign-cloud aware: the dfs suffix comes from `dfsSuffix()` so a Gov URL
+ * (`*.dfs.core.usgovcloudapi.net`) is converted too — a hard-coded
+ * `.dfs.core.windows.net` regex would silently pass Gov URLs through unchanged
+ * and break Spark `abfss://` reads in GCC-High / IL5. Returns the input
+ * unchanged if it isn't a dfs https URL for the active cloud. Lives here (the
+ * pure endpoint module) rather than in the mssql-importing mirror-engine so it
+ * is unit-testable without the SQL/identity native dependency chain.
+ */
+export function httpsToAbfss(httpsUrl: string): string {
+  const suffix = dfsSuffix().replace(/\./g, '\\.');
+  const m = (httpsUrl || '').match(
+    new RegExp(`^https://([^.]+)\\.${suffix}/([^/]+)/(.*)$`, 'i'),
+  );
+  if (!m) return httpsUrl;
+  const [, account, container, path] = m;
+  return `abfss://${container}@${account}.${dfsSuffix()}/${path}`;
+}
+
 // ---------------------------------------------------------------------------
 // Azure AI Search (data plane)
 // ---------------------------------------------------------------------------

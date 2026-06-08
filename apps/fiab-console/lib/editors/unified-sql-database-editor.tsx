@@ -1068,10 +1068,12 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 <MessageBarBody>
                   <MessageBarTitle>Mirroring — Azure-native CDC (no Microsoft Fabric)</MessageBarTitle>
                   Enables the database <strong>change feed</strong> via the real{' '}
-                  <code>sys.sp_change_feed_enable_db</code>. Stream the captured changes to ADLS{' '}
-                  <strong>Bronze Delta</strong> with an ADF CDC pipeline / Synapse Link copy or the Loom
-                  mirroring engine. The console identity must be <code>db_owner</code> on this database; a
-                  permission / tier error is shown verbatim (no Fabric workspace required).
+                  <code>sys.sp_change_feed_enable_db</code>, then — when the ADLS{' '}
+                  <strong>Bronze</strong> landing zone is configured (<code>LOOM_BRONZE_URL</code>) — snapshots
+                  each table to <strong>Bronze Delta</strong> via the Loom mirroring engine and returns a
+                  ready-to-run Synapse Serverless query per table. The next run syncs only Change-Tracking
+                  deltas. The console identity must be <code>db_owner</code> on this database; a permission /
+                  tier error is shown verbatim (no Fabric workspace required).
                 </MessageBarBody>
               </MessageBar>
               <div className={s.card}>
@@ -1090,6 +1092,59 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         : (mirror.error || 'request failed')}
                     </MessageBarBody>
                   </MessageBar>
+                )}
+                {/* Honest gate: change feed on, but Bronze landing not configured / item not saved. */}
+                {mirror?.ok && mirror.bronzeNote && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Bronze landing not run</MessageBarTitle>
+                      {mirror.bronzeNote}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {/* Real Bronze gate from the mirror engine (e.g. source unreachable). */}
+                {mirror?.bronze?.gate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Bronze landing gated — {mirror.bronze.gate.missing}</MessageBarTitle>
+                      {mirror.bronze.gate.message}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {/* Bronze receipt: real per-table snapshot landed to ADLS + a ready-to-run Serverless query. */}
+                {Array.isArray(mirror?.bronze?.tables) && mirror.bronze.tables.length > 0 && (
+                  <div className={s.card}>
+                    <Caption1>
+                      Landed to ADLS Bronze: <code>{mirror.bronze.basePath}</code>
+                      {mirror.bronze.basePath && (
+                        <Tooltip content="Copy Bronze base path" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Copy20Regular />}
+                            onClick={() => navigator.clipboard?.writeText(String(mirror.bronze.basePath))} style={{ marginLeft: 4 }} />
+                        </Tooltip>
+                      )}
+                    </Caption1>
+                    {mirror.bronze.tables.map((t: any, i: number) => (
+                      <div key={`${t.schema}.${t.table}.${i}`} className={s.formRow}>
+                        <Caption1>
+                          <strong>{t.schema}.{t.table}</strong>{' '}
+                          {t.status === 'replicated'
+                            ? <Badge appearance="tint" color="success">{t.mode || 'snapshot'} · {t.rows} rows</Badge>
+                            : <Badge appearance="tint" color="danger">error</Badge>}
+                          {t.note ? <> — {t.note}</> : null}
+                          {t.error ? <> — {t.error}</> : null}
+                        </Caption1>
+                        {t.openrowset && (
+                          <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                            <code style={{ flex: 1 }}>{t.openrowset}</code>
+                            <Tooltip content="Copy Synapse Serverless query" relationship="label">
+                              <Button size="small" appearance="subtle" icon={<Copy20Regular />}
+                                onClick={() => navigator.clipboard?.writeText(String(t.openrowset))} />
+                            </Tooltip>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </>
