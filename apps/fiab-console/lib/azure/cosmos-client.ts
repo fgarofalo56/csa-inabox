@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _labelAssignments: Container | null = null;
@@ -145,6 +146,13 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Item-level permissions & sharing (F6) — one row per (item, principal),
+  // partitioned by the item id so every per-item permission lookup hits a
+  // single physical partition. The Azure-native default mirrors each grant to
+  // ADLS POSIX ACLs + ARM Storage data-plane RBAC; Cosmos is the source of
+  // truth for the "Manage permissions" list. Created lazily so a fresh
+  // environment needs no extra ARM/Bicep step beyond the account+database.
+  _itemPermissions = await mk('item-permissions', '/itemId');
   // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
   // One row per principal (user / group / SP) per workspace, partitioned by the
   // workspace so the Manage Access pane hits a single physical partition. Keyed
@@ -174,6 +182,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
@@ -239,7 +248,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'workspace-roles', 'governance-domains',
+  'maintenance-jobs', 'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
 ];
 
 /** List all Loom containers with their current throughput shape. */
