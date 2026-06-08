@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _labelPropagation: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
 // Govern → Admin view (F2) — tenant-scoped posture aggregates, distinct from the
@@ -159,6 +160,11 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Sensitivity-label downstream propagation state (F15). One row per item
+  // (id = 'prop:<itemId>'), written by the label-propagation timer Function
+  // and read live-overlaid by the lineage view. PK /tenantId so the governance
+  // lineage read hits a single physical partition.
+  _labelPropagation = await mk('label-propagation', '/tenantId');
   // Governance posture aggregates — F3 data-owner Govern view. One doc per
   // data owner (id = owner OID, PK /ownerId), recomputed by the posture-refresh
   // Azure Function on tab-open AND live in the BFF as a fallback. Partitioned by
@@ -230,6 +236,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
 export async function postureAggregatesAdminContainer(): Promise<Container> { await ensure(); return _postureAggregatesAdmin!; }
@@ -308,7 +315,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'label-propagation',
   'posture-aggregates', 'recommended-actions',
   'posture-aggregates-admin', 'recommended-actions-admin',
   'onelake-security-roles',
