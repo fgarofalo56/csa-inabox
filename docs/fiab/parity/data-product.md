@@ -17,6 +17,7 @@ glossary terms (https://learn.microsoft.com/purview/unified-catalog-glossary-ter
 | 6 | Publish to catalog (Draft → Published) | Publish |
 | 7 | Access policies (request workflow, time limit, approvers) | Manage policies |
 | 8 | Lineage of mapped assets | lineage graph |
+| 9 | Publish as a consumable API (Weave edge → APIM) | n/a in Purview; Loom "Thread" edge — Azure-native APIM exposure |
 
 ## Loom coverage
 
@@ -30,6 +31,7 @@ glossary terms (https://learn.microsoft.com/purview/unified-catalog-glossary-ter
 | 6 | built ✅ | Register/Re-register with Purview → POST `/register-purview` → real `POST /datagovernance/catalog/dataProducts` (2026-03-20-preview). Body is now spec-compliant: REQUIRED `id` (uuid) is minted/round-tripped, `status: DRAFT` (uppercase enum), `contacts` as a `ContactsMap` (`{ owner: [{id, description}] }`, owner sent only when it's an AAD oid GUID). Returns 200 with `dataProductId` **only** on real success and persists it to Cosmos so the gate clears; 422 when `state.domain` is missing/not a GUID; honest 501 hint when Purview unprovisioned; 4xx/502 on upstream failure. No fake-200 no-op. |
 | 7 | built ✅ | Access policies tab → GET/POST `/api/governance/policies` (kind=Access) — time limit + approvers |
 | 8 | built ✅ | Lineage tab → GET `/api/catalog/lineage?source=purview&id=<guid>` rendered as a node/edge list |
+| 9 | built ✅ | **Publish as API** ribbon + toolbar button → dialog captures the backing query endpoint → POST `/api/items/data-product/[id]/publish-api` creates a real APIM API + published product + active subscription and returns the callable URL + subscription key. API ref (`apimApiId`/`apimProductId`/`apimSubscriptionId`/`apimGatewayUrl`) persists to Cosmos; honest 503 gate when APIM env vars are unset. Gateway URL read live from ARM (`getServiceInfo().gatewayUrl`) — cloud-correct for Commercial/GCC/GCC-High/DoD. |
 
 ## Backend per control
 
@@ -39,4 +41,5 @@ glossary terms (https://learn.microsoft.com/purview/unified-catalog-glossary-ter
 - Glossary → `createAtlasGlossaryTerm` / `applyGlossaryTerm`
 - Lineage → `getLineageSubgraph`
 - Access policies → Cosmos tenant-settings policies doc
+- Publish as API → `upsertApi` + `upsertProduct(state:published)` + `addApiToProduct` + `createSubscription(state:active)` + `getSubscriptionKeys` (ARM `Microsoft.ApiManagement/service`, api-version 2024-06-01-preview; Console UAMI "API Management Service Contributor"). Honest gate: `apimConfigGate()` → 503 MessageBar naming the missing env var + `apim.bicep`.
 - Honest gate: Purview unprovisioned → structured 501 hint MessageBar (env var + bicep module + roles).
