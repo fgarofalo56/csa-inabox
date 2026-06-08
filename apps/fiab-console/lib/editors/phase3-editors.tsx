@@ -67,6 +67,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -8317,6 +8318,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [ctasBusy, setCtasBusy] = useState(false);
   const [ctasError, setCtasError] = useState<string | null>(null);
 
+  // Column & Row security dialog (column-level GRANT, RLS, DDM) over the
+  // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
+  const [secOpen, setSecOpen] = useState(false);
+
   const newSql = useCallback(() => {
     // Multi-tab is a future v3.x — for now "New SQL query" resets the
     // current tab to a fresh template, matching Fabric Warehouse's
@@ -8407,7 +8412,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       ]},
       { label: 'Manage', actions: [
         // Real DMV — database principals & role membership.
-        { label: 'Permissions', onClick: canRun ? () => { setSqlText(
+        { label: 'Principals', onClick: canRun ? () => { setSqlText(
           `-- Warehouse permissions — principals and role membership.\n`
           + `SELECT p.name AS principal, p.type_desc, ISNULL(r.name, '') AS member_of\n`
           + `FROM sys.database_principals p\n`
@@ -8418,6 +8423,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // Source control lives at the workspace level in Fabric — open the
         // workspace Git settings (honest navigation, not a stub).
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
+      ]},
+      { label: 'Security', actions: [
+        // Column-level GRANT, Row-Level Security and Dynamic Data Masking over
+        // the backing Synapse Dedicated SQL pool (Azure-native — no Fabric).
+        { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
@@ -8620,6 +8630,20 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                   <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasTable.trim()}>
                     {ctasBusy ? 'Creating…' : 'Create table'}
                   </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
+              <DialogBody>
+                <DialogTitle>Column &amp; Row security — {schema?.warehouse || 'Warehouse'}</DialogTitle>
+                <DialogContent>
+                  <SqlSecurityPanel itemType="warehouse" itemId={id} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSecOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
