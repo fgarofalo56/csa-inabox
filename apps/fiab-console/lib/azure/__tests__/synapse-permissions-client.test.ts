@@ -49,11 +49,14 @@ import {
   grantTableSelect,
   revokeTableSelect,
   createRlsPolicy,
+  createRlsPolicyWithPredicate,
+  testRlsPredicate,
   denyColumnSelect,
   revokeColumnDeny,
   listColumnDenyGrants,
   generateMaskedView,
 } from '@/lib/azure/synapse-permissions-client';
+import { validateWhereClause, RLS_WHERE_MAX } from '@/lib/azure/rls-predicate';
 
 const target = { server: 'ws.sql.azuresynapse.net', database: 'pool', cacheKey: 'k' } as any;
 
@@ -120,6 +123,94 @@ describe('createRlsPolicy', () => {
     const fn = sent.find((s) => s.includes('CREATE FUNCTION'))!;
     expect(fn).toContain('@cmp = USER_NAME()');
     expect(fn).not.toContain('DROP TABLE');
+  });
+});
+
+// ── F8 — free-form WHERE-predicate RLS ────────────────────────────────────────
+
+describe('validateWhereClause (F8 sanitizer)', () => {
+  it('accepts the canonical identity predicate', () => {
+    expect(validateWhereClause('@cmp = USER_NAME()')).toEqual({ ok: true });
+  });
+
+  it('requires a reference to @cmp', () => {
+    expect(validateWhereClause('USER_NAME() = SUSER_SNAME()').ok).toBe(false);
+  });
+
+  it('blocks the injection vectors (;, comments, quotes, DDL/DML, subqueries)', () => {
+    for (const bad of [
+      '@cmp = USER_NAME(); DROP TABLE x',
+      '@cmp = USER_NAME() -- bypass',
+      "@cmp = 'alice@contoso.com'",
+      '@cmp = USER_NAME() UNION SELECT 1',
+      '@cmp IN (SELECT id FROM t)',
+      '@cmp = USER_NAME() EXEC xp_cmdshell',
+    ]) {
+      expect(validateWhereClause(bad).ok, bad).toBe(false);
+    }
+  });
+
+  it('enforces the length cap', () => {
+    expect(validateWhereClause('@cmp = ' + 'A'.repeat(RLS_WHERE_MAX)).ok).toBe(false);
+  });
+});
+
+describe('createRlsPolicyWithPredicate', () => {
+  it('probes, then emits the TVF wrapping the user predicate with the owner-bypass', async () => {
+    const res = await createRlsPolicyWithPredicate(target, {
+      objectId: 100,
+      filterColumnId: 3,
+      whereClause: '@cmp = USER_NAME()',
+    });
+    expect(res.policyName).toBe('LoomSecurity.pol_rls_Orders');
+    expect(res.predicate).toBe('@cmp = USER_NAME()');
+
+    // A parse/bind probe runs BEFORE any DROP so an invalid predicate can't
+    // leave the table unprotected.
+    const probe = sent.find((s) => /SELECT TOP 0 1 AS rls_result WHERE/.test(s))!;
+    expect(probe).toContain("WHERE (@cmp = USER_NAME()) OR IS_MEMBER('db_owner') = 1;");
+    const probeIdx = sent.indexOf(probe);
+    const dropIdx = sent.findIndex((s) => s.includes('DROP SECURITY POLICY'));
+    expect(probeIdx).toBeLessThan(dropIdx);
+
+    const fn = sent.find((s) => s.includes('CREATE FUNCTION'))!;
+    expect(fn).toContain('CREATE FUNCTION [LoomSecurity].[fn_rls_Orders](@cmp sysname)');
+    expect(fn).toContain("WHERE (@cmp = USER_NAME()) OR IS_MEMBER('db_owner') = 1;");
+
+    const pol = sent.find((s) => s.includes('CREATE SECURITY POLICY'))!;
+    expect(pol).toContain('ADD FILTER PREDICATE [LoomSecurity].[fn_rls_Orders]([Region]) ON [dbo].[Orders]');
+  });
+
+  it('rejects an invalid predicate WITHOUT emitting any DDL', async () => {
+    await expect(
+      createRlsPolicyWithPredicate(target, { objectId: 100, filterColumnId: 3, whereClause: '@cmp = USER_NAME(); DROP TABLE x' }),
+    ).rejects.toThrow(/semicolon/i);
+    expect(sent.some((s) => s.includes('CREATE FUNCTION'))).toBe(false);
+    expect(sent.some((s) => s.includes('DROP SECURITY POLICY'))).toBe(false);
+  });
+});
+
+describe('testRlsPredicate', () => {
+  it('substitutes @cmp with the filter column and identity functions with the test identity', async () => {
+    const { result } = await testRlsPredicate(target, {
+      objectId: 100,
+      filterColumnId: 2,
+      whereClause: '@cmp = USER_NAME()',
+      testIdentity: "o'brien@contoso.com",
+    });
+    expect(result).toBeDefined();
+    const select = sent.find((s) => /^SELECT TOP \d+ \* FROM/.test(s))!;
+    // @cmp → t.[SalesRep]; USER_NAME() → N'…' (single-quote escaped); owner-bypass omitted.
+    expect(select).toContain('FROM [dbo].[Orders] AS t');
+    expect(select).toContain("WHERE (t.[SalesRep] = N'o''brien@contoso.com');");
+    expect(select).not.toContain('IS_MEMBER');
+  });
+
+  it('rejects an invalid predicate before touching the table', async () => {
+    await expect(
+      testRlsPredicate(target, { objectId: 100, filterColumnId: 2, whereClause: 'no cmp here', testIdentity: 'x' }),
+    ).rejects.toThrow(/@cmp/i);
+    expect(sent.some((s) => /^SELECT TOP/.test(s))).toBe(false);
   });
 });
 
