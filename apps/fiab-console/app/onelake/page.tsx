@@ -44,6 +44,15 @@ import {
   MessageBarBody,
   MessageBarTitle,
   Tooltip,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogContent,
   makeStyles,
   tokens,
   mergeClasses,
@@ -56,6 +65,11 @@ import {
   DatabaseStack16Regular,
   AppsList20Regular,
   Person20Regular,
+  MoreHorizontal20Regular,
+  Copy16Regular,
+  Link16Regular,
+  BranchFork16Regular,
+  Info16Regular,
 } from '@fluentui/react-icons';
 
 import { PageShell } from '@/lib/components/page-shell';
@@ -67,6 +81,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
+import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 // ── Item types surfaced by the OneLake catalog Explore tab ────────────────
@@ -145,6 +160,47 @@ function fmtBytes(n: number): string {
   let v = n;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+// ── OneLake addressing ─────────────────────────────────────────────────────
+// Map a Loom item to the {container, itemPath} tuple used by the OneLake path
+// helper. Container = the workspace (OneLake's "workspace" == ADLS container);
+// itemPath = "<displayName>.<itemType>" (Fabric's "<item>.<type>" convention).
+function onelakeAddress(it: OwnedItem, workspaceName: string) {
+  return {
+    container: workspaceName || it.workspaceId,
+    itemPath: `${it.displayName}.${it.itemType}`,
+    workspaceGuid: it.workspaceId,
+    itemGuid: it.id,
+  };
+}
+
+/**
+ * Resolve a OneLake URI form for an item via the BFF (which holds the storage
+ * account name) and write it to the clipboard. Returns silently on failure —
+ * the menu item is fire-and-forget; the Properties panel surfaces any gate.
+ */
+async function copyOnelakeForm(
+  it: OwnedItem,
+  workspaceName: string,
+  form: 'abfs' | 'dfs',
+): Promise<void> {
+  const a = onelakeAddress(it, workspaceName);
+  const qs = new URLSearchParams({
+    container: a.container,
+    itemPath: a.itemPath,
+    workspaceGuid: a.workspaceGuid,
+    itemGuid: a.itemGuid,
+  });
+  try {
+    const r = await fetch(`/api/onelake/paths?${qs.toString()}`);
+    const j = await r.json();
+    if (j?.ok && j.paths?.[form]) {
+      await navigator.clipboard.writeText(j.paths[form] as string);
+    }
+  } catch {
+    // network/clipboard failure — no-op (Properties panel shows the honest gate)
+  }
 }
 
 const useStyles = makeStyles({
@@ -543,6 +599,7 @@ export default function OneLakeCatalogPage() {
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const [wsFilter, setWsFilter] = useState<string | null>(null); // workspaceId or null
   const [selected, setSelected] = useState<OwnedItem | null>(null);
+  const [propsItem, setPropsItem] = useState<OwnedItem | null>(null);
 
   // ── load items + workspaces + identity ──
   useEffect(() => {
@@ -685,6 +742,45 @@ export default function OneLakeCatalogPage() {
   const subtitle =
     'Find, explore, and open the data items your tenant exposes — lakehouses, warehouses, databases, mirrored and KQL stores — without losing your place.';
 
+  // Per-tile overflow (kebab) — Fabric OneLake item context menu, themed.
+  function renderOverflow(it: OwnedItem) {
+    const workspaceName = wsName.get(it.workspaceId) ?? it.workspaceId;
+    return (
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<MoreHorizontal20Regular />}
+            aria-label={`More actions for ${it.displayName}`}
+          />
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem icon={<Open16Regular />} onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}>
+              Open
+            </MenuItem>
+            <MenuItem icon={<Copy16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'abfs'); }}>
+              Copy OneLake path
+            </MenuItem>
+            <MenuItem icon={<Link16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'dfs'); }}>
+              Get URL (DFS)
+            </MenuItem>
+            <MenuItem
+              icon={<BranchFork16Regular />}
+              onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(it.id)}`)}
+            >
+              View lineage
+            </MenuItem>
+            <MenuItem icon={<Info16Regular />} onClick={() => setPropsItem(it)}>
+              Properties
+            </MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  }
+
   return (
     <PageShell title="OneLake catalog" subtitle={subtitle}>
       {unauth && <SignInRequired subject="catalog items" />}
@@ -824,6 +920,7 @@ export default function OneLakeCatalogPage() {
                         subtitle={typeLabel(it.itemType)}
                         meta={`Refreshed ${relative(it.updatedAt || it.createdAt)}`}
                         badge={isPreviewType(it.itemType) ? <Badge appearance="tint" color="brand" size="small">Preview</Badge> : undefined}
+                        overflowMenu={renderOverflow(it)}
                         onClick={() => setSelected(it)}
                       />
                     ))}
@@ -860,6 +957,24 @@ export default function OneLakeCatalogPage() {
           />
         )}
       </div>
+
+      {/* Properties dialog — Paths (DFS/Blob/ABFS/GUID) + Connect snippets */}
+      <Dialog open={Boolean(propsItem)} onOpenChange={(_e, d) => { if (!d.open) setPropsItem(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogContent>
+              {propsItem && (
+                <PropertiesPanel
+                  {...onelakeAddress(propsItem, wsName.get(propsItem.workspaceId) ?? propsItem.workspaceId)}
+                  itemName={propsItem.displayName}
+                  itemType={typeLabel(propsItem.itemType)}
+                  onClose={() => setPropsItem(null)}
+                />
+              )}
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </PageShell>
   );
 }

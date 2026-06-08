@@ -31,6 +31,13 @@ export interface ItemTileProps {
   meta?: React.ReactNode;
   /** Optional trailing badge node (Preview tag, status pill, etc.). */
   badge?: React.ReactNode;
+  /**
+   * Optional overflow menu node (e.g. a Fluent `<Menu>…</Menu>`). Rendered
+   * top-right of the tile head. Clicks inside it are stopped from bubbling to
+   * the tile's own `onClick`, so the kebab opens its menu without "opening"
+   * the item. Coexists with `badge` (badge sits to its left).
+   */
+  overflowMenu?: React.ReactNode;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
@@ -104,6 +111,17 @@ const useStyles = makeStyles({
     marginLeft: 'auto',
     flexShrink: 0,
   },
+  overflow: {
+    flexShrink: 0,
+    display: 'inline-flex',
+  },
+  headTrailing: {
+    marginLeft: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
 });
 
 export function ItemTile({
@@ -112,6 +130,7 @@ export function ItemTile({
   subtitle,
   meta,
   badge,
+  overflowMenu,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -161,7 +180,21 @@ export function ItemTile({
             </Text>
           )}
         </span>
-        {badge != null && <span className={styles.badge}>{badge}</span>}
+        {(badge != null || overflowMenu != null) && (
+          <span className={styles.headTrailing}>
+            {badge != null && <span className={styles.badge}>{badge}</span>}
+            {overflowMenu != null && (
+              <span
+                className={styles.overflow}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
+              >
+                {overflowMenu}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       {meta != null && (
         <Text size={200} className={styles.meta}>
