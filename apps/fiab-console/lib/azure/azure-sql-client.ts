@@ -421,6 +421,104 @@ export async function executeQuery(
   }
 }
 
+// ============================================================
+// Batch query (multi-result-set + in-band messages)
+// ============================================================
+
+/** Server-side row cap for batch queries — honest "showing first N" in the UI. */
+export const MAX_ROWS_BATCH = 10_000;
+
+/** An in-band SQL message (PRINT / RAISERROR severity ≤ 10 / done-with-counts). */
+export interface InfoMessage {
+  message: string;
+  number: number;
+  /** SQL severity class: 0 = PRINT/info, 1–10 = warning, > 10 = error. */
+  severity: number;
+  lineNumber: number;
+  serverName: string;
+  procName: string;
+}
+
+/** One result set from a batch, already capped + flattened to a row matrix. */
+export interface RecordsetSlice {
+  columns: string[];
+  rows: unknown[][];
+  /** Total rows the statement produced before the 10k cap. */
+  rowCount: number;
+  truncated: boolean;
+}
+
+export interface BatchQueryResult {
+  recordsets: RecordsetSlice[];
+  messages: InfoMessage[];
+  /** One count per statement, from mssql result.rowsAffected[]. */
+  rowsAffected: number[];
+  executionMs: number;
+}
+
+/**
+ * Batch-aware TDS query: captures ALL result sets from a multi-statement batch
+ * (`result.recordsets[]`) AND every in-band SQL message (PRINT / RAISERROR with
+ * severity ≤ 10 / statement done-with-count messages). The 10k row cap applies
+ * per result set with an honest truncation flag — parity with the SSMS / Azure
+ * Data Studio / Fabric SQL editor results pane (multiple grids + Messages tab).
+ *
+ * Cloud behavior: identical across Commercial, GCC, GCC-High, and DoD — TDS is
+ * the on-wire protocol; the only cloud variable is the host suffix
+ * (database.windows.net vs database.usgovcloudapi.net), already resolved by
+ * sqlHostSuffix() + LOOM_AZURE_SQL_HOST_SUFFIX. No Microsoft Fabric dependency.
+ */
+export async function executeQueryBatch(
+  server: string,
+  database: string,
+  sqlText: string,
+  opts?: { requestId?: string },
+): Promise<BatchQueryResult> {
+  const started = Date.now();
+  const pool = await getPool(server, database);
+  const request = pool.request();
+  // Register the live Request so the cancel route can send a TDS ATTENTION
+  // packet for this exact in-flight query. Registered BEFORE .query() so a
+  // cancel that races the start still lands on the right Request.
+  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  const messages: InfoMessage[] = [];
+  // Attach the info listener BEFORE .query() — tedious emits 'info' events
+  // during result-set processing, before the Promise resolves.
+  request.on('info', (msg: any) => {
+    messages.push({
+      message: msg?.message || '',
+      number: msg?.number || 0,
+      severity: msg?.class ?? 0,
+      lineNumber: msg?.lineNumber || 0,
+      serverName: msg?.serverName || '',
+      procName: msg?.procName || '',
+    });
+  });
+  let result: sql.IResult<any>;
+  try {
+    result = await request.query(sqlText);
+  } finally {
+    if (opts?.requestId) liveRequests.delete(opts.requestId);
+  }
+  // result.recordsets is an array of arrays: one element per SELECT in the batch.
+  const rawSets: any[][] = Array.isArray(result.recordsets) && result.recordsets.length
+    ? (result.recordsets as any[][])
+    : (result.recordset ? [result.recordset] : []);
+  const recordsets: RecordsetSlice[] = rawSets.map((rs) => {
+    const cols = rs.length ? Object.keys(rs[0]) : [];
+    const rows = rs.slice(0, MAX_ROWS_BATCH).map((r: any) =>
+      cols.map((c) => (r[c] !== undefined ? r[c] : null)),
+    );
+    return { columns: cols, rows, rowCount: rs.length, truncated: rs.length > MAX_ROWS_BATCH };
+  });
+  return {
+    recordsets,
+    messages,
+    rowsAffected: Array.isArray(result.rowsAffected) ? result.rowsAffected : [],
+    executionMs: Date.now() - started,
+  };
+}
+
 /**
  * Parameterized query — returns the raw recordset (array of row objects) so
  * the object navigator can read named catalog columns. Inputs are bound as
