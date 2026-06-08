@@ -20,9 +20,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import sql from 'mssql';
-import { armBase } from './cloud-endpoints';
-
-const SQL_SCOPE = 'https://database.windows.net/.default';
+import { armBase, getSqlSuffix } from './cloud-endpoints';
 
 function arm(): string {
   // Sovereign-cloud ARM base (cloud-endpoints honors LOOM_ARM_ENDPOINT + AZURE_CLOUD).
@@ -31,8 +29,16 @@ function arm(): string {
 }
 
 function sqlHostSuffix(): string {
-  // Commercial: database.windows.net   Gov: database.usgovcloudapi.net
-  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || 'database.windows.net';
+  // LOOM_AZURE_SQL_HOST_SUFFIX: explicit per-instance override (rare edge cases).
+  // Default: cloud-aware from LOOM_CLOUD / AZURE_CLOUD via getSqlSuffix().
+  //   Commercial / GCC      → database.windows.net
+  //   GCC-High / IL5 / DoD  → database.usgovcloudapi.net
+  return process.env.LOOM_AZURE_SQL_HOST_SUFFIX || getSqlSuffix();
+}
+
+/** TDS AAD token scope, cloud-correct (https://<sql-suffix>/.default). */
+function sqlScope(): string {
+  return `https://${sqlHostSuffix()}/.default`;
 }
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -117,12 +123,16 @@ export interface AzureSqlDatabase {
   id: string;
   name: string;
   location: string;
-  sku?: { name: string; tier: string; capacity?: number };
+  sku?: { name: string; tier: string; family?: string; capacity?: number };
   status?: string;
   maxSizeBytes?: number;
   collation?: string;
   createMode?: string;
   zoneRedundant?: boolean;
+  /** Serverless auto-pause delay in minutes (-1 = never pause). GP serverless only. */
+  autoPauseDelay?: number;
+  /** Serverless minimum vCores. GP serverless only. */
+  minCapacity?: number;
 }
 
 export async function listDatabases(serverIdOrName: string): Promise<AzureSqlDatabase[]> {
@@ -136,12 +146,14 @@ export async function listDatabases(serverIdOrName: string): Promise<AzureSqlDat
       id: d.id,
       name: d.name,
       location: d.location,
-      sku: d.sku ? { name: d.sku.name, tier: d.sku.tier, capacity: d.sku.capacity } : undefined,
+      sku: d.sku ? { name: d.sku.name, tier: d.sku.tier, family: d.sku.family, capacity: d.sku.capacity } : undefined,
       status: d.properties?.status,
       maxSizeBytes: d.properties?.maxSizeBytes,
       collation: d.properties?.collation,
       createMode: d.properties?.createMode,
       zoneRedundant: d.properties?.zoneRedundant,
+      autoPauseDelay: d.properties?.autoPauseDelay,
+      minCapacity: d.properties?.minCapacity,
     }));
 }
 
@@ -154,12 +166,14 @@ export async function getDatabase(serverIdOrName: string, dbName: string): Promi
     id: res.id,
     name: res.name,
     location: res.location,
-    sku: res.sku ? { name: res.sku.name, tier: res.sku.tier, capacity: res.sku.capacity } : undefined,
+    sku: res.sku ? { name: res.sku.name, tier: res.sku.tier, family: res.sku.family, capacity: res.sku.capacity } : undefined,
     status: res.properties?.status,
     maxSizeBytes: res.properties?.maxSizeBytes,
     collation: res.properties?.collation,
     createMode: res.properties?.createMode,
     zoneRedundant: res.properties?.zoneRedundant,
+    autoPauseDelay: res.properties?.autoPauseDelay,
+    minCapacity: res.properties?.minCapacity,
   };
 }
 
@@ -208,6 +222,55 @@ export interface CreateDatabaseSpec {
   /** Zone redundancy. */
   zoneRedundant?: boolean;
   maxSizeBytes?: number;
+  /** Database collation. Default applied by ARM: SQL_Latin1_General_CP1_CI_AS.
+   *  Set at create time only; immutable after the database exists. */
+  collation?: string;
+  /** Backup storage redundancy. ARM validates against region/tier availability. */
+  requestedBackupStorageRedundancy?: 'Geo' | 'GeoZone' | 'Local' | 'Zone';
+  /** Full ARM resource ID of a public maintenance configuration (SQLDB scope).
+   *  Use listDbMaintenanceConfigs() to discover valid IDs for the server's
+   *  region. Only honored on vCore tiers (GP, BC, HS). */
+  maintenanceConfigurationId?: string;
+}
+
+export interface MaintenanceConfig {
+  /** Full ARM resource ID — pass as CreateDatabaseSpec.maintenanceConfigurationId. */
+  id: string;
+  /** Configuration name, e.g. SQL_EastUS2_DB_1. */
+  name: string;
+  /** Human-friendly window description for the UI dropdown. */
+  displayName: string;
+}
+
+/**
+ * Lists available public maintenance configurations for a given Azure region,
+ * scope=SQLDB. Use a returned `id` as `maintenanceConfigurationId` in
+ * CreateDatabaseSpec. An empty array means the region publishes no SQLDB
+ * windows (the database then uses the System default policy) — that is an
+ * honest gate, not an error. Resolves to the sovereign ARM host automatically
+ * via armBase() (Commercial / Gov / DoD) with no per-cloud branching here.
+ */
+export async function listDbMaintenanceConfigs(location: string): Promise<MaintenanceConfig[]> {
+  if (!location) return [];
+  try {
+    const filter = encodeURIComponent(`location eq '${location}' and maintenanceScope eq 'SQLDB'`);
+    const res = await armRequest<{ value: any[] }>(
+      `/providers/Microsoft.Maintenance/publicMaintenanceConfigurations?api-version=2023-09-01&$filter=${filter}`,
+    );
+    return (res.value || []).map((c) => {
+      const name: string = c.name || '';
+      const displayName = name.endsWith('_DB_1')
+        ? 'Weekday window (Mon–Thu 10 PM – 6 AM local)'
+        : name.endsWith('_DB_2')
+          ? 'Weekend window (Fri–Sun 10 PM – 6 AM local)'
+          : name;
+      return { id: c.id, name, displayName };
+    });
+  } catch {
+    // Maintenance API may be unavailable in a region or boundary; fall back to
+    // System default rather than blocking the create flow.
+    return [];
+  }
 }
 
 export async function createDatabase(
@@ -232,6 +295,13 @@ export async function createDatabase(
         ...(spec.sampleName ? { sampleName: spec.sampleName } : {}),
         ...(typeof spec.zoneRedundant === 'boolean' ? { zoneRedundant: spec.zoneRedundant } : {}),
         ...(spec.maxSizeBytes ? { maxSizeBytes: spec.maxSizeBytes } : {}),
+        ...(spec.collation ? { collation: spec.collation } : {}),
+        ...(spec.requestedBackupStorageRedundancy
+          ? { requestedBackupStorageRedundancy: spec.requestedBackupStorageRedundancy }
+          : {}),
+        ...(spec.maintenanceConfigurationId
+          ? { maintenanceConfigurationId: spec.maintenanceConfigurationId }
+          : {}),
       },
       ...(spec.skuName ? { sku: { name: spec.skuName, ...(spec.tier ? { tier: spec.tier } : {}) } } : {}),
     };
@@ -268,6 +338,24 @@ async function defaultServerScopePath(serverName: string, suffix: string): Promi
 
 const pools: Map<string, sql.ConnectionPool> = new Map();
 
+/**
+ * Registry of live mssql `Request` objects, keyed by a caller-supplied request
+ * id. The cancel route (`/query/cancel`) looks the request up and calls
+ * `.cancel()`, which makes tedious send a TDS ATTENTION packet on the same
+ * connection — SQL Server acknowledges (error 3617 / SYS_ATTN) and the in-flight
+ * `.query()` promise rejects with `RequestError('Canceled.', 'ECANCEL')`.
+ *
+ * This is in-process Node.js state scoped to ONE Container App replica. For a
+ * scaled-out console the cancel POST must reach the SAME replica that started
+ * the query — enable ingress sticky sessions
+ * (`ingress.stickySessions.affinity: 'sticky'`) or run a single replica. There
+ * is no cross-replica cancel because the mssql connection itself is per-replica.
+ *
+ * Entries are removed on completion, error, or explicit cancel (in the `finally`
+ * of `executeQuery` and in the cancel route after `.cancel()`).
+ */
+export const liveRequests: Map<string, sql.Request> = new Map();
+
 export interface QueryResult {
   columns: string[];
   rows: unknown[][];
@@ -282,7 +370,7 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   const key = `${server}/${database}`;
   const existing = pools.get(key);
   if (existing?.connected) return existing;
-  const tok = await credential.getToken(SQL_SCOPE);
+  const tok = await credential.getToken(sqlScope());
   if (!tok?.token) throw new AzureSqlError('Failed to acquire AAD token for Azure SQL', 401);
   const host = server.includes('.') ? server : `${server}.${sqlHostSuffix()}`;
   const pool = new sql.ConnectionPool({
@@ -303,20 +391,34 @@ async function getPool(server: string, database: string): Promise<sql.Connection
   return pool;
 }
 
-export async function executeQuery(server: string, database: string, sqlText: string): Promise<QueryResult> {
+export async function executeQuery(
+  server: string,
+  database: string,
+  sqlText: string,
+  opts?: { requestId?: string },
+): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(server, database);
-  const result = await pool.request().query(sqlText);
-  const recordset = result.recordset || [];
-  const columns = recordset.length ? Object.keys(recordset[0]) : [];
-  const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
-  return {
-    columns,
-    rows,
-    rowCount: recordset.length,
-    executionMs: Date.now() - started,
-    truncated: recordset.length > MAX_ROWS,
-  };
+  const request = pool.request();
+  // Register the live Request so the cancel route can send a TDS ATTENTION
+  // packet for this exact in-flight query. Registered BEFORE .query() so a
+  // cancel that races the start still lands on the right Request.
+  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  try {
+    const result = await request.query(sqlText);
+    const recordset = result.recordset || [];
+    const columns = recordset.length ? Object.keys(recordset[0]) : [];
+    const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+    return {
+      columns,
+      rows,
+      rowCount: recordset.length,
+      executionMs: Date.now() - started,
+      truncated: recordset.length > MAX_ROWS,
+    };
+  } finally {
+    if (opts?.requestId) liveRequests.delete(opts.requestId);
+  }
 }
 
 /**
@@ -450,6 +552,174 @@ export interface FirewallRule {
 }
 
 const SQL_API_VERSION = '2023-08-01-preview';
+
+// ============================================================
+// Compute & Storage scaling (ARM PATCH — Microsoft.Sql/servers/databases)
+// ============================================================
+
+export interface ScaleDatabaseSpec {
+  /** Full ARM scope of the server (/subscriptions/.../servers/<name>) OR a bare server name. */
+  serverId: string;
+  /** Database name to scale. */
+  database: string;
+  /** DTU name (S0, S1, P1…), vCore name (GP_Gen5_4), or serverless name (GP_S_Gen5_2). */
+  skuName: string;
+  /** Basic | Standard | Premium | GeneralPurpose | BusinessCritical | Hyperscale */
+  tier: string;
+  /** Gen5 (vCore / serverless). Omit for DTU SKUs. */
+  family?: string;
+  /** DTU count or vCore count. */
+  capacity?: number;
+  /** Max storage in bytes; must be a multiple of 1,073,741,824 (1 GiB). */
+  maxSizeBytes?: number;
+  /** Serverless GP only. Auto-pause delay in minutes. -1 = disabled. */
+  autoPauseDelay?: number;
+  /** Serverless GP only. Minimum vCores (0.5 | 0.75 | 1 | …). */
+  minCapacity?: number;
+}
+
+export interface ScaledSku {
+  name?: string;
+  tier?: string;
+  family?: string;
+  capacity?: number;
+}
+
+export interface ScaleDatabaseResult {
+  ok: true;
+  beforeSku: ScaledSku;
+  afterSku: ScaledSku;
+  /** Before/after serverless settings (present when the DB is GP serverless). */
+  beforeAutoPauseDelay?: number;
+  afterAutoPauseDelay?: number;
+  beforeMinCapacity?: number;
+  afterMinCapacity?: number;
+  beforeMaxSizeBytes?: number;
+  afterMaxSizeBytes?: number;
+  /** Provisioning/operational state of the database after the LRO settled. */
+  provisioningState: string;
+  /** Async-operation outcome reported by ARM (Succeeded / Failed / …), if observed. */
+  lroStatus?: string;
+}
+
+/**
+ * Poll an ARM Long-Running-Operation (Azure-AsyncOperation / Location) URL to a
+ * terminal state. Honours Retry-After (capped at 30s). Returns the final status
+ * string ('Succeeded' | 'Failed' | 'Canceled') or undefined if there was no URL
+ * / the poll could not be read (caller then re-GETs the resource for truth).
+ */
+async function pollScaleLro(url: string | null, token: string, timeoutMs = 600_000): Promise<string | undefined> {
+  if (!url) return undefined;
+  const deadline = Date.now() + timeoutMs;
+  // Give ARM an initial beat before the first poll.
+  await new Promise((r) => setTimeout(r, 2_000));
+  while (Date.now() < deadline) {
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+    } catch {
+      return undefined; // transient — caller re-GETs the resource for the real state
+    }
+    if (!res.ok) return undefined;
+    const j: any = await res.json().catch(() => null);
+    const status: string | undefined = j?.status;
+    if (!status || status === 'Succeeded' || status === 'Failed' || status === 'Canceled') return status;
+    const retryAfter = Math.min(Number(res.headers.get('retry-after') || '5') || 5, 30) * 1_000;
+    await new Promise((r) => setTimeout(r, retryAfter));
+  }
+  return undefined;
+}
+
+/**
+ * Scale an Azure SQL database's compute + storage via ARM PATCH on
+ * Microsoft.Sql/servers/databases — change SKU (DTU ↔ vCore ↔ serverless),
+ * vCore/DTU capacity, max storage, and serverless auto-pause / min-vCore.
+ *
+ * This is a REAL control-plane mutation: it GETs the before-SKU, PATCHes the
+ * new SKU/properties, polls the Azure-AsyncOperation LRO to completion, then
+ * GETs the after-SKU so the caller has an honest before/after receipt.
+ *
+ * The console UAMI must hold "SQL DB Contributor" (9b7fa17d-e63e-47b0-bb0a-15c516ac86ec)
+ * — or Contributor — on the server's resource group; otherwise ARM returns 403,
+ * which propagates as an AzureSqlError so the editor can render an honest gate
+ * naming the missing role (per no-vaporware.md).
+ */
+export async function scaleDatabase(spec: ScaleDatabaseSpec): Promise<ScaleDatabaseResult> {
+  if (!spec.serverId) throw new AzureSqlError('serverId is required', 400);
+  if (!spec.database) throw new AzureSqlError('database is required', 400);
+  if (!spec.skuName) throw new AzureSqlError('skuName is required', 400);
+  if (!spec.tier) throw new AzureSqlError('tier is required', 400);
+  if (typeof spec.maxSizeBytes === 'number' && spec.maxSizeBytes % 1_073_741_824 !== 0) {
+    throw new AzureSqlError('maxSizeBytes must be a multiple of 1,073,741,824 (1 GiB)', 400);
+  }
+
+  const scope = spec.serverId.startsWith('/') ? spec.serverId : await defaultServerScope(spec.serverId);
+  const dbPath = `${scope}/databases/${encodeURIComponent(spec.database)}?api-version=${SQL_API_VERSION}`;
+
+  // 1. before-state
+  const beforeDb = await armRequest<any>(dbPath);
+  const beforeSku: ScaledSku = beforeDb?.sku
+    ? { name: beforeDb.sku.name, tier: beforeDb.sku.tier, family: beforeDb.sku.family, capacity: beforeDb.sku.capacity }
+    : {};
+
+  // 2. PATCH body — only include fields the caller set.
+  const sku: any = { name: spec.skuName, tier: spec.tier };
+  if (spec.family) sku.family = spec.family;
+  if (typeof spec.capacity === 'number') sku.capacity = spec.capacity;
+  const properties: any = {};
+  if (typeof spec.maxSizeBytes === 'number') properties.maxSizeBytes = spec.maxSizeBytes;
+  if (typeof spec.autoPauseDelay === 'number') properties.autoPauseDelay = spec.autoPauseDelay;
+  if (typeof spec.minCapacity === 'number') properties.minCapacity = spec.minCapacity;
+  const patchBody: any = { sku };
+  if (Object.keys(properties).length > 0) patchBody.properties = properties;
+
+  // 3. PATCH via raw fetch so we can read the LRO headers (armRequest discards them).
+  const token = await armToken();
+  const patchRes = await fetch(`${arm()}${dbPath}`, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(patchBody),
+    cache: 'no-store',
+  });
+  if (!patchRes.ok && patchRes.status !== 202) {
+    const errText = await patchRes.text();
+    let errJson: any = null;
+    try { errJson = errText ? JSON.parse(errText) : null; } catch { /* leave as text */ }
+    const msg = (errJson?.error?.message || errText || `Scale PATCH failed (HTTP ${patchRes.status})`).toString();
+    throw new AzureSqlError(msg, patchRes.status, errJson || errText);
+  }
+
+  // 4. poll the LRO to a terminal state (202 path); a 200 means it was synchronous.
+  const asyncOpUrl = patchRes.headers.get('azure-asyncoperation') || patchRes.headers.get('location') || null;
+  const lroStatus = await pollScaleLro(asyncOpUrl, token);
+  if (lroStatus === 'Failed' || lroStatus === 'Canceled') {
+    throw new AzureSqlError(`Scale operation ${lroStatus.toLowerCase()} on ${spec.database}`, 502, { lroStatus });
+  }
+
+  // 5. after-state (source of truth — confirms ARM applied the SKU).
+  const afterDb = await armRequest<any>(dbPath);
+  const afterSku: ScaledSku = afterDb?.sku
+    ? { name: afterDb.sku.name, tier: afterDb.sku.tier, family: afterDb.sku.family, capacity: afterDb.sku.capacity }
+    : {};
+
+  return {
+    ok: true,
+    beforeSku,
+    afterSku,
+    beforeAutoPauseDelay: beforeDb?.properties?.autoPauseDelay,
+    afterAutoPauseDelay: afterDb?.properties?.autoPauseDelay,
+    beforeMinCapacity: beforeDb?.properties?.minCapacity,
+    afterMinCapacity: afterDb?.properties?.minCapacity,
+    beforeMaxSizeBytes: beforeDb?.properties?.maxSizeBytes,
+    afterMaxSizeBytes: afterDb?.properties?.maxSizeBytes,
+    provisioningState: afterDb?.properties?.status || 'Online',
+    lroStatus,
+  };
+}
 
 export async function listFirewallRules(serverName: string): Promise<FirewallRule[]> {
   const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);

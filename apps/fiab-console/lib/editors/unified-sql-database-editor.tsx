@@ -39,15 +39,21 @@ import {
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular, TopSpeed20Regular,
+  Stop20Regular, ChartMultiple20Regular,
   Sparkle20Regular, Sparkle20Filled, Bug20Regular, TextBulletListSquare20Regular,
   ArrowEnter20Regular, Dismiss20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { registerInlineCompletion } from '@/lib/components/editor/inline-completion';
+import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { SqlScalePanel } from './components/sql-scale-panel';
+import { useJobsStore } from '@/lib/state/jobs-store';
+import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -69,6 +75,38 @@ const SQL_DB_SKUS = [
   'HS_Gen5_2', 'HS_Gen5_4', 'HS_Gen5_8', 'HS_Gen5_16',
 ];
 const SQL_DB_TIERS = ['Basic', 'Standard', 'Premium', 'GeneralPurpose', 'BusinessCritical', 'Hyperscale'];
+// SQL Server collations surfaced in the Azure portal Create Database blade.
+// The full catalog has thousands; these are the portal-offered choices. The
+// first entry is the ARM default applied when no collation is sent.
+const SQL_COLLATIONS = [
+  'SQL_Latin1_General_CP1_CI_AS',       // portal default — case-insensitive, accent-sensitive
+  'SQL_Latin1_General_CP1_CS_AS',       // case-sensitive variant
+  'Latin1_General_100_CI_AS_SC_UTF8',   // UTF-8 aware, SQL Server 2019+
+  'Latin1_General_100_CS_AS_SC_UTF8',
+  'Latin1_General_BIN2',                // binary sort (fastest, case-sensitive)
+  'Latin1_General_CI_AS',
+  'Latin1_General_CS_AS',
+  'French_CI_AS',
+  'German_PhoneBook_CI_AS',
+  'Japanese_CI_AS',
+  'Korean_Wansung_CI_AS',
+  'Modern_Spanish_CI_AS',
+  'SQL_Latin1_General_CP437_CI_AI',     // accent-insensitive variant
+  'SQL_Latin1_General_CP850_CI_AS',
+  'SQL_Latin1_General_CP1_CI_AI',
+  'Traditional_Spanish_CI_AS',
+  'Chinese_PRC_CI_AS',
+] as const;
+type SqlCollation = typeof SQL_COLLATIONS[number];
+const DEFAULT_COLLATION: SqlCollation = 'SQL_Latin1_General_CP1_CI_AS';
+// requestedBackupStorageRedundancy — ARM validates the choice against the
+// region/tier; an incompatible pick surfaces verbatim in the result MessageBar.
+const BACKUP_REDUNDANCY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'Geo', label: 'Geo-redundant (default)' },
+  { value: 'GeoZone', label: 'Geo-zone-redundant (requires AZ + paired region)' },
+  { value: 'Zone', label: 'Zone-redundant (within region)' },
+  { value: 'Local', label: 'Locally redundant (single region)' },
+];
 const PG_VERSIONS = ['11', '12', '13', '14', '15', '16'];
 const PG_TIERS = ['Burstable', 'GeneralPurpose', 'MemoryOptimized'];
 // Common PG flexible-server compute SKUs grouped by tier.
@@ -151,6 +189,10 @@ const useStyles = makeStyles({
     borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
     margin: '4px 0',
   },
+  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 },
+  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: 4, padding: 8 },
+  connCode: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
+  connCopyBtn: { position: 'absolute', top: 4, right: 4 },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -542,6 +584,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [server, setServer] = useState('');
   const [database, setDatabase] = useState('');
   const [databases, setDatabases] = useState<string[]>([]);
+  // Full database objects (incl. sku) so the Compute & Storage tab can show the
+  // currently-bound SKU as the "before" without an extra ARM GET.
+  const [databasesFull, setDatabasesFull] = useState<Array<{ name: string; sku?: { name?: string; tier?: string; family?: string; capacity?: number } }>>([]);
   const [dbLoading, setDbLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [bindMsg, setBindMsg] = useState<string | null>(null);
@@ -553,8 +598,24 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     return inv.mi.instances.find((x) => x.name === server)?.fqdn || '';
   }, [inv, family, server]);
 
+  // ---- connection strings (Connect tab card) ----
+  type ConnDriverKey = 'adonet' | 'jdbc' | 'odbc' | 'php' | 'go';
+  const [connDriver, setConnDriver] = useState<ConnDriverKey>('adonet');
+  const [connCopied, setConnCopied] = useState<ConnDriverKey | null>(null);
+  const connStrings = useMemo(
+    () => ((family === 'azure-sql' && serverFqdn && database)
+      ? buildConnectionStrings({ fqdn: serverFqdn, database })
+      : null),
+    [family, serverFqdn, database],
+  );
+  const copyConnStr = useCallback(async (key: ConnDriverKey, value: string) => {
+    await navigator.clipboard?.writeText(value);
+    setConnCopied(key);
+    setTimeout(() => setConnCopied(null), 2000);
+  }, []);
+
   const loadDatabases = useCallback(async (fam: Family, srv: string) => {
-    setDatabases([]); setDbError(null);
+    setDatabases([]); setDatabasesFull([]); setDbError(null);
     if (!srv || fam === 'managed-instance') return;
     setDbLoading(true);
     const url = fam === 'postgres'
@@ -562,7 +623,10 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       : `/api/items/azure-sql-server/${encodeURIComponent(id)}/databases?server=${encodeURIComponent(srv)}`;
     const j = await fetchJson(url);
     if (!j.ok) setDbError(j.error || 'databases failed');
-    else setDatabases((j.databases || []).map((d: any) => d.name));
+    else {
+      setDatabases((j.databases || []).map((d: any) => d.name));
+      setDatabasesFull((j.databases || []).map((d: any) => ({ name: d.name, sku: d.sku })));
+    }
     setDbLoading(false);
   }, [id]);
 
@@ -582,13 +646,20 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
   );
   const [qResult, setQResult] = useState<QueryResponse | null>(null);
   const [qLoading, setQLoading] = useState(false);
+  // Background-job continuity: the query runs in the module-scope jobs-store so
+  // it survives this editor unmounting (tab switch / close). activeJobId lets us
+  // recover the result on remount; activeRequestId is the TDS cancel token.
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const startSqlQuery = useJobsStore((st) => st.startSqlQuery);
+  const jobs = useJobsStore((st) => st.jobs);
 
   // ---- Copilot (Fix / Explain / NL→T-SQL + inline ghost text) ----
   // Only the Azure SQL (T-SQL) family is wired to the SQL Copilot; PostgreSQL /
@@ -612,18 +683,63 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     return `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`;
   }, [family, id]);
 
-  const run = useCallback(async (sqlOverride?: string) => {
+  const run = useCallback((sqlOverride?: string) => {
     const sqlToRun = sqlOverride ?? sqlText;
     if (!server) { setQResult({ ok: false, error: 'select a server first' }); return; }
     if (family !== 'postgres' && !database) { setQResult({ ok: false, error: 'select a database first' }); return; }
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActiveRequestId(reqId);
     setQLoading(true); setQResult(null);
-    const j = await fetchJson(queryUrl, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ server, database: database || 'postgres', sql: sqlToRun }),
+    const jobId = startSqlQuery({
+      databaseName: database || 'postgres',
+      server,
+      sqlLabel: sqlToRun.slice(0, 80),
+      sqlText: sqlToRun,
+      queryUrl,
+      requestId: reqId,
+      onDone: ({ ok, queryResult, error, code }) => {
+        // Fires whether or not we're still mounted; React no-ops setState on an
+        // unmounted component. The remount useEffect recovers a backgrounded
+        // result from the store.
+        setQLoading(false); setActiveJobId(null); setActiveRequestId(null);
+        setQResult(ok && queryResult
+          ? { ok: true, ...queryResult }
+          : { ok: false, error: error || 'query failed', code });
+      },
     });
-    setQResult(j);
+    setActiveJobId(jobId);
+  }, [queryUrl, server, database, family, sqlText, startSqlQuery]);
+
+  // Cancel an in-flight query by sending a TDS ATTENTION packet to the BFF. The
+  // running fetch in the jobs-store then resolves with { ok:false, code:'ECANCEL' }
+  // and onDone restores the UI — no AbortController, the server actually stops.
+  const cancelQuery = useCallback(async () => {
+    if (!activeRequestId || family === 'postgres') return;
+    try {
+      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: activeRequestId }),
+      });
+    } catch { /* cancel is best-effort; the query promise still settles */ }
+  }, [id, activeRequestId, family]);
+
+  // Recover a result for a query that completed while this editor was unmounted
+  // (the user navigated away and came back). onDone was a no-op on the unmounted
+  // component, but the finished job is still in the store.
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = jobs.find((j) => j.id === activeJobId);
+    if (!job || job.status === 'running') return;
     setQLoading(false);
-  }, [queryUrl, server, database, family, sqlText]);
+    setQResult(job.status === 'success' && job.queryResult
+      ? { ok: true, ...job.queryResult }
+      : { ok: false, error: job.error || 'query failed' });
+    setActiveJobId(null);
+    setActiveRequestId(null);
+  }, [jobs, activeJobId]);
 
   // Load a statement from the object navigator into the Query tab (SELECT
   // TOP 1000, EXEC, CREATE templates) — matches the SSMS / portal flow.
@@ -780,6 +896,41 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     }
   }, [copilotEligible, id, server, database, sqlText, nlInput]);
 
+  // ---- Get data → ADF ingestion deep-links (Copy / pipeline / dataflow) ----
+  // Opens REAL Azure Data Factory Studio with THIS database pre-wired as the
+  // copy sink. New pipeline/dataflow first upsert the AzureSqlDatabase linked
+  // service + AzureSqlTable dataset + artifact via ARM, then window.open the
+  // authoring canvas. No toasts — real navigation (per ui-parity.md).
+  type GetDataAction = 'copy-data' | 'new-pipeline' | 'new-dataflow';
+  const [getDataBusy, setGetDataBusy] = useState(false);
+  const [getDataMsg, setGetDataMsg] = useState<
+    { ok: boolean; text: string; url?: string; factoryName?: string; privateNetworkGate?: boolean; factoryMiPrincipalHint?: string } | null
+  >(null);
+  const [receiptRunId, setReceiptRunId] = useState('');
+
+  const openGetData = useCallback(async (action: GetDataAction) => {
+    if (!server || !database) { setGetDataMsg({ ok: false, text: 'Pick a server + database on the Connect tab first.' }); setTab('get-data'); return; }
+    setGetDataBusy(true); setGetDataMsg(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/get-data`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, family, server, serverFqdn, database }),
+    });
+    setGetDataBusy(false);
+    setTab('get-data');
+    if (!j.ok) { setGetDataMsg({ ok: false, text: j.error || 'Get data failed' }); return; }
+    // Real navigation — open ADF Studio in a new tab. No toast.
+    if (j.url) window.open(j.url, '_blank', 'noopener,noreferrer');
+    const label = action === 'copy-data' ? 'Copy Data Tool'
+      : action === 'new-pipeline' ? `pipeline ${j.pipelineName}`
+      : `dataflow ${j.dataflowName}`;
+    setGetDataMsg({
+      ok: true,
+      text: `Opened ADF Studio — ${label}. This database is the pre-wired copy sink.`,
+      url: j.url, factoryName: j.factoryName, privateNetworkGate: j.privateNetworkGate,
+      factoryMiPrincipalHint: j.factoryMiPrincipalHint,
+    });
+  }, [id, family, server, serverFqdn, database]);
+
   // Azure-native mirroring (change feed → ADLS Bronze Delta; no Fabric).
   const [mirror, setMirror] = useState<any>(null);
   const [mirrorBusy, setMirrorBusy] = useState(false);
@@ -820,6 +971,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [newDbTier, setNewDbTier] = useState('GeneralPurpose');
   const [newDbSample, setNewDbSample] = useState(false);
   const [newDbZoneRedundant, setNewDbZoneRedundant] = useState(false);
+  const [newDbCollation, setNewDbCollation] = useState<SqlCollation>(DEFAULT_COLLATION);
+  const [newDbBackupRedundancy, setNewDbBackupRedundancy] = useState('');
+  const [newDbMaintenanceWindow, setNewDbMaintenanceWindow] = useState('');
+  const [maintenanceConfigs, setMaintenanceConfigs] = useState<{ id: string; name: string; displayName: string }[]>([]);
+  const [maintLoading, setMaintLoading] = useState(false);
   // PG fields
   const [pgName, setPgName] = useState('');
   const [pgRg, setPgRg] = useState('');
@@ -830,7 +986,34 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [pgTier, setPgTier] = useState('Burstable');
   const [pgVersion, setPgVersion] = useState('16');
 
+  const loadMaintenanceConfigs = useCallback(async (serverName: string) => {
+    if (!serverName) { setMaintenanceConfigs([]); return; }
+    const loc = inv?.sql.servers.find((srv) => srv.name === serverName)?.location;
+    if (!loc) { setMaintenanceConfigs([]); return; }
+    setMaintLoading(true);
+    const j = await fetchJson(
+      `/api/items/azure-sql-database/${encodeURIComponent(id)}/maintenance-configs?location=${encodeURIComponent(loc)}`,
+    );
+    setMaintenanceConfigs(j.ok ? (j.configs || []) : []);
+    setMaintLoading(false);
+  }, [id, inv]);
+
+  // Discover the region's maintenance windows whenever a target server is picked.
+  useEffect(() => {
+    if (newDbServer) loadMaintenanceConfigs(newDbServer);
+    else setMaintenanceConfigs([]);
+    // Reset any prior selection — windows are region-specific.
+    setNewDbMaintenanceWindow('');
+  }, [newDbServer, loadMaintenanceConfigs]);
+
   const provisionSqlDb = useCallback(async () => {
+    // Client-side collation guard — reject anything outside the enumerated list
+    // before issuing the BFF call (the dropdown enforces this; this is a
+    // defense-in-depth check that mirrors the route-level validation).
+    if (!SQL_COLLATIONS.includes(newDbCollation)) {
+      setProvMsg({ ok: false, text: `Collation '${newDbCollation}' is not in the supported list.` });
+      return;
+    }
     setProvBusy(true); setProvMsg(null);
     const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/create-db`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -838,14 +1021,17 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         server: newDbServer, name: newDbName, skuName: newDbSku, tier: newDbTier,
         sampleName: newDbSample ? 'AdventureWorksLT' : undefined,
         zoneRedundant: newDbZoneRedundant || undefined,
+        collation: newDbCollation !== DEFAULT_COLLATION ? newDbCollation : undefined,
+        requestedBackupStorageRedundancy: newDbBackupRedundancy || undefined,
+        maintenanceConfigurationId: newDbMaintenanceWindow || undefined,
       }),
     });
     setProvMsg(j.ok
-      ? { ok: true, text: `Azure SQL database '${newDbName}' provisioning on ${newDbServer} (status: ${j.status || 'accepted'}). ARM continues async.` }
+      ? { ok: true, text: `Azure SQL database '${newDbName}' provisioning on ${newDbServer} · collation ${newDbCollation}${newDbZoneRedundant ? ' · zone-redundant' : ''} (status: ${j.status || 'accepted'}). ARM continues async.` }
       : { ok: false, text: j.error || 'create failed' });
     if (j.ok) loadInventory();
     setProvBusy(false);
-  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, newDbZoneRedundant, loadInventory]);
+  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, newDbZoneRedundant, newDbCollation, newDbBackupRedundancy, newDbMaintenanceWindow, loadInventory]);
 
   const provisionPg = useCallback(async () => {
     setProvBusy(true); setProvMsg(null);
@@ -920,15 +1106,49 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Firewall', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Manage firewall rules' },
         { label: 'Entra admin', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Set the Microsoft Entra admin' },
         { label: 'Geo-replication', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Create a geo-secondary' },
+        { label: 'Scale compute', onClick: (family === 'azure-sql' && server && database) ? () => setTab('scale') : undefined, disabled: !(family === 'azure-sql' && server && database), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Change DTU / vCore tier, serverless auto-pause, and max storage' },
       ]},
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Performance', actions: [
+        { label: 'Query Store / QPI', onClick: (server && database) ? () => setTab('performance') : undefined, disabled: !(server && database), title: !(server && database) ? 'Pick a server + database first' : 'Top-resource queries, runtime-stats time series + execution plans over Query Store' },
+      ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
+      { label: 'Get data', actions: [
+        {
+          label: 'Get data',
+          disabled: getDataBusy || !server,
+          title: !server ? 'Pick a server first' : 'Open Azure Data Factory ingestion surfaces with this database as the sink',
+          dropdownItems: [
+            {
+              label: getDataBusy ? 'Opening…' : 'Copy data',
+              icon: <ArrowDownload20Regular />,
+              onClick: (server && database && !getDataBusy) ? () => openGetData('copy-data') : undefined,
+              disabled: getDataBusy || !(server && database),
+              title: !database ? 'Pick a database first' : 'Open the ADF Copy Data Tool (this DB is the sink)',
+            },
+            {
+              label: 'New pipeline',
+              icon: <Play20Regular />,
+              onClick: (server && database && family === 'azure-sql' && !getDataBusy) ? () => openGetData('new-pipeline') : undefined,
+              disabled: getDataBusy || !(server && database && family === 'azure-sql'),
+              title: family !== 'azure-sql' ? 'Azure SQL sink only — use Copy data for other engines' : !database ? 'Pick a database first' : 'Create an ADF pipeline with this DB as the Copy sink',
+            },
+            {
+              label: 'New dataflow',
+              icon: <Database20Regular />,
+              onClick: (server && database && family === 'azure-sql' && !getDataBusy) ? () => openGetData('new-dataflow') : undefined,
+              disabled: getDataBusy || !(server && database && family === 'azure-sql'),
+              title: family !== 'azure-sql' ? 'Azure SQL sink only — use Copy data for other engines' : !database ? 'Pick a database first' : 'Create an ADF Mapping Data Flow with this DB as the sink',
+            },
+          ],
+        },
+      ]},
     ]},
-  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, copilotOpen, copilotEligible, invokeCopilot]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, copilotOpen, copilotEligible, invokeCopilot, getDataBusy, openGetData]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;
@@ -988,8 +1208,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
+            {family === 'azure-sql' && <Tab value="performance" icon={<ChartMultiple20Regular />}>Performance</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
+            <Tab value="get-data" icon={<ArrowDownload20Regular />}>Get data</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
+            {family === 'azure-sql' && <Tab value="scale" icon={<TopSpeed20Regular />}>Compute &amp; Storage</Tab>}
           </TabList>
 
           {/* ---------------- Connect ---------------- */}
@@ -1067,6 +1290,56 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
               <Caption1>Pick a server, then <strong>Bind connection</strong> (ribbon) to persist it to this item, or open the <strong>Query</strong> tab.</Caption1>
+
+              {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
+              {family === 'azure-sql' && serverFqdn && (
+                <div className={s.connCard}>
+                  <Subtitle2>Connection strings</Subtitle2>
+                  {!database ? (
+                    <Caption1>Select a database (left pane or a <strong>Connect</strong> button above) to generate driver-ready strings.</Caption1>
+                  ) : (
+                    <>
+                      <Caption1>
+                        FQDN: <code>{serverFqdn}</code> · DB: <code>{database}</code> · Auth: Microsoft Entra Managed Identity (password-free)
+                      </Caption1>
+                      <TabList
+                        size="small"
+                        selectedValue={connDriver}
+                        onTabSelect={(_, d) => setConnDriver(d.value as ConnDriverKey)}
+                      >
+                        <Tab value="adonet">ADO.NET</Tab>
+                        <Tab value="jdbc">JDBC</Tab>
+                        <Tab value="odbc">ODBC</Tab>
+                        <Tab value="php">PHP</Tab>
+                        <Tab value="go">Go</Tab>
+                      </TabList>
+                      {connStrings && (
+                        <div className={s.connCodeWrap}>
+                          <pre className={s.connCode}>{connStrings[connDriver]}</pre>
+                          <Tooltip content={connCopied === connDriver ? 'Copied!' : 'Copy to clipboard'} relationship="label">
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              icon={<Copy20Regular />}
+                              aria-label={`Copy ${connDriver} connection string`}
+                              className={s.connCopyBtn}
+                              onClick={() => copyConnStr(connDriver, connStrings[connDriver])}
+                            />
+                          </Tooltip>
+                        </div>
+                      )}
+                      <Caption1>
+                        All strings use password-free Microsoft Entra authentication (Managed Identity / Default).
+                        Grant the connecting identity <code>db_datareader</code> / <code>db_datawriter</code> in the database via{' '}
+                        <code>CREATE USER [&lt;entra-principal&gt;] FROM EXTERNAL PROVIDER;</code>.
+                        {getSqlHostSuffix(serverFqdn).includes('usgovcloudapi') && (
+                          <> Gov cloud detected — endpoint suffix is <code>{getSqlHostSuffix(serverFqdn)}</code> (GCC-High / IL5 / DoD).</>
+                        )}
+                      </Caption1>
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
 
@@ -1106,10 +1379,46 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         {SQL_DB_TIERS.map((t) => <Option key={t} value={t}>{t}</Option>)}
                       </Dropdown>
                     </Field>
+                    <Field label="Collation" hint="Set at create time only — immutable after the database exists.">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={[newDbCollation]}
+                        value={newDbCollation}
+                        onOptionSelect={(_, d) => setNewDbCollation((d.optionValue as SqlCollation) || newDbCollation)}
+                        aria-label="Database collation"
+                      >
+                        {SQL_COLLATIONS.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Backup storage redundancy">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={newDbBackupRedundancy ? [newDbBackupRedundancy] : []}
+                        value={newDbBackupRedundancy ? (BACKUP_REDUNDANCY_OPTIONS.find((o) => o.value === newDbBackupRedundancy)?.label || newDbBackupRedundancy) : ''}
+                        placeholder="Geo-redundant (default)"
+                        onOptionSelect={(_, d) => setNewDbBackupRedundancy(d.optionValue || '')}
+                        aria-label="Backup storage redundancy"
+                      >
+                        {BACKUP_REDUNDANCY_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label={`Maintenance window${maintLoading ? ' (loading…)' : ''}`} hint="vCore tiers only. System default applies any time outside business hours.">
+                      <Dropdown
+                        className={s.fullWidth}
+                        selectedOptions={[newDbMaintenanceWindow]}
+                        value={newDbMaintenanceWindow ? (maintenanceConfigs.find((c) => c.id === newDbMaintenanceWindow)?.displayName || newDbMaintenanceWindow) : 'System default (any time)'}
+                        disabled={maintLoading || !newDbServer}
+                        onOptionSelect={(_, d) => setNewDbMaintenanceWindow(d.optionValue || '')}
+                        aria-label="Maintenance window"
+                      >
+                        <Option value="">System default (any time)</Option>
+                        {maintenanceConfigs.map((c) => <Option key={c.id} value={c.id}>{c.displayName}</Option>)}
+                      </Dropdown>
+                    </Field>
                   </div>
                   <Checkbox checked={newDbSample} onChange={(_, d) => setNewDbSample(!!d.checked)} label="Seed AdventureWorksLT sample schema" />
                   <Checkbox checked={newDbZoneRedundant} onChange={(_, d) => setNewDbZoneRedundant(!!d.checked)}
-                    label="Zone-redundant (Premium / Business Critical / Hyperscale)" />
+                    label="Zone-redundant (vCore tiers only: GeneralPurpose / BusinessCritical / Hyperscale)" />
                   <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !newDbServer || !newDbName} onClick={provisionSqlDb}>
                     {provBusy ? 'Creating…' : 'Create Azure SQL database'}
                   </Button>
@@ -1165,8 +1474,16 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     </Button>
                   </Tooltip>
                   <Button appearance="primary" icon={<Play20Regular />} disabled={qLoading || !server} onClick={() => run()}>Run</Button>
+                  {qLoading && (
+                    <Button appearance="secondary" icon={<Stop20Regular />} onClick={cancelQuery} disabled={family === 'postgres' || !activeRequestId} title={family === 'postgres' ? 'Cancel is available on the Azure SQL TDS path' : 'Send a TDS ATTENTION packet — cancels the running query on the server'}>Cancel</Button>
+                  )}
                 </div>
               </div>
+              {qLoading && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Running in background — switch tabs or close this editor freely; a toast fires when the query completes.
+                </Caption1>
+              )}
               {family === 'managed-instance' && (
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
               )}
@@ -1175,7 +1492,25 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               )}
               <div className={s.queryRow}>
                 <div className={s.queryMain}>
-                  <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" onReady={family === 'azure-sql' ? handleEditorReady : undefined} />
+                  {family === 'postgres' ? (
+                    // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are
+                    // T-SQL-specific, so the PG path keeps the plain Monaco surface
+                    // until a pg-catalog provider lands. Run still posts the script.
+                    <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+                  ) : (
+                    <TsqlMonaco
+                      value={sqlText}
+                      onChange={setSqlText}
+                      onRun={(sql) => run(sql)}
+                      server={server}
+                      database={database}
+                      itemId={id}
+                      height={240}
+                      readOnly={family === 'managed-instance'}
+                      busy={qLoading}
+                      onReady={family === 'azure-sql' ? handleEditorReady : undefined}
+                    />
+                  )}
                   {copilotEligible && (
                     <Caption1>
                       <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: 14 }} /> Copilot inline completion is on while the pane is open —
@@ -1335,9 +1670,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               )
           )}
 
+          {/* ---------------- Performance (Query Store / QPI) ---------------- */}
+          {tab === 'performance' && (
+            family === 'azure-sql'
+              ? <SqlPerformanceDashboard id={id} server={server} database={database} />
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Query Store performance applies to Azure SQL</MessageBarTitle>
+                    The Query Store dashboard reads the T-SQL <code>sys.query_store_*</code> catalog views. Select an Azure SQL database to use it; PostgreSQL exposes performance via <code>pg_stat_statements</code> instead.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
           {/* ---------------- Catalog ---------------- */}
-          {tab === 'catalog' && (
-            <>
+          {tab === 'catalog' && (            <>
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>OneLake / Purview catalog</MessageBarTitle>
@@ -1357,6 +1705,89 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     </MessageBarBody>
                   </MessageBar>
                 )}
+              </div>
+            </>
+          )}
+
+          {/* ---------------- Get data → ADF ingestion deep-links ---------------- */}
+          {tab === 'get-data' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Get data — Azure Data Factory ingestion surfaces</MessageBarTitle>
+                  Opens Azure Data Factory Studio with this database (<code>{database || 'select one'}</code>) pre-wired
+                  as the copy <strong>sink</strong> — Azure-native, no Microsoft Fabric. <strong>Copy data</strong> opens
+                  the stepped Copy Data Tool; <strong>New pipeline</strong> / <strong>New dataflow</strong> create the
+                  AzureSqlDatabase linked service + AzureSqlTable dataset + artifact via ARM, then open the authoring
+                  canvas. The factory uses its system-assigned managed identity — grant it <code>db_datareader</code> +{' '}
+                  <code>db_datawriter</code> on <code>{database || 'the target database'}</code> via Microsoft Entra so the
+                  Copy activity can write rows.
+                </MessageBarBody>
+              </MessageBar>
+
+              <div className={s.toolbar}>
+                <Button appearance="primary" icon={<ArrowDownload20Regular />} disabled={getDataBusy || !server || !database}
+                  onClick={() => openGetData('copy-data')}>{getDataBusy ? 'Opening…' : 'Copy data'}</Button>
+                <Button appearance="outline" icon={<Play20Regular />} disabled={getDataBusy || !(server && database && family === 'azure-sql')}
+                  onClick={() => openGetData('new-pipeline')} title={family !== 'azure-sql' ? 'Azure SQL sink only' : undefined}>New pipeline</Button>
+                <Button appearance="outline" icon={<Database20Regular />} disabled={getDataBusy || !(server && database && family === 'azure-sql')}
+                  onClick={() => openGetData('new-dataflow')} title={family !== 'azure-sql' ? 'Azure SQL sink only' : undefined}>New dataflow</Button>
+              </div>
+
+              {getDataMsg && (
+                <MessageBar intent={getDataMsg.ok ? 'success' : 'error'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>{getDataMsg.ok ? 'ADF Studio opened' : 'Get data failed'}</MessageBarTitle>
+                    {getDataMsg.text}
+                    {getDataMsg.factoryName && <> · factory <code>{getDataMsg.factoryName}</code></>}
+                    {getDataMsg.url && <> · <a href={getDataMsg.url} target="_blank" rel="noreferrer">Re-open in ADF Studio</a></>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {getDataMsg?.ok && getDataMsg.privateNetworkGate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>ADF Studio requires private-network access</MessageBarTitle>
+                    The factory has <code>publicNetworkAccess: Disabled</code> (private link only). Reach ADF Studio's
+                    management plane from the corporate VPN or an Azure Bastion session on the hub VNet.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {getDataMsg?.ok && getDataMsg.factoryMiPrincipalHint && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>One-time: grant the factory managed identity write access</MessageBarTitle>
+                    <code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {/* Run receipt — verify rows landed via a COUNT(*) in the Query tab. */}
+              <div className={s.card}>
+                <Subtitle2>Pipeline run receipt</Subtitle2>
+                <Caption1>
+                  After running the pipeline / dataflow in ADF Studio, paste its <strong>Run ID</strong> and click{' '}
+                  <strong>Check count delta</strong> — it switches to the Query tab with a <code>SELECT COUNT(*)</code>{' '}
+                  template so you can confirm new rows landed in <code>{database || 'the target database'}</code>.
+                </Caption1>
+                <Field label="ADF pipeline run ID">
+                  <Input value={receiptRunId} onChange={(_, d) => setReceiptRunId(d.value)}
+                    placeholder="00000000-0000-0000-0000-000000000000" />
+                </Field>
+                <Button appearance="primary" icon={<Play20Regular />}
+                  disabled={!receiptRunId.trim() || !server || !database}
+                  onClick={() => {
+                    const countSql =
+                      `-- Verify rows landed from ADF pipeline run ${receiptRunId.trim()}\n` +
+                      `-- Replace <your_target_table> with the table the Copy/dataflow sink wrote to.\n` +
+                      `SELECT COUNT(*) AS row_count FROM dbo.[<your_target_table>];`;
+                    setSqlText(countSql);
+                    setTab('query');
+                  }}>
+                  Check count delta (open in Query)
+                </Button>
               </div>
             </>
           )}
@@ -1392,6 +1823,25 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 )}
               </div>
             </>
+          )}
+
+          {/* ---------------- Compute & Storage (scale) ---------------- */}
+          {tab === 'scale' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <SqlScalePanel
+                      id={id} server={server} database={database}
+                      currentSku={databasesFull.find((d) => d.name === database)?.sku}
+                    />
+                  : <Caption1>Pick a server <strong>and</strong> database on the <strong>Connect</strong> tab to change its compute &amp; storage (DTU / vCore / serverless).</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Compute &amp; Storage scaling applies to Azure SQL Database</MessageBarTitle>
+                    SQL Managed Instance scaling uses the instance SKU (<code>Microsoft.Sql/managedInstances</code> PATCH) and PostgreSQL flexible server uses a distinct compute ARM surface — wire those separately. Select an Azure SQL database to scale its compute and storage here.
+                  </MessageBarBody>
+                </MessageBar>
+              )
           )}
         </div>
       }
