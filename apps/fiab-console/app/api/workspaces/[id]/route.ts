@@ -60,6 +60,12 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
       description: 'description' in body ? (body.description?.trim() || undefined) : ws.description,
       capacity: 'capacity' in body ? (body.capacity?.trim() || undefined) : ws.capacity,
       domain: 'domain' in body ? (body.domain?.trim() || undefined) : ws.domain,
+      // Storage-account binding for OneLake lifecycle management. A full ARM
+      // resource id (string) — the lifecycle route validates it at use time.
+      // Empty string clears the binding (falls back to deployment-default).
+      storageAccountId: 'storageAccountId' in body
+        ? (typeof body.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined)
+        : ws.storageAccountId,
       updatedAt: new Date().toISOString(),
     };
     const c = await workspacesContainer();

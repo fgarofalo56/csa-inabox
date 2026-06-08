@@ -34,18 +34,24 @@ export async function GET(req: NextRequest) {
   // Cross-partition query; types is small, expanded to OR.
   const orClauses = types.map((_, i) => `c.itemType = @t${i}`).join(' OR ');
   const params = types.map((t, i) => ({ name: `@t${i}`, value: t }));
+  // Project the full c.state blob (ItemDetails still reads it) plus the two
+  // governance leaves the catalog cards render directly — Cosmos returns
+  // c.state.endorsement / c.state.sensitivityLabel as top-level fields.
   const { resources: candidates } = await items.items
     .query({
-      query: `SELECT c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt FROM c WHERE ${orClauses}`,
+      query: `SELECT c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt, c.state.endorsement, c.state.sensitivityLabel FROM c WHERE (${orClauses}) AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)`,
       parameters: params,
     })
     .fetchAll();
 
   if (candidates.length === 0) return NextResponse.json({ ok: true, items: [] });
 
-  // Tenant-filter by workspace ownership (cached).
+  // Tenant-filter by workspace ownership (cached). Capture each owning
+  // workspace's domain id so the card can show a domain badge (resolved to a
+  // display name client-side via /api/governance/domains).
   const ws = await workspacesContainer();
   const cache = new Map<string, boolean>();
+  const wsDomainId = new Map<string, string | undefined>();
   const owned: any[] = [];
   for (const it of candidates as any[]) {
     let isOwned = cache.get(it.workspaceId);
@@ -53,10 +59,11 @@ export async function GET(req: NextRequest) {
       try {
         const { resource } = await ws.item(it.workspaceId, s.claims.oid).read<any>();
         isOwned = !!resource && resource.tenantId === s.claims.oid;
+        wsDomainId.set(it.workspaceId, resource?.domain ?? undefined);
       } catch { isOwned = false; }
       cache.set(it.workspaceId, isOwned);
     }
-    if (isOwned) owned.push(it);
+    if (isOwned) owned.push({ ...it, workspaceDomain: wsDomainId.get(it.workspaceId) });
   }
   owned.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
   return NextResponse.json({ ok: true, items: owned });

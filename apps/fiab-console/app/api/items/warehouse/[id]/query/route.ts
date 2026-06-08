@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
+import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 
 export const runtime = 'nodejs';
@@ -23,6 +23,11 @@ export async function POST(req: NextRequest) {
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
+  // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
+  const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
+    .filter((p: any) => p && typeof p.name === 'string')
+    .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
+
   const state = await getPoolState().catch(() => null);
   if (state && state.state !== 'Online') {
     return NextResponse.json(
@@ -32,12 +37,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await executeQuery(dedicatedTarget(), sqlText);
+    const result = await executeQuery(dedicatedTarget(), sqlText, 60_000, parameters);
     return NextResponse.json({
       ok: true,
       ...result,
       warehouse: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
       sku: state?.sku || 'unknown',
+      // Receipt: the parameterized statement + bound params (values out-of-band).
+      statement: sqlText,
+      parameters,
+      parametersCount: parameters.length,
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
