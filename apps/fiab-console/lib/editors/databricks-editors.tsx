@@ -856,11 +856,66 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     rows_produced?: number;
     error_message?: string;
   }
+  interface QueryProfileMetrics {
+    compilation_time_ms?: number;
+    execution_time_ms?: number;
+    photon_total_time_ms?: number;
+    total_time_ms?: number;
+    result_fetch_time_ms?: number;
+    read_bytes?: number;
+    read_remote_bytes?: number;
+    read_cache_bytes?: number;
+    write_remote_bytes?: number;
+    network_sent_bytes?: number;
+    spill_to_disk_bytes?: number;
+    rows_read_count?: number;
+    rows_produced_count?: number;
+    read_files_count?: number;
+    read_partitions_count?: number;
+    pruned_files_count?: number;
+  }
+  interface QueryProfile {
+    query_id: string;
+    status: string;
+    query_text?: string;
+    duration?: number;
+    error_message?: string;
+    spark_ui_url?: string;
+    statement_type?: string;
+    metrics?: QueryProfileMetrics;
+    photon_coverage_pct?: number | null;
+    plans_state?: string;
+    plans?: unknown;
+  }
   const [qhOpen, setQhOpen] = useState(false);
   const [qhEntries, setQhEntries] = useState<QHEntry[]>([]);
   const [qhBusy, setQhBusy] = useState(false);
   const [qhError, setQhError] = useState<string | null>(null);
   const [qhNext, setQhNext] = useState<string | null>(null);
+
+  // Query-profile drawer — opened from a history row's "Profile" button.
+  // Renders the real per-query metrics (IO / Photon) + Spark-plan deep-link
+  // from /api/2.0/sql/history/queries/{id}?include_metrics=true.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileData, setProfileData] = useState<QueryProfile | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const openProfile = useCallback(async (queryId: string) => {
+    setProfileOpen(true);
+    setProfileBusy(true);
+    setProfileError(null);
+    setProfileData(null);
+    try {
+      const r = await fetch(
+        `/api/items/databricks-sql-warehouse/${id}/query-profile?queryId=${encodeURIComponent(queryId)}`,
+      );
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setProfileData(j as QueryProfile);
+    } catch (e: any) { setProfileError(e?.message || String(e)); }
+    finally { setProfileBusy(false); }
+  }, [id]);
 
   const loadQueryHistory = useCallback(async (append = false, pageToken?: string) => {
     setQhBusy(true); setQhError(null);
@@ -1209,10 +1264,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                         <TableHeaderCell>User</TableHeaderCell>
                         <TableHeaderCell>Rows</TableHeaderCell>
                         <TableHeaderCell>Query</TableHeaderCell>
+                        <TableHeaderCell>Profile</TableHeaderCell>
                       </TableRow></TableHeader>
                       <TableBody>
                         {qhEntries.length === 0 && !qhBusy && (
-                          <TableRow><TableCell colSpan={6}><Caption1>No queries yet.</Caption1></TableCell></TableRow>
+                          <TableRow><TableCell colSpan={7}><Caption1>No queries yet.</Caption1></TableCell></TableRow>
                         )}
                         {qhEntries.map((q) => (
                           <TableRow key={q.query_id}>
@@ -1228,6 +1284,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                             <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               <code style={{ fontSize: 11 }}>{q.query_text?.slice(0, 200) || (q.error_message ? `ERR: ${q.error_message}` : '—')}</code>
                             </TableCell>
+                            <TableCell>
+                              <Button
+                                size="small"
+                                appearance="subtle"
+                                disabled={q.status !== 'FINISHED' && q.status !== 'FAILED'}
+                                title={q.status !== 'FINISHED' && q.status !== 'FAILED' ? 'Profile available once the query completes' : 'View execution profile (IO, Photon, Spark plan)'}
+                                onClick={() => openProfile(q.query_id)}
+                              >
+                                Profile
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -1240,6 +1307,118 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                   <Button appearance="primary" onClick={() => loadQueryHistory(true, qhNext || undefined)} disabled={qhBusy || !qhNext}>
                     {qhNext ? 'Load more' : 'No more pages'}
                   </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={profileOpen} onOpenChange={(_, d) => setProfileOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '920px', width: '95vw' }}>
+              <DialogBody>
+                <DialogTitle>
+                  Query profile{profileData?.query_id ? ` — ${profileData.query_id}` : ''}
+                </DialogTitle>
+                <DialogContent>
+                  {profileBusy && <Spinner size="small" label="Loading profile…" labelPosition="after" />}
+                  {profileError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{profileError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {profileData && !profileBusy && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Badge appearance="filled" color={profileData.status === 'FINISHED' ? 'success' : profileData.status === 'FAILED' ? 'danger' : 'informative'}>
+                          {profileData.status}
+                        </Badge>
+                        {profileData.statement_type && (
+                          <Badge appearance="outline">{profileData.statement_type}</Badge>
+                        )}
+                        {profileData.duration != null && (
+                          <Badge appearance="outline">Total: {(profileData.duration / 1000).toFixed(2)}s</Badge>
+                        )}
+                        {profileData.photon_coverage_pct != null && (
+                          <Badge appearance="outline" color="brand">Photon: {profileData.photon_coverage_pct}%</Badge>
+                        )}
+                        <Caption1>Plans: <strong>{profileData.plans_state ?? '—'}</strong></Caption1>
+                      </div>
+
+                      {profileData.error_message && (
+                        <MessageBar intent="error">
+                          <MessageBarBody>{profileData.error_message}</MessageBarBody>
+                        </MessageBar>
+                      )}
+
+                      {profileData.metrics && (
+                        <>
+                          <Divider>IO &amp; timing</Divider>
+                          <Table aria-label="Query metrics" size="small">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHeaderCell>Metric</TableHeaderCell>
+                                <TableHeaderCell>Value</TableHeaderCell>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {([
+                                ['Compilation', `${profileData.metrics.compilation_time_ms ?? '—'} ms`],
+                                ['Execution', `${profileData.metrics.execution_time_ms ?? '—'} ms`],
+                                ['Photon time', `${profileData.metrics.photon_total_time_ms ?? '—'} ms`],
+                                ['Result fetch', `${profileData.metrics.result_fetch_time_ms ?? '—'} ms`],
+                                ['Bytes read (total)', fmtBytes(profileData.metrics.read_bytes)],
+                                ['Bytes read (remote)', fmtBytes(profileData.metrics.read_remote_bytes)],
+                                ['Bytes read (cache)', fmtBytes(profileData.metrics.read_cache_bytes)],
+                                ['Bytes written', fmtBytes(profileData.metrics.write_remote_bytes)],
+                                ['Spill to disk', fmtBytes(profileData.metrics.spill_to_disk_bytes)],
+                                ['Network sent', fmtBytes(profileData.metrics.network_sent_bytes)],
+                                ['Rows read', profileData.metrics.rows_read_count != null ? profileData.metrics.rows_read_count.toLocaleString() : '—'],
+                                ['Rows produced', profileData.metrics.rows_produced_count != null ? profileData.metrics.rows_produced_count.toLocaleString() : '—'],
+                                ['Files scanned', profileData.metrics.read_files_count ?? '—'],
+                                ['Files pruned', profileData.metrics.pruned_files_count ?? '—'],
+                                ['Partitions scanned', profileData.metrics.read_partitions_count ?? '—'],
+                              ] as [string, string | number][]).map(([label, val]) => (
+                                <TableRow key={label}>
+                                  <TableCell><Caption1>{label}</Caption1></TableCell>
+                                  <TableCell className={s.cell}>{val}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+
+                      <Divider>Spark plan (physical DAG)</Divider>
+                      {profileData.spark_ui_url && (
+                        <Body1>
+                          Open the full physical plan / DAG in the Spark UI:{' '}
+                          <a href={profileData.spark_ui_url} target="_blank" rel="noopener noreferrer">
+                            {profileData.spark_ui_url}
+                          </a>
+                        </Body1>
+                      )}
+                      {profileData.plans != null && (
+                        <pre style={{
+                          fontFamily: 'Consolas, monospace', fontSize: 11, overflow: 'auto',
+                          maxHeight: 320, backgroundColor: tokens.colorNeutralBackground3,
+                          padding: 8, borderRadius: 4, margin: 0,
+                        }}>
+                          {JSON.stringify(profileData.plans, null, 2)}
+                        </pre>
+                      )}
+                      {profileData.plans == null && !profileData.spark_ui_url && (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            No inline plan returned for this query (likely a result-cache hit or a
+                            metadata-only statement). Re-run with a change that bypasses the cache to
+                            capture a plan.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setProfileOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -1338,6 +1517,14 @@ function fmtDuration(ms?: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function fmtBytes(b?: number): string {
+  if (b == null) return '—';
+  if (b < 1024) return `${b} B`;
+  if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`;
+  return `${(b / 1_073_741_824).toFixed(2)} GB`;
 }
 
 // ============================================================
