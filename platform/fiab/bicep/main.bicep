@@ -81,6 +81,9 @@ param loomIdentityPickerEnabled bool = false
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
+@description('Grant the Console UAMI "Storage Account Contributor" on each DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default.')
+param consolePrincipalNeedsLifecycleWrite bool = false
+
 @description('OpenAI region for chat models')
 param openaiLocation string
 
@@ -98,6 +101,11 @@ param powerBiSku string
 
 @description('Storage requires CMK (true at IL5)')
 param storageRequireCmk bool = false
+
+@description('Soft-delete retention days for ADLS Gen2 blob/directory recovery (OneLake Recycle bin restore window). 1–365. Default 30. GA all clouds.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
 
 @description('Key Vault Premium HSM isolated (true at IL5)')
 param keyVaultHsmIsolated bool = false
@@ -370,6 +378,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    recycleRetentionDays: recycleRetentionDays
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     agentFoundryEnabled: agentFoundryEnabled
@@ -470,7 +479,9 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
+    recycleRetentionDays: recycleRetentionDays
   }
 }
 
@@ -523,7 +534,9 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     shirAdminPassword: shirAdminPassword
+    recycleRetentionDays: recycleRetentionDays
   }
 }]
 
