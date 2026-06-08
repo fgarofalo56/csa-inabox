@@ -1,16 +1,20 @@
 'use client';
 
 import { use } from 'react';
-import { DataProductDetails } from '@/lib/data-products/data-product-details';
+import { DataProductDetailEditor } from '@/lib/editors/data-product-detail';
 
 /**
- * /data-products/[id] — data-product details / creation receipt. The static
- * /data-products/new route takes precedence for "new", so this only renders for
- * real Cosmos ids.
+ * F15 — consumer (read-only) data-product details page.
+ *
+ * The discoverable, non-owner-facing surface for a Published data product.
+ * Reachable from the governance catalog (Open data product) and the data
+ * products list / create-wizard landing. Renders the read-only details view +
+ * the purpose-bound "Request access" flow. Unlike /items/data-product/[id]
+ * (the owner editor, gated on workspace ownership), this page is open to any
+ * authenticated catalog reader; the editor hides owner-only affordances when
+ * the caller is not the owner (isOwner from /api/data-products/[id]).
  */
-interface Props { params: Promise<{ id: string }> }
-
-export default function DataProductDetailsPage(props: Props) {
+export default function DataProductConsumerPage(props: { params: Promise<{ id: string }> }) {
   const { id } = use(props.params);
-  return <DataProductDetails id={id} />;
+  return <DataProductDetailEditor id={id} />;
 }

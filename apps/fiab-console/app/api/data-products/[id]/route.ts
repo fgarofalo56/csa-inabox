@@ -1,14 +1,27 @@
 /**
- * Data-product BFF — partial-field GET + PATCH for ONE marketplace data product.
+ * Data-product BFF — consumer (read-only) GET + owner PATCH for ONE marketplace
+ * data product, against the SAME `items` Cosmos record (itemType 'data-product')
+ * the marketplace lists and the create wizard writes — so an edit here changes
+ * exactly what the marketplace shows (no separate copy).
  *
- *   GET   /api/data-products/[id]   → { ok, item, doc } (+ ETag response header)
+ *   GET   /api/data-products/[id]   → { ok, item, doc, ownerTenantId, isOwner }
+ *                                     (+ ETag response header).
  *   PATCH /api/data-products/[id]   → merge ONLY the supplied recognised fields
  *                                     into the Cosmos WorkspaceItem and persist.
  *                                     Returns { ok, item, doc, patched } (+ ETag).
  *
- * Two consumers share this surface, against the SAME `items` Cosmos record
- * (itemType 'data-product') the marketplace lists and the create wizard writes —
- * so an edit here changes exactly what the marketplace shows (no separate copy):
+ * GET is the F15 consumer surface: unlike /api/cosmos-items/data-product/[id]
+ * (which gates on workspace ownership and 404s for non-owners), this route
+ * returns ANY data product to any authenticated user — the Purview Unified
+ * Catalog model where published data products are discoverable to catalog
+ * readers. It resolves the owning workspace's tenantId so the caller can be told
+ * whether they own it (isOwner) and the UI can hide owner-edit controls for
+ * non-owners. The same payload carries `doc` + an ETag so an OWNER opening this
+ * page can edit in place.
+ *
+ * PATCH is owner-only: it loads the item via the tenant-scoped path (404s for
+ * non-owners) before merging, so a consumer can never write. Two owner callers
+ * share PATCH against the SAME record:
  *
  *   1. Attribute right-rail (F5/F11): { updateFrequency }, { termsOfUse[] },
  *      { documentation[] } — merged into item.state without clobbering siblings.
@@ -94,8 +107,11 @@ function toDoc(item: WithEtag): DataProductDoc {
   };
 }
 
-/** Load the data-product item and verify it belongs to the caller's tenant. */
-async function loadItem(itemId: string, tenantId: string): Promise<WithEtag | null> {
+/**
+ * Find the data-product item by id+itemType (cross-partition). NOT ownership
+ * gated — the F15 consumer view returns any discoverable data product.
+ */
+async function findItem(itemId: string): Promise<WithEtag | null> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WithEtag>({
@@ -106,7 +122,29 @@ async function loadItem(itemId: string, tenantId: string): Promise<WithEtag | nu
       ],
     })
     .fetchAll();
-  const item = resources[0];
+  return resources[0] ?? null;
+}
+
+/** Resolve the owning workspace's tenantId (best-effort) for the isOwner flag. */
+async function resolveOwnerTenantId(workspaceId: string): Promise<string | null> {
+  try {
+    const ws = await workspacesContainer();
+    const { resources } = await ws.items
+      .query<{ tenantId: string }>({
+        query: 'SELECT c.tenantId FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: workspaceId }],
+      })
+      .fetchAll();
+    return resources[0]?.tenantId ?? null;
+  } catch {
+    // Owner resolution is best-effort; the consumer view still renders.
+    return null;
+  }
+}
+
+/** Load the data-product item and verify it belongs to the caller's tenant. */
+async function loadOwnedItem(itemId: string, tenantId: string): Promise<WithEtag | null> {
+  const item = await findItem(itemId);
   if (!item) return null;
   const ws = await workspacesContainer();
   try {
@@ -124,10 +162,12 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(id, session.claims.oid);
+    const item = await findItem(id);
     if (!item) return err('Data product not found', 404, 'not_found');
+    const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
+    const isOwner = ownerTenantId !== null && ownerTenantId === session.claims.oid;
     return NextResponse.json(
-      { ok: true, item, doc: toDoc(item) },
+      { ok: true, item, doc: toDoc(item), ownerTenantId, isOwner },
       { headers: { ETag: item._etag ?? '' } },
     );
   } catch (e: any) {
@@ -138,7 +178,8 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 /**
  * Merge only the recognised fields. Each is independently optional so the client
  * sends just what it changed. Validation rejects bad shapes so the Cosmos doc
- * never holds an invalid frequency / malformed link.
+ * never holds an invalid frequency / malformed link. Owner-only: loads the item
+ * via the tenant-scoped path, so a consumer (non-owner) gets 404 and can't write.
  */
 export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
@@ -251,7 +292,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
 
   try {
-    const item = await loadItem(id, session.claims.oid);
+    const item = await loadOwnedItem(id, session.claims.oid);
     if (!item) return err('Data product not found', 404, 'not_found');
 
     const mergedState: Record<string, unknown> = { ...(item.state ?? {}) };
