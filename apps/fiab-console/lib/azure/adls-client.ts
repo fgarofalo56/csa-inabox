@@ -506,3 +506,129 @@ export async function revokeContainerRoleAssignment(roleAssignmentArmId: string)
   const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
   await armCall<void>(url, { method: 'DELETE' });
 }
+
+// ============================================================
+// OneLake Lifecycle Management — ADLS Gen2 blob lifecycle
+// management policies via the ARM management plane.
+//
+// Parity with Fabric "OneLake — Manage lifecycle" (≤10 rules per
+// workspace). The Azure-native backend is the storage account's
+// singleton `managementPolicies/default` resource — read/written in
+// FULL (partial updates are not supported by ARM). Each rule tiers or
+// deletes block blobs after N days since modification / last-access /
+// creation.
+//
+// Required role: Storage Account Contributor
+//   (17d1049b-9a84-46fb-8f53-869881c3d3ab) on the storage account —
+// grants Microsoft.Storage/storageAccounts/managementPolicies/write.
+// Granted by storage-lifecycle-rbac.bicep. A 403 surfaces as an honest
+// MessageBar naming that role (no Fabric dependency).
+// Docs: https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-overview
+// ============================================================
+
+const STORAGE_MGMT_API = '2023-05-01';
+
+/** Built-in Storage Account Contributor role GUID (global across all Azure clouds). */
+export const STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID = '17d1049b-9a84-46fb-8f53-869881c3d3ab';
+
+import {
+  deserialiseRule,
+  serialiseRule,
+  type ConditionField,
+  type LifecycleAction,
+  type LifecycleRule,
+} from './lifecycle-policy-shapes';
+export type { ConditionField, LifecycleAction, LifecycleRule } from './lifecycle-policy-shapes';
+
+/** Pointer to the storage account whose lifecycle policy is being read/written. */
+export interface LifecycleAccountRef {
+  /** Storage account name. Defaults to the primary DLZ account. */
+  account?: string;
+  /** Subscription id override (parsed from a workspace's bound ARM id). Defaults to LOOM_SUBSCRIPTION_ID. */
+  subscriptionId?: string;
+  /** Resource group override. Defaults to LOOM_DLZ_RG. */
+  resourceGroup?: string;
+}
+
+export type LifecyclePolicyErrorCode = 'missing_config' | 'forbidden' | 'arm_error';
+
+export class LifecyclePolicyError extends Error {
+  code: LifecyclePolicyErrorCode;
+  status?: number;
+  constructor(message: string, code: LifecyclePolicyErrorCode, status?: number) {
+    super(message);
+    this.name = 'LifecyclePolicyError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * Build the storage-account-level ARM resource path (no container suffix) for
+ * the lifecycle policy. Honours per-workspace overrides (sub/rg parsed from a
+ * bound storage-account ARM id) before falling back to env.
+ */
+function resolveAccountScope(ref?: LifecycleAccountRef): string {
+  const sub = ref?.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
+  const rg = ref?.resourceGroup || process.env.LOOM_DLZ_RG;
+  if (!sub || !rg) {
+    throw new LifecyclePolicyError(
+      'LOOM_SUBSCRIPTION_ID and LOOM_DLZ_RG required to resolve the storage account scope for lifecycle policies',
+      'missing_config',
+    );
+  }
+  const account = ref?.account || getAccountName();
+  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}`;
+}
+
+/** Translate an ARM error into a typed LifecyclePolicyError. */
+function asLifecycleError(e: any): LifecyclePolicyError {
+  if (e instanceof LifecyclePolicyError) return e;
+  const status: number | undefined = typeof e?.status === 'number' ? e.status : undefined;
+  if (status === 403) {
+    return new LifecyclePolicyError(
+      e?.message || 'Forbidden — missing Storage Account Contributor on the storage account',
+      'forbidden', 403,
+    );
+  }
+  return new LifecyclePolicyError(e?.message || `ARM error ${status ?? ''}`.trim(), 'arm_error', status);
+}
+
+/**
+ * Read the live lifecycle management policy for the storage account. Returns
+ * `[]` when no policy exists yet (HTTP 404 from ARM — not an error).
+ */
+export async function getLifecyclePolicy(ref?: LifecycleAccountRef): Promise<LifecycleRule[]> {
+  const scope = resolveAccountScope(ref);
+  const url = `${armBase()}${scope}/managementPolicies/default?api-version=${STORAGE_MGMT_API}`;
+  try {
+    const res = await armCall<any>(url);
+    const rules: any[] = res?.properties?.policy?.rules || [];
+    return rules.map(deserialiseRule).filter((r): r is LifecycleRule => r != null);
+  } catch (e: any) {
+    if (e?.status === 404) return []; // no policy yet
+    throw asLifecycleError(e);
+  }
+}
+
+/**
+ * Replace the lifecycle management policy in FULL (ARM does not support partial
+ * updates). Returns the re-serialised rules echoed by the PUT response.
+ */
+export async function setLifecyclePolicy(
+  rules: LifecycleRule[],
+  ref?: LifecycleAccountRef,
+): Promise<LifecycleRule[]> {
+  const scope = resolveAccountScope(ref);
+  const url = `${armBase()}${scope}/managementPolicies/default?api-version=${STORAGE_MGMT_API}`;
+  const body = {
+    properties: { policy: { rules: rules.map(serialiseRule) } },
+  };
+  try {
+    const res = await armCall<any>(url, { method: 'PUT', body: JSON.stringify(body) });
+    const out: any[] = res?.properties?.policy?.rules || [];
+    return out.map(deserialiseRule).filter((r): r is LifecycleRule => r != null);
+  } catch (e: any) {
+    throw asLifecycleError(e);
+  }
+}
