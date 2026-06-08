@@ -92,6 +92,11 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Soft-delete retention days for ADLS Gen2 recovery — surfaced to the Console as LOOM_RECYCLE_RETENTION_DAYS (OneLake Recycle bin restore window). Must match the storage account deleteRetentionPolicy. 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
 @description('Deploy the Loom apps (Console, MCP, Orchestrator, Copilot, Activator, Mirroring, Direct-Lake Shim). Requires the container images to exist in ACR first — set false on initial provision, then true after images are built + pushed (PRP-16).')
 param deployAppsEnabled bool = false
 
@@ -1256,6 +1261,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // container is created in landing-zone/storage.bicep; the Console UAMI
             // already holds Storage Blob Data Contributor on the account.
             { name: 'LOOM_CSV_IMPORTS_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/csv-imports' }
+            // LOOM_RECYCLE_RETENTION_DAYS — OneLake Recycle bin restore window.
+            // Mirrors the storage account's blob soft-delete deleteRetentionPolicy
+            // (landing-zone/storage.bicep recycleRetentionDays) so the recycle-bin
+            // UI shows the correct days-remaining countdown and computes purgeAfter.
+            { name: 'LOOM_RECYCLE_RETENTION_DAYS', value: string(recycleRetentionDays) }
             // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
             // card: when set, the BFF uploads a sample CSV to landing/samples and
             // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
