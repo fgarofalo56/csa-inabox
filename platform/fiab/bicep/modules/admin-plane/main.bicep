@@ -176,6 +176,12 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
+param loomOnelakeSecurityEnabled bool = false
+
+@description('Enable the OPT-IN Fabric OneLake dataAccessRoles sync path on the Console app (sets LOOM_FABRIC_SECURITY_ENABLED=true). The Azure-native ADLS ACL path is the default and needs no Fabric workspace. Ignored at the GCC-High / IL5 boundary (Fabric is not authorized there). Off by default.')
+param loomFabricSecurityEnabled bool = false
+
 @description('Synapse dev-endpoint DNS suffix for sovereign clouds. Commercial = azuresynapse.net (default); GCC-High / DoD = azuresynapse.us. Empty resolves to azuresynapse.net in code.')
 param loomSynapseDevSuffix string = ''
 
@@ -1189,6 +1195,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // scripts/csa-loom/grant-uami-graph-roles.sh post-deploy
             // bootstrap step performs (idempotent).
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
+            // OneLake Security (F7) — Azure-native folder/table ACL roles for
+            // lakehouse / mirrored items. The ADLS-ACL backend is enabled when
+            // the Console UAMI holds Storage Blob Data Owner (granted by
+            // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
+            { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
+            { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -1270,6 +1282,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
+            // OneLake Security (F7) — Azure-native folder/table ACL roles for
+            // lakehouse / mirrored items. The ADLS-ACL backend is enabled when
+            // the Console UAMI holds Storage Blob Data Owner (granted by
+            // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
+            { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
+            { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
           ]
         )
         secrets: concat(

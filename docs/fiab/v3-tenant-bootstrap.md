@@ -641,3 +641,69 @@ These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`
 `LOOM_AML_WORKSPACE_ID`, `LOOM_AML_PORTAL_BASE`. The gate is evaluated
 server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
 directly.
+
+---
+
+## OneLake Security (F7) — Console UAMI Storage Blob Data Owner {#onelake-security-acl}
+
+The **Security** tab in the Lakehouse / Mirrored-Database / Mirrored-Databricks
+editors creates **data-access roles** that grant Read / ReadWrite on chosen
+folders + tables to chosen members. The Azure-native backend enforces each role
+as **ADLS Gen2 POSIX ACLs** on the Delta folders (no Fabric workspace required).
+
+Setting ACLs **on behalf of other principals** requires the Console UAMI to hold
+**Storage Blob Data Owner** (`b7e6dc6d-f1e8-4753-8033-0f276bb0955b`) on the DLZ
+storage account — the only built-in role with the ACL-modify "superuser" bit
+(Reader / Contributor cannot set ACLs for others). This is off by default
+(least-privilege); enable it when you want the Security tab.
+
+### Step 1 — Deploy with the feature enabled
+
+```bicep
+// params/<cloud>-full.bicepparam
+param loomOnelakeSecurityEnabled = true   // → Storage Blob Data Owner grant + LOOM_ONELAKE_SECURITY_ACL=true
+// param loomFabricSecurityEnabled = true  // OPTIONAL opt-in Fabric dataAccessRoles mirror (non-Gov only)
+```
+
+`synapse.bicep` / `synapse-storage-rbac.bicep` then grant the Owner role
+(`consoleOwnerGrant`), and `admin-plane/main.bicep` sets
+`LOOM_ONELAKE_SECURITY_ACL=true` on loom-console.
+
+### Step 1b — Existing deployment (manual grant + env)
+
+```bash
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Owner" \
+  --scope /subscriptions/<sub>/resourceGroups/<dlz-rg>/providers/Microsoft.Storage/storageAccounts/<dlz-account>
+az containerapp update --name loom-console -g rg-csa-loom-admin-<region> \
+  --set-env-vars LOOM_ONELAKE_SECURITY_ACL=true
+```
+
+Until both are in place, the Security tab renders but **honest-gates** role
+creation with a MessageBar naming `LOOM_ONELAKE_SECURITY_ACL` + the Owner role.
+
+### Step 2 — Verify
+
+Open a lakehouse → **Security** → **New role**, pick `/Tables/<t>` + a member,
+**Create role**. Then the **Verification** view reads the live ACL back
+(`getAccessControl`) and confirms the member's object id is present — the
+read-back proves the grant is real.
+
+### Opt-in Fabric mirror (non-Gov only)
+
+With `LOOM_FABRIC_SECURITY_ENABLED=true` and a bound Fabric workspace + item id,
+the **Fabric sync** sub-tab pushes the Loom roles to Fabric's
+`PUT /workspaces/{ws}/items/{id}/dataAccessRoles` (replace-all). Honest-gated off
+in GCC-High / IL5 (Fabric is not authorized at that boundary) — the ADLS ACL path
+is the only one there and remains fully functional.
+
+### Bicep sync
+
+- Owner grant: `landing-zone/synapse.bicep` (`loomOnelakeSecurityEnabled`) →
+  `synapse-storage-rbac.bicep` (`consolePrincipalNeedsOwner`, `consoleOwnerGrant`).
+- Env vars: `admin-plane/main.bicep` (`loomOnelakeSecurityEnabled` →
+  `LOOM_ONELAKE_SECURITY_ACL`; `loomFabricSecurityEnabled` →
+  `LOOM_FABRIC_SECURITY_ENABLED`).
+- Cosmos container `onelake-security-roles` (PK `/itemId`) — created lazily by
+  `cosmos-client.ts`, no ARM step.

@@ -36,6 +36,9 @@ param consoleUamiName string = ''
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Enable OneLake Security (F7) — grants the Console UAMI Storage Blob Data Owner on the lakehouse ADLS account so the Security tab can set folder/table ACLs on behalf of role members. Off by default (least-privilege).')
+param loomOnelakeSecurityEnabled bool = false
+
 @description('Managed VNet enabled')
 param managedVnet bool = true
 
@@ -324,6 +327,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // Shared ADX cluster MI gets Storage Blob Data Reader so the Eventhouse
     // Delta endpoint (external table kind=delta) can read this lakehouse.
     adxClusterPrincipalId: skipRoleGrants ? '' : adxClusterPrincipalId
+    // F7 — when OneLake Security is enabled, the Console UAMI also gets Storage
+    // Blob Data Owner so the Security tab can set ACLs on behalf of role members.
+    consolePrincipalNeedsOwner: loomOnelakeSecurityEnabled
   }
 }
 
