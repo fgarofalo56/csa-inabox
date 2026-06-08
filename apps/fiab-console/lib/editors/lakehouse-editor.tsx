@@ -49,6 +49,10 @@ import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
 import { LoadToTableWizard } from './components/load-to-table-wizard';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
+import {
+  SHORTCUT_SOURCE_CARDS, ShortcutSourceLogo, ExternalCredsForm, RemoteBrowseTree,
+  type ExternalCredsState, type CredSourceType,
+} from '@/lib/components/onelake/shortcut-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -556,14 +560,6 @@ export function LakehouseEditor({ item, id }: Props) {
     engineObject?: string; format?: string; status: 'active' | 'pending' | 'error';
     statusDetail?: string; createdBy: string; createdAt: string;
   }
-  const SHORTCUT_SOURCES: { type: ShortcutTargetType; label: string; ready: boolean }[] = [
-    { type: 'internal', label: 'Internal Loom lakehouse', ready: true },
-    { type: 'adls', label: 'ADLS Gen2 / Azure Blob', ready: true },
-    { type: 's3', label: 'Amazon S3', ready: true },
-    { type: 'gcs', label: 'Google Cloud Storage', ready: true },
-    { type: 'dataverse', label: 'Dataverse', ready: true },
-    { type: 'delta_sharing', label: 'Delta Sharing (cross-tenant)', ready: false },
-  ];
   // In-tenant ADLS/Blob account picker (vs typing the abfss URI) + external SAS.
   const [scAdlsMode, setScAdlsMode] = useState<'picker' | 'external'>('picker');
   const [storageAccts, setStorageAccts] = useState<Array<{ name: string; dfsHost?: string; blobHost?: string; isHns: boolean; resourceGroup?: string }>>([]);
@@ -583,6 +579,10 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scInternalContainer, setScInternalContainer] = useState('');
   const [scInternalPath, setScInternalPath] = useState('');
   const [scKvSecret, setScKvSecret] = useState('');
+  // External-source (S3/GCS/ADLS/Dataverse) structured creds + browse selection.
+  // The credential value is written to Key Vault by the BFF; only the secret
+  // NAME (extCreds.secretName) is ever held here or persisted on the row.
+  const [extCreds, setExtCreds] = useState<ExternalCredsState>({ region: 'us-east-1' });
   const [scName, setScName] = useState('');
   const [scKind, setScKind] = useState<ShortcutKind>('files');
   const [scParentPath, setScParentPath] = useState('');
@@ -738,6 +738,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setScInternalContainer(''); setScInternalPath(''); setScKvSecret('');
     setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
     setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
+    setExtCreds({ region: 'us-east-1' });
   }, []);
 
   const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
@@ -750,6 +751,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setScSubmitting(true); setScSubmitError(null);
     // Resolve targetUri from the per-source fields.
     let targetUri = scTargetUri.trim();
+    let credentialRef: { kind: string; keyVaultSecret: string } | undefined;
     if (scType === 'internal') {
       const c = scInternalContainer.trim();
       const p = scInternalPath.trim().replace(/^\/+/, '');
@@ -757,18 +759,27 @@ export function LakehouseEditor({ item, id }: Props) {
     } else if (scType === 'adls' && scAdlsMode === 'picker' && scAcctHost) {
       // Build abfss from the picked account + container + path (no typed URI).
       const c = scAdlsContainer.trim();
-      const p = scAdlsPath.trim().replace(/^\/+/, '');
+      const p = (extCreds.selectedPath || scAdlsPath).trim().replace(/^\/+/, '');
       targetUri = `abfss://${c}@${scAcctHost}/${p}`;
+    } else if (scType === 's3' || scType === 'gcs') {
+      // External object store: target built from the browse selection; the
+      // credential lives in Key Vault (only its NAME travels with the row).
+      const scheme = scType === 's3' ? 's3' : 'gs';
+      const key = (extCreds.selectedPath || '').replace(/^\/+/, '');
+      targetUri = `${scheme}://${(extCreds.bucket || '').trim()}/${key}`;
+      credentialRef = extCreds.secretName
+        ? { kind: scType === 's3' ? 'awsKeys' : 'gcsServiceAccount', keyVaultSecret: extCreds.secretName }
+        : undefined;
+    } else if (scType === 'dataverse') {
+      // Dataverse binds via the Synapse-Link export path stored in Key Vault.
+      const sub = (extCreds.selectedPath || 'tables').replace(/^\/+/, '');
+      targetUri = `dataverse://${sub}`;
+      credentialRef = extCreds.secretName ? { kind: 'sas', keyVaultSecret: extCreds.secretName } : undefined;
+    } else if (scType === 'adls' && scAdlsMode === 'external') {
+      credentialRef = scKvSecret.trim() ? { kind: 'sas', keyVaultSecret: scKvSecret.trim() } : undefined;
+    } else if (scType === 'delta_sharing') {
+      credentialRef = scKvSecret.trim() ? { kind: 'deltaSharing', keyVaultSecret: scKvSecret.trim() } : undefined;
     }
-    const credentialRef = scKvSecret.trim()
-      ? {
-          kind: scType === 's3' ? 'awsKeys'
-              : scType === 'gcs' ? 'gcsServiceAccount'
-              : scType === 'delta_sharing' ? 'deltaSharing'
-              : 'sas',
-          keyVaultSecret: scKvSecret.trim(),
-        }
-      : undefined;
     // F9 — on a schema-enabled lakehouse a Tables shortcut lands inside its
     // target schema folder (Tables/<schema>/<name>), mirroring Fabric's schema
     // shortcut. This is a real registry effect (fullPath includes the schema).
@@ -791,7 +802,7 @@ export function LakehouseEditor({ item, id }: Props) {
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, loadShortcuts]);
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, extCreds, loadShortcuts]);
 
   // Register a PLANNED bundle shortcut into the live registry (one click) — the
   // bundle only carries metadata, so this materializes it against the real
@@ -3545,21 +3556,24 @@ export function LakehouseEditor({ item, id }: Props) {
                 <DialogContent>
                   {scStep === 1 && (
                     <>
-                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds need a Key Vault credential.</Caption1>
+                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
-                        {SHORTCUT_SOURCES.map((src) => (
+                        {SHORTCUT_SOURCE_CARDS.map((src) => (
                           <Button
                             key={src.type}
                             appearance={scType === src.type ? 'primary' : 'outline'}
-                            icon={<CloudLink20Regular />}
                             onClick={() => setScType(src.type)}
-                            style={{ justifyContent: 'flex-start', height: 'auto', padding: '10px 12px' }}
+                            style={{ justifyContent: 'flex-start', height: 'auto', padding: '10px 12px', textAlign: 'left' }}
                           >
-                            <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-                              <span>{src.label}</span>
-                              <Badge appearance="tint" color={src.ready ? 'success' : 'warning'} size="small">
-                                {src.ready ? 'UAMI-ready' : 'Needs credential'}
-                              </Badge>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                              <ShortcutSourceLogo type={src.type} size={28} />
+                              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+                                <span style={{ fontWeight: 600 }}>{src.label}</span>
+                                <Caption1 style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'normal' }}>{src.blurb}</Caption1>
+                                <Badge appearance="tint" color={src.uamiReady ? 'success' : 'warning'} size="small">
+                                  {src.uamiReady ? 'UAMI-ready' : 'Key Vault credential'}
+                                </Badge>
+                              </span>
                             </span>
                           </Button>
                         ))}
@@ -3618,8 +3632,19 @@ export function LakehouseEditor({ item, id }: Props) {
                               </div>
                               {scAcctHost && scAdlsContainer && (
                                 <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
-                                  abfss://{scAdlsContainer}@{scAcctHost}/{scAdlsPath.replace(/^\/+/, '')}
+                                  abfss://{scAdlsContainer}@{scAcctHost}/{(extCreds.selectedPath || scAdlsPath).replace(/^\/+/, '')}
                                 </Caption1>
+                              )}
+                              {scAcctHost && scAdlsContainer && (
+                                <Field label="Browse remote objects" hint="Click a folder or file to set the path (runs on the Console UAMI).">
+                                  <RemoteBrowseTree
+                                    sourceType="adls"
+                                    account={scAcctHost.split('.')[0]}
+                                    container={scAdlsContainer}
+                                    onSelect={(path) => { setExtCreds((c) => ({ ...c, selectedPath: path })); setScAdlsPath(path); }}
+                                    selectedPath={extCreds.selectedPath}
+                                  />
+                                </Field>
                               )}
                             </>
                           ) : (
@@ -3638,23 +3663,31 @@ export function LakehouseEditor({ item, id }: Props) {
                       )}
                       {(scType === 's3' || scType === 'gcs' || scType === 'dataverse') && (
                         <>
-                          <MessageBar intent="warning">
-                            <MessageBarBody>
-                              {scType === 's3' && 'Amazon S3 requires AWS credentials. '}
-                              {scType === 'gcs' && 'Google Cloud Storage requires a service-account JSON. '}
-                              {scType === 'dataverse' && 'Dataverse reads via its Synapse-Link export storage. '}
-                              Store the secret in Key Vault and name it below; create will save the reference and
-                              honest-gate the read-through until the credential wiring lands.
-                            </MessageBarBody>
-                          </MessageBar>
-                          <Field label="Target URI" required
-                            hint={scType === 's3' ? 's3://<bucket>/<path>' : scType === 'gcs' ? 'gs://<bucket>/<path>' : 'Dataverse export ADLS path'}>
-                            <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
-                              placeholder={scType === 's3' ? 's3://my-bucket/data' : scType === 'gcs' ? 'gs://my-bucket/data' : 'abfss://dataverse@…'} />
+                          <Field label="Shortcut name" required hint="Used to name the Key Vault secret and the shortcut.">
+                            <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder={scType === 's3' ? 'partner_products' : scType === 'gcs' ? 'gcs_exports' : 'dataverse_accounts'} />
                           </Field>
-                          <Field label="Key Vault secret name" hint="The admin-plane Key Vault secret holding the credential.">
-                            <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-s3-creds" />
+                          <ExternalCredsForm
+                            sourceType={scType as CredSourceType}
+                            lakehouseId={shortcutLakehouseId}
+                            shortcutName={scName}
+                            value={extCreds}
+                            onChange={setExtCreds}
+                          />
+                          <Field label="Browse remote objects" hint="Click a folder or file to set the shortcut target.">
+                            <RemoteBrowseTree
+                              sourceType={scType as CredSourceType}
+                              bucket={extCreds.bucket}
+                              region={extCreds.region}
+                              kvSecret={extCreds.secretName}
+                              onSelect={(path) => setExtCreds((c) => ({ ...c, selectedPath: path }))}
+                              selectedPath={extCreds.selectedPath}
+                            />
                           </Field>
+                          {(scType === 's3' || scType === 'gcs') && extCreds.bucket && (
+                            <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                              {scType === 's3' ? 's3' : 'gs'}://{extCreds.bucket}/{(extCreds.selectedPath || '').replace(/^\/+/, '')}
+                            </Caption1>
+                          )}
                         </>
                       )}
                       {scType === 'delta_sharing' && (
