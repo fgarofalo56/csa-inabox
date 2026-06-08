@@ -511,6 +511,9 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
+param loomPurviewUnifiedAccount string = ''
+
 @description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
 @allowed(['cosmos', 'fabric'])
 param loomDomainsBackend string = 'cosmos'
@@ -1188,14 +1191,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
-            // Data-products store backend (Wave 4 — Data Marketplace). Empty →
-            // the Azure-native Cosmos DataProductStore, whose six containers
-            // (dataproducts /tenantId, dataproduct-jobs /dataProductId,
-            // access-requests /dataProductId, attribute-groups /tenantId,
-            // okrs /tenantId, governance-domains /tenantId) are created lazily by
-            // cosmos-client ensure() (createIfNotExists) on first access — no
-            // extra ARM resources beyond the account + database. No Microsoft
-            // Fabric / Purview-unified-catalog dependency on this default path.
+            // Data-products store backend (Wave 4 — Data Marketplace / F22).
+            // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
+            // Microsoft Fabric / Purview-unified-catalog dependency). Set to
+            // 'unified-catalog' to opt into the Purview Unified Catalog REST
+            // adapter (Commercial only — GCC / GCC-High / IL5 fall through to
+            // Cosmos silently; CSA_LOOM_BOUNDARY is injected for every app by
+            // app-deployments.bicep so the factory's Gov fall-through needs no
+            // extra var here). When opted in WITHOUT loomPurviewUnifiedAccount
+            // the factory renders an honest gate instead of fabricated data.
             { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomDataproductsBackend }
             // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
             // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
@@ -1204,6 +1208,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
             { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
+          // F22 — Purview Unified Catalog account for the data-product adapter.
+          // Only emitted when set; absence makes the factory serve the honest
+          // gate (501/503 + remediation) on Commercial when
+          // LOOM_DATAPRODUCTS_BACKEND=unified-catalog, rather than fabricated data.
+          !empty(loomPurviewUnifiedAccount) ? [
+            { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
+          ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
