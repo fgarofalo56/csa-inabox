@@ -1470,7 +1470,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
             // AOAI inference endpoint + model deployment names for the Agent
             // Service account. Consumed by the AOAI clients (chat + embeddings).
-            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
+            // AOAI inference endpoint + model deployment names. Sourced from the
+            // dedicated Agent Service account when present, else from the shared
+            // Foundry hub (so the AI Functions Gov/AOAI path works on a hub-only
+            // deploy — the deployment is then discovered from the hub connections
+            // by resolveAoaiTarget()).
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '') }
             { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
