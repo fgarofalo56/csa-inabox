@@ -96,6 +96,65 @@ resource atlasNamespace 'Microsoft.ContainerService/managedClusters/namespaces@2
 }
 
 // =====================================================================
+// Domain Images — Azure Blob Storage (F4 domain gallery)
+//
+// Per-cloud blob endpoint:
+//   Commercial / GCC:  https://{acct}.blob.core.windows.net
+//   GCC-High / IL5:    https://{acct}.blob.core.usgovcloudapi.net
+//
+// UAMI grant: Storage Blob Data Reader (2a2b9908-...) so the Console can
+// read/list domain gallery images (the F4 Governance Domains editor offers an
+// icon/image gallery). The UAMI must already exist at deploy time (from the
+// identity module). Grant is skipped when consolePrincipalId is empty or
+// skipRoleGrants is true. Storage is deployed whenever purviewEnabled is true;
+// at IL5 (Atlas primary) pass domainImagesEnabled if image storage is still
+// wanted — it is gated on purviewEnabled here to avoid an always-on account.
+// =====================================================================
+
+@description('Storage account name for F4 domain gallery images. Globally unique, <=24 chars. Defaults to a stable hash of the resource group id.')
+@minLength(3)
+@maxLength(24)
+param domainImagesStorageName string = 'stloomdomimg${take(uniqueString(resourceGroup().id), 8)}'
+
+resource domainImagesStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (purviewEnabled) {
+  name: take(domainImagesStorageName, 24)
+  location: location
+  tags: complianceTags
+  sku: { name: 'Standard_LRS' }
+  kind: 'StorageV2'
+  properties: {
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    accessTier: 'Hot'
+  }
+}
+
+resource domainImagesBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (purviewEnabled) {
+  parent: domainImagesStorage
+  name: 'default'
+}
+
+resource domainImagesContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (purviewEnabled) {
+  parent: domainImagesBlobService
+  name: 'domain-images'
+  properties: { publicAccess: 'None' }
+}
+
+// Storage Blob Data Reader for the Console UAMI — lets the BFF read/list gallery blobs.
+resource domainImagesReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled && !empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: domainImagesStorage
+  name: guid(domainImagesStorage.id, consolePrincipalId, '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1') // Storage Blob Data Reader
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// =====================================================================
 // Outputs — caller uses these to wire DLZ catalog endpoints
 // =====================================================================
 
@@ -120,4 +179,10 @@ output atlasEndpoint string = atlasOnAksEnabled
 // data-plane). The bootstrap workflow performs the grant.
 output consolePurviewRoleGrant string = purviewEnabled && !empty(consolePrincipalId)
   ? 'Post-deploy: ROLE=data-reader CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
+  : ''
+
+// F4 domain-image gallery storage — consumed by main.bicep → LOOM_DOMAIN_IMAGES_URL.
+output domainImagesStorageId string = purviewEnabled ? domainImagesStorage.id : ''
+output domainImagesEndpoint string = purviewEnabled
+  ? 'https://${domainImagesStorage.name}.blob.core.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
   : ''
