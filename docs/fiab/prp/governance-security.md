@@ -167,7 +167,7 @@ partial backend, MessageBar) · 🔶 stub (renders, no API wiring) · ❌ missin
 | F8 | OneLake Row-Level Security (WHERE predicate) | Synapse/SQL view + `CREATE SECURITY POLICY` over Delta table | RLS sub-section in Security tab: WHERE editor (Monaco, 1000-char, regex-validated), "Test predicate" button, OR-union note, Preview badge | All 4 | 🔶 stub | Build RLS editor; generate+execute SECURITY POLICY via `synapse-sql-client`; test-predicate runs SELECT |
 | F9 | OneLake Column-Level Security (hidden columns) | Synapse/SQL `GRANT/DENY` on columns + masked view | CLS sub-section: multi-select column picker, hidden list, role-conflict warning, deny-semantic note | All 4 | 🔶 stub | Build CLS editor; column GRANT/DENY generation; conflict detection |
 | F10 | SQL analytics endpoint — User's-identity mode | Synapse/SQL connection mode (delegated vs caller token); Cosmos accessMode flag | "Data access mode" section: Delegated/User's-identity radios, one-time confirmation dialog | All 4 | 🔶 stub | Build section; PATCH accessMode in Cosmos; switch connection auth in `synapse-sql-client` |
-| F11 | Warehouse / SQL endpoint — SQL granular security (T-SQL) | Synapse/Azure SQL TDS: object GRANT, column GRANT, RLS function+policy, DDM | "SQL Security" side panel + Monaco T-SQL editor; wizards: Object GRANT, Column GRANT, Row-level policy, Dynamic Data Masking; Entra-auth only | All 4 | 🔶 placeholder | Embed Monaco (T-SQL); build 4 wizards generating + executing T-SQL via TDS; preview-SQL pane |
+| F11 | Warehouse / SQL endpoint — SQL granular security (T-SQL) | Synapse/Azure SQL TDS: object GRANT, column GRANT, RLS function+policy, DDM | "SQL Security" side panel + Monaco T-SQL editor; wizards: Object GRANT, Column GRANT, Row-level policy, Dynamic Data Masking; Entra-auth only | All 4 | ✅ built | Done: `lib/panes/sql-security-panel.tsx` + `lib/sql/tsql-builders.ts` + `app/api/items/[type]/[id]/sql-security/route.ts`; 4 wizards generate+preview+execute real T-SQL over TDS (Entra-only); EXECUTE-AS verify; RLS honest-gated on Serverless. Parity: `docs/fiab/parity/sql-security.md` |
 | F12 | Sensitivity labels — manual labeling | Graph IP taxonomy; Cosmos assignment + Purview label on asset | Label flyout on item header (PATCH label); greyed labels per policy; descriptions | All 4 | ✅ built (API) | Wire flyout on item header; apply via PATCH; policy-greyed labels; descriptions |
 | F13 | Sensitivity labels — default labeling (tenant + domain) | Cosmos tenant/domain default-label config; applied on create | Admin tenant settings: enable toggle + label picker; Domain → Delegated → default-label dropdown | All 4 | 🔶 placeholder | Build tenant + domain default-label config; apply on item creation |
 | F14 | Sensitivity labels — mandatory labeling | Cosmos policy flag; intercept save flow | Tenant settings "Require label" toggle + "Power BI only" info card; intercept save | All 4 | 🔶 placeholder | Build toggle; enforce at item-save; info card |
@@ -434,7 +434,7 @@ repo root; `lib` = `apps/fiab-console/lib`, `app` = `apps/fiab-console/app`.
 - **Acceptance:** switching to user's-identity makes a real query run under the
   caller's token; persisted; confirmation explains one-time nature.
 
-### Task 11 — SQL granular security wizards (F11)
+### Task 11 — SQL granular security wizards (F11) — ✅ SHIPPED
 - **Goal:** T-SQL object/column GRANT, RLS, DDM on Warehouse/SQL endpoint.
 - **Files:** create `lib/panes/sql-security-panel.tsx`,
   `lib/sql/tsql-builders.ts`; reuse `lib/azure/sql-objects-client.ts`,
@@ -446,6 +446,16 @@ repo root; `lib` = `apps/fiab-console/lib`, `app` = `apps/fiab-console/app`.
   Row-level policy / Dynamic Data Masking) each with a preview-SQL pane before run.
 - **Acceptance:** each wizard executes real T-SQL and the effect is verifiable
   (e.g., masked column returns masked value for the test principal); Entra-only.
+- **Delivered:** `lib/sql/tsql-builders.ts` (pure, injection-safe builders + 23
+  unit tests) → `app/api/items/[type]/[id]/sql-security/route.ts`
+  (GET catalog state; POST preview/execute/verify; dispatches Synapse
+  Dedicated/Serverless + Azure SQL; RLS honest-gated on Serverless) →
+  `lib/panes/sql-security-panel.tsx` (4 wizards + Current-security tab + Monaco
+  preview pane + EXECUTE-AS verify). Mounted in the Azure SQL editor ("SQL
+  security" tab) and Synapse Dedicated/Serverless editors (ribbon → dialog).
+  db_owner bootstrap: `platform/fiab/bootstrap/sql-security-bootstrap.sql`.
+  Parity doc: `docs/fiab/parity/sql-security.md`. Capability:
+  `service.sql-security`.
 
 ### Task 12 — Sensitivity-label flyout (F12) + taxonomy
 - **Goal:** wire manual labeling to the item header.

@@ -44,6 +44,16 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+// Wave 4 — Data Marketplace / Governance containers.
+let _dataProducts: Container | null = null;
+let _dataProductJobs: Container | null = null;
+let _accessRequests: Container | null = null;
+let _attributeGroups: Container | null = null;
+let _okrs: Container | null = null;
+let _governanceDomains: Container | null = null;
+let _itemPermissions: Container | null = null;
+let _wsRoles: Container | null = null;
+let _labelAssignments: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +152,45 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Data Marketplace / Governance containers (Wave 4). Partitioned by tenantId
+  // (product catalog, attribute groups, OKRs, governance domains) or
+  // dataProductId (jobs, access requests) so every per-product or per-tenant
+  // lookup hits a single physical partition. Created lazily (createIfNotExists)
+  // so a fresh environment needs no extra ARM/Bicep step beyond the
+  // account + database — exactly like every other Loom container above.
+  _dataProducts      = await mk('dataproducts',        '/tenantId');
+  _dataProductJobs   = await mk('dataproduct-jobs',    '/dataProductId');
+  _accessRequests    = await mk('access-requests',     '/dataProductId');
+  _attributeGroups   = await mk('attribute-groups',    '/tenantId');
+  _okrs              = await mk('okrs',                '/tenantId');
+  // Item-level permissions & sharing (F6) — one row per (item, principal),
+  // partitioned by the item id so every per-item permission lookup hits a
+  // single physical partition. The Azure-native default mirrors each grant to
+  // ADLS POSIX ACLs + ARM Storage data-plane RBAC; Cosmos is the source of
+  // truth for the "Manage permissions" list. Created lazily so a fresh
+  // environment needs no extra ARM/Bicep step beyond the account+database.
+  _itemPermissions = await mk('item-permissions', '/itemId');
+  // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
+  // One row per principal (user / group / SP) per workspace, partitioned by the
+  // workspace so the Manage Access pane hits a single physical partition. Keyed
+  // by principalId (NOT UPN) so groups — which have no UPN — are first-class.
+  // Distinct from the legacy UPN-keyed `workspace-permissions` container, which
+  // is left untouched for the data-agent config authz path.
+  _wsRoles = await mk('workspace-roles', '/workspaceId');
+  // Governance Domains (F4) — one doc per domain, partitioned by tenant so
+  // every Governance "Domains" list lookup hits a single physical partition.
+  // Created lazily; no pre-step beyond the Cosmos account + database. The
+  // Purview classic-collection mirror is best-effort on top of this store.
+  // Shared by both the Wave-4 marketplace catalog and the governance dashboard.
+  _governanceDomains = await mk('governance-domains', '/tenantId');
+  // Sensitivity-label assignments — one row per manual label application to a
+  // Loom item (F12 sensitivity-label flyout). Mirrors what's written into
+  // item.state.sensitivityLabel, but as an append-only, tenant-partitioned
+  // audit tier so the governance dashboard can query "every label change in
+  // the tenant" without scanning every item's state field. PK /tenantId.
+  // createIfNotExists keeps a fresh environment from needing an extra
+  // ARM/Bicep step beyond the account+database.
+  _labelAssignments = await mk('label-assignments', '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +200,17 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
+export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
+export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
+export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
+
+// Wave 4 — Data Marketplace / Governance accessors.
+export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
+export async function dataProductJobsContainer(): Promise<Container> { await ensure(); return _dataProductJobs!; }
+export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
+export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
+export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +273,9 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
+  'dataproducts', 'dataproduct-jobs', 'access-requests',
+  'attribute-groups', 'okrs',
 ];
 
 /** List all Loom containers with their current throughput shape. */
