@@ -45,6 +45,7 @@ import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipelin
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { WarehouseAlerts } from './components/warehouse-alerts';
 import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { downloadResultsCsv, downloadResultsJson } from './components/result-export';
@@ -691,6 +692,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  // Query-result alerts (Databricks SQL Alerts on Comm/GCC; Azure Monitor on Gov).
+  const [alertsOpen, setAlertsOpen] = useState(false);
   // UC column-mask + row-filter wizards (granular security beyond object grants).
   const [ucSecOpen, setUcSecOpen] = useState(false);
   // AI functions helper (sentiment/classify/translate/summarize/extract).
@@ -1370,6 +1373,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Modeling', actions: [
         // Loom-native Model view — relationships become real UC FK constraints.
         { label: 'Model view', onClick: () => setEditorTab('model') },
+      ]},
+      { label: 'Alerts', actions: [
+        { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Databricks SQL Alerts)' },
       ]},
     ]},
   ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel]);
@@ -2158,6 +2164,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
 
+          <WarehouseAlerts
+            engine="databricks-sql-warehouse"
+            id={id}
+            warehouseId={warehouseId}
+            open={alertsOpen}
+            onOpenChange={setAlertsOpen}
+          />
           <Dialog open={ucSecOpen} onOpenChange={(_, d) => setUcSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>

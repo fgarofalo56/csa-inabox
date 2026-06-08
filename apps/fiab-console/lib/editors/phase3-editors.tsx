@@ -72,6 +72,7 @@ import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-script
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { WarehouseAlerts } from './components/warehouse-alerts';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
@@ -8364,6 +8365,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [ctasTable, setCtasTable] = useState('');
   const [ctasBusy, setCtasBusy] = useState(false);
   const [ctasError, setCtasError] = useState<string | null>(null);
+  // Query-result alerts — Azure Monitor scheduled-query rule (Gov) /
+  // Databricks SQL Alerts (Comm/GCC). Backend chosen server-side by cloud.
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
   // Column & Row security dialog (column-level GRANT, RLS, DDM) over the
   // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
@@ -8517,6 +8521,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // Source control lives at the workspace level in Fabric — open the
         // workspace Git settings (honest navigation, not a stub).
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
+      ]},
+      { label: 'Alerts', actions: [
+        { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Azure Monitor scheduled-query rule)' },
       ]},
       { label: 'Security', actions: [
         // Column-level GRANT, Row-Level Security and Dynamic Data Masking over
@@ -8924,6 +8931,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             </DialogSurface>
           </Dialog>
 
+          <WarehouseAlerts engine="warehouse" id={id} open={alertsOpen} onOpenChange={setAlertsOpen} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>

@@ -1639,3 +1639,178 @@ export async function deleteUcVolumesFile(volumePath: string): Promise<void> {
   }
 }
 
+// ============================================================
+// Databricks SQL — Queries + Alerts (query-result alerting)
+//
+// The modern Databricks SQL alerting model (Learn:
+// /azure/databricks/sql/user/alerts/) is a two-object pair:
+//   1. a saved Query object — owns the SQL text + the warehouse it runs on
+//      (POST /api/2.0/sql/queries)
+//   2. an Alert object — references that query_id, evaluates a Condition
+//      (op / value-column / threshold) on the result, and runs on a Schedule
+//      (POST /api/2.0/sql/alerts)
+// Both modern endpoints wrap the resource in a single-key envelope
+// (`{ query: {...} }` / `{ alert: {...} }`) and return the created object with
+// its server-assigned `id`. Condition shape is grounded in the documented CLI
+// example:
+//   { op:'GREATER_THAN', operand:{ column:{ name:'cpu' } },
+//     threshold:{ value:{ double_value: 80 } } }
+// Notification destinations are managed separately (workspace notification
+// destinations); the alert links subscribers by id. This client creates the
+// rule; the editor surfaces an honest note that subscribers are added in the
+// Databricks portal / via the destinations API.
+// ============================================================
+
+/** A Databricks SQL saved query (the query an alert evaluates). */
+export interface DbxSqlQuery {
+  id: string;
+  display_name?: string;
+  query_text?: string;
+  warehouse_id?: string;
+}
+
+/**
+ * Create a saved SQL query that an alert can evaluate.
+ *   POST /api/2.0/sql/queries  body { query: { display_name, query_text, warehouse_id } }
+ * Returns the created query (incl. its server-assigned `id`).
+ */
+export async function createDbxQuery(
+  displayName: string,
+  queryText: string,
+  warehouseId: string,
+): Promise<DbxSqlQuery> {
+  const res = await dbxFetch('/api/2.0/sql/queries', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: { display_name: displayName, query_text: queryText, warehouse_id: warehouseId },
+    }),
+  });
+  const body = await asJsonOrThrow<DbxSqlQuery & { query?: DbxSqlQuery }>(res, 'createDbxQuery');
+  // Tolerate either a bare object or a `{ query: {...} }` envelope on the response.
+  return (body.id ? body : body.query) as DbxSqlQuery;
+}
+
+/** Move a saved SQL query to the trash. DELETE /api/2.0/sql/queries/{id}. */
+export async function trashDbxQuery(queryId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/sql/queries/${encodeURIComponent(queryId)}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'trashDbxQuery');
+}
+
+export type DbxAlertOp =
+  | 'GREATER_THAN'
+  | 'GREATER_THAN_OR_EQUAL'
+  | 'LESS_THAN'
+  | 'LESS_THAN_OR_EQUAL'
+  | 'EQUAL'
+  | 'NOT_EQUAL';
+
+export interface DbxAlertCondition {
+  op: DbxAlertOp;
+  /** The value column of the query result to evaluate. */
+  operand: { column: { name: string } };
+  /** Numeric threshold the column value is compared against. */
+  threshold: { value: { double_value: number } };
+}
+
+export interface DbxAlertSchedule {
+  quartz_cron_schedule: { quartz_cron_expression: string; timezone_id: string };
+}
+
+export interface DbxAlert {
+  id: string;
+  display_name?: string;
+  query_id?: string;
+  condition?: DbxAlertCondition;
+  schedule?: DbxAlertSchedule;
+  /** OK | TRIGGERED | ERROR (modern alerts dropped the legacy UNKNOWN state). */
+  state?: string;
+  create_time?: string;
+  update_time?: string;
+  owner_user_name?: string;
+}
+
+/** List SQL alerts. GET /api/2.0/sql/alerts (paged: { results, next_page_token }). */
+export async function listDbxAlerts(opts?: {
+  page_size?: number;
+  page_token?: string;
+}): Promise<{ alerts: DbxAlert[]; next_page_token?: string }> {
+  const qs = new URLSearchParams();
+  if (opts?.page_size) qs.set('page_size', String(opts.page_size));
+  if (opts?.page_token) qs.set('page_token', opts.page_token);
+  const res = await dbxFetch(`/api/2.0/sql/alerts${qs.toString() ? `?${qs}` : ''}`);
+  const body = await asJsonOrThrow<{ results?: DbxAlert[]; alerts?: DbxAlert[]; next_page_token?: string }>(
+    res,
+    'listDbxAlerts',
+  );
+  return { alerts: body.results || body.alerts || [], next_page_token: body.next_page_token };
+}
+
+/** Get a single SQL alert. GET /api/2.0/sql/alerts/{id}. */
+export async function getDbxAlert(alertId: string): Promise<DbxAlert> {
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`);
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'getDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+export interface DbxAlertCreateSpec {
+  display_name: string;
+  query_id: string;
+  condition: DbxAlertCondition;
+  schedule?: DbxAlertSchedule;
+}
+
+/**
+ * Create a SQL alert.
+ *   POST /api/2.0/sql/alerts  body { alert: { display_name, query_id, condition, schedule? } }
+ * Returns the created alert incl. its server-assigned `id`.
+ */
+export async function createDbxAlert(spec: DbxAlertCreateSpec): Promise<DbxAlert> {
+  const res = await dbxFetch('/api/2.0/sql/alerts', {
+    method: 'POST',
+    body: JSON.stringify({
+      alert: {
+        display_name: spec.display_name,
+        query_id: spec.query_id,
+        condition: spec.condition,
+        ...(spec.schedule ? { schedule: spec.schedule } : {}),
+      },
+    }),
+  });
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'createDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+/**
+ * Partial-update a SQL alert (name / condition / schedule).
+ *   PATCH /api/2.0/sql/alerts/{id}  body { alert: { …fields }, update_mask: 'a,b' }
+ */
+export async function updateDbxAlert(
+  alertId: string,
+  patch: { display_name?: string; condition?: DbxAlertCondition; schedule?: DbxAlertSchedule },
+): Promise<DbxAlert> {
+  const fields: string[] = [];
+  const alert: Record<string, unknown> = {};
+  if (patch.display_name !== undefined) { alert.display_name = patch.display_name; fields.push('display_name'); }
+  if (patch.condition !== undefined) { alert.condition = patch.condition; fields.push('condition'); }
+  if (patch.schedule !== undefined) { alert.schedule = patch.schedule; fields.push('schedule'); }
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ alert, update_mask: fields.join(',') }),
+  });
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'updateDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+/**
+ * Move a SQL alert to the trash. DELETE /api/2.0/sql/alerts/{id}. Trashed alerts
+ * stop triggering immediately and are permanently deleted after 30 days.
+ */
+export async function trashDbxAlert(alertId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'trashDbxAlert');
+}
+
