@@ -641,3 +641,51 @@ These flow through `app-deployments.bicep` to the Console as `LOOM_AML_INSTANCE`
 `LOOM_AML_WORKSPACE_ID`, `LOOM_AML_PORTAL_BASE`. The gate is evaluated
 server-side in `/api/notebook/[id]/lsp`; the client never reads boundary env
 directly.
+
+## Govern tab — data-owner posture refresh (F3) {#posture-refresh}
+
+The **Govern tab → data-owner ("My items") view** (`/governance/govern?view=owner`)
+shows the signed-in user's governance posture — inventory, sensitivity-label
+coverage, and curation state — plus owner-scoped recommended-action cards. On
+tab-open the Console BFF dispatches an owner-scoped recompute to the
+**`posture-refresh`** Azure Function (fire-and-forget), which writes fresh
+aggregates to Cosmos; the Console then re-reads them. The surface is **fully
+functional without the Function** — when it is not wired, the BFF computes the
+same posture live from Cosmos and the UI shows an honest MessageBar. No Fabric /
+Power BI dependency on any path (all four clouds behave identically).
+
+### Cosmos containers (auto-created, no ARM step)
+
+Created lazily by the Console's `cosmos-client.ts` (`createIfNotExists`) on first
+access — no Bicep container resource needed beyond the account + database:
+
+| Container | Partition key | Doc |
+|-----------|---------------|-----|
+| `posture-aggregates` | `/ownerId` | `{ id: ownerId, ownerId, totalItems, labelCoveragePct, descriptionCoveragePct, endorsementCoveragePct, computedAt }` |
+| `recommended-actions` | `/ownerId` | `{ id: ownerId, ownerId, unlabeled[], undescribed[], unendorsed[], computedAt }` |
+
+`id == partitionKey == ownerId` (the owner OID), so every owner read/write is a
+single-partition point-operation — cross-owner leakage is structurally impossible.
+
+### Wire the Function (optional — UI works without it)
+
+1. Deploy `azure-functions/posture-refresh/deploy/main.bicep` (storage + Y1 plan +
+   Python Function App with system-assigned MI + cross-RG Cosmos data-plane grant).
+   See `azure-functions/posture-refresh/DEPLOYMENT.md`.
+2. Publish code, capture the host key, store it in the Loom Key Vault as
+   `loom-posture-function-key`.
+3. Set the admin-plane params so the Console picks it up:
+
+   ```bicep
+   // params/<cloud>-full.bicepparam
+   param loomPostureFunctionUrl = '<functionUrl output>'
+   // param loomPostureFunctionKeySecretName = 'loom-posture-function-key'  // default
+   ```
+
+   These surface as `LOOM_POSTURE_FUNCTION_URL` (plain) and
+   `LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault) on the Console. Empty URL →
+   honest gate + live compute fallback.
+
+Per-cloud: `LOOM_COSMOS_ENDPOINT` is already boundary-resolved by
+`admin-plane/main.bicep` (`documents.azure.com` Commercial/GCC,
+`documents.azure.us` GCC-High/IL5); the Function needs no cloud-specific code.
