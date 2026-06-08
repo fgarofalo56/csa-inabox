@@ -27,13 +27,14 @@
 
 import {
   dedicatedTarget,
+  serverlessTarget,
   executeQuery as synapseExecute,
   type SynapseTarget,
   type QueryResult,
 } from './synapse-sql-client';
 
 // Re-export so the BFF route can resolve the target + honest-gate in one import.
-export { dedicatedTarget, type SynapseTarget };
+export { dedicatedTarget, serverlessTarget, type SynapseTarget };
 
 // ── identifier / literal escaping (no string injection) ──────────────────────
 export function sqlBracket(ident: string): string {
@@ -228,6 +229,145 @@ export async function revokeTableSelect(
   return { revoked: `${label} ↛ ${name}` };
 }
 
+// ── column-level security (CLS): hidden columns via column-scope DENY ─────────
+//
+// Fabric's OneLake "Column-level security" hides specific columns from a role.
+// The Azure-native (no-Fabric) equivalent on the Synapse Dedicated SQL pool is
+// a **table-level GRANT + column-level DENY**:
+//
+//   GRANT SELECT ON [s].[t] TO [role];           -- role can query the table
+//   DENY  SELECT ON [s].[t]([SSN],[Phone]) TO [role];  -- but NOT these columns
+//
+// DENY semantics (DENY Object Permissions, T-SQL):
+//   • Column-level DENY takes precedence over column-level GRANT.
+//   • A table-level DENY does NOT override a column-level GRANT (backward-compat
+//     quirk) — so the "hide columns" model is table GRANT + column DENY, which
+//     also means newly-added columns stay visible (they inherit the table GRANT)
+//     until explicitly denied. Querying a denied column yields Msg 230.
+//
+// A column that carries BOTH a GRANT and a DENY for the same principal is a
+// conflict: DENY wins, the GRANT is dead weight. {@link listColumnDenyGrants}
+// + {@link listTableGrants} let the UI detect and warn on the overlap.
+
+/**
+ * List column-level **DENY** SELECT entries on user tables/views — the rows
+ * that hide columns from a principal. `minor_id > 0` → column-level (joined to
+ * sys.columns); `state_desc = 'DENY'`.
+ */
+export async function listColumnDenyGrants(target: SynapseTarget): Promise<TableGrantRow[]> {
+  const qr = await synapseExecute(
+    target,
+    `SELECT dp.name AS principal, dp.type_desc AS principalType,
+            s.name AS [schema], o.name AS [table],
+            col.name AS [column], perm.permission_name AS permissionName
+     FROM sys.database_permissions perm
+     JOIN sys.objects o ON o.object_id = perm.major_id
+     JOIN sys.schemas s ON s.schema_id = o.schema_id
+     JOIN sys.database_principals dp ON dp.principal_id = perm.grantee_principal_id
+     JOIN sys.columns col ON col.object_id = perm.major_id AND col.column_id = perm.minor_id
+     WHERE perm.class = 1
+       AND perm.permission_name = 'SELECT'
+       AND perm.state_desc = 'DENY'
+       AND perm.minor_id > 0
+       AND o.type IN ('U','V')
+       AND o.is_ms_shipped = 0
+     ORDER BY s.name, o.name, dp.name, perm.minor_id;`,
+  );
+  return toObjects(qr).map((r) => ({
+    principal: String(r.principal),
+    principalType: String(r.principalType || ''),
+    schema: String(r.schema),
+    table: String(r.table),
+    column: r.column == null ? null : String(r.column),
+    permissionName: String(r.permissionName),
+  }));
+}
+
+/**
+ * Hide columns from `upn` — issue a table-level GRANT SELECT (so the principal
+ * can still query the table) and a column-level DENY SELECT on the hidden
+ * columns. At least one column is required (a column-level DENY is meaningless
+ * without one). Identifiers resolved from the catalog by id.
+ */
+export async function denyColumnSelect(
+  target: SynapseTarget,
+  upn: string,
+  objectId: number,
+  columnIds: number[],
+): Promise<{ denied: string; hiddenColumns: string[] }> {
+  const name = (upn || '').trim();
+  if (!name) throw new Error('A principal UPN is required to hide columns.');
+  if (!Array.isArray(columnIds) || columnIds.length === 0) {
+    throw new Error('At least one column is required to hide (column-level DENY).');
+  }
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const cols = await resolveColumnNames(target, objectId, columnIds);
+  if (cols.length === 0) throw new Error('None of the requested columns exist on the table.');
+  const fq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  const sql =
+    ensureUserClause(name) +
+    `GRANT SELECT ON ${fq} TO ${sqlBracket(name)};\n` +
+    `DENY SELECT ON ${fq}${columnList(cols)} TO ${sqlBracket(name)};`;
+  await synapseExecute(target, sql);
+  return { denied: `${schema}.${table}(${cols.join(', ')}) ⊘ ${name}`, hiddenColumns: cols };
+}
+
+/**
+ * Un-hide columns — REVOKE the column-level SELECT entry (removes both any
+ * GRANT and the DENY at column scope) so the principal can see them again.
+ */
+export async function revokeColumnDeny(
+  target: SynapseTarget,
+  upn: string,
+  objectId: number,
+  columnIds: number[],
+): Promise<{ revoked: string; columns: string[] }> {
+  const name = (upn || '').trim();
+  if (!name) throw new Error('A principal UPN is required to un-hide columns.');
+  if (!Array.isArray(columnIds) || columnIds.length === 0) {
+    throw new Error('At least one column is required to un-hide.');
+  }
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const cols = await resolveColumnNames(target, objectId, columnIds);
+  if (cols.length === 0) throw new Error('None of the requested columns exist on the table.');
+  const fq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  await synapseExecute(target, `REVOKE SELECT ON ${fq}${columnList(cols)} FROM ${sqlBracket(name)};`);
+  return { revoked: `${schema}.${table}(${cols.join(', ')}) ↺ ${name}`, columns: cols };
+}
+
+/**
+ * Generate a **masked view** that projects NULL for the hidden columns —
+ * the Serverless SQL pool path (column-level DENY on base tables is not
+ * supported on Serverless, so a view is the parity mechanism there). The
+ * caller passes a {@link serverlessTarget}; columns are catalog-resolved from
+ * that same target. `CREATE OR ALTER VIEW` must be the only statement in its
+ * batch, so it runs as a single executeQuery call.
+ */
+export async function generateMaskedView(
+  target: SynapseTarget,
+  objectId: number,
+  hiddenColumnIds: number[],
+  viewSuffix: string,
+): Promise<{ viewFqn: string; sql: string; hiddenColumns: string[] }> {
+  const { schema, name: table } = await resolveTable(target, objectId);
+  const allCols = await listSqlColumns(target, objectId);
+  if (allCols.length === 0) throw new Error('The table/view has no columns to project.');
+  const hidden = new Set((hiddenColumnIds || []).filter((n) => Number.isInteger(n)));
+  const hiddenNames = allCols.filter((c) => hidden.has(c.columnId)).map((c) => c.name);
+  const viewName = `v_${safeSuffix(table)}_${safeSuffix(viewSuffix || 'masked')}`;
+  const viewFq = `${sqlBracket(schema)}.${sqlBracket(viewName)}`;
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+  const projection = allCols
+    .map((c) => (hidden.has(c.columnId) ? `NULL AS ${sqlBracket(c.name)}` : sqlBracket(c.name)))
+    .join(', ');
+  const sql =
+    `CREATE OR ALTER VIEW ${viewFq} AS\n` +
+    `SELECT ${projection}\n` +
+    `FROM ${tableFq};`;
+  await synapseExecute(target, sql);
+  return { viewFqn: `${schema}.${viewName}`, sql, hiddenColumns: hiddenNames };
+}
+
 // ── row-level security (Dedicated SQL pool only) ─────────────────────────────
 
 const RLS_SCHEMA = 'LoomSecurity';
@@ -336,6 +476,144 @@ export async function createRlsPolicy(
   );
   return { policyName: `${RLS_SCHEMA}.${polName}`, functionName: `${RLS_SCHEMA}.${fnName}` };
 }
+
+// ── free-form WHERE-predicate RLS (F8 — "OneLake security" custom predicate) ──
+
+// The predicate sanitizer lives in a dependency-free module so it can be
+// unit-tested without dragging in the Azure SDK / mssql. Re-exported here so
+// the BFF route imports validation + DDL from one place.
+export { RLS_WHERE_MAX, validateWhereClause } from './rls-predicate';
+import { validateWhereClause } from './rls-predicate';
+
+function whereClauseError(message: string): Error & { status: number; code: string } {
+  const err = new Error(message) as Error & { status: number; code: string };
+  err.status = 400;
+  err.code = 'invalid_where_clause';
+  return err;
+}
+
+/**
+ * Create a row-level security FILTER predicate from a free-form WHERE clause
+ * (F8). The clause is validated, parse/bind-probed (so an invalid predicate
+ * never drops the existing policy), then embedded in the inline TVF:
+ *
+ *   CREATE FUNCTION LoomSecurity.fn_rls_<table>(@cmp sysname)
+ *     RETURNS TABLE WITH SCHEMABINDING AS
+ *     RETURN SELECT 1 AS rls_result
+ *     WHERE (<user predicate>) OR IS_MEMBER('db_owner') = 1;
+ *
+ * The owner-bypass (`OR IS_MEMBER('db_owner') = 1`) is always appended so a
+ * database owner can still read every row. The filter column is resolved from
+ * the catalog by integer column_id (never user text) and passed positionally
+ * as @cmp. Dedicated SQL pool only.
+ */
+export async function createRlsPolicyWithPredicate(
+  target: SynapseTarget,
+  opts: { objectId: number; filterColumnId: number; whereClause: string },
+): Promise<{ policyName: string; functionName: string; predicate: string }> {
+  const verdict = validateWhereClause(opts.whereClause);
+  if (!verdict.ok) throw whereClauseError(verdict.error!);
+  const clause = opts.whereClause.trim();
+
+  const { schema, name: table } = await resolveTable(target, opts.objectId);
+  const cols = await resolveColumnNames(target, opts.objectId, [opts.filterColumnId]);
+  if (cols.length === 0) throw new Error('The chosen filter column does not exist on the table.');
+  const filterColumn = cols[0];
+
+  const fnName = `fn_rls_${safeSuffix(table)}`;
+  const polName = `pol_rls_${safeSuffix(table)}`;
+  const fnFq = `${sqlBracket(RLS_SCHEMA)}.${sqlBracket(fnName)}`;
+  const polFq = `${sqlBracket(RLS_SCHEMA)}.${sqlBracket(polName)}`;
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+
+  await ensureRlsSchema(target);
+
+  // Parse/bind PROBE first — validate the predicate compiles against a no-FROM
+  // SELECT (only @cmp + identity functions are in scope, exactly like the TVF).
+  // If it throws (precise SQL parse/bind error) we have NOT mutated any policy,
+  // so an invalid predicate can never leave the table unprotected.
+  await synapseExecute(
+    target,
+    `DECLARE @cmp sysname = N'';\n` +
+      `SELECT TOP 0 1 AS rls_result WHERE (${clause}) OR IS_MEMBER('db_owner') = 1;`,
+  );
+
+  // Drop any existing policy first (it depends on the function).
+  await synapseExecute(
+    target,
+    `IF EXISTS (SELECT 1 FROM sys.security_policies WHERE name = ${sqlString(polName)}) DROP SECURITY POLICY ${polFq};`,
+  );
+  await synapseExecute(
+    target,
+    `IF OBJECT_ID('${RLS_SCHEMA}.${fnName.replace(/'/g, "''")}') IS NOT NULL DROP FUNCTION ${fnFq};`,
+  );
+  // CREATE FUNCTION must be the only statement in its batch.
+  await synapseExecute(
+    target,
+    `CREATE FUNCTION ${fnFq}(@cmp sysname)\n` +
+      `RETURNS TABLE WITH SCHEMABINDING AS\n` +
+      `RETURN SELECT 1 AS rls_result\n` +
+      `WHERE (${clause}) OR IS_MEMBER('db_owner') = 1;`,
+  );
+  // CREATE SECURITY POLICY must be the only statement in its batch.
+  await synapseExecute(
+    target,
+    `CREATE SECURITY POLICY ${polFq}\n` +
+      `ADD FILTER PREDICATE ${fnFq}(${sqlBracket(filterColumn)}) ON ${tableFq}\n` +
+      `WITH (STATE = ON);`,
+  );
+  return { policyName: `${RLS_SCHEMA}.${polName}`, functionName: `${RLS_SCHEMA}.${fnName}`, predicate: clause };
+}
+
+/**
+ * Test a free-form RLS predicate against LIVE rows without creating a policy.
+ * Faithfully evaluates the predicate the policy would apply:
+ *   - `@cmp`            → each row's filter-column value (catalog-resolved name)
+ *   - USER_NAME()       → the `testIdentity` (the signed-in admin's UPN by
+ *   - SUSER_SNAME()       default) so the preview shows the rows THAT user would
+ *                         see, not the rows the BFF service identity sees.
+ *
+ * Returns `SELECT TOP <n>` of the live table filtered by the predicate. The
+ * owner-bypass is intentionally omitted here so the predicate's own filtering
+ * is visible (the connecting identity is db_owner and would otherwise match
+ * every row). Read-only — no DDL, no policy mutation.
+ */
+export async function testRlsPredicate(
+  target: SynapseTarget,
+  opts: { objectId: number; filterColumnId: number; whereClause: string; testIdentity: string; sampleRows?: number },
+): Promise<{ schema: string; table: string; filterColumn: string; testIdentity: string; result: QueryResult }> {
+  const verdict = validateWhereClause(opts.whereClause);
+  if (!verdict.ok) throw whereClauseError(verdict.error!);
+  const clause = opts.whereClause.trim();
+
+  const { schema, name: table } = await resolveTable(target, opts.objectId);
+  const cols = await resolveColumnNames(target, opts.objectId, [opts.filterColumnId]);
+  if (cols.length === 0) throw new Error('The chosen filter column does not exist on the table.');
+  const filterColumn = cols[0];
+
+  const testIdentity = (opts.testIdentity || '').trim();
+  const top = Math.min(Math.max(Number(opts.sampleRows) || 20, 1), 200);
+  const tableFq = `${sqlBracket(schema)}.${sqlBracket(table)}`;
+
+  // Substitute the only user-side tokens with injection-safe values:
+  //   @cmp           → t.[filterColumn]    (bracket-escaped catalog identifier)
+  //   USER_NAME()    → N'testIdentity'     (sqlString-escaped literal)
+  //   SUSER_SNAME()  → N'testIdentity'
+  // The rest of the clause already passed validateWhereClause (no quotes,
+  // comments, semicolons, or DDL/DML keywords) so it is safe to embed verbatim.
+  const probeClause = clause
+    .replace(/@cmp\b/gi, `t.${sqlBracket(filterColumn)}`)
+    .replace(/USER_NAME\s*\(\s*\)/gi, sqlString(testIdentity))
+    .replace(/SUSER_SNAME\s*\(\s*\)/gi, sqlString(testIdentity));
+
+  const result = await synapseExecute(
+    target,
+    `SELECT TOP ${top} * FROM ${tableFq} AS t WHERE (${probeClause});`,
+  );
+  return { schema, table, filterColumn, testIdentity, result };
+}
+
+// ── policy teardown ──────────────────────────────────────────────────────────
 
 /** Drop a row-level security policy (resolved from the catalog by object_id). */
 export async function dropRlsPolicy(target: SynapseTarget, policyObjectId: number): Promise<{ dropped: string }> {

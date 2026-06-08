@@ -44,6 +44,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
+import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -548,7 +549,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'catalog' | 'mirroring'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'catalog' | 'mirroring'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -709,11 +710,14 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Entra admin', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Set the Microsoft Entra admin' },
         { label: 'Geo-replication', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Create a geo-secondary' },
       ]},
+      { label: 'Data security', actions: [
+        { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
+      ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
       ]},
     ]},
-  ], [invLoading, loadInventory, server, bindConnection, qLoading, run, serverFqdn, loadSchema]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;
@@ -772,6 +776,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
+            {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
           </TabList>
@@ -1013,6 +1018,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               database={database}
               servers={(inv?.sql.servers || []).map((x) => ({ name: x.name, location: x.location }))}
             />
+          )}
+
+          {/* ---------------- SQL granular security (F11) ---------------- */}
+          {tab === 'security' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <SqlSecurityPanel itemType="azure-sql-database" itemId={id} server={server} database={database} />
+                  : <Caption1>Pick a server + database on the <strong>Connect</strong> tab to manage object/column GRANT, Row-Level Security and Dynamic Data Masking.</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>T-SQL security wizards apply to Azure SQL</MessageBarTitle>
+                    Object/column GRANT, Row-Level Security and Dynamic Data Masking are T-SQL features. Select an Azure SQL database to use them; PostgreSQL uses its own role/RLS model.
+                  </MessageBarBody>
+                </MessageBar>
+              )
           )}
 
           {/* ---------------- Catalog ---------------- */}
