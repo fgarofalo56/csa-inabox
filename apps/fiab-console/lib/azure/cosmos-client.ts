@@ -44,6 +44,13 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+// Wave 4 — Data Marketplace / Governance containers.
+let _dataProducts: Container | null = null;
+let _dataProductJobs: Container | null = null;
+let _accessRequests: Container | null = null;
+let _attributeGroups: Container | null = null;
+let _okrs: Container | null = null;
+let _governanceDomains: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +149,18 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Data Marketplace / Governance containers (Wave 4). Partitioned by tenantId
+  // (product catalog, attribute groups, OKRs, governance domains) or
+  // dataProductId (jobs, access requests) so every per-product or per-tenant
+  // lookup hits a single physical partition. Created lazily (createIfNotExists)
+  // so a fresh environment needs no extra ARM/Bicep step beyond the
+  // account + database — exactly like every other Loom container above.
+  _dataProducts      = await mk('dataproducts',        '/tenantId');
+  _dataProductJobs   = await mk('dataproduct-jobs',    '/dataProductId');
+  _accessRequests    = await mk('access-requests',     '/dataProductId');
+  _attributeGroups   = await mk('attribute-groups',    '/tenantId');
+  _okrs              = await mk('okrs',                '/tenantId');
+  _governanceDomains = await mk('governance-domains',  '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +170,14 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+
+// Wave 4 — Data Marketplace / Governance accessors.
+export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
+export async function dataProductJobsContainer(): Promise<Container> { await ensure(); return _dataProductJobs!; }
+export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
+export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
+export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
+export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -214,6 +241,8 @@ const KNOWN_CONTAINER_IDS = [
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
   'maintenance-jobs',
+  'dataproducts', 'dataproduct-jobs', 'access-requests',
+  'attribute-groups', 'okrs', 'governance-domains',
 ];
 
 /** List all Loom containers with their current throughput shape. */

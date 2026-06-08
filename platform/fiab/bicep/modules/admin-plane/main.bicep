@@ -469,6 +469,10 @@ param copyJobControlEnabled bool = false
 @allowed(['adf', 'fabric'])
 param loomDataflowBackend string = 'adf'
 
+@description('Data-products store backend. Default empty → Cosmos (Azure-native DEFAULT; data products catalog in the Loom Cosmos `dataproducts` container, NO Microsoft Fabric / Purview-unified-catalog dependency). Set to "unified-catalog" to opt into the Purview Unified Catalog path, which throws an honest gate on a classic Data Map account.')
+@allowed(['', 'cosmos', 'unified-catalog'])
+param loomDataproductsBackend string = ''
+
 @description('Explicit Azure ML MLflow tracking URI for the ML Experiment editor. REQUIRED in IL5 / GCC-High (the commercial *.api.azureml.ms host is wrong there and no public alternate hostname is documented). Get it via `az ml workspace show --query mlflow_tracking_uri -o tsv`. Empty in Commercial / GCC, where the editor auto-constructs the URI from LOOM_AML_WORKSPACE/LOOM_FOUNDRY_NAME + region + subscription.')
 param loomMlflowTrackingUri string = ''
 
@@ -1108,6 +1112,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // Data-products store backend (Wave 4 — Data Marketplace). Empty →
+            // the Azure-native Cosmos DataProductStore, whose six containers
+            // (dataproducts /tenantId, dataproduct-jobs /dataProductId,
+            // access-requests /dataProductId, attribute-groups /tenantId,
+            // okrs /tenantId, governance-domains /tenantId) are created lazily by
+            // cosmos-client ensure() (createIfNotExists) on first access — no
+            // extra ARM resources beyond the account + database. No Microsoft
+            // Fabric / Purview-unified-catalog dependency on this default path.
+            { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomDataproductsBackend }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path

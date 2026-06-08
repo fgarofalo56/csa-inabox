@@ -147,7 +147,10 @@ describe('purview-client (classic Data Map)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('registerDataProduct / getDataProduct / listDataProducts gate on a classic account', async () => {
+  it('registerDataProduct / getDataProduct / listDataProducts gate when LOOM_DATAPRODUCTS_BACKEND=unified-catalog', async () => {
+    // Opt-in unified-catalog backend → the legacy honest gate is preserved.
+    process.env.LOOM_DATAPRODUCTS_BACKEND = 'unified-catalog';
+    vi.resetModules();
     const mod = await import('../purview-client');
     await expect(mod.registerDataProduct({ displayName: 'X', domain: 'd' })).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
     await expect(mod.getDataProduct('id')).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
@@ -160,9 +163,16 @@ describe('purview-client (classic Data Map)', () => {
     await expect(mod.listBusinessDomains()).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
   });
 
-  it('still throws NotConfigured (account unset) before the unified-catalog gate', async () => {
-    delete process.env.LOOM_PURVIEW_ACCOUNT;
+  it('with LOOM_DATAPRODUCTS_BACKEND UNSET, data products do NOT hit the unified-catalog gate (Azure-native Cosmos default)', async () => {
+    // Default backend is the Azure-native Cosmos store. With LOOM_COSMOS_ENDPOINT
+    // unset, the Cosmos client throws its own config error — which is NOT the
+    // PurviewUnifiedCatalogGateError. That proves the default path no longer
+    // gates on Purview / Fabric at all (no-fabric-dependency.md).
+    delete process.env.LOOM_DATAPRODUCTS_BACKEND;
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    vi.resetModules();
     const mod = await import('../purview-client');
-    await expect(mod.registerDataProduct({ displayName: 'X', domain: 'd' })).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+    await expect(mod.listDataProducts()).rejects.not.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

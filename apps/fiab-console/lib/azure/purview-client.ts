@@ -934,25 +934,33 @@ export interface PurviewDataProduct {
 }
 
 /**
- * Honest gate: data products are a unified-catalog concept. On the classic Data
- * Map account this throws PurviewUnifiedCatalogGateError so callers render the
- * MessageBar. Use `registerAtlasEntity` to catalog physical assets instead.
+ * Data-product CRUD — delegates to the DataProductStore adapter selected by
+ * LOOM_DATAPRODUCTS_BACKEND:
+ *   unset / 'cosmos'   → CosmosDataProductStore (Azure-native DEFAULT — real
+ *                        Cosmos CRUD, NO Microsoft Fabric / unified-catalog dep).
+ *   'unified-catalog'  → UnifiedCatalogGateAdapter (opt-in honest gate; throws
+ *                        PurviewUnifiedCatalogGateError, a subclass of
+ *                        PurviewNotConfiguredError, so every existing BFF catch
+ *                        still renders a 501/503 + hint MessageBar).
+ *
+ * NOTE: the classic `purviewAccount()` gate is NOT on the default Cosmos path —
+ * data products live in Loom's own Cosmos catalog and never require a Purview
+ * account. The store is imported lazily so this module has no static dependency
+ * on the Cosmos client (keeps the classic Data Map surface independently usable).
  */
-export async function registerDataProduct(_payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
-  // Touch the env var so an unset account still yields the precise "not
-  // configured" gate before the unified-catalog gate.
-  purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Data products');
+export async function registerDataProduct(payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
+  const { getDataProductStore } = await import('@/lib/dataproducts/store');
+  return (await getDataProductStore()).register(payload);
 }
 
-export async function getDataProduct(_id: string): Promise<PurviewDataProduct | null> {
-  purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Data products');
+export async function getDataProduct(id: string): Promise<PurviewDataProduct | null> {
+  const { getDataProductStore } = await import('@/lib/dataproducts/store');
+  return (await getDataProductStore()).get(id);
 }
 
-export async function listDataProducts(_domain?: string): Promise<PurviewDataProduct[]> {
-  purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Data products');
+export async function listDataProducts(domain?: string): Promise<PurviewDataProduct[]> {
+  const { getDataProductStore } = await import('@/lib/dataproducts/store');
+  return (await getDataProductStore()).list(domain);
 }
 
 /**
