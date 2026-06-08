@@ -142,6 +142,7 @@ export interface QueryResult {
 const MAX_ROWS = 5_000;
 
 /**
+/**
  * In-process registry of in-flight TDS requests, keyed by a caller-supplied
  * queryId. A separate /cancel route looks the request up and calls
  * `Request.cancel()`, which sends the TDS ATTENTION packet (tedious) to abort
@@ -168,7 +169,29 @@ export function cancelActiveQuery(queryId: string): boolean {
   return true;
 }
 
-export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000, queryId?: string): Promise<QueryResult> {
+/**
+ * A named query parameter for the TDS path. The SQL references the marker as
+ * `@name`; the value is bound via `req.input(name, type, value)` (which mssql
+ * issues as `sp_executesql @stmt, @params, …`), so the value is NEVER spliced
+ * into the SQL string — the canonical SQL-injection-safe T-SQL parameterization
+ * for both Synapse Dedicated and Serverless pools.
+ */
+export interface SynapseQueryParam {
+  name: string;
+  value: string | null;
+}
+
+/** Bind named parameters onto a TDS request as NVARCHAR(MAX). T-SQL implicitly
+ * converts to the target column type at execution, so a single bind type covers
+ * string/number/date filters. The value is bound, not concatenated. */
+function bindParams(req: sql.Request, parameters?: SynapseQueryParam[]): void {
+  if (!parameters?.length) return;
+  for (const p of parameters) {
+    req.input(p.name, sql.NVarChar(sql.MAX), p.value ?? null);
+  }
+}
+
+export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000, parameters?: SynapseQueryParam[], queryId?: string): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(target);
   const req = pool.request();
@@ -182,6 +205,9 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
     const msg = info?.message ?? (typeof info === 'string' ? info : '');
     if (msg) messages.push(String(msg));
   });
+
+  // Bind named parameters (`@name`) before executing — injection-safe.
+  bindParams(req, parameters);
 
   // Wrap query execution with an explicit timeout to catch cold-start latency.
   // Synapse serverless OPENROWSET on CSV files can take 30-60s on first run.
@@ -275,6 +301,7 @@ export async function executeQueryAsUser(
   userSqlToken: string,
   userOid: string,
   timeoutMs = 60_000,
+  parameters?: SynapseQueryParam[],
   queryId?: string,
 ): Promise<QueryResult> {
   const started = Date.now();
@@ -287,6 +314,9 @@ export async function executeQueryAsUser(
     const msg = info?.message ?? (typeof info === 'string' ? info : '');
     if (msg) messages.push(String(msg));
   });
+
+  // Bind named parameters (`@name`) before executing — injection-safe.
+  bindParams(req, parameters);
 
   try {
     const queryPromise = req.query(sqlText);

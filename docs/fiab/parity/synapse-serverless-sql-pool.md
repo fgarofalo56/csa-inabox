@@ -57,3 +57,4 @@ Grade: **A — every inventory row built; IntelliSense, view/proc/iTVF CRUD, Mes
 > database picker for 3-part cross-DB queries — all over the same serverless TDS
 > path, no new env vars.
 
+> **T9 — Visualize + query parameters.** Added a **Visualize** toggle (in-Loom SVG chart: bar/line/area/pie/scatter + axis pickers over the real result rows, `result-visualize.tsx`) and **query parameters** (`{{name}}` widgets → `@name` bound via `req.input()` → `sp_executesql`, injection-safe). Receipt returns `statement` + `parameters` + `parametersCount`. Grade unchanged (A).

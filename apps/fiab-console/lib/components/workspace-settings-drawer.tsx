@@ -12,14 +12,14 @@
  * will deliver them — never auto-generated form stubs.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Tab, TabList,
   Button, Tooltip, Field, Input, Textarea, Dropdown, Option,
-  MessageBar, MessageBarBody, Spinner,
+  MessageBar, MessageBarBody, Spinner, Divider, Subtitle2,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle,
   DialogContent, DialogActions,
   makeStyles, tokens,
@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
+import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 
 interface Props { workspace: Workspace; }
 
@@ -318,6 +319,102 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
 
 // ------------------------------ OneLake ------------------------------
 
+interface StorageAccountOption { id: string; name: string; isHns: boolean; location?: string; }
+
+function StorageBindingSection({ workspace }: { workspace: Workspace }) {
+  const styles = useStyles();
+  const [accounts, setAccounts] = useState<StorageAccountOption[] | null | 'loading'>('loading');
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>(workspace.storageAccountId ?? '');
+  const [manual, setManual] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/storage/accounts').then((r) => r.json())
+      .then((d: any) => {
+        if (d?.ok && Array.isArray(d.accounts)) {
+          setAccounts(d.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, location: a.location })));
+        } else {
+          setAccounts(null);
+          setAccountsError(d?.hint || d?.error || 'Could not list storage accounts.');
+        }
+      })
+      .catch((e) => { setAccounts(null); setAccountsError(String(e?.message || e)); });
+  }, []);
+
+  const currentName = useMemo(() => {
+    const id = selected || manual;
+    return id ? id.split('/').pop() : undefined;
+  }, [selected, manual]);
+
+  const save = async () => {
+    setSaving(true); setError(null); setSaved(false);
+    try {
+      const storageAccountId = (selected || manual).trim();
+      await updateWorkspace(workspace.id, { storageAccountId: storageAccountId || undefined });
+      setSaved(true);
+      window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: 'workspace' } }));
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save binding');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={styles.section}>
+      <Subtitle2>Storage account binding</Subtitle2>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          Bind this workspace to a specific ADLS Gen2 storage account. Lifecycle
+          management rules (below) are written to the bound account. When unbound,
+          the deployment-default DLZ account is used.
+        </MessageBarBody>
+      </MessageBar>
+      {accounts === 'loading' && <Spinner size="tiny" label="Listing storage accounts…" />}
+      {Array.isArray(accounts) && (
+        <Field label="Storage account">
+          <Dropdown
+            value={currentName ? `${currentName}` : 'Not bound (deployment default)'}
+            selectedOptions={[selected]}
+            onOptionSelect={(_, d) => { setSelected(d.optionValue || ''); setManual(''); }}>
+            <Option value="">Not bound (deployment default)</Option>
+            {accounts.map((a) => (
+              <Option key={a.id} value={a.id} text={a.name}>
+                {a.name} ({a.isHns ? 'ADLS Gen2' : 'Blob'}){a.location ? ` — ${a.location}` : ''}
+              </Option>
+            ))}
+          </Dropdown>
+        </Field>
+      )}
+      {accounts === null && (
+        <>
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              Reader role on the subscription is required to list storage accounts
+              (<code>Microsoft.Storage/storageAccounts/read</code>). {accountsError} You
+              can paste the storage account ARM resource id manually below.
+            </MessageBarBody>
+          </MessageBar>
+          <Field label="Storage account ARM resource id">
+            <Input value={manual} onChange={(_, d) => { setManual(d.value); setSelected(''); }}
+              placeholder="/subscriptions/…/resourceGroups/…/providers/Microsoft.Storage/storageAccounts/…" />
+          </Field>
+        </>
+      )}
+      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {saved && <MessageBar intent="success"><MessageBarBody>Binding saved.</MessageBarBody></MessageBar>}
+      <div className={styles.row}>
+        <Button appearance="primary" onClick={save} disabled={saving}>
+          {saving ? 'Saving…' : 'Save binding'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function OneLakeSection({ workspace }: { workspace: Workspace }) {
   const styles = useStyles();
   const url = (workspace as any).oneLake as string | null | undefined;
@@ -330,40 +427,48 @@ function OneLakeSection({ workspace }: { workspace: Workspace }) {
       .catch(() => setResolved(null));
   }, [workspace.id, resolved]);
 
-  if (resolved === undefined) return <Spinner size="tiny" label="Loading…" />;
-
-  if (!resolved) {
-    return (
-      <MessageBar intent="warning">
-        <MessageBarBody>
-          OneLake base URL not configured for this deployment. Set
-          <code style={{ padding: '0 4px' }}>LOOM_ONELAKE_BASE</code> on the
-          loom-console container app (e.g.
-          <code style={{ padding: '0 4px' }}>abfss://onelake@&lt;account&gt;.dfs.core.windows.net</code>)
-          to surface the per-workspace URL.
-        </MessageBarBody>
-      </MessageBar>
-    );
-  }
-
   return (
     <div className={styles.section}>
-      <MessageBar intent="success">
-        <MessageBarBody>
-          This workspace's OneLake URL is derived from
-          <code style={{ padding: '0 4px' }}>LOOM_ONELAKE_BASE + workspace name</code>.
-          Items in the workspace store their data under this prefix.
-        </MessageBarBody>
-      </MessageBar>
-      <Field label="OneLake URL">
-        <Input value={resolved} readOnly />
-      </Field>
-      <div className={styles.row}>
-        <Button icon={<Copy16Regular />}
-          onClick={() => navigator.clipboard?.writeText(resolved)}>
-          Copy
-        </Button>
-      </div>
+      <StorageBindingSection workspace={workspace} />
+
+      <Divider />
+      <Subtitle2>OneLake URL</Subtitle2>
+      {resolved === undefined ? (
+        <Spinner size="tiny" label="Loading…" />
+      ) : !resolved ? (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            OneLake base URL not configured for this deployment. Set
+            <code style={{ padding: '0 4px' }}>LOOM_ONELAKE_BASE</code> on the
+            loom-console container app (e.g.
+            <code style={{ padding: '0 4px' }}>abfss://onelake@&lt;account&gt;.dfs.core.windows.net</code>)
+            to surface the per-workspace URL.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <>
+          <MessageBar intent="success">
+            <MessageBarBody>
+              This workspace's OneLake URL is derived from
+              <code style={{ padding: '0 4px' }}>LOOM_ONELAKE_BASE + workspace name</code>.
+              Items in the workspace store their data under this prefix.
+            </MessageBarBody>
+          </MessageBar>
+          <Field label="OneLake URL">
+            <Input value={resolved} readOnly />
+          </Field>
+          <div className={styles.row}>
+            <Button icon={<Copy16Regular />}
+              onClick={() => navigator.clipboard?.writeText(resolved)}>
+              Copy
+            </Button>
+          </div>
+        </>
+      )}
+
+      <Divider />
+      <Subtitle2>Lifecycle management rules</Subtitle2>
+      <LifecycleRulesPanel workspaceId={workspace.id} />
     </div>
   );
 }

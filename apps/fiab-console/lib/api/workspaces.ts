@@ -9,6 +9,11 @@ export interface Workspace {
   description?: string;
   capacity?: string;
   domain?: string;
+  /**
+   * ARM resource id of the storage account bound to this workspace for OneLake
+   * lifecycle management. Absent = use the deployment-default DLZ account.
+   */
+  storageAccountId?: string;
   /** Derived: LOOM_ONELAKE_BASE + name. Only present on GET /api/workspaces/[id]. */
   oneLake?: string | null;
   createdBy: string;
@@ -88,7 +93,7 @@ export async function createWorkspace(input: {
   });
 }
 
-export async function updateWorkspace(id: string, patch: Partial<Pick<Workspace, 'name' | 'description' | 'capacity' | 'domain'>>): Promise<Workspace> {
+export async function updateWorkspace(id: string, patch: Partial<Pick<Workspace, 'name' | 'description' | 'capacity' | 'domain' | 'storageAccountId'>>): Promise<Workspace> {
   return fetchJson<Workspace>(`/api/workspaces/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
