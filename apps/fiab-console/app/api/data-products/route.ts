@@ -150,9 +150,31 @@ async function tryRegisterPurview(opts: {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // Duplicate-name lookup mode (F4 edit/create dialog): /api/data-products?name=<n>&excludeId=<id>.
+  // NON-BLOCKING warning source — returns the existing product that shares the
+  // (case-insensitive) name, or null. Names are not required to be unique
+  // (matches the Purview portal), so this never blocks Save.
+  const nameQ = (req.nextUrl.searchParams.get('name') || '').trim();
+  if (nameQ) {
+    const excludeId = req.nextUrl.searchParams.get('excludeId') || '';
+    try {
+      const items = await listOwnedItems('data-product', session.claims.oid);
+      const dup = items.find(
+        (it) => it.id !== excludeId && (it.displayName || '').trim().toLowerCase() === nameQ.toLowerCase(),
+      );
+      return NextResponse.json({
+        ok: true,
+        duplicate: dup ? { id: dup.id, displayName: dup.displayName } : null,
+      });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    }
+  }
+
   try {
     const items = await listOwnedItems('data-product', session.claims.oid);
     return NextResponse.json({
