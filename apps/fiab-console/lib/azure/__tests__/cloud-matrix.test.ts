@@ -93,6 +93,13 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.cosmosSuffix()).toBe(COSMOS_COM);
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe(`https://cosmos-loom.${COSMOS_COM}:443/`);
   });
+
+  it('Synapse SQL helpers use sql.azuresynapse.net + matching JDBC cert wildcard', async () => {
+    const m = await load('AzureCloud');
+    const SYN_COM = J('sql', 'azuresynapse', 'net');
+    expect(m.synapseSqlSuffix()).toBe(SYN_COM);
+    expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -153,6 +160,12 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.cosmosSuffix()).toBe('documents.azure.us');
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe('https://cosmos-loom.documents.azure.us:443/');
   });
+
+  it('Synapse SQL helpers use the Gov suffix + matching JDBC cert wildcard', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
+    expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+  });
 });
 
 describe('cloud-endpoints — overrides + DoD', () => {
@@ -167,6 +180,8 @@ describe('cloud-endpoints — overrides + DoD', () => {
     expect(m.armBase()).toBe('https://management.azure.microsoft.scloud');
     expect(m.isGovCloud()).toBe(true);
     expect(m.kustoSuffix()).toBe('kusto.usgovcloudapi.net');
+    // Synapse JDBC cert wildcard carries the Gov suffix in DoD too.
+    expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
   });
 
   it('LOGIC_APP_WORKFLOW_SCHEMA is the cloud-invariant schema namespace', async () => {

@@ -31,6 +31,7 @@ import {
   Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionDetailsPanel } from './components/connection-details';
 import { ModelViewPanel } from './components/model-view-canvas';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -510,6 +511,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [computeId, setComputeId] = useState('');
   // SQL granular security (F11) — GRANT / RLS / DDM wizards over TDS (Entra-only).
   const [secOpen, setSecOpen] = useState(false);
+  // Connection details panel (server FQDN, JDBC URL, sqlcmd snippet).
+  const [connOpen, setConnOpen] = useState(false);
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
 
@@ -809,6 +812,11 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         // wizards — real T-SQL over TDS (Entra-only) via /sql-security.
         { label: 'GRANT / RLS / masking', onClick: isOnline ? () => setSecOpen(true) : undefined, disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Connect', actions: [
+        // Server FQDN, JDBC URL + sqlcmd snippet (copy). Env-derived — works
+        // even while the pool is paused.
+        { label: 'Connection details', onClick: () => setConnOpen(true), title: 'Server hostname, database, JDBC URL + sqlcmd snippet (copy)' },
+      ]},
       { label: 'Modeling', actions: [
         // Loom-native Model view (table cards + relationship lines + measures), no Power BI.
         { label: 'Model view', onClick: () => setEditorTab('model') },
@@ -1065,6 +1073,21 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '640px' }}>
+              <DialogBody>
+                <DialogTitle>Connection details — {poolState?.pool || 'Dedicated SQL pool'}</DialogTitle>
+                <DialogContent>
+                  <ConnectionDetailsPanel engine="synapse-dedicated-sql-pool" id={id} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
               <DialogBody>

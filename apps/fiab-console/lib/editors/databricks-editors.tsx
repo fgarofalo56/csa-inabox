@@ -35,6 +35,7 @@ import {
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionDetailsPanel } from './components/connection-details';
 import { AiFunctionsHelper } from './components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
@@ -724,6 +725,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   // ---- Edit / scale dialog (POST /api/2.0/sql/warehouses/{id}/edit) ----
   const [editOpen, setEditOpen] = useState(false);
+  const [connOpen, setConnOpen] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSize, setEditSize] = useState('X-Small');
@@ -1348,6 +1350,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
         { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
         { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
+        { label: 'Connection details', onClick: warehouseId ? () => setConnOpen(true) : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Server hostname, HTTP path, JDBC URL + CLI snippet (copy)' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
       { label: 'Unity Catalog', actions: [
@@ -1743,6 +1746,26 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                   <Button appearance="primary" onClick={saveEdit} disabled={editBusy}>
                     {editBusy ? 'Saving…' : 'Save changes'}
                   </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '640px' }}>
+              <DialogBody>
+                <DialogTitle>Connection details — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  {warehouseId ? (
+                    <ConnectionDetailsPanel
+                      engine="databricks-sql-warehouse"
+                      id={id}
+                      warehouseId={warehouseId}
+                    />
+                  ) : null}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

@@ -25,11 +25,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge, Button, Caption1, Spinner, Tooltip, Dropdown, Option, Label,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Play20Regular, ArrowDownload20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionDetailsPanel } from './components/connection-details';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -138,6 +140,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [resultTab, setResultTab] = useState<'results' | 'messages'>('results');
   const [loading, setLoading] = useState(false);
+  const [connOpen, setConnOpen] = useState(false);
 
   // Editor handle + objects ref so the (once-registered) Monaco completion
   // provider can read the latest catalog without re-registering on each render.
@@ -341,6 +344,9 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
       { label: 'Objects', actions: [
         { label: objectsLoading ? 'Refreshing…' : 'Refresh objects', onClick: !objectsLoading ? loadObjects : undefined, disabled: objectsLoading },
       ]},
+      { label: 'Connect', actions: [
+        { label: 'Connection details', onClick: () => setConnOpen(true), title: 'Serverless endpoint FQDN, database, JDBC URL + sqlcmd snippet (copy)' },
+      ]},
       { label: 'New', actions: [
         { label: 'New view', onClick: () => newScript(TEMPLATE_VIEW) },
         { label: 'New procedure', onClick: () => newScript(TEMPLATE_PROC) },
@@ -510,6 +516,24 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               )
             )}
           </div>
+
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '640px' }}>
+              <DialogBody>
+                <DialogTitle>Connection details — Serverless SQL</DialogTitle>
+                <DialogContent>
+                  <ConnectionDetailsPanel
+                    engine="synapse-serverless-sql-pool"
+                    id={id}
+                    database={database}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

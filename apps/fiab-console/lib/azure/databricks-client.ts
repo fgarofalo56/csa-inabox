@@ -65,6 +65,24 @@ async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
 // Warehouse management
 // ------------------------------------------------------------
 
+/**
+ * Connection endpoint details for a SQL Warehouse, returned verbatim by
+ * `GET /api/2.0/sql/warehouses/{id}` in the `odbc_params` field. These are the
+ * real, externally-routable JDBC/ODBC coordinates a BI tool or `databricks sql`
+ * client uses to reach the warehouse — the Connection details panel surfaces
+ * them so an analyst can copy a working JDBC URL.
+ *   hostname : adb-7405613013893759.19.azuredatabricks.net (workspace FQDN)
+ *   path     : /sql/1.0/warehouses/<warehouse-id> (the warehouse HTTP path)
+ *   protocol : 'https'
+ *   port     : 443
+ */
+export interface WarehouseOdbcParams {
+  hostname: string;
+  path: string;
+  protocol?: string;
+  port?: number;
+}
+
 export interface Warehouse {
   id: string;
   name: string;
@@ -82,6 +100,12 @@ export interface Warehouse {
   min_num_clusters?: number;
   max_num_clusters?: number;
   auto_stop_mins?: number;
+  /**
+   * ODBC/JDBC connection coordinates — present on a started warehouse. A
+   * STOPPED warehouse may omit these until it has been provisioned at least
+   * once; the connection route gates honestly when they are absent.
+   */
+  odbc_params?: WarehouseOdbcParams;
 }
 
 export async function listWarehouses(): Promise<Warehouse[]> {
