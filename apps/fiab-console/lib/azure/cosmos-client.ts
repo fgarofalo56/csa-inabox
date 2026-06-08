@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _dataproductJobs: Container | null = null;
 let _labelPropagation: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
@@ -63,6 +64,30 @@ let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
 let _labelAssignments: Container | null = null;
 let _ensured = false;
+
+/**
+ * Bulk-import job record for the Data product "Import from CSV" flyout (F2/F18).
+ * One row per import run, partitioned by tenant so the Monitor tab polls a
+ * single physical partition. `rowErrors` captures the per-row failures that did
+ * NOT abort the valid rows — surfaced verbatim in the Monitor error log.
+ */
+export interface DataProductImportJob {
+  id: string;            // jobId (UUID)
+  tenantId: string;      // partition key — caller's oid
+  status: 'running' | 'done' | 'partial' | 'failed';
+  totalRows: number;
+  successCount: number;
+  failCount: number;
+  rowErrors: Array<{ row: number; name: string; error: string }>;
+  createdAt: string;
+  updatedAt: string;
+  workspaceId: string;
+  /** ADLS staging path (file name in the csv-imports container). '' when staging was gated. */
+  blobPath: string;
+  /** True when the raw CSV was staged to ADLS; false when the storage gate fired (inline-only). */
+  staged: boolean;
+  createdBy?: string;
+}
 
 function endpoint(): string {
   const v = process.env.LOOM_COSMOS_ENDPOINT;
@@ -160,6 +185,12 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Bulk-import jobs for the Data product "Import from CSV" flyout (F2/F18) —
+  // one row per import run, partitioned by tenant so the Monitor tab polls a
+  // single physical partition. Created lazily so a fresh environment needs no
+  // extra ARM/Bicep step beyond the account+database. Named distinctly from the
+  // marketplace 'dataproduct-jobs' container below (different partition key).
+  _dataproductJobs = await mk('dataproduct-import-jobs', '/tenantId');
   // Sensitivity-label downstream propagation state (F15). One row per item
   // (id = 'prop:<itemId>'), written by the label-propagation timer Function
   // and read live-overlaid by the lineage view. PK /tenantId so the governance
@@ -236,6 +267,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
@@ -315,7 +347,8 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'label-propagation',
+  'maintenance-jobs', 'dataproduct-import-jobs',
+  'label-propagation',
   'posture-aggregates', 'recommended-actions',
   'posture-aggregates-admin', 'recommended-actions-admin',
   'onelake-security-roles',

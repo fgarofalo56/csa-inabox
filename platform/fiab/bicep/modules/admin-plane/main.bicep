@@ -1220,6 +1220,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+            // LOOM_CSV_IMPORTS_URL backs the Data product "Import from CSV" flyout
+            // (F2/F18): the BFF stages the raw uploaded CSV to the csv-imports
+            // container before bulk-creating draft data products + writing the
+            // dataproduct-jobs status doc. Only emitted when an ADLS account is
+            // configured; otherwise the flyout's honest gate fires and the import
+            // still runs inline (Cosmos-only, no Blob staging). The csv-imports
+            // container is created in landing-zone/storage.bicep; the Console UAMI
+            // already holds Storage Blob Data Contributor on the account.
+            { name: 'LOOM_CSV_IMPORTS_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/csv-imports' }
             // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
             // card: when set, the BFF uploads a sample CSV to landing/samples and
             // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
