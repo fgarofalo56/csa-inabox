@@ -287,6 +287,7 @@ export async function executeStatement(
   sql: string,
   catalog?: string,
   schema?: string,
+  onStatementId?: (id: string) => void,
 ): Promise<QueryResult> {
   const t0 = Date.now();
   const payload: Record<string, unknown> = {
@@ -309,6 +310,10 @@ export async function executeStatement(
     throw new Error(`executeStatement submit failed ${res.status}: ${await res.text()}`);
   }
   let body = (await res.json()) as StatementResponse;
+  // Surface the server-assigned statement_id immediately so a caller (the BFF
+  // query route) can register it for cancellation while we keep polling. The
+  // Statement Execution API cancel endpoint keys off this id.
+  if (body.statement_id) onStatementId?.(body.statement_id);
 
   // Poll until terminal (SUCCEEDED / FAILED / CANCELED / CLOSED).
   const deadline = Date.now() + POLL_TIMEOUT_MS;
@@ -348,8 +353,58 @@ export async function executeStatement(
 }
 
 // ============================================================
-// Helpers — uniform error surfacing
+// Statement cancellation (SQL Statement Execution API 2.0)
 // ============================================================
+
+/**
+ * In-process registry mapping a client-generated query id to the
+ * server-assigned Databricks statement_id, so a separate /cancel request can
+ * resolve the running statement without the client having to wait for the
+ * (blocking) /query response to return the id first.
+ *
+ * Same-process only — sufficient for Loom's single-instance Container App.
+ * On scale-out, a cancel may land on a different replica and find no entry;
+ * the client then shows "Cancel sent" and the original query completes.
+ */
+const pendingStatements = new Map<string, string>(); // clientQueryId -> statement_id
+
+export function registerPendingStatement(clientQueryId: string, statementId: string): void {
+  if (clientQueryId && statementId) pendingStatements.set(clientQueryId, statementId);
+}
+
+export function clearPendingStatement(clientQueryId: string): void {
+  if (clientQueryId) pendingStatements.delete(clientQueryId);
+}
+
+/**
+ * Cancel a running statement.
+ *   POST /api/2.0/sql/statements/{statement_id}/cancel
+ * Grounded in the SQL Statement Execution API
+ * (https://learn.microsoft.com/azure/databricks/api/workspace/statementexecution/cancelexecution).
+ * Returns 200 with empty body when accepted; a 404 means the statement is
+ * already terminal — both are treated as success.
+ */
+export async function cancelStatement(statementId: string): Promise<void> {
+  const res = await dbxFetch(
+    `/api/2.0/sql/statements/${encodeURIComponent(statementId)}/cancel`,
+    { method: 'POST', body: '{}' },
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`cancelStatement failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+/** Resolve a client query id to its statement_id and cancel it. */
+export async function cancelByClientId(
+  clientQueryId: string,
+): Promise<{ canceled: boolean; statementId?: string }> {
+  const statementId = pendingStatements.get(clientQueryId);
+  if (!statementId) return { canceled: false };
+  await cancelStatement(statementId);
+  return { canceled: true, statementId };
+}
+
+
 async function asJsonOrThrow<T>(res: Response, op: string): Promise<T> {
   if (!res.ok) {
     const text = await res.text();

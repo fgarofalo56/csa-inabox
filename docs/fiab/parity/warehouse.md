@@ -21,6 +21,11 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 11 | Permissions (object/row-level security) | Manage |
 | 12 | Source control (Git integration) | Workspace ribbon |
 | 13 | Cross-warehouse 3-part-name query | Editor |
+| 14 | Run selection (execute only highlighted text) | Editor |
+| 15 | Cancel a running query | Editor |
+| 16 | Multi-tab query editor | Editor tab strip |
+| 17 | Schema-aware IntelliSense (column completions) | Editor |
+| 18 | Database picker for cross-database 3-part queries | Editor toolbar |
 
 ## Loom coverage
 
@@ -39,10 +44,17 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 11 | ✅ | `Permissions` → real sys.database_principals query via `/query` |
 | 12 | ⚠️ honest-gate | `Source control` opens Fabric Git Learn (Git is workspace-level) |
 | 13 | ✅ | 3-part names work through the same TDS path |
+| 14 | ✅ | `getRunSql()` sends only the highlighted selection to `/query` when present; else full text. |
+| 15 | ✅ | **Cancel** button (while running) → `POST /[id]/cancel` `{queryId}` → `cancelActiveQuery()` → mssql `Request.cancel()` (TDS ATTENTION) aborts the batch; canceled runs show a `warning` MessageBar. |
+| 16 | ✅ | Multi-tab via `useSqlTabs` + `SqlTabBar`; **New SQL query** opens a fresh tab (replaced the old single-tab reset). |
+| 17 | ✅ | `registerSqlIntelliSense` completion provider fed from `/schema` (sys.schemas + `?table=` → INFORMATION_SCHEMA.COLUMNS, cached). |
+| 18 | ✅ | Toolbar **Database** dropdown (sys.databases) re-targets the TDS connection so `other_db.schema.table` 3-part names resolve. |
 
 ## Backend per control
 - Schema / query / CTAS / DMV actions → Synapse Dedicated pool TDS (`executeQuery` / `dedicatedTarget`) via `/api/items/warehouse/[id]/query` + `/schema`.
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **B+ — SQL authoring + explorer + CTAS + Excel + permissions/relationships all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
+Grade: **B+ — SQL authoring + explorer + CTAS + Excel + permissions/relationships + run-selection + cancel + multi-tab + IntelliSense + cross-DB picker all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
+
+> **rev — SQL-editor parity sweep.** Added rows 14–18 (run-selection, Cancel via TDS ATTENTION `/cancel`, multi-tab tab bar, schema IntelliSense, database picker). All over the existing Synapse Dedicated TDS path — no new env vars, no Fabric dependency.

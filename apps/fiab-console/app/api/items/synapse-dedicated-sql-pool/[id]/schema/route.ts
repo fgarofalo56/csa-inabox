@@ -2,9 +2,15 @@
  * GET /api/items/synapse-dedicated-sql-pool/[id]/schema
  * Returns the Dedicated pool's schema tree. If pool is Paused, returns
  * 409 — UI shows the "paused, click Resume" state.
+ *
+ * Query params:
+ *   ?table=<schema.table>  → { ok, columns } from INFORMATION_SCHEMA.COLUMNS
+ *                            (drives editor IntelliSense column completions)
+ * Otherwise returns { schemas, databases } (databases = sys.databases for the
+ * cross-database picker).
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
@@ -12,7 +18,7 @@ import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
@@ -30,7 +36,24 @@ export async function GET() {
     );
   }
 
+  const tableParam = req.nextUrl.searchParams.get('table') || '';
+
   try {
+    // Column-completion request: ?table=schema.table → INFORMATION_SCHEMA.COLUMNS.
+    if (tableParam) {
+      const [schemaName, tableName] = tableParam.includes('.')
+        ? tableParam.split('.', 2)
+        : ['dbo', tableParam];
+      const cols = await executeQuery(
+        dedicatedTarget(),
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
+           AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+         ORDER BY ORDINAL_POSITION`,
+      );
+      return NextResponse.json({ ok: true, state: 'Online', columns: cols.rows.map((r) => String(r[0])) });
+    }
+
     const tables = await executeQuery(
       dedicatedTarget(),
       `SELECT TOP 200 s.name + '.' + t.name AS qualified, t.name AS table_name, s.name AS schema_name,
@@ -46,12 +69,21 @@ export async function GET() {
       void qualified;
       (schemas[schemaName] ||= []).push({ table: tableName, rows: Number(rowCount || 0) });
     }
+
+    // Database list for the cross-database picker (sys.databases, online only).
+    let databases: string[] = [];
+    try {
+      const dbs = await executeQuery(dedicatedTarget(), `SELECT name FROM sys.databases WHERE state = 0 ORDER BY name`);
+      databases = dbs.rows.map((r) => String(r[0]));
+    } catch { databases = []; }
+
     return NextResponse.json({
       ok: true,
       state: 'Online',
       sku: state.sku,
       pool: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
       schemas,
+      databases,
     });
   } catch (e: any) {
     return NextResponse.json(

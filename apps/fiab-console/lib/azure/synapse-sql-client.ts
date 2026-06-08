@@ -141,10 +141,38 @@ export interface QueryResult {
 
 const MAX_ROWS = 5_000;
 
-export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000): Promise<QueryResult> {
+/**
+ * In-process registry of in-flight TDS requests, keyed by a caller-supplied
+ * queryId. A separate /cancel route looks the request up and calls
+ * `Request.cancel()`, which sends the TDS ATTENTION packet (tedious) to abort
+ * the batch on the server. Same-process only — sufficient for Loom's
+ * single-instance Container App. On scale-out a cancel may land on a different
+ * replica (no entry → found:false); the client shows "Cancel sent" and the
+ * original query completes on its own replica.
+ */
+const activeRequests = new Map<string, sql.Request>();
+
+/**
+ * Cancel an in-flight query by its caller-supplied queryId. Sends a TDS
+ * ATTENTION packet via mssql `Request.cancel()`. Returns true if a matching
+ * in-flight request was found on this process, false otherwise.
+ */
+export function cancelActiveQuery(queryId: string): boolean {
+  const req = activeRequests.get(queryId);
+  if (!req) return false;
+  try {
+    req.cancel();
+  } finally {
+    activeRequests.delete(queryId);
+  }
+  return true;
+}
+
+export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000, queryId?: string): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(target);
   const req = pool.request();
+  if (queryId) activeRequests.set(queryId, req);
 
   // Capture TDS info/warning messages (PRINT, RAISERROR with severity ≤ 10).
   // These are how Synapse surfaces non-fatal diagnostics; the editor shows
@@ -157,30 +185,34 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
 
   // Wrap query execution with an explicit timeout to catch cold-start latency.
   // Synapse serverless OPENROWSET on CSV files can take 30-60s on first run.
-  const queryPromise = req.query(sqlText);
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
-  );
+  try {
+    const queryPromise = req.query(sqlText);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
+    );
 
-  const result = await Promise.race([queryPromise, timeoutPromise]);
-  const recordset = result.recordset || [];
-  const columns = recordset.length
-    ? Object.keys(recordset[0])
-    : Object.keys((result as any).recordsets?.[0]?.columns || {});
-  const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
-  // mssql sums rowsAffected per statement; report the last/total for DDL receipts.
-  const affected = Array.isArray(result.rowsAffected)
-    ? result.rowsAffected.reduce((a: number, b: number) => a + b, 0)
-    : 0;
-  return {
-    columns,
-    rows,
-    rowCount: recordset.length,
-    executionMs: Date.now() - started,
-    truncated: recordset.length > MAX_ROWS,
-    messages,
-    recordsAffected: affected,
-  };
+    const result = await Promise.race([queryPromise, timeoutPromise]);
+    const recordset = result.recordset || [];
+    const columns = recordset.length
+      ? Object.keys(recordset[0])
+      : Object.keys((result as any).recordsets?.[0]?.columns || {});
+    const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+    // mssql sums rowsAffected per statement; report the last/total for DDL receipts.
+    const affected = Array.isArray(result.rowsAffected)
+      ? result.rowsAffected.reduce((a: number, b: number) => a + b, 0)
+      : 0;
+    return {
+      columns,
+      rows,
+      rowCount: recordset.length,
+      executionMs: Date.now() - started,
+      truncated: recordset.length > MAX_ROWS,
+      messages,
+      recordsAffected: affected,
+    };
+  } finally {
+    if (queryId) activeRequests.delete(queryId);
+  }
 }
 
 /**
@@ -243,10 +275,12 @@ export async function executeQueryAsUser(
   userSqlToken: string,
   userOid: string,
   timeoutMs = 60_000,
+  queryId?: string,
 ): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getUserPool(target, userSqlToken, userOid);
   const req = pool.request();
+  if (queryId) activeRequests.set(queryId, req);
 
   const messages: string[] = [];
   req.on('info', (info: any) => {
@@ -254,27 +288,31 @@ export async function executeQueryAsUser(
     if (msg) messages.push(String(msg));
   });
 
-  const queryPromise = req.query(sqlText);
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
-  );
+  try {
+    const queryPromise = req.query(sqlText);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
+    );
 
-  const result = await Promise.race([queryPromise, timeoutPromise]);
-  const recordset = result.recordset || [];
-  const columns = recordset.length
-    ? Object.keys(recordset[0])
-    : Object.keys((result as any).recordsets?.[0]?.columns || {});
-  const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
-  const affected = Array.isArray(result.rowsAffected)
-    ? result.rowsAffected.reduce((a: number, b: number) => a + b, 0)
-    : 0;
-  return {
-    columns,
-    rows,
-    rowCount: recordset.length,
-    executionMs: Date.now() - started,
-    truncated: recordset.length > MAX_ROWS,
-    messages,
-    recordsAffected: affected,
-  };
+    const result = await Promise.race([queryPromise, timeoutPromise]);
+    const recordset = result.recordset || [];
+    const columns = recordset.length
+      ? Object.keys(recordset[0])
+      : Object.keys((result as any).recordsets?.[0]?.columns || {});
+    const rows = recordset.slice(0, MAX_ROWS).map((r: any) => columns.map((c) => r[c]));
+    const affected = Array.isArray(result.rowsAffected)
+      ? result.rowsAffected.reduce((a: number, b: number) => a + b, 0)
+      : 0;
+    return {
+      columns,
+      rows,
+      rowCount: recordset.length,
+      executionMs: Date.now() - started,
+      truncated: recordset.length > MAX_ROWS,
+      messages,
+      recordsAffected: affected,
+    };
+  } finally {
+    if (queryId) activeRequests.delete(queryId);
+  }
 }

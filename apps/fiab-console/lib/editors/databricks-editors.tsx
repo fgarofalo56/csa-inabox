@@ -34,6 +34,8 @@ import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipelin
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
+import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -86,6 +88,7 @@ interface QueryResponse {
   error?: string;
   state?: string;
   code?: string;
+  canceled?: boolean;
 }
 
 interface Warehouse {
@@ -116,6 +119,7 @@ interface SchemaResponse {
   catalogs?: string[];
   schemas?: string[];
   tables?: string[];
+  columns?: string[];
   message?: string;
   error?: string;
 }
@@ -152,9 +156,9 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   if (!result.ok) {
     return (
       <div className={s.resultBox}>
-        <MessageBar intent="error">
+        <MessageBar intent={result.canceled ? 'warning' : 'error'}>
           <MessageBarBody>
-            <MessageBarTitle>Query failed</MessageBarTitle>
+            <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
             {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
           </MessageBarBody>
         </MessageBar>
@@ -615,9 +619,21 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
 
-  const [sqlText, setSqlText] = useState<string>(
-    `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
+  const [sqlText0] = useState<string>(
+    `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
   );
+  // Multi-tab query state (run-selection + cancel are wired per active tab).
+  const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
+    useSqlTabs<QueryResponse>(sqlText0);
+  const sqlText = activeTab.sql;
+  const setSqlText = setActiveSql;
+  const result = activeTab.result;
+  const loading = activeTab.loading;
+  const setResult = setActiveResult;
+  // Monaco editor instance (for run-selection) + schema cache (for IntelliSense).
+  const editorRef = useRef<any>(null);
+  const schemaCacheRef = useRef<SqlSchemaCache>(createEmptyCache());
+  const [canceling, setCanceling] = useState(false);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState<string>('');
   const [warehouseState, setWarehouseState] = useState<WarehouseState | null>(null);
@@ -626,11 +642,15 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [schemas, setSchemas] = useState<string[]>([]);
   const [activeSchema, setActiveSchema] = useState<string | null>(null);
   const [tables, setTables] = useState<string[]>([]);
-  const [result, setResult] = useState<QueryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+
+  // Capture the Monaco editor + register schema-aware IntelliSense once mounted.
+  const handleEditorReady = useCallback((ed: any, mc: any) => {
+    editorRef.current = ed;
+    registerSqlIntelliSense(mc, 'sql', () => schemaCacheRef.current);
+  }, []);
 
   // ---- Edit / scale dialog (POST /api/2.0/sql/warehouses/{id}/edit) ----
   const [editOpen, setEditOpen] = useState(false);
@@ -679,7 +699,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) return;
     const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}`);
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setCatalogs(j.catalogs || []);
+    if (j.ok) {
+      setCatalogs(j.catalogs || []);
+      schemaCacheRef.current.catalogs = j.catalogs || [];
+    }
   }, [id, warehouseId]);
 
   useEffect(() => {
@@ -702,7 +725,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setSchemas(j.schemas || []);
+    if (j.ok) {
+      setSchemas(j.schemas || []);
+      schemaCacheRef.current.schemas.set(cat, j.schemas || []);
+    }
   }, [id, warehouseId]);
 
   const openSchema = useCallback(async (cat: string, sch: string) => {
@@ -713,7 +739,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
     const j = (await r.json()) as SchemaResponse;
-    if (j.ok) setTables(j.tables || []);
+    if (j.ok) {
+      setTables(j.tables || []);
+      schemaCacheRef.current.tables.set(`${cat}.${sch}`, j.tables || []);
+    }
+  }, [id, warehouseId]);
+
+  // Fetch a table's columns (DESCRIBE TABLE) into the IntelliSense cache so
+  // typing `catalog.schema.table.` suggests real column names.
+  const cacheColumns = useCallback(async (cat: string, sch: string, tbl: string) => {
+    if (!warehouseId) return;
+    try {
+      const r = await fetch(
+        `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}&table=${encodeURIComponent(tbl)}`,
+      );
+      const j = (await r.json()) as SchemaResponse & { columns?: string[] };
+      if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${cat}.${sch}.${tbl}`, j.columns);
+    } catch { /* completions are best-effort */ }
   }, [id, warehouseId]);
 
   // ---- Start / Stop with poll ----
@@ -800,38 +842,58 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     }
   }, [id, warehouseId, editSize, editMinClusters, editMaxClusters, editAutoStop, editType, editServerless, refreshState]);
 
-  // ---- Run query ----
+  // ---- Run query (run-selection + cancel-aware) ----
   const run = useCallback(async () => {
     if (!warehouseId) {
       setResult({ ok: false, error: 'No warehouse selected.' });
       return;
     }
-    setLoading(true);
-    setResult(null);
+    // Run-selection: if text is highlighted, execute only that.
+    const sqlToRun = getRunSql(editorRef, sqlText);
+    if (!sqlToRun.trim()) return;
+    const tabId = activeTabId;
+    const clientQueryId = `dbx-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    patchTab(tabId, { loading: true, result: null, queryId: clientQueryId });
     try {
       const res = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          sql: sqlText,
+          sql: sqlToRun,
           warehouseId,
           catalog: activeCatalog || undefined,
           schema: activeSchema || undefined,
+          clientQueryId,
         }),
       });
       const json = (await res.json()) as QueryResponse;
       if (res.status === 409 && json.state) {
-        setResult({ ok: false, error: `Warehouse is ${json.state}. Click Start.` });
+        patchTab(tabId, { result: { ok: false, error: `Warehouse is ${json.state}. Click Start.` } });
         refreshState();
       } else {
-        setResult(json);
+        patchTab(tabId, { result: json });
       }
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
+      patchTab(tabId, { result: { ok: false, error: e?.message || String(e) } });
     } finally {
-      setLoading(false);
+      patchTab(tabId, { loading: false, queryId: undefined });
+      setCanceling(false);
     }
-  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, refreshState]);
+  }, [id, sqlText, warehouseId, activeCatalog, activeSchema, refreshState, activeTabId, patchTab, setResult]);
+
+  // ---- Cancel the active tab's in-flight statement ----
+  const cancel = useCallback(async () => {
+    const qid = activeTab.queryId;
+    if (!qid) return;
+    setCanceling(true);
+    try {
+      await fetch(`/api/items/databricks-sql-warehouse/${id}/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientQueryId: qid }),
+      });
+    } catch { /* the query promise resolves to canceled regardless */ }
+  }, [id, activeTab.queryId]);
 
   const state = warehouseState?.state || 'UNKNOWN';
   const isRunning = state === 'RUNNING';
@@ -995,6 +1057,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
+                                  void cacheColumns(c, sch, t);
                                 }}
                               >
                                 <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
@@ -1057,17 +1120,34 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Button appearance="outline" icon={<ArrowSync20Regular />} aria-label="Refresh warehouse state" onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
             }}>Refresh</Button>
+            {/* Catalog picker — drives query context + 3-part / 4-part cross-catalog SQL. */}
+            <Dropdown
+              aria-label="Catalog"
+              placeholder="Catalog"
+              value={activeCatalog || ''}
+              selectedOptions={activeCatalog ? [activeCatalog] : []}
+              onOptionSelect={(_, d) => { if (d.optionValue) openCatalog(d.optionValue); }}
+              disabled={catalogs.length === 0 || !isRunning}
+              style={{ minWidth: 160 }}
+            >
+              {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+            </Dropdown>
             <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
               <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
                 Edit
               </Button>
             </Tooltip>
+            {loading && (
+              <Button appearance="outline" icon={<Stop20Regular />} onClick={cancel} disabled={canceling}>
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </Button>
+            )}
             <Tooltip
               content={
                 !warehouseId ? 'Pick a warehouse first'
                   : loading ? 'A query is running…'
                   : !isRunning ? 'Start the warehouse before running SQL'
-                  : 'Run the SQL on the selected warehouse'
+                  : 'Run the SQL (or just the highlighted selection) on the selected warehouse'
               }
               relationship="label"
             >
@@ -1103,6 +1183,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               Context: <strong>{activeCatalog}</strong>{activeSchema ? <> · <strong>{activeSchema}</strong></> : null}
             </Caption1>
           )}
+          <SqlTabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelect={setActiveTabId}
+            onAdd={addTab}
+            onClose={closeTab}
+          />
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}
@@ -1110,6 +1197,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             height={260}
             minHeight={200}
             ariaLabel="Databricks SQL editor"
+            onReady={handleEditorReady}
           />
           <ResultsPanel result={result} loading={loading} />
           {!warehousesError && warehouses.length === 0 && (

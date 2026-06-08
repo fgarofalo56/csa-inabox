@@ -16,6 +16,11 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | Workload management groups + classifiers | Manage |
 | 8 | Geo backup / restore points | Manage |
 | 9 | Compute picker across pools | Studio |
+| 10 | Run selection (execute only highlighted text) | Develop hub |
+| 11 | Cancel a running query | Develop hub |
+| 12 | Multi-tab query editor | Develop hub tabs |
+| 13 | Schema-aware IntelliSense (column completions) | Develop hub |
+| 14 | Database picker for cross-database 3-part queries | Develop toolbar |
 
 ## Loom coverage
 
@@ -30,9 +35,14 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 | 7 | ✅ | `Workload mgmt` loads sys.workload_management_workload_groups query |
 | 8 | ✅ | `Geo backup` loads sys.pdw_loader_backup_runs query |
 | 9 | ✅ | `ComputePicker` filtered to dedicated pools |
+| 10 | ✅ | `getRunSql()` sends only the highlighted selection to `/query` when present. |
+| 11 | ✅ | **Cancel** button (while running) → `POST /[id]/cancel` `{queryId}` → `cancelActiveQuery()` → mssql `Request.cancel()` (TDS ATTENTION). |
+| 12 | ✅ | Multi-tab via `useSqlTabs` + `SqlTabBar`. |
+| 13 | ✅ | `registerSqlIntelliSense` fed from `/schema` (sys.schemas + `?table=` INFORMATION_SCHEMA.COLUMNS). |
+| 14 | ✅ | **Database** dropdown (sys.databases) re-targets the TDS connection for `other_db.schema.table` 3-part queries. |
 
 ## Backend per control
 - Query / DMV actions → Synapse Dedicated TDS (`executeQuery`/`dedicatedTarget`).
 - Lifecycle → ARM (`synapse-pool-arm` `getPoolState`/resume/pause).
 
-Grade: **A — every inventory row built; all four former "deferred" buttons now wired to real DMV T-SQL through the existing /query TDS path.**
+Grade: **A — every inventory row built; the four former "deferred" buttons + run-selection, Cancel (TDS ATTENTION), multi-tab, IntelliSense and the cross-DB picker all run through the existing /query TDS path.**

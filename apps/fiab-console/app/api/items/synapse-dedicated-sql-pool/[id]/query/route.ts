@@ -26,6 +26,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
+  const queryId = (body?.queryId || '').toString().trim() || undefined;
+  // Cross-database picker: when the editor's database dropdown selects a
+  // database other than the env-bound pool, open the TDS connection against
+  // that database so 3-part names (other_db.schema.table) resolve natively.
+  const database = (body?.database || '').toString().trim();
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
@@ -38,6 +43,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   const accessMode = await resolveAccessMode(id, 'synapse-dedicated-sql-pool');
+
+  // Resolve the TDS target — default to the env-bound pool, or a selected
+  // sibling database for cross-DB queries (keyed separately so its own pool
+  // is cached).
+  const baseTarget = dedicatedTarget();
+  const target = database && database !== baseTarget.database
+    ? { ...baseTarget, database, cacheKey: `dedicated:${process.env.LOOM_SYNAPSE_WORKSPACE}:${database}` }
+    : baseTarget;
 
   try {
     let result;
@@ -54,28 +67,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           { status: 403 },
         );
       }
-      result = await executeQueryAsUser(dedicatedTarget(), sqlText, userToken, session.claims.oid);
+      result = await executeQueryAsUser(target, sqlText, userToken, session.claims.oid, 60_000, queryId);
     } else {
-      result = await executeQuery(dedicatedTarget(), sqlText);
+      result = await executeQuery(target, sqlText, 60_000, queryId);
     }
     return NextResponse.json({
       ok: true,
       ...result,
       accessMode,
       pool: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
+      database: target.database,
       sku: state?.sku || 'unknown',
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
+    const canceled = /cancel/i.test(e?.message || '') || e?.code === 'ECANCEL';
     return NextResponse.json(
       {
         ok: false,
-        error: e?.message || String(e),
+        canceled,
+        error: canceled ? 'Query canceled by user.' : (e?.message || String(e)),
         code: e?.code,
         sqlNumber: e?.number,
         accessMode,
       },
-      { status: 502 },
+      { status: canceled ? 200 : 502 },
     );
   }
 }

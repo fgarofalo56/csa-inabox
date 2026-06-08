@@ -48,3 +48,12 @@ Object explorer: `apps/fiab-console/lib/components/synapse-sql-object-explorer.t
 
 Grade: **A — every inventory row built; IntelliSense, view/proc/iTVF CRUD, Messages pane and DROP-with-confirm all run against the real serverless TDS endpoint. Azure-native by default (no Fabric/Power BI); honest MessageBar gate when `LOOM_SYNAPSE_WORKSPACE` is unset.**
 
+> **rev — SQL-editor parity sweep.** The sibling `SynapseServerlessSqlPoolEditor`
+> (`lib/editors/synapse-sql-editors.tsx`) was brought onto the shared
+> `sql-editor-kit` + `sql-intellisense` primitives, adding run-selection,
+> multi-tab tabs, a **Cancel** button (`POST /[id]/cancel` `{queryId}` →
+> `cancelActiveQuery()` → mssql `Request.cancel()` TDS ATTENTION), schema-aware
+> column completions (`/schema?table=` → INFORMATION_SCHEMA.COLUMNS) and a
+> database picker for 3-part cross-DB queries — all over the same serverless TDS
+> path, no new env vars.
+

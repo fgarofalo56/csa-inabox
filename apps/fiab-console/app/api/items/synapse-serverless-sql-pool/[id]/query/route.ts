@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
   const database = (body?.database || 'master').toString();
+  const queryId = (body?.queryId || '').toString().trim() || undefined;
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
@@ -46,9 +47,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           { status: 403 },
         );
       }
-      result = await executeQueryAsUser(serverlessTarget(database), sqlText, userToken, session.claims.oid);
+      result = await executeQueryAsUser(serverlessTarget(database), sqlText, userToken, session.claims.oid, 60_000, queryId);
     } else {
-      result = await executeQuery(serverlessTarget(database), sqlText);
+      result = await executeQuery(serverlessTarget(database), sqlText, 60_000, queryId);
     }
     // DDL (CREATE/ALTER/DROP VIEW|PROC|FUNCTION) and other non-SELECT statements
     // return no columns. Flag isDdl so the editor switches to the Messages pane
@@ -64,16 +65,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
+    const canceled = /cancel/i.test(e?.message || '') || e?.code === 'ECANCEL';
     return NextResponse.json(
       {
         ok: false,
-        error: e?.message || String(e),
+        canceled,
+        error: canceled ? 'Query canceled by user.' : (e?.message || String(e)),
         code: e?.code,
         sqlState: e?.originalError?.info?.state,
         sqlNumber: e?.number,
         accessMode,
       },
-      { status: 502 },
+      { status: canceled ? 200 : 502 },
     );
   }
 }
