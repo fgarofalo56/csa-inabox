@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _okrs: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +143,12 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Data-product OKRs (F10 "Linked resources") — Loom-native objectives &
+  // key-results store, one row per OKR, partitioned by the parent
+  // data-product item id so the editor's OKR list hits a single physical
+  // partition. Created lazily so a fresh environment needs no extra
+  // ARM/Bicep step beyond the account+database.
+  _okrs = await mk('okrs', '/dataProductId');
   _ensured = true;
 }
 
@@ -151,6 +158,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +221,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'okrs',
 ];
 
 /** List all Loom containers with their current throughput shape. */

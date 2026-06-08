@@ -35,6 +35,7 @@ import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { LinkedResourcesPanel } from './components/linked-resources';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -1905,8 +1906,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const domains = useGovernanceDomains();
 
-  // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
-  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
+  // Tabs: Overview | Datasets | Linked resources | Lineage | Access policies
+  const [tab, setTab] = useState<'overview' | 'datasets' | 'linked-resources' | 'lineage' | 'policies'>('overview');
 
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');
@@ -1925,12 +1926,6 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const dsClassSelected = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
   const [dsBusy, setDsBusy] = useState(false);
   const [dsMsg, setDsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
-
-  // Glossary term create/link.
-  const [glName, setGlName] = useState('');
-  const [glDesc, setGlDesc] = useState('');
-  const [glBusy, setGlBusy] = useState(false);
-  const [glMsg, setGlMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   // Lineage.
   const [lineage, setLineage] = useState<{ nodes: any[]; edges: any[] } | null>(null);
@@ -2128,32 +2123,6 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const removeDataset = (qn: string) => { setState((prev) => ({ ...prev, datasets: (prev.datasets || []).filter((d) => d.qualifiedName !== qn) })); setDirty(true); };
 
-  // ---- Glossary terms (create + link to the product) ----
-  const createGlossaryLink = useCallback(async () => {
-    if (!glName.trim()) { setGlMsg({ intent: 'error', text: 'Term name is required.' }); return; }
-    setGlBusy(true); setGlMsg(null);
-    try {
-      const r = await fetch('/api/catalog/glossary', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          term: { name: glName.trim(), longDescription: glDesc || undefined },
-          ...(state.purviewDataProductId ? { applyTo: { source: 'purview', entityGuid: state.purviewDataProductId } } : {}),
-        }),
-      });
-      const j = await r.json();
-      if (r.status === 501) { setGlMsg({ intent: 'error', text: 'Purview not provisioned — set LOOM_PURVIEW_ACCOUNT to manage glossary terms.' }); return; }
-      if (!j.ok) { setGlMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
-      const link: DataProductGlossaryLink = { name: j.term?.name || glName.trim(), guid: j.term?.guid };
-      setState((prev) => ({ ...prev, glossaryLinks: [...(prev.glossaryLinks || []), link] }));
-      setDirty(true);
-      setGlMsg({ intent: 'success', text: `Created term '${link.name}'${j.applied ? ' and linked to the data product' : ''}. Save to persist.` });
-      setGlName(''); setGlDesc('');
-    } catch (e: any) { setGlMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setGlBusy(false); }
-  }, [glName, glDesc, state.purviewDataProductId]);
-
-  const removeGlossaryLink = (name: string) => { setState((prev) => ({ ...prev, glossaryLinks: (prev.glossaryLinks || []).filter((g) => g.name !== name) })); setDirty(true); };
-
   // ---- Lineage ----
   const loadLineage = useCallback(async () => {
     const guid = state.datasets?.[0]?.guid || state.purviewDataProductId;
@@ -2235,7 +2204,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
-        { label: 'Glossary', onClick: () => setTab('glossary') },
+        { label: 'Linked resources', onClick: () => setTab('linked-resources') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
@@ -2313,7 +2282,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
           <Tab value="datasets" icon={<Code20Regular />}>Datasets</Tab>
-          <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
+          <Tab value="linked-resources" icon={<Library20Regular />}>Linked resources</Tab>
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
         </TabList>
@@ -2431,31 +2400,13 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           </div>
         )}
 
-        {tab === 'glossary' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Body1>Create glossary terms and link them to this data product. {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'flex-end' }}>
-              <Field label="Term name"><Input value={glName} onChange={(_, d) => setGlName(d.value)} placeholder="Net Revenue" /></Field>
-              <Field label="Definition"><Input value={glDesc} onChange={(_, d) => setGlDesc(d.value)} placeholder="Revenue after returns and discounts" /></Field>
-            </div>
-            <Button appearance="primary" icon={<Add20Regular />} onClick={createGlossaryLink} disabled={glBusy} style={{ alignSelf: 'flex-start' }}>
-              {glBusy ? 'Creating…' : 'Create + link term'}
-            </Button>
-            {glMsg && <MessageBar intent={glMsg.intent}><MessageBarBody>{glMsg.text}</MessageBarBody></MessageBar>}
-            <Table size="small" aria-label="Glossary terms">
-              <TableHeader><TableRow><TableHeaderCell>Term</TableHeaderCell><TableHeaderCell>GUID</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
-              <TableBody>
-                {(state.glossaryLinks || []).length === 0 && <TableRow><TableCell>No glossary terms linked yet.</TableCell><TableCell /><TableCell /></TableRow>}
-                {(state.glossaryLinks || []).map((g) => (
-                  <TableRow key={g.name}>
-                    <TableCell><strong>{g.name}</strong></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{g.guid?.slice(0, 12) || '—'}</code></TableCell>
-                    <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeGlossaryLink(g.name)}>Unlink</Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        {tab === 'linked-resources' && (
+          <LinkedResourcesPanel
+            dataProductId={id}
+            glossaryLinks={state.glossaryLinks || []}
+            onGlossaryLinksChange={(links) => patchState({ glossaryLinks: links })}
+            datasetsKey={(state.datasets || []).length}
+          />
         )}
 
         {tab === 'lineage' && (

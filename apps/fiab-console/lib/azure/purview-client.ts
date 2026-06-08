@@ -62,6 +62,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { isGovCloud } from './cloud-endpoints';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -202,9 +203,11 @@ function purviewAccount(): string {
     .replace(/\/+$/, '');
 }
 
-/** Classic Data Map base host — `{account}.purview.azure.com` (NOT -api). */
+/** Classic Data Map base host — `{account}.purview.azure.com` (Commercial) or
+ * `{account}.purview.azure.us` (Azure US Government). NOT the -api host. */
 function purviewBase(): string {
-  return `https://${purviewAccount()}.purview.azure.com`;
+  const suffix = isGovCloud() ? 'purview.azure.us' : 'purview.azure.com';
+  return `https://${purviewAccount()}.${suffix}`;
 }
 
 /** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
@@ -533,6 +536,35 @@ export async function getAssetDetail(guid: string): Promise<any | null> {
 }
 
 /**
+ * Extract Critical-Data-Element (CDE) classifications from a Purview Atlas
+ * entity. The classic Data Map has no first-class "CDE" object (that lives in
+ * the unified-catalog `/datagovernance` plane), so on the Azure-native default
+ * path CDEs are modeled as Atlas classifications whose typeName starts with
+ * `CDE.` — the convention used when assets are registered/scanned with their
+ * critical-data labels. Returns [] when the entity carries no CDE
+ * classification. Throws PurviewNotConfiguredError (via purviewAccount) when
+ * LOOM_PURVIEW_ACCOUNT is unset — callers translate that into an honest gate.
+ *
+ * https://learn.microsoft.com/rest/api/purview/datamapdataplane/entity/get
+ */
+export async function getAssetCdeClassifications(
+  guid: string,
+): Promise<{ typeName: string; displayName: string; entityGuid: string }[]> {
+  if (!guid) return [];
+  const detail = await getAssetDetail(guid);
+  const classifications = detail?.entity?.classifications;
+  if (!Array.isArray(classifications)) return [];
+  return classifications
+    .filter((c: any) => typeof c?.typeName === 'string' && c.typeName.startsWith('CDE.'))
+    .map((c: any) => ({
+      typeName: c.typeName as string,
+      // Human-friendly name = the portion after the `CDE.` prefix.
+      displayName: (c.typeName as string).slice('CDE.'.length) || c.typeName,
+      entityGuid: guid,
+    }));
+}
+
+/**
  * Look up an Atlas entity by its (typeName, qualifiedName) unique attribute.
  *   GET /datamap/api/atlas/v2/entity/uniqueAttribute/type/{typeName}
  *       ?attr:qualifiedName=<qualifiedName>
@@ -746,6 +778,49 @@ export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewG
     glossaryGuid: targetGuid,
     raw,
   }));
+}
+
+/**
+ * List glossaries in the account.
+ *   GET /datamap/api/atlas/v2/glossary  → AtlasGlossary[]
+ *
+ * Used by the data-product "Linked resources" surface to populate the domain
+ * (glossary) filter Dropdown. Live-verified: the SINGULAR `/glossary` path
+ * lists glossaries (the plural `/glossaries` 404s).
+ * https://learn.microsoft.com/rest/api/purview/datamapdataplane/glossary/list-glossaries
+ */
+export async function listGlossaries(): Promise<{ guid: string; name: string }[]> {
+  purviewAccount();
+  const gRes = await purviewFetch('/datamap/api/atlas/v2/glossary');
+  if (gRes.status === 404) return [];
+  const gj = await readJson<any[]>(gRes);
+  if (!Array.isArray(gj)) return [];
+  return gj
+    .filter((g: any) => g?.guid)
+    .map((g: any) => ({ guid: g.guid as string, name: (g.name as string) || g.qualifiedName || g.guid }));
+}
+
+/**
+ * Keyword search across glossary terms within a glossary (or the first
+ * glossary when none is given). Reuses the proven listGlossaryTerms GET path
+ * (up to 200 terms) and filters on name/qualifiedName client-side — real
+ * Purview entries, no mock list. For accounts with >200 terms per glossary a
+ * Discovery query with { entityType: 'AtlasGlossaryTerm' } would replace this.
+ */
+export async function searchGlossaryTermsByKeyword(
+  keyword: string,
+  glossaryGuid?: string,
+  limit = 50,
+): Promise<PurviewGlossaryTerm[]> {
+  const terms = await listGlossaryTerms(glossaryGuid);
+  const q = (keyword || '').trim().toLowerCase();
+  if (!q) return terms.slice(0, limit);
+  return terms
+    .filter((t) =>
+      (t.name || '').toLowerCase().includes(q) ||
+      (t.qualifiedName || '').toLowerCase().includes(q),
+    )
+    .slice(0, limit);
 }
 
 /** POST /datamap/api/atlas/v2/glossary/term — create an Atlas glossary term. */
