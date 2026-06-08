@@ -1782,6 +1782,10 @@ interface DataProductState {
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
+  // F6 — Publish/Unpublish/Expire lifecycle. Cosmos is the source of truth;
+  // managed via POST /api/data-products/[id]/status. Unset == Draft.
+  lifecycleStatus?: 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
+  lifecycleStatusAt?: string;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1945,6 +1949,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [polBusy, setPolBusy] = useState(false);
   const [polMsg, setPolMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
+  // F6 — lifecycle (Publish / Set to draft / Set to expired).
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleMsg, setLifecycleMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
   // Phase 4.5 — all field mutations use functional updates so that if an
   // async response (e.g. registerPurview hydrating purviewDataProductId)
   // lands between the user's keystroke and React's commit, neither edit
@@ -2093,6 +2101,41 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const setBundleText = (text: string) => patchState({ bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
 
+  // ---- F6 lifecycle: Publish / Set to draft / Set to expired ----
+  // The server (/api/data-products/[id]/status) is the authoritative guard:
+  // Publish enforces >=1 asset + an active Access policy + a set domain and
+  // returns 422 with the precise precondition reason. We surface that reason
+  // verbatim in the lifecycle MessageBar. Cosmos is the source of truth — no
+  // Microsoft Fabric / Power BI dependency.
+  const handleSetStatus = useCallback(async (next: 'PUBLISHED' | 'DRAFT' | 'EXPIRED') => {
+    setLifecycleBusy(true); setLifecycleMsg(null);
+    try {
+      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/status`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: next }),
+      });
+      const j = await r.json();
+      if (r.status === 422 && j?.preconditionFailed) {
+        setLifecycleMsg({ intent: 'error', text: j.preconditionFailed.message });
+        return;
+      }
+      if (!j?.ok) { setLifecycleMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setState((prev) => ({ ...prev, lifecycleStatus: next, lifecycleStatusAt: j.lifecycleStatusAt }));
+      const label = next === 'PUBLISHED' ? 'Published' : next === 'EXPIRED' ? 'set to expired' : 'set to draft';
+      setLifecycleMsg({
+        intent: 'success',
+        text: next === 'PUBLISHED'
+          ? `Published. ${j.purviewSync ? 'Purview unified catalog updated.' : (j.purviewSyncNote || 'Consumers can now discover this data product.')}`
+          : `Status ${label}.${next === 'EXPIRED' ? ' Consumers can no longer discover this data product.' : ''}`,
+      });
+    } catch (e: any) {
+      setLifecycleMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }, [id]);
+
   // ---- Datasets (register Atlas entity + classifications) ----
   const registerDataset = useCallback(async () => {
     if (!dsName.trim() || !dsQName.trim()) { setDsMsg({ intent: 'error', text: 'Name and qualified name are required.' }); return; }
@@ -2225,6 +2268,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const canSave = status.kind !== 'saving' && (isNew
     ? (!!state.displayName.trim() && !!workspaceId)
     : dirty);
+  // F6 — client-side preflight for the Publish button. The server is the
+  // authoritative gate (assets / policy / domain); this only blocks obvious
+  // non-starters with an honest tooltip.
+  const isPublished = state.lifecycleStatus === 'PUBLISHED';
+  const canPublish = !isNew && !lifecycleBusy && status.kind !== 'saving' && !isPublished && !!state.displayName.trim();
+  const publishBlockReason = isNew
+    ? 'Create the data product first'
+    : isPublished ? 'Already published'
+    : !state.displayName.trim() ? 'Display name is required'
+    : undefined;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Product', actions: [
@@ -2233,6 +2286,18 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
         { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
       ]},
+      { label: 'Lifecycle', actions: [
+        { label: lifecycleBusy ? 'Publishing…' : 'Publish',
+          onClick: canPublish ? () => handleSetStatus('PUBLISHED') : undefined,
+          disabled: !canPublish, title: publishBlockReason },
+        { label: 'Unpublish',
+          disabled: isNew || lifecycleBusy || !isPublished,
+          title: isNew ? 'Create the data product first' : !isPublished ? 'Publish the data product first' : undefined,
+          dropdownItems: [
+            { label: 'Set to draft', onClick: () => handleSetStatus('DRAFT') },
+            { label: 'Set to expired', onClick: () => handleSetStatus('EXPIRED') },
+          ] },
+      ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
         { label: 'Glossary', onClick: () => setTab('glossary') },
@@ -2240,7 +2305,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
     ]},
-  ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
+  ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror, canPublish, isPublished, lifecycleBusy, publishBlockReason, handleSetStatus]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -2284,6 +2349,12 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         {loading && <Spinner size="tiny" label="Loading…" />}
 
         <div className={s.toolbar}>
+          {(() => {
+            const ls = state.lifecycleStatus;
+            if (ls === 'PUBLISHED') return <Badge appearance="filled" color="success">Published</Badge>;
+            if (ls === 'EXPIRED') return <Badge appearance="filled" color="danger">Expired</Badge>;
+            return <Badge appearance="outline" color="warning">Draft</Badge>;
+          })()}
           {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
@@ -2309,6 +2380,23 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           </Button>
         </div>
         <StatusBar status={status} />
+
+        {lifecycleMsg && (
+          <MessageBar intent={lifecycleMsg.intent}>
+            <MessageBarBody>
+              <MessageBarTitle>{lifecycleMsg.intent === 'error' ? 'Lifecycle error' : 'Status updated'}</MessageBarTitle>
+              {lifecycleMsg.text}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {state.lifecycleStatus === 'EXPIRED' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>This data product is expired</MessageBarTitle>
+              It is visible only to stewards and owners. Consumers cannot discover it in the catalog or request access. Use <strong>Publish</strong> to make it discoverable again.
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>

@@ -956,6 +956,27 @@ export async function listDataProducts(_domain?: string): Promise<PurviewDataPro
 }
 
 /**
+ * Push a Publish/Unpublish/Expire lifecycle transition to the unified-catalog
+ * data product (PUT {endpoint}/datagovernance/catalog/dataProducts/{id} with
+ * `status: DRAFT | PUBLISHED | EXPIRED`, the CatalogModelStatus enum from the
+ * 2026-03-20-preview REST API).
+ *
+ * Honest gate: data-product lifecycle is a unified-catalog concept that the
+ * deployed CLASSIC Data Map account does not expose. This throws
+ * PurviewUnifiedCatalogGateError so the BFF renders the MessageBar hint while
+ * Cosmos remains the authoritative status store (the lifecycle still fully
+ * works without Purview). When a new-experience unified-catalog account is
+ * onboarded (LOOM_PURVIEW_ACCOUNT pointing at it), this becomes the real PUT.
+ */
+export async function updateDataProductStatus(
+  _id: string,
+  _status: 'DRAFT' | 'PUBLISHED' | 'EXPIRED',
+): Promise<PurviewDataProduct> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Data product lifecycle');
+}
+
+/**
  * Business-domain mirror on CLASSIC Data Map.
  *
  * The unified-catalog `/datagovernance` business-domains surface does NOT exist
