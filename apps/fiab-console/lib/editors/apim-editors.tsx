@@ -3023,7 +3023,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         {tab === 'glossary' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Body1>Create glossary terms and link them to this data product. {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1> {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1>
+            <Body1>Create glossary terms and link them to this data product. {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'flex-end' }}>
               <Field label="Term name"><Input value={glName} onChange={(_, d) => setGlName(d.value)} placeholder="Net Revenue" /></Field>
               <Field label="Definition"><Input value={glDesc} onChange={(_, d) => setGlDesc(d.value)} placeholder="Revenue after returns and discounts" /></Field>
