@@ -217,6 +217,55 @@ and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`
   expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
   the admin-consent click above.
 
+## Batch labeling — Power BI Admin setLabels {#batch-labeling-powerbi-setlabels}
+
+The **Admin → Batch labeling** page (`/admin/batch-labeling`) bulk-applies a
+sensitivity label to many catalog items at once. It always writes the label
+assignment to Cosmos (the item's `state.sensitivityLabel`), and — when Microsoft
+Purview is configured — stamps the label as an Atlas asset classification on the
+matching catalog asset. Neither of those needs anything beyond the Purview
+bootstrap above.
+
+The **optional** third sink is the Power BI Admin
+`InformationProtection.setLabels` REST API, which writes the label onto the
+underlying Power BI artifact (semantic model / report / dashboard / dataflow)
+linked to a Loom item. It requires two things that the page surfaces honestly
+(the checkbox only appears when both are satisfied):
+
+1. **A real MIP label GUID.** The Power BI API only accepts Microsoft
+   Information Protection label GUIDs, not Loom-native label ids. So
+   `LOOM_MIP_ENABLED=true` (see the MIP section above) must already be on, and
+   the operator must pick a label sourced from MIP in the dropdown.
+
+2. **The Console UAMI must be a Fabric Administrator.** This is a one-time
+   M365 / Entra admin action and is **NOT an Azure ARM role** — it cannot be
+   granted from bicep. A tenant admin adds the Console UAMI's service principal
+   to the *Fabric administrator* role in the Microsoft 365 admin center
+   (Roles → Role assignments → Fabric administrator), or via the Power BI
+   tenant settings "Service principals can use Fabric APIs" group plus the admin
+   role. Until this is done, `setLabels` returns 401/403, which the results grid
+   shows verbatim in red per row (no fake success).
+
+### Step — Flip the feature flag
+
+```bash
+az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
+  --set-env-vars LOOM_POWERBI_ADMIN_LABELS=true
+```
+
+Or set `loomPowerBiAdminLabels = true` in the `.bicepparam` and re-deploy
+admin-plane (the env wiring is already in `admin-plane/main.bicep`).
+
+### Bicep sync
+
+- Env flag `LOOM_POWERBI_ADMIN_LABELS`:
+  `platform/fiab/bicep/main.bicep` (`loomPowerBiAdminLabels` param) →
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- The Fabric Administrator role assignment is a **Power BI / M365 tenant** grant
+  and intentionally cannot be expressed in ARM/bicep — hence the one-time admin
+  action above. The page hides the Power BI checkbox until `LOOM_POWERBI_ADMIN_LABELS`
+  is set, and any per-artifact 403 is shown verbatim.
+
 ## PostgreSQL in-database query (Entra auth)
 
 The unified SQL editor's **Query** tab and schema browser run real SQL against a

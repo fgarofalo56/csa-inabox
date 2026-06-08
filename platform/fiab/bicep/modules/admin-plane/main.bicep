@@ -389,6 +389,9 @@ param loomMipEnabled bool = false
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
+@description('Enable the Power BI Admin InformationProtection.setLabels API used by /admin/batch-labeling to propagate a MIP sensitivity label to linked Power BI artifacts. Requires (1) loomMipEnabled=true for the label GUIDs, and (2) the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action — NOT an Azure ARM role, so it cannot be granted from bicep). When false, batch labeling still writes Cosmos + Purview; the Power BI checkbox is hidden.')
+param loomPowerBiAdminLabels bool = false
+
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar.')
 param loomIdentityPickerEnabled bool = false
 
@@ -1181,6 +1184,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
+          ] : [],
+          loomPowerBiAdminLabels ? [
+            { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
           ] : [],
           // Identity Picker (Entra user/group/SPN search + transitive nested
           // groups) — gated on the Console UAMI's Graph User.Read.All +

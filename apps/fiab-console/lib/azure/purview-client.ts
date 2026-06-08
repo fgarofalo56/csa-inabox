@@ -661,6 +661,34 @@ export async function ensureClassificationDefs(names: string[]): Promise<void> {
   }
 }
 
+/**
+ * Add one or more classifications to a catalog asset (Atlas entity) by GUID.
+ *   POST /datamap/api/atlas/v2/entity/guid/{guid}/classifications
+ *   body: [{ typeName }]
+ *
+ * Used by batch labeling to stamp a sensitivity-label name onto the matching
+ * Purview asset. The classification typedefs must already exist (call
+ * ensureClassificationDefs first). Atlas returns 204 on success and 409 when
+ * the classification is already assigned — both are treated as success
+ * (idempotent). Any other non-2xx surfaces verbatim as a PurviewError.
+ *
+ * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ */
+export async function addAssetClassification(guid: string, classificationNames: string[]): Promise<void> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const names = [...new Set((classificationNames || []).map((n) => (n || '').trim()).filter(Boolean))];
+  if (!names.length) return;
+  const res = await purviewFetch(`/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}/classifications`, {
+    method: 'POST',
+    body: JSON.stringify(names.map((n) => ({ typeName: n }))),
+  });
+  // Atlas returns 204 No Content on success; 409 means already assigned.
+  if (res.ok || res.status === 204 || res.status === 409) return;
+  const t = await res.text();
+  throw new PurviewError(res.status, t, `addAssetClassification failed: ${t || res.statusText}`);
+}
+
 // ------------------------------------------------------------
 // Atlas glossary surface (low-level — /datamap/api/atlas/v2/glossary)
 // ------------------------------------------------------------
