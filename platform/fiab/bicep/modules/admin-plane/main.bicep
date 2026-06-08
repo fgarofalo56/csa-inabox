@@ -1150,6 +1150,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
           ] : []),
+          // Purview Unified Catalog data-plane endpoint + API version — used by
+          // the data-product creation wizard (/api/data-products,
+          // /api/governance-domains) to register data products + list business
+          // domains. STRICTLY OPT-IN: empty when no Purview account is bound, in
+          // which case the wizard saves the draft to Loom's Cosmos store and
+          // shows an honest "not registered in Purview" hint (no gate; the item
+          // is 100% functional Azure-native per no-fabric-dependency.md). The UC
+          // API is Commercial-only today; GCC/GCC-High/IL5 fall back to the
+          // Cosmos governance-domain list automatically.
+          !empty(loomPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${loomPurviewAccount}.purview.azure.com' }
+            { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
+          ] : (purviewEnabled ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
+            { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
+          ] : []),
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
