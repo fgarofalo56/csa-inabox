@@ -358,6 +358,31 @@ export function cosmosEndpointFromName(accountName: string): string {
   return `https://${accountName}.${cosmosSuffix()}:443/`;
 }
 
+/**
+ * Cosmos DB **Gremlin (Apache TinkerPop) API** data-plane hostname suffix
+ * (no leading dot, no account prefix).
+ *   Commercial / GCC : gremlin.cosmos.azure.com
+ *   GCC-High / IL5 / DoD : gremlin.cosmos.azure.us
+ *
+ * The Gremlin endpoint is a DISTINCT host from the NoSQL `documents.azure.*`
+ * document endpoint — a Gremlin client connects over the `gremlin.cosmos.*`
+ * WebSocket host (verified against Microsoft Learn
+ * https://learn.microsoft.com/azure/cosmos-db/gremlin and the Azure-Government
+ * parity matrix). Hard-coding the Commercial `.azure.com` suffix silently
+ * fails Gremlin auth + traversal in Gov, so every Gremlin endpoint URL builds
+ * from this helper. GCC runs on the Commercial Azure environment, so its
+ * Gremlin account is a `.azure.com` account — same as Commercial — which is
+ * exactly what `isGovCloud()` (false for GCC) yields.
+ */
+export function gremlinSuffix(): string {
+  return isGovCloud() ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com';
+}
+
+/** Build the Cosmos Gremlin WebSocket endpoint URL for a given account name. */
+export function gremlinEndpointFromName(accountName: string): string {
+  return `wss://${accountName}.${gremlinSuffix()}:443/`;
+}
+
 // ---------------------------------------------------------------------------
 // Azure Machine Learning data plane (api.azureml.ms / api.ml.azure.us)
 // ---------------------------------------------------------------------------

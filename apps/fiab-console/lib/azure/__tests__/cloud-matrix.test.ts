@@ -93,6 +93,13 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.cosmosSuffix()).toBe(COSMOS_COM);
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe(`https://cosmos-loom.${COSMOS_COM}:443/`);
   });
+
+  it('Cosmos Gremlin helpers use gremlin.cosmos.azure.com', async () => {
+    const m = await load('AzureCloud');
+    const GREMLIN_COM = J('gremlin', 'cosmos', 'azure', 'com');
+    expect(m.gremlinSuffix()).toBe(GREMLIN_COM);
+    expect(m.gremlinEndpointFromName('cosmos-loom-gremlin')).toBe(`wss://cosmos-loom-gremlin.${GREMLIN_COM}:443/`);
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -153,6 +160,12 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.cosmosSuffix()).toBe('documents.azure.us');
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe('https://cosmos-loom.documents.azure.us:443/');
   });
+
+  it('Cosmos Gremlin helpers use gremlin.cosmos.azure.us', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.gremlinSuffix()).toBe('gremlin.cosmos.azure.us');
+    expect(m.gremlinEndpointFromName('cosmos-loom-gremlin')).toBe('wss://cosmos-loom-gremlin.gremlin.cosmos.azure.us:443/');
+  });
 });
 
 describe('cloud-endpoints — overrides + DoD', () => {
@@ -167,6 +180,8 @@ describe('cloud-endpoints — overrides + DoD', () => {
     expect(m.armBase()).toBe('https://management.azure.microsoft.scloud');
     expect(m.isGovCloud()).toBe(true);
     expect(m.kustoSuffix()).toBe('kusto.usgovcloudapi.net');
+    // Cosmos Gremlin in DoD uses the same Gov suffix as GCC-High / IL5.
+    expect(m.gremlinSuffix()).toBe('gremlin.cosmos.azure.us');
   });
 
   it('LOGIC_APP_WORKFLOW_SCHEMA is the cloud-invariant schema namespace', async () => {

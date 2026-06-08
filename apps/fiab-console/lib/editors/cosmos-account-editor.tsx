@@ -35,6 +35,7 @@ import {
   ArrowSync20Regular, Dismiss12Regular,
   Home16Regular, DocumentBulletList16Regular, Settings20Regular,
   Search16Regular, Code16Regular, MathFormula20Regular, Flow20Regular,
+  Organization20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -43,6 +44,7 @@ import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/compo
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
 import { CosmosSettings } from '@/lib/components/cosmos/cosmos-settings';
+import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -96,6 +98,7 @@ function tabIcon(kind: CosmosAction) {
     case 'items': return <DocumentBulletList16Regular />;
     case 'settings': return <Settings20Regular />;
     case 'newSqlQuery': return <Search16Regular />;
+    case 'graph': return <Organization20Regular />;
     case 'storedProcedure':
     case 'newStoredProcedure': return <Code16Regular />;
     case 'udf':
@@ -145,6 +148,9 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
         seedQuery: 'SELECT * FROM c',
       };
+    } else if (a === 'graph') {
+      // Cosmos Gremlin graph explorer — one tab per account (pinned key).
+      tab = { key: 'graph', kind: 'graph', title: 'Graph explorer', closable: true };
     } else {
       // Script tabs (existing or new sproc/udf/trigger) — honest-gated authoring.
       const label =
@@ -185,6 +191,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
     { id: 'home', label: 'Home', groups: [
       { label: 'Data Explorer', actions: [
         { label: 'New SQL Query', icon: <Search16Regular />, onClick: () => openTab({ action: 'newSqlQuery' }) },
+        { label: 'Graph explorer', icon: <Organization20Regular />, onClick: () => openTab({ action: 'graph' }) },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refresh },
       ]},
     ]},
@@ -269,6 +276,10 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
               )
             )}
 
+            {active.kind === 'graph' && (
+              <GremlinExplorerPanel id={id} />
+            )}
+
             {active.kind === 'settings' && active.container && (
               <CosmosSettings
                 key={active.key}
@@ -344,6 +355,40 @@ function ScriptGate({ kind, db, container, scriptName }: { kind: CosmosAction; d
           headers). Not wired yet — surfaced honestly per no-vaporware.md rather than faked.
         </MessageBarBody>
       </MessageBar>
+    </div>
+  );
+}
+
+/**
+ * Graph explorer tab — the Cosmos DB Gremlin (graph) API surface. Renders a
+ * read-only endpoint chip (server-bound, per no-vaporware.md) plus the live
+ * force-directed canvas + Gremlin editor. The canvas runs `g.V().limit(25)`
+ * on mount and surfaces the real BFF honest-gate inline when the account
+ * isn't Gremlin-enabled or the runtime endpoint isn't wired.
+ */
+function GremlinExplorerPanel({ id }: { id: string }) {
+  // Server-bound endpoint (read-only). The BFF drives the real runtime via
+  // LOOM_COSMOS_GREMLIN_ENDPOINT; this client mirror is informational only.
+  const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+      <MessageBar intent={endpoint ? 'info' : 'warning'}>
+        <MessageBarBody>
+          <MessageBarTitle>Cosmos Gremlin (graph) API</MessageBarTitle>
+          {endpoint ? (
+            <>Connected to <code>{endpoint}</code> (server-bound via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>).
+              Run a traversal below — <code>g.V()</code>/<code>g.E()</code> results render on the
+              force-directed canvas; <code>addV</code>/<code>addE</code> persist to the live graph.</>
+          ) : (
+            <>No Gremlin runtime endpoint is bound. The Gremlin API needs a dedicated
+              <strong> EnableGremlin</strong> account (deploy{' '}
+              <code>cosmos-graph-vector.bicep</code>), then set <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>
+              {' '}on the Console Container App. The canvas below still renders and reports the precise
+              gate returned by the backend.</>
+          )}
+        </MessageBarBody>
+      </MessageBar>
+      <GremlinGraphCanvas itemId={id} />
     </div>
   );
 }
