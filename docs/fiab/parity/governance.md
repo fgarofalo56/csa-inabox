@@ -37,6 +37,7 @@ sensitivity, insights, policies) work today with no Purview at all.
 | Data Map — scans + run history + trigger | `/governance/scans` (drawer) | `/api/governance/scans` → `listScansForSource` / `listScanRuns` / `triggerScanRun` | ⚠️ GATED |
 | Lineage (column/asset graph) | `/governance/lineage` | `/api/governance/lineage` (Cosmos) + `getLineageSubgraph` (Atlas) when bound | ✅ BUILT |
 | Access policies (DLP/masking/RLS/retention/access) | `/governance/policies` | `/api/governance/policies` (Cosmos, CRUD + toggle) | ✅ BUILT — **Access** grants are REAL Azure-native data-plane grants across three scopes: **ADLS container** (Storage RBAC), **warehouse** (Synapse dedicated SQL Entra DB user + db_datareader/writer/owner), **KQL database** (ADX `.add database` viewers/users/admins). Symmetric revoke on policy delete. workspace/item/collection still honest-`pending`. |
+| **DLP policies + violations + tips (F22)** | `/governance/policies` (DLP card) + `/admin/security` DLP panel | `dlp-graph-client` (Graph) + `/api/governance/dlp/*` | ✅ BUILT — see DLP section below |
 | Health management — insights & reports (coverage, DQ) | `/governance/insights` | `/api/governance/insights` (Cosmos KPIs) + `listDataQualityRules` when bound | ✅ BUILT — KPIs now cover **compliance score** (composite), sensitivity, classification, **ownership** (`state.owner`), **endorsement** (`state.endorsement` Certified/Promoted / `state.certified`), active policies, audit-30d; per-type coverage table adds Owned + Endorsed columns; a **policy-effectiveness** sortable table lists active policies (type/scope/status/updated). All derived live from Cosmos — no sample data. |
 | Microsoft Purview portal launch + connection status | `/governance/purview` | `/api/governance/purview/status` probe + deep-link | ✅ BUILT |
 
@@ -67,6 +68,40 @@ renders; the controls call live Purview REST and disable behind the honest
   Atlas `/catalog/api/atlas/v2/...`.
 - Lineage → Atlas `/datamap/api/atlas/v2/lineage/{guid}`.
 - Cosmos-backed surfaces → workspace-items + audit-log containers.
+
+## Data loss prevention (F22) — DLP policies + violations + tips
+
+**Source UI:** Microsoft Purview compliance portal → Data loss prevention
+(policies, alerts, activity explorer / DLPRuleMatch, policy tips, restrict
+access) — grounded in Microsoft Learn (`/graph/deployments`,
+`/graph/api/resources/security-api-overview`) and the live Purview portal.
+
+**Loom surfaces:** the `/governance/policies` **DLP card** (everyday view) and
+the `/admin/security` **DLP panel** Violations sub-tab (power-user view).
+
+| Purview DLP capability | Loom coverage | Backend per control |
+|---|---|---|
+| DLP policy list + rules | ✅ BUILT (Commercial/GCC) · ⚠️ honest-gate in GCC-High/IL5 | `listDlpPolicies` / `listDlpRules` → `GET /beta/security/dataLossPreventionPolicies` |
+| Per-item violations list | ✅ BUILT (all clouds) | `listDlpViolations` → `GET /v1.0/security/alerts_v2` (shaped per item from evidence) |
+| Last-scan timestamp | ✅ BUILT | `dlp-meta:<tenant>` Cosmos doc `lastScannedAt` (stamped on each violations refresh) |
+| Trigger scan | ⚠️ honest-gate (no Graph REST trigger exists) | `triggerScan` → typed 501 + `Start-Scan` / Purview portal "Scan now" link; request timestamp recorded |
+| Per-item policy-tip badges | ✅ BUILT | DLP rows badge `N tips` (best-effort name match vs. violations) / `monitored`; Access rows badge `restricted` |
+| Restrict access (revoke) | ✅ BUILT (real RBAC/data-plane) | `POST /api/governance/dlp/restrict` → ADLS Storage-RBAC revoke (ARM read-back confirmed) · warehouse/KQL inverse grant; writes `policies` + `dlp-meta` (item-permissions) |
+| DoD / Gov honest-gate | ✅ BUILT | `MessageBar` when `graphDlpPolicyApiAvailable()===false`; names the gap + `compliance.microsoft.us` |
+
+**National-cloud reality (grounded in Learn `/graph/deployments`):** the `/beta`
+DLP *policy* segment is not exposed on the US Gov (`graph.microsoft.us`) or DoD
+(`dod-graph.microsoft.us`) Graph roots, so policy list/rules honest-gate there
+while violations (`alerts_v2`, GA on all roots) and restrict-access RBAC keep
+working. `cloud-endpoints.graphBase()`/`graphScope()` pick the correct root from
+`AZURE_CLOUD` / `LOOM_CLOUD_BOUNDARY` (wired by `admin-plane/main.bicep`).
+
+**No-vaporware notes:** there is **no public Graph REST API** to trigger the
+Purview Information Protection scanner or read its status — both surface honest
+gates with the exact `Start-Scan` / `Get-ScanStatus` cmdlet + portal link rather
+than a faked response. Violations are mapped only from real `alerts_v2` evidence
+(never synthesized). Restrict-access performs a real ARM role-assignment DELETE
+and re-reads ARM to confirm the principal no longer holds the role.
 
 ## Grade
 

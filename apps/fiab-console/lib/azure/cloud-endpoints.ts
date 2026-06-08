@@ -145,6 +145,55 @@ export function stripArmBase(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Microsoft Graph (national-cloud aware)
+// ---------------------------------------------------------------------------
+//
+// Graph has DISTINCT service roots per sovereign cloud (verified against
+// Microsoft Learn — https://learn.microsoft.com/graph/deployments):
+//
+//   | National cloud                      | Microsoft Graph root            |
+//   |-------------------------------------|---------------------------------|
+//   | Global (Commercial / GCC)           | https://graph.microsoft.com     |
+//   | US Government L4 (GCC High)          | https://graph.microsoft.us      |
+//   | US Government L5 (DoD / IL5)         | https://dod-graph.microsoft.us  |
+//
+// Access tokens are NOT interchangeable across roots, so the scope must match
+// the chosen base. A client that hard-codes graph.microsoft.com fails in Gov.
+
+/** Friendly cloud-boundary label for UI/MessageBar copy (e.g. "GCC High (L4)"). */
+export function cloudBoundaryLabel(): string {
+  // Prefer the explicit deployment boundary when bicep wires it through; this
+  // distinguishes GCC-High from IL5 (both map to AzureUSGovernment otherwise).
+  const explicit = (process.env.LOOM_CLOUD_BOUNDARY || '').trim();
+  if (explicit) {
+    switch (explicit.toLowerCase()) {
+      case 'commercial': return 'Commercial';
+      case 'gcc': return 'GCC';
+      case 'gcc-high': case 'gcchigh': return 'GCC High (L4)';
+      case 'il5': case 'dod': return 'DoD (IL5/L5)';
+      default: return explicit;
+    }
+  }
+  switch (detectCloud()) {
+    case 'AzureUSGovernment': return 'US Government (GCC High / IL5)';
+    case 'AzureDOD': return 'DoD (IL5/L5)';
+    default: return 'Commercial';
+  }
+}
+
+/**
+ * Whether Microsoft Graph exposes the `/beta/security/dataLossPreventionPolicies`
+ * policy-management surface for the active cloud. This preview segment is NOT
+ * available in the US Government / DoD Graph roots as of 2026 — DLP policy
+ * authoring there remains Purview-compliance-portal + Security & Compliance
+ * PowerShell only. DLP ALERTS (`/v1.0/security/alerts_v2`) and restrict-access
+ * RBAC enforcement still work in every cloud.
+ */
+export function graphDlpPolicyApiAvailable(): boolean {
+  return !isGovCloud();
+}
+
+// ---------------------------------------------------------------------------
 // Key Vault (data plane)
 // ---------------------------------------------------------------------------
 
