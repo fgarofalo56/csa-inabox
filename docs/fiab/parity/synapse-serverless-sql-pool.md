@@ -48,3 +48,5 @@ Object explorer: `apps/fiab-console/lib/components/synapse-sql-object-explorer.t
 
 Grade: **A — every inventory row built; IntelliSense, view/proc/iTVF CRUD, Messages pane and DROP-with-confirm all run against the real serverless TDS endpoint. Azure-native by default (no Fabric/Power BI); honest MessageBar gate when `LOOM_SYNAPSE_WORKSPACE` is unset.**
 
+
+> **T9 — Visualize + query parameters.** Added a **Visualize** toggle (in-Loom SVG chart: bar/line/area/pie/scatter + axis pickers over the real result rows, `result-visualize.tsx`) and **query parameters** (`{{name}}` widgets → `@name` bound via `req.input()` → `sp_executesql`, injection-safe). Receipt returns `statement` + `parameters` + `parametersCount`. Grade unchanged (A).

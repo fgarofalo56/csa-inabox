@@ -503,6 +503,21 @@ export function synapseSqlSuffix(): string {
   return isGovCloud() ? 'sql.azuresynapse.usgovcloudapi.net' : 'sql.azuresynapse.net';
 }
 
+/**
+ * Wildcard pattern for the JDBC `hostNameInCertificate` property when an
+ * external client connects to Synapse SQL (Dedicated or Serverless). Mirrors
+ * the `synapseSqlSuffix()` Commercial/Gov split so the JDBC URL the console's
+ * Connection details panel surfaces is valid on every sovereign boundary —
+ * without it the Microsoft JDBC driver can reject the TLS cert because the
+ * `*-ondemand` / pool FQDN does not match the leaf certificate subject.
+ *   Commercial / GCC : *.sql.azuresynapse.net
+ *   GCC-High / IL5   : *.sql.azuresynapse.usgovcloudapi.net
+ *   DoD              : *.sql.azuresynapse.usgovcloudapi.net
+ */
+export function synapseSqlJdbcHostCert(): string {
+  return `*.${synapseSqlSuffix()}`;
+}
+
 /** Log Analytics query-API host (full URL with scheme). */
 export function getLogAnalyticsHost(): string {
   return isGovCloud() ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com';
