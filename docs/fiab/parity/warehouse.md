@@ -33,16 +33,19 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 5 | ✅ | Save-as-view achievable via CREATE VIEW in editor; CTAS dialog covers table |
 | 6 | ✅ | `Save as table` CTAS dialog (`submitCtas`) → real CREATE TABLE AS SELECT |
 | 7 | ✅ | `Open in Excel` → `/iqy` returns a real .iqy web-query file |
-| 8 | ⚠️ honest-gate | Visualize/Explore launch Power BI — use the Report/Semantic-model editors |
+| 8 | ✅ | **Visualize** toggle renders an in-Loom chart (bar/line/area/pie/scatter + axis pickers) over the real result rows — `result-visualize.tsx`, no Power BI dependency |
 | 9 | ✅ | Results grid is selectable/copyable |
 | 10 | ✅ | `Manage relationships` → sys.foreign_keys; `New measure` → CREATE FUNCTION template |
 | 11 | ✅ | `Permissions` → real sys.database_principals query via `/query` |
 | 12 | ⚠️ honest-gate | `Source control` opens Fabric Git Learn (Git is workspace-level) |
 | 13 | ✅ | 3-part names work through the same TDS path |
+| 14 | ✅ | **Query parameters** — `{{name}}` tokens auto-detected into widgets above the editor; rewritten to `@name` and bound via `req.input()` → `sp_executesql` (injection-safe; value never concatenated) |
 
 ## Backend per control
 - Schema / query / CTAS / DMV actions → Synapse Dedicated pool TDS (`executeQuery` / `dedicatedTarget`) via `/api/items/warehouse/[id]/query` + `/schema`.
+- Visualize (chart) → client-side SVG over the real result set (`result-visualize.tsx`); no backend call, no Power BI.
+- Query parameters → bound server-side via `req.input(name, NVarChar, value)` in `executeQuery`; receipt returns `statement` + `parameters` + `parametersCount`.
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **B+ — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
+Grade: **A- — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships + in-Loom visualize + parameterized queries all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; one honest-gate (workspace Git). The Power BI visualize gate is removed (built Azure-native).**

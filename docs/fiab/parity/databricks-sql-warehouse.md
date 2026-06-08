@@ -45,3 +45,5 @@ Grade: **A (warehouse lifecycle + edit/scale + UC explorer with views/functions 
 
 > **rev.2 — corrected against current code (PR #545).** Added row 7 (edit/scale warehouse) as ✅ built — the editor now has a real Edit dialog POSTing `/sql/warehouses/{id}/edit` through a real route + client. Grade unchanged (already A); inventory now reflects the scale capability.
 > **rev.3 — Explorer completion.** Added rows 8–10: views + user functions nodes, lazy view row-counts, and CREATE/DROP script-out over `SHOW CREATE TABLE`/`SHOW CREATE FUNCTION`.
+
+> **T9 — Visualize + query parameters.** Added a **Visualize** toggle that renders an in-Loom chart (bar/line/area/pie/scatter + axis pickers) over the real result rows (`result-visualize.tsx`, client-side SVG — no Power BI). Added **query parameters**: `{{name}}` tokens auto-detected into widgets above the editor, rewritten to `:name` and sent in the Statement Execution API `parameters[]` array (bound by Databricks, never concatenated — injection-safe). Receipt returns `statement` + `parameters` + `parametersCount`. Grade unchanged (A).

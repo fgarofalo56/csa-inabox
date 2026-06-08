@@ -48,3 +48,5 @@ Editor: `SynapseDedicatedSqlPoolEditor` in `apps/fiab-console/lib/editors/synaps
 - Object enumeration + script-out → `sys.views`/`sys.procedures`/`sys.objects`/`sys.sql_modules` via `lib/azure/sql-object-scripting.ts`.
 
 Grade: **A — every inventory row built; Explorer covers views/SPs/functions with real row counts and full script-out (CREATE/ALTER/DROP) over OBJECT_DEFINITION; CTAS (distribution+index) and SELECT INTO copy wired through the TDS path, with an honest no-zero-copy-clone disclosure for Dedicated.**
+
+> **T9 — Visualize + query parameters.** Added a **Visualize** toggle (in-Loom SVG chart: bar/line/area/pie/scatter + axis pickers over the real result rows, `result-visualize.tsx`) and **query parameters** (`{{name}}` widgets → `@name` bound via `req.input()` → `sp_executesql`, injection-safe). Receipt returns `statement` + `parameters` + `parametersCount`. Grade unchanged (A).

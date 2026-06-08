@@ -24,6 +24,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
+  DataBarVertical20Regular,
   TableAdd20Regular,
   Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
@@ -34,6 +35,8 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
+import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
+import { ResultVisualize } from './components/result-visualize';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
@@ -101,6 +104,7 @@ function ResultsPanel({
   onOpenExcel?: () => void | Promise<void>;
 }) {
   const s = useStyles();
+  const [showViz, setShowViz] = useState(false);
   if (loading) {
     return (
       <div className={s.resultBox}>
@@ -138,6 +142,10 @@ function ResultsPanel({
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
         {rows.length > 0 && (
           <div className={s.resultActions}>
+            <Tooltip content={showViz ? 'Hide chart' : 'Visualize results as a chart'} relationship="label">
+              <Button size="small" appearance={showViz ? 'primary' : 'subtle'} icon={<DataBarVertical20Regular />}
+                onClick={() => setShowViz((v) => !v)}>{showViz ? 'Hide chart' : 'Visualize'}</Button>
+            </Tooltip>
             <Tooltip content="Download results as CSV" relationship="label">
               <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                 onClick={() => downloadBlob(`query-results-${stamp}.csv`, 'text/csv', resultsToCsv(columns, rows))}>CSV</Button>
@@ -155,6 +163,7 @@ function ResultsPanel({
           </div>
         )}
       </div>
+      {showViz && rows.length > 0 && <ResultVisualize columns={columns} rows={rows} />}
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
       ) : (
@@ -203,6 +212,8 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   const [schema, setSchema] = useState<ServerlessSchema | null>(null);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens in the editor.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   // v3.29: surface the shared ComputePicker so the Serverless surface shows
   // the same family-wide compute-target dropdown its sibling Dedicated +
   // Spark editors use. Serverless is always-on so we hide lifecycle controls
@@ -226,10 +237,12 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     setLoading(true);
     setResult(null);
     try {
+      // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
+      const statement = substituteSynapse(sqlText, queryParams);
       const res = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sqlText, database }),
+        body: JSON.stringify({ sql: statement, database, parameters: queryParams }),
       });
       const json = (await res.json()) as QueryResponse;
       setResult(json);
@@ -238,7 +251,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     } finally {
       setLoading(false);
     }
-  }, [id, sqlText, database]);
+  }, [id, sqlText, database, queryParams]);
 
   // Open-in-Excel — download a .iqy web-query for the current SQL + database.
   // Excel refreshes by POSTing back to the serverless /query route (real TDS).
@@ -402,6 +415,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
           />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() ? openInExcel : undefined} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
@@ -464,6 +478,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [resuming, setResuming] = useState(false);
+  // Query parameters auto-detected from {{name}} tokens in the editor.
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const pollRef = useRef<number | null>(null);
   // ComputePicker surfaces sibling Dedicated SQL pools so users can switch
   // between pools (multi-pool workspaces) and see lifecycle state at a
@@ -571,10 +587,12 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     setLoading(true);
     setResult(null);
     try {
+      // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
+      const statement = substituteSynapse(sqlText, queryParams);
       const res = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sqlText }),
+        body: JSON.stringify({ sql: statement, parameters: queryParams }),
       });
       const json = (await res.json()) as QueryResponse;
       if (res.status === 409 && json.state) {
@@ -588,7 +606,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     } finally {
       setLoading(false);
     }
-  }, [id, sqlText, refreshState]);
+  }, [id, sqlText, queryParams, refreshState]);
 
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
@@ -971,6 +989,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             minHeight={200}
             ariaLabel="Dedicated T-SQL editor"
           />
+          <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           <ResultsPanel result={result} loading={loading} />
           {ctasReceipt && (
             <MessageBar intent="success">
