@@ -38,6 +38,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { AiFunctionsHelper } from './components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
+import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -687,6 +688,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  // UC column-mask + row-filter wizards (granular security beyond object grants).
+  const [ucSecOpen, setUcSecOpen] = useState(false);
   // AI functions helper (sentiment/classify/translate/summarize/extract).
   const [aiFnOpen, setAiFnOpen] = useState(false);
   // Last table the user clicked in the tree — context for the AI functions SQL.
@@ -1357,6 +1360,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               : '',
           ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
         { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
+        { label: 'Column & row security', onClick: () => setUcSecOpen(true), title: 'Unity Catalog column masks + row filters (Commercial / GCC)' },
       ]},
       { label: 'Modeling', actions: [
         // Loom-native Model view — relationships become real UC FK constraints.
@@ -2114,6 +2118,25 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+
+          <Dialog open={ucSecOpen} onOpenChange={(_, d) => setUcSecOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
+              <DialogBody>
+                <DialogTitle>Column &amp; row security — Unity Catalog</DialogTitle>
+                <DialogContent>
+                  <UcSecurityPanel
+                    itemType="databricks-sql-warehouse"
+                    itemId={id}
+                    warehouseId={warehouseId || undefined}
+                    catalog={activeCatalog || undefined}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setUcSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           <AiFunctionsHelper
             open={aiFnOpen}
