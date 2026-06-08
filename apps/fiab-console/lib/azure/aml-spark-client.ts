@@ -37,7 +37,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope, isGovCloud } from './cloud-endpoints';
+import { armBase, armScope, getBlobSuffix } from './cloud-endpoints';
 import { buildRunnerPy } from './aml-spark-runner';
 
 export { buildRunnerPy };
@@ -119,7 +119,7 @@ export function isAmlSparkConfigured(): boolean {
 }
 
 function blobSuffix(): string {
-  return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';
+  return getBlobSuffix();
 }
 
 async function armToken(): Promise<string> {
