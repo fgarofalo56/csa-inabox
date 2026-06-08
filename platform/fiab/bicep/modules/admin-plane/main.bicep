@@ -233,6 +233,9 @@ param loomApprovalLogicAppRg string = ''
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
+@description('Key Vault URI for external-source SHORTCUT credentials (S3/GCS/SAS/Synapse-Link). Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault to isolate shortcut credentials — keep it the SAME vault the shortcut engine binding reads, or unset to default.')
+param loomShortcutKeyVaultUri string = ''
+
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
@@ -1020,6 +1023,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // point at a separate vault by overriding loomParamKeyVaultUri and
             // granting the Console identity "Key Vault Secrets User" on it.
             { name: 'LOOM_PARAM_KEYVAULT', value: !empty(loomParamKeyVaultUri) ? loomParamKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // External-source shortcut credentials (S3/GCS/SAS/Synapse-Link). KV
+            // defaults to the admin-plane vault (Console UAMI has Secrets Officer);
+            // override loomShortcutKeyVaultUri to isolate them in a dedicated vault
+            // (keep it the same vault the shortcut engine binding reads).
+            { name: 'LOOM_SHORTCUT_KEYVAULT', value: !empty(loomShortcutKeyVaultUri) ? loomShortcutKeyVaultUri : keyvault.outputs.keyVaultUri }
             // App Configuration source for parameter overrides. Empty disables
             // the App Config path; set to an App Configuration endpoint and grant
             // the Console identity "App Configuration Data Reader" to enable.
