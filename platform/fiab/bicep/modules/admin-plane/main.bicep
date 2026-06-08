@@ -1209,8 +1209,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
           // F22 — Purview Unified Catalog account for the data-product adapter.
-          // Only emitted when set; absence makes the factory keep Cosmos even if
-          // LOOM_DATAPRODUCTS_BACKEND=purview-unified (honest fall-through).
+          // Only emitted when set; absence makes the factory serve the honest
+          // gate (501/503 + remediation) on Commercial when
+          // LOOM_DATAPRODUCTS_BACKEND=unified-catalog, rather than fabricated data.
           !empty(loomPurviewUnifiedAccount) ? [
             { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
           ] : [],

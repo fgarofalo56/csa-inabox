@@ -141,7 +141,7 @@ function unifiedNotConfiguredHint(): PurviewNotConfiguredHint {
     bicepModule: 'platform/fiab/bicep/modules/admin-plane/main.bicep',
     bicepStatus:
       'Set loomPurviewUnifiedAccount (=> LOOM_PURVIEW_UNIFIED_ACCOUNT) to your Purview ' +
-      'Unified Catalog account name and loomDataProductsBackend="purview-unified" on a ' +
+      'Unified Catalog account name and loomDataproductsBackend="unified-catalog" on a ' +
       'Commercial deployment. The Unified Catalog REST surface is reached at ' +
       'https://api.purview-service.microsoft.com (or a per-tenant ' +
       'https://{tenantId}-api.purview-service.microsoft.com via LOOM_PURVIEW_UC_ENDPOINT).',
@@ -158,7 +158,7 @@ function unifiedNotConfiguredHint(): PurviewNotConfiguredHint {
       },
     ],
     followUp:
-      'Operator action: (1) set loomDataProductsBackend="purview-unified" + ' +
+      'Operator action: (1) set loomDataproductsBackend="unified-catalog" + ' +
       'loomPurviewUnifiedAccount in admin-plane/main.bicep (Commercial only — ' +
       'GCC/GCC-High/IL5 fall through to Cosmos), (2) grant the Loom Console UAMI ' +
       'Catalog Reader + Data Product Owner in the target governance domain via ' +

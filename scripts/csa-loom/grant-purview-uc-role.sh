@@ -19,7 +19,7 @@
 #   ref: https://learn.microsoft.com/purview/data-governance-roles-permissions
 #
 # Adapter routing (must ALL hold for the adapter to be active):
-#   LOOM_DATAPRODUCTS_BACKEND=purview-unified
+#   LOOM_DATAPRODUCTS_BACKEND=unified-catalog
 #   LOOM_PURVIEW_UNIFIED_ACCOUNT=<uc-account>  (or LOOM_PURVIEW_UC_ENDPOINT=<host>)
 #   CSA_LOOM_BOUNDARY=Commercial               (GCC/GCC-High/IL5 fall through to Cosmos)
 #
@@ -57,7 +57,7 @@ Grant them in the Purview portal (one-time, ~1 min):
   5. Save. Propagation is near-immediate.
 
 Then set (Commercial only) and redeploy admin-plane:
-   loomDataProductsBackend  = 'purview-unified'   (=> LOOM_DATAPRODUCTS_BACKEND)
+   loomDataproductsBackend  = 'unified-catalog'   (=> LOOM_DATAPRODUCTS_BACKEND)
    loomPurviewUnifiedAccount = '$UC_ACCOUNT'       (=> LOOM_PURVIEW_UNIFIED_ACCOUNT)
 EOF
 

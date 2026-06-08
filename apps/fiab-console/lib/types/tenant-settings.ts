@@ -185,7 +185,7 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
       {
         id: 'dataProducts.purviewUnifiedEnabled',
         label: 'Purview Unified Catalog adapter',
-        help: 'When enabled (LOOM_DATAPRODUCTS_BACKEND=purview-unified + LOOM_PURVIEW_UNIFIED_ACCOUNT set + cloud=Commercial), data products are stored/retrieved via the Purview Unified Catalog REST API (2026-03-20-preview) instead of Cosmos. On GCC / GCC-High / IL5 the factory silently falls back to Cosmos regardless of this toggle. This switch is informational — actual routing is driven by the deployment env vars, surfaced live by /api/admin/data-products-backend.',
+        help: 'When enabled (LOOM_DATAPRODUCTS_BACKEND=unified-catalog + LOOM_PURVIEW_UNIFIED_ACCOUNT set + cloud=Commercial), data products are stored/retrieved via the Purview Unified Catalog REST API (2026-03-20-preview) instead of Cosmos. On GCC / GCC-High / IL5 the factory silently falls back to Cosmos regardless of this toggle. This switch is informational — actual routing is driven by the deployment env vars, surfaced live by /api/admin/data-products-backend.',
         default: false,
         learnUrl: 'https://learn.microsoft.com/rest/api/purview/unified-catalog-api-overview',
       },

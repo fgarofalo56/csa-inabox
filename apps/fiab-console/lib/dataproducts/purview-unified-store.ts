@@ -1,16 +1,21 @@
 /**
  * PurviewUnifiedDataProductStore — the OPT-IN DataProductStore adapter that
  * routes data-product CRUD through the Microsoft Purview Unified Catalog REST
- * API (2026-03-20-preview). Selected by the factory ONLY on Commercial with
- * LOOM_DATAPRODUCTS_BACKEND=purview-unified + a configured Unified account.
+ * API (2026-03-20-preview). Selected by the factory (lib/dataproducts/store.ts)
+ * ONLY on the Commercial boundary with LOOM_DATAPRODUCTS_BACKEND=unified-catalog
+ * AND a configured Unified Catalog account (LOOM_PURVIEW_UNIFIED_ACCOUNT /
+ * LOOM_PURVIEW_UC_ENDPOINT). On GCC / GCC-High / IL5 the factory falls through
+ * to Cosmos silently; opted-in-but-unconfigured falls through to the honest gate.
  *
- * Maps UCDataProduct <-> LoomDataProduct so the SAME BFF + UI operate against
- * this backend exactly as they do against Cosmos (ui-parity.md). Errors
+ * Implements the SAME `DataProductStore` interface the Cosmos adapter does
+ * (register / get / list / update / delete → PurviewDataProduct), so the BFF +
+ * UI operate against this backend exactly as they do against Cosmos
+ * (ui-parity.md). Maps UCDataProduct <-> PurviewDataProduct. Errors
  * (PurviewNotConfiguredError / PurviewError) propagate UNCHANGED so the route
  * renders an honest infra-gate MessageBar (no-vaporware.md) — never fabricated
  * data.
  */
-import type { SessionPayload } from '@/lib/auth/session';
+import { PurviewError } from '@/lib/azure/purview-client';
 import {
   ucGet,
   ucList,
@@ -20,9 +25,14 @@ import {
   type UCDataProduct,
   type UCDataProductPayload,
 } from '@/lib/azure/purview-unified-client';
-import type { DataProductStore, LoomDataProduct, LoomDataProductPayload } from './store';
+import type {
+  DataProductStore,
+  PurviewDataProduct,
+  PurviewDataProductPayload,
+} from './store';
 
-function toLoom(dp: UCDataProduct): LoomDataProduct {
+/** Map the Unified Catalog REST shape onto the canonical PurviewDataProduct. */
+function toPurview(dp: UCDataProduct): PurviewDataProduct {
   return {
     id: dp.id,
     name: dp.name,
@@ -32,67 +42,76 @@ function toLoom(dp: UCDataProduct): LoomDataProduct {
     type: dp.type,
     endorsed: dp.endorsed,
     contacts: dp.contacts,
-    businessUse: dp.businessUse,
-    createdAt: dp.systemData?.createdAt,
+    documentation: dp.documentation,
     updatedAt: dp.systemData?.lastModifiedAt,
-    source: 'purview-unified',
     raw: dp,
   };
 }
 
-/** Build the UC create/update payload from a Loom payload (name + domain required). */
-function toUCPayload(payload: LoomDataProductPayload): UCDataProductPayload {
-  const { name, domain, description, type, status, endorsed, businessUse, contacts } = payload;
-  if (!domain) {
-    throw new Error('domain (governance domain id) is required to create a Purview Unified Catalog data product');
+/** Resolve the create-name from either `name` or the UI's `displayName`. */
+function payloadName(p: PurviewDataProductPayload): string | undefined {
+  return (p.name ?? p.displayName)?.toString().trim() || undefined;
+}
+
+/** Build a full UC create payload (name + domain are required by the REST surface). */
+function toUCCreate(p: PurviewDataProductPayload): UCDataProductPayload {
+  const name = payloadName(p);
+  if (!name) throw new PurviewError(400, null, 'name is required to create a data product');
+  if (!p.domain) {
+    throw new PurviewError(
+      400,
+      null,
+      'domain (governance domain id) is required to create a Purview Unified Catalog data product',
+    );
   }
   return {
     name,
-    domain,
-    ...(description !== undefined ? { description } : {}),
-    ...(type !== undefined ? { type } : {}),
-    ...(status !== undefined ? { status: status as UCDataProduct['status'] } : {}),
-    ...(endorsed !== undefined ? { endorsed } : {}),
-    ...(businessUse !== undefined ? { businessUse } : {}),
-    ...(contacts !== undefined ? { contacts: contacts as UCDataProduct['contacts'] } : {}),
+    domain: p.domain,
+    ...(p.description !== undefined ? { description: p.description } : {}),
+    ...(p.type !== undefined ? { type: p.type } : {}),
+    ...(p.endorsed !== undefined ? { endorsed: p.endorsed } : {}),
   };
 }
 
+/** Build a partial UC patch from a partial canonical payload. */
+function toUCPatch(p: Partial<PurviewDataProductPayload>): Partial<UCDataProductPayload> {
+  const patch: Partial<UCDataProductPayload> = {};
+  const name = p.name ?? p.displayName;
+  if (name !== undefined) patch.name = String(name);
+  if (p.domain !== undefined) patch.domain = p.domain;
+  if (p.description !== undefined) patch.description = p.description;
+  if (p.type !== undefined) patch.type = p.type;
+  if (p.endorsed !== undefined) patch.endorsed = p.endorsed;
+  return patch;
+}
+
 export class PurviewUnifiedDataProductStore implements DataProductStore {
-  readonly backendName = 'purview-unified' as const;
-
-  async list(_session: SessionPayload, opts?: { domain?: string; top?: number; skip?: number }): Promise<LoomDataProduct[]> {
-    const dps = await ucList({ domainId: opts?.domain, top: opts?.top, skip: opts?.skip });
-    return dps.map(toLoom);
+  /** Create — or upsert when payload.id names an existing product. */
+  async register(payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
+    if (payload.id) {
+      const existing = await ucGet(payload.id);
+      if (existing) return toPurview(await ucUpdate(payload.id, toUCPatch(payload)));
+    }
+    return toPurview(await ucCreate(toUCCreate(payload)));
   }
 
-  async get(_session: SessionPayload, id: string): Promise<LoomDataProduct | null> {
+  async get(id: string): Promise<PurviewDataProduct | null> {
     const dp = await ucGet(id);
-    return dp ? toLoom(dp) : null;
+    return dp ? toPurview(dp) : null;
   }
 
-  async create(_session: SessionPayload, payload: LoomDataProductPayload): Promise<LoomDataProduct> {
-    const dp = await ucCreate(toUCPayload(payload));
-    return toLoom(dp);
+  async list(domain?: string): Promise<PurviewDataProduct[]> {
+    const dps = await ucList({ domainId: domain });
+    return dps.map(toPurview);
   }
 
-  async update(_session: SessionPayload, id: string, patch: Partial<LoomDataProductPayload>): Promise<LoomDataProduct | null> {
+  async update(id: string, payload: Partial<PurviewDataProductPayload>): Promise<PurviewDataProduct> {
     const existing = await ucGet(id);
-    if (!existing) return null;
-    const ucPatch: Partial<UCDataProductPayload> = {};
-    if (patch.name !== undefined) ucPatch.name = patch.name;
-    if (patch.domain !== undefined) ucPatch.domain = patch.domain;
-    if (patch.description !== undefined) ucPatch.description = patch.description;
-    if (patch.type !== undefined) ucPatch.type = patch.type;
-    if (patch.status !== undefined) ucPatch.status = patch.status as UCDataProduct['status'];
-    if (patch.endorsed !== undefined) ucPatch.endorsed = patch.endorsed;
-    if (patch.businessUse !== undefined) ucPatch.businessUse = patch.businessUse;
-    if (patch.contacts !== undefined) ucPatch.contacts = patch.contacts as UCDataProduct['contacts'];
-    const dp = await ucUpdate(id, ucPatch);
-    return toLoom(dp);
+    if (!existing) throw new PurviewError(404, null, `Data product '${id}' not found`);
+    return toPurview(await ucUpdate(id, toUCPatch(payload)));
   }
 
-  async remove(_session: SessionPayload, id: string): Promise<boolean> {
-    return ucRemove(id);
+  async delete(id: string): Promise<void> {
+    await ucRemove(id);
   }
 }

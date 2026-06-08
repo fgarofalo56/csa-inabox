@@ -73,10 +73,10 @@ export default function TenantSettingsPage() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ updatedAt?: string; updatedBy?: string }>({});
   const [dpBackend, setDpBackend] = useState<{
-    backend: 'cosmos' | 'purview-unified';
+    backend: 'cosmos' | 'unified-catalog';
     label: string;
     options: Array<{ id: string; label: string }>;
-    details?: { boundary?: string; govFallThrough?: boolean };
+    details?: { boundary?: string; govFallThrough?: boolean; unconfiguredGate?: boolean };
   } | null>(null);
   const [q, setQ] = useState('');
   // Dirty ref so the Ctrl+S handler sees fresh state.
@@ -268,7 +268,7 @@ export default function TenantSettingsPage() {
 
       {/* Data-product store backend indicator (read-only; env-driven routing). */}
       {dpBackend && (
-        <MessageBar intent={dpBackend.backend === 'purview-unified' ? 'success' : 'info'} style={{ marginBottom: 12 }}>
+        <MessageBar intent={dpBackend.backend === 'unified-catalog' ? 'success' : 'info'} style={{ marginBottom: 12 }}>
           <MessageBarBody>
             <MessageBarTitle>Data product store backend</MessageBarTitle>
             Backend:{' '}
@@ -283,6 +283,14 @@ export default function TenantSettingsPage() {
                 Purview Unified Catalog was requested but this is a{' '}
                 <code>{dpBackend.details.boundary}</code> deployment — the Unified Catalog
                 data plane is Commercial-only, so data products use Cosmos.
+              </div>
+            )}
+            {dpBackend.details?.unconfiguredGate && (
+              <div style={{ marginTop: 4, fontSize: 12 }}>
+                Purview Unified Catalog is selected but no account is wired — set{' '}
+                <code>LOOM_PURVIEW_UNIFIED_ACCOUNT</code> (or <code>LOOM_PURVIEW_UC_ENDPOINT</code>)
+                and grant the Console UAMI the Catalog Reader + Data Product Owner roles in the
+                target governance domain. Until then the data-product surfaces show an honest gate.
               </div>
             )}
           </MessageBarBody>
