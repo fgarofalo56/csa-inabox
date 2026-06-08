@@ -25,6 +25,35 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.26.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.25.0...csa-inabox-v0.26.0) (2026-06-07)
+
+
+### Features
+
+* **csa-loom:** AML Compute-Instance Jupyter Server proxy (contents + kernel execute) ([#868](https://github.com/fgarofalo56/csa-inabox/issues/868)) ([04ca67e](https://github.com/fgarofalo56/csa-inabox/commit/04ca67e9c823450e5d1bf02059a006212ffb4616))
+* **csa-loom:** Compute Instance API — list / start / status ([#858](https://github.com/fgarofalo56/csa-inabox/issues/858)) ([1e9e51c](https://github.com/fgarofalo56/csa-inabox/commit/1e9e51c5e1fe94bdfa4ac0d3ecde3f7389888469))
+* **csa-loom:** Data Science experience home + switcher entry ([#870](https://github.com/fgarofalo56/csa-inabox/issues/870)) ([cf85173](https://github.com/fgarofalo56/csa-inabox/commit/cf851738fe9f959113b4d2e6cfe0a4870ec67305))
+* **csa-loom:** display(df) rich grid + chart recommendations (notebook) ([#871](https://github.com/fgarofalo56/csa-inabox/issues/871)) ([c969580](https://github.com/fgarofalo56/csa-inabox/commit/c96958066d3693611ef46d8891c66bf08bb97f26))
+* **csa-loom:** Fix with Copilot — inline error remediation for notebook cells ([#856](https://github.com/fgarofalo56/csa-inabox/issues/856)) ([6d3ef60](https://github.com/fgarofalo56/csa-inabox/commit/6d3ef60101276e747b82c95d59e201c5612707fe))
+* **csa-loom:** full MLflow ML Experiment editor (sortable runs, step charts, compare, IL5 gate) ([#872](https://github.com/fgarofalo56/csa-inabox/issues/872)) ([3256248](https://github.com/fgarofalo56/csa-inabox/commit/3256248a825b47e5c51e3cd48c5f706bbf00a7ec))
+* **csa-loom:** in-cell Copilot for the notebook editor (Fabric parity) ([#860](https://github.com/fgarofalo56/csa-inabox/issues/860)) ([9ec8f0e](https://github.com/fgarofalo56/csa-inabox/commit/9ec8f0e67b624fe48395daa94b4c52ce84388eed))
+* **csa-loom:** inline code completion (ghost text) in notebook cells ([#861](https://github.com/fgarofalo56/csa-inabox/issues/861)) ([f14efa5](https://github.com/fgarofalo56/csa-inabox/commit/f14efa5b04f58e3e5d938159fe0b7d627250e3f2))
+* **csa-loom:** ml-model editor — MLflow stage transitions, register-from-run lineage, gov-cloud host ([#865](https://github.com/fgarofalo56/csa-inabox/issues/865)) ([95e041b](https://github.com/fgarofalo56/csa-inabox/commit/95e041b1f818b61196c83986f028ceb5c3be3ae6))
+* **csa-loom:** Monaco notebook cells + Pylance/pylsp LSP bridge (Azure-native) ([#866](https://github.com/fgarofalo56/csa-inabox/issues/866)) ([45d8a8f](https://github.com/fgarofalo56/csa-inabox/commit/45d8a8fb80a3a36e8230fb20b4fa8e192e043530))
+* **csa-loom:** notebook Azure ML path — CI selector, auto-start, datastore explorer, .ipynb run ([#873](https://github.com/fgarofalo56/csa-inabox/issues/873)) ([7ac289e](https://github.com/fgarofalo56/csa-inabox/commit/7ac289e9c8362e20b65cf889e1c04261f3a9db82))
+* **csa-loom:** notebook cell authoring + %%pyspark Spark routing (AML / Synapse Livy) ([#874](https://github.com/fgarofalo56/csa-inabox/issues/874)) ([8429974](https://github.com/fgarofalo56/csa-inabox/commit/842997483dd38b5754090540a67da3d284139170))
+* **csa-loom:** notebook Configure-session dialog + Spark session status badge ([#863](https://github.com/fgarofalo56/csa-inabox/issues/863)) ([c9384e9](https://github.com/fgarofalo56/csa-inabox/commit/c9384e96b07dbdce311263c57abaa08acf515398))
+* **csa-loom:** notebook Copilot chat pane — streaming AOAI, slash commands, apply-to-notebook ([#862](https://github.com/fgarofalo56/csa-inabox/issues/862)) ([c7618cd](https://github.com/fgarofalo56/csa-inabox/commit/c7618cdc4061b4e40ac0d27795a3ffa6e8b3a6f7))
+* **csa-loom:** notebook Library & Environment management (AML-backed, no Fabric) ([#864](https://github.com/fgarofalo56/csa-inabox/issues/864)) ([37cfa3d](https://github.com/fgarofalo56/csa-inabox/commit/37cfa3d7341e34a40dbfad725a85b00c65110cf4))
+* **csa-loom:** notebook scheduling via AML job schedule REST (recurrence, no cron) ([#859](https://github.com/fgarofalo56/csa-inabox/issues/859)) ([853234b](https://github.com/fgarofalo56/csa-inabox/commit/853234b02e659767e596a318299669d7c7bf860b))
+* **csa-loom:** notebook Variable explorer (Name/Type/Length/Value, sortable, Python-only) ([#857](https://github.com/fgarofalo56/csa-inabox/issues/857)) ([259b148](https://github.com/fgarofalo56/csa-inabox/commit/259b1482316d74e266d6446f28188d041d5327fc))
+* **csa-loom:** resolveAmlTarget() + AML control-plane REST client (foundation) ([#867](https://github.com/fgarofalo56/csa-inabox/issues/867)) ([e593183](https://github.com/fgarofalo56/csa-inabox/commit/e5931830f1cc4b846d6d002e46e16be460cedf56))
+
+
+### Documentation
+
+* **csa-loom:** Data Science parity doc + bicep/teardown sync (no-Fabric default) ([#869](https://github.com/fgarofalo56/csa-inabox/issues/869)) ([3aa4ccc](https://github.com/fgarofalo56/csa-inabox/commit/3aa4ccc0c3d4c6f1e9b218b9a8dee8420611aa3e))
+
 ## [0.25.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.24.0...csa-inabox-v0.25.0) (2026-06-07)
 
 
