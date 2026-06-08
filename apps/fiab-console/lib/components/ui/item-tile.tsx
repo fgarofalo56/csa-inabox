@@ -36,6 +36,15 @@ export interface ItemTileProps {
    * Fluent Badge chip below the title, colour-tiered by sensitivity.
    */
   sensitivityLabel?: string;
+  /**
+   * Optional overflow menu node (e.g. a Fluent `<Menu>…</Menu>`). Rendered
+   * top-right of the tile head. Clicks inside it are stopped from bubbling to
+   * the tile's own `onClick`, so the kebab opens its menu without "opening"
+   * the item. Coexists with `badge` (badge sits to its left).
+   */
+  overflowMenu?: React.ReactNode;
+  /** Bottom badge row: endorsement chip, owner avatar, domain chip. Omit → row absent. */
+  footer?: React.ReactNode;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
@@ -122,6 +131,24 @@ const useStyles = makeStyles({
     marginLeft: 'auto',
     flexShrink: 0,
   },
+  overflow: {
+    flexShrink: 0,
+    display: 'inline-flex',
+  },
+  headTrailing: {
+    marginLeft: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexShrink: 0,
+  },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minHeight: '20px',
+  },
 });
 
 export function ItemTile({
@@ -131,6 +158,8 @@ export function ItemTile({
   meta,
   badge,
   sensitivityLabel,
+  overflowMenu,
+  footer,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -192,13 +221,28 @@ export function ItemTile({
             </Badge>
           )}
         </span>
-        {badge != null && <span className={styles.badge}>{badge}</span>}
+        {(badge != null || overflowMenu != null) && (
+          <span className={styles.headTrailing}>
+            {badge != null && <span className={styles.badge}>{badge}</span>}
+            {overflowMenu != null && (
+              <span
+                className={styles.overflow}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
+              >
+                {overflowMenu}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       {meta != null && (
         <Text size={200} className={styles.meta}>
           {meta}
         </Text>
       )}
+      {footer != null && <div className={styles.footer}>{footer}</div>}
     </div>
   );
 }

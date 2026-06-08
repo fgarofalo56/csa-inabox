@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner,
+  Avatar,
   Badge,
   Button,
   Dropdown,
@@ -46,6 +47,15 @@ import {
   MessageBarBody,
   MessageBarTitle,
   Tooltip,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogContent,
   makeStyles,
   tokens,
   mergeClasses,
@@ -59,6 +69,11 @@ import {
   AppsList20Regular,
   Person20Regular,
   ShieldKeyhole16Regular,
+  MoreHorizontal20Regular,
+  Copy16Regular,
+  Link16Regular,
+  BranchFork16Regular,
+  Info16Regular,
 } from '@fluentui/react-icons';
 
 import { PageShell } from '@/lib/components/page-shell';
@@ -70,7 +85,9 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
+import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { initials, endorsementOf } from './card-badges';
 
 // ── Item types surfaced by the OneLake catalog Explore tab ────────────────
 // "lakehouses, warehouses, Fabric databases, mirrored items, and other
@@ -97,6 +114,12 @@ interface OwnedItem {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Flattened from state.endorsement by the route. 'Certified' | 'Promoted' | 'Master data' | undefined */
+  endorsement?: string;
+  /** Flattened from state.sensitivityLabel by the route. */
+  sensitivityLabel?: string;
+  /** Domain id from parent workspace.domain; resolved to a display name via domainMap. */
+  workspaceDomain?: string;
 }
 
 interface Workspace {
@@ -155,6 +178,102 @@ function fmtBytes(n: number): string {
   let v = n;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+// ── OneLake addressing ─────────────────────────────────────────────────────
+// Map a Loom item to the {container, itemPath} tuple used by the OneLake path
+// helper. Container = the workspace (OneLake's "workspace" == ADLS container);
+// itemPath = "<displayName>.<itemType>" (Fabric's "<item>.<type>" convention).
+function onelakeAddress(it: OwnedItem, workspaceName: string) {
+  return {
+    container: workspaceName || it.workspaceId,
+    itemPath: `${it.displayName}.${it.itemType}`,
+    workspaceGuid: it.workspaceId,
+    itemGuid: it.id,
+  };
+}
+
+/**
+ * Resolve a OneLake URI form for an item via the BFF (which holds the storage
+ * account name) and write it to the clipboard. Returns silently on failure —
+ * the menu item is fire-and-forget; the Properties panel surfaces any gate.
+ */
+async function copyOnelakeForm(
+  it: OwnedItem,
+  workspaceName: string,
+  form: 'abfs' | 'dfs',
+): Promise<void> {
+  const a = onelakeAddress(it, workspaceName);
+  const qs = new URLSearchParams({
+    container: a.container,
+    itemPath: a.itemPath,
+    workspaceGuid: a.workspaceGuid,
+    itemGuid: a.itemGuid,
+  });
+  try {
+    const r = await fetch(`/api/onelake/paths?${qs.toString()}`);
+    const j = await r.json();
+    if (j?.ok && j.paths?.[form]) {
+      await navigator.clipboard.writeText(j.paths[form] as string);
+    }
+  } catch {
+    // network/clipboard failure — no-op (Properties panel shows the honest gate)
+  }
+}
+
+/** Bottom-row badges for an ItemTile: endorsement chip + owner avatar + domain
+ *  chip. Returns undefined when none apply so the tile renders no empty row. */
+function tileFooter(
+  it: OwnedItem,
+  resolvedDomainName: string | undefined,
+): React.ReactNode | undefined {
+  // Endorsement: prefer the flattened top-level field, fall back to the
+  // legacy state.certified flag (older items predate state.endorsement).
+  const endorse = endorsementOf(it);
+  const hasContent = Boolean(endorse || it.createdBy || resolvedDomainName);
+  if (!hasContent) return undefined;
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {endorse && (
+        <Tooltip
+          content={
+            endorse === 'Certified'
+              ? 'Certified — meets your organization’s quality standards'
+              : endorse === 'Promoted'
+              ? 'Promoted — recommended for sharing and reuse'
+              : endorse
+          }
+          relationship="label"
+        >
+          <Badge
+            appearance={endorse === 'Certified' ? 'filled' : 'outline'}
+            color="brand"
+            size="small"
+          >
+            {endorse}
+          </Badge>
+        </Tooltip>
+      )}
+      {it.createdBy && (
+        <Tooltip content={`Owner: ${it.createdBy}`} relationship="label">
+          <Avatar
+            initials={initials(it.createdBy)}
+            size={16}
+            color="colorful"
+            aria-label={`Owner: ${it.createdBy}`}
+          />
+        </Tooltip>
+      )}
+      {resolvedDomainName && (
+        <Tooltip content={`Domain: ${resolvedDomainName}`} relationship="label">
+          <Badge appearance="tint" color="subtle" size="small">
+            {resolvedDomainName}
+          </Badge>
+        </Tooltip>
+      )}
+    </span>
+  );
 }
 
 const useStyles = makeStyles({
@@ -676,6 +795,7 @@ export default function OneLakeCatalogPage() {
 
   const [items, setItems] = useState<OwnedItem[] | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
   const [unauth, setUnauth] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
@@ -685,6 +805,7 @@ export default function OneLakeCatalogPage() {
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const [wsFilter, setWsFilter] = useState<string | null>(null); // workspaceId or null
   const [selected, setSelected] = useState<OwnedItem | null>(null);
+  const [propsItem, setPropsItem] = useState<OwnedItem | null>(null);
 
   // ── load items + workspaces + identity ──
   useEffect(() => {
@@ -702,6 +823,14 @@ export default function OneLakeCatalogPage() {
       .then((d) => setWorkspaces(Array.isArray(d) ? d : []))
       .catch(() => setWorkspaces([]));
 
+    // Domains resolve workspace.domain ids → display names for the card badge.
+    // Azure-native by default (Cosmos governance-domains); honest-degrades to
+    // no domain badge if the backend is gated (e.g. IL5 fabric opt-in 501).
+    fetch('/api/governance/domains')
+      .then((r) => (r.ok ? r.json() : { ok: false, domains: [] }))
+      .then((d) => setDomains(Array.isArray(d?.domains) ? d.domains : []))
+      .catch(() => setDomains([]));
+
     fetch('/api/me')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -717,6 +846,12 @@ export default function OneLakeCatalogPage() {
     for (const w of workspaces) m.set(w.id, w.name);
     return m;
   }, [workspaces]);
+
+  const domainMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of domains) m.set(d.id, d.name);
+    return m;
+  }, [domains]);
 
   // ── per-type counts (respect scope + workspace filter, ignore type chip) ──
   const scopedItems = useMemo(() => {
@@ -826,6 +961,45 @@ export default function OneLakeCatalogPage() {
 
   const subtitle =
     'Find, explore, and open the data items your tenant exposes — lakehouses, warehouses, databases, mirrored and KQL stores — without losing your place.';
+
+  // Per-tile overflow (kebab) — Fabric OneLake item context menu, themed.
+  function renderOverflow(it: OwnedItem) {
+    const workspaceName = wsName.get(it.workspaceId) ?? it.workspaceId;
+    return (
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<MoreHorizontal20Regular />}
+            aria-label={`More actions for ${it.displayName}`}
+          />
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem icon={<Open16Regular />} onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}>
+              Open
+            </MenuItem>
+            <MenuItem icon={<Copy16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'abfs'); }}>
+              Copy OneLake path
+            </MenuItem>
+            <MenuItem icon={<Link16Regular />} onClick={() => { void copyOnelakeForm(it, workspaceName, 'dfs'); }}>
+              Get URL (DFS)
+            </MenuItem>
+            <MenuItem
+              icon={<BranchFork16Regular />}
+              onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(it.id)}`)}
+            >
+              View lineage
+            </MenuItem>
+            <MenuItem icon={<Info16Regular />} onClick={() => setPropsItem(it)}>
+              Properties
+            </MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  }
 
   return (
     <PageShell title="OneLake catalog" subtitle={subtitle}>
@@ -967,6 +1141,11 @@ export default function OneLakeCatalogPage() {
                         meta={`Refreshed ${relative(it.updatedAt || it.createdAt)}`}
                         badge={isPreviewType(it.itemType) ? <Badge appearance="tint" color="brand" size="small">Preview</Badge> : undefined}
                         sensitivityLabel={(it.state?.['sensitivityLabel'] as string | undefined) || undefined}
+                        overflowMenu={renderOverflow(it)}
+                        footer={tileFooter(
+                          it,
+                          it.workspaceDomain ? domainMap.get(it.workspaceDomain) : undefined,
+                        )}
                         onClick={() => setSelected(it)}
                       />
                     ))}
@@ -1019,6 +1198,24 @@ export default function OneLakeCatalogPage() {
           />
         )}
       </div>
+
+      {/* Properties dialog — Paths (DFS/Blob/ABFS/GUID) + Connect snippets */}
+      <Dialog open={Boolean(propsItem)} onOpenChange={(_e, d) => { if (!d.open) setPropsItem(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogContent>
+              {propsItem && (
+                <PropertiesPanel
+                  {...onelakeAddress(propsItem, wsName.get(propsItem.workspaceId) ?? propsItem.workspaceId)}
+                  itemName={propsItem.displayName}
+                  itemType={typeLabel(propsItem.itemType)}
+                  onClose={() => setPropsItem(null)}
+                />
+              )}
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </PageShell>
   );
 }
