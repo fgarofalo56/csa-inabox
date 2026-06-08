@@ -29,9 +29,10 @@ import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
-  Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
+  Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useObservability, DqScoreGauge, ObservabilityTabContent } from './data-product-detail';
 import { DeleteDataProductDialog } from './components/delete-data-product-dialog';
 import { AddDataAssetsPanel, type DataAssetRef as DataAssetWithFlags } from './components/add-data-assets-panel';
 import { ImportDataProductsFlyout } from './components/import-data-products-flyout';
@@ -2071,17 +2072,21 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const domains = useGovernanceDomains();
 
-  // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies
+  // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies | Observability
   // Initial tab can be deep-linked via ?tab= (e.g. the details page's
   // "Manage policies" action opens directly on the policies tab).
-  type DpTab = 'overview' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies';
+  type DpTab = 'overview' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability';
   const initialTab = ((): DpTab => {
     const t = searchParams?.get('tab');
-    return t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies'
+    return t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability'
       ? t
       : 'overview';
   })();
   const [tab, setTab] = useState<DpTab>(initialTab);
+
+  // F19/F20 — Data Observability: live GET feeds the Overview DQ gauge AND the
+  // Observability tab (lineage + health charts + DQ breakdown). One source of truth.
+  const observability = useObservability(id);
 
   // Bulk "Import from CSV" flyout (F2 import + F18 monitoring) — creates many
   // draft data-product items from a CSV in one shot. Available on /new and on
@@ -2626,6 +2631,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Linked resources', onClick: () => setTab('linked-resources') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
+        { label: 'Observability', onClick: () => setTab('observability') },
       ]},
       { label: 'Bulk', actions: [
         { label: 'Import from CSV', onClick: () => setImportOpen(true) },
@@ -2735,6 +2741,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           {state.apimApiId && <Badge appearance="outline" color="success" icon={<Key20Regular />}>APIM API: {state.apimApiId}</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+          {!isNew && <DqScoreGauge obs={observability.data} loading={observability.loading} />}
           <Button appearance={isNew ? 'primary' : 'secondary'} icon={<Save20Regular />} onClick={save} disabled={!canSave}>
             {status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : isNew ? 'Create' : 'Save'}
           </Button>
@@ -2836,6 +2843,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="linked-resources" icon={<Link20Regular />}>Linked resources</Tab>
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
+          <Tab value="observability" icon={<Pulse20Regular />}>Observability</Tab>
         </TabList>
 
         {tab === 'overview' && (
@@ -3150,6 +3158,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </TableBody>
             </Table>
           </div>
+        )}
+
+        {tab === 'observability' && (
+          <ObservabilityTabContent
+            id={id}
+            obs={observability.data}
+            loading={observability.loading}
+            err={observability.err}
+            refresh={observability.refresh}
+          />
         )}
 
         <DeleteDataProductDialog
