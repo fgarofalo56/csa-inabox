@@ -582,6 +582,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     adminEntraGroupId: adminEntraGroupId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The governance-catalog index self-heals from the BFF (PE-locked service);
+    // pass the Console UAMI so an operator can flip deployGovernanceIndex=true
+    // when running on a VNet-injected script host.
+    deployGovernanceIndex: false
+    scriptIdentityId: identity.outputs.uamiConsoleId
+    scriptIdentityClientId: identity.outputs.uamiConsoleClientId
   }
 }
 

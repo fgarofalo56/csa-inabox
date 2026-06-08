@@ -167,6 +167,38 @@ export function dfsUrl(account: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure AI Search (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * AI Search data-plane hostname suffix (no leading dot).
+ *
+ * Commercial / GCC (GCC runs on Commercial Azure) → `search.windows.net`.
+ * GCC-High / IL5 (`AzureUSGovernment`) → `search.usgovcloudapi.net`. Hard-coding
+ * the Commercial suffix silently fails AI Search auth + data-plane in Gov, so
+ * every search client builds its base URL from this helper.
+ */
+export function searchSuffix(): string {
+  return isGovCloud() ? 'search.usgovcloudapi.net' : 'search.windows.net';
+}
+
+/** Build the AI Search data-plane base URL from a bare service name (FQDNs pass through). */
+export function searchEndpointBase(serviceName: string): string {
+  if (serviceName.includes('.')) {
+    return `https://${serviceName.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  }
+  return `https://${serviceName}.${searchSuffix()}`;
+}
+
+/**
+ * AAD scope for AI Search data-plane tokens. `https://search.azure.com/.default`
+ * is cloud-invariant — the resource audience is byte-identical in Commercial,
+ * GCC, GCC-High and IL5 (only the token issuer changes, not the resource). Kept
+ * here so the separate literals across the search clients share one source.
+ */
+export const SEARCH_AAD_SCOPE = 'https://search.azure.com/.default';
+
+// ---------------------------------------------------------------------------
 // ADX / Kusto (data plane)
 // ---------------------------------------------------------------------------
 
