@@ -29,7 +29,7 @@
  * the honest infra-gate so the UI shows a precise MessageBar.
  */
 
-import { AzureSqlError, executeParameterized } from './azure-sql-client';
+import { AzureSqlError, executeParameterized, executeWithCredential, type SqlExplicitAuth } from './azure-sql-client';
 
 export type SqlObjectGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type';
 
@@ -89,6 +89,24 @@ const USER_SCHEMA_FILTER =
   "'db_securityadmin','db_ddladmin','db_backupoperator','db_datareader'," +
   "'db_datawriter','db_denydatareader','db_denydatawriter')";
 
+// Read-only user-table catalog query (no user input — server/database are
+// resolved per item, never interpolated). Shared by listTables (UAMI) and
+// listTablesWithAuth (credential-backed).
+const LIST_TABLES_SQL =
+  `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
+          t.type AS type, o.type_desc AS typeDesc,
+          t.create_date AS createDate, t.modify_date AS modifyDate,
+          ISNULL((
+            SELECT SUM(p.row_count)
+            FROM sys.dm_db_partition_stats p
+            WHERE p.object_id = t.object_id AND p.index_id IN (0,1)
+          ), 0) AS rowCount
+   FROM sys.tables t
+   JOIN sys.schemas s ON s.schema_id = t.schema_id
+   JOIN sys.objects o ON o.object_id = t.object_id
+   WHERE t.is_ms_shipped = 0
+   ORDER BY s.name, t.name;`;
+
 export async function listSchemas(server: string, database: string): Promise<SqlSchemaRow[]> {
   const rows = await executeParameterized<any>(
     server,
@@ -105,20 +123,27 @@ export async function listTables(server: string, database: string): Promise<SqlO
   const rows = await executeParameterized<any>(
     server,
     database,
-    `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
-            t.type AS type, o.type_desc AS typeDesc,
-            t.create_date AS createDate, t.modify_date AS modifyDate,
-            ISNULL((
-              SELECT SUM(p.row_count)
-              FROM sys.dm_db_partition_stats p
-              WHERE p.object_id = t.object_id AND p.index_id IN (0,1)
-            ), 0) AS rowCount
-     FROM sys.tables t
-     JOIN sys.schemas s ON s.schema_id = t.schema_id
-     JOIN sys.objects o ON o.object_id = t.object_id
-     WHERE t.is_ms_shipped = 0
-     ORDER BY s.name, t.name;`,
+    LIST_TABLES_SQL,
   );
+  return rows.map(shapeObject);
+}
+
+/**
+ * Credential-aware variant of {@link listTables}: when the caller supplies an
+ * explicit SQL login / connection-string auth (resolved from a Key Vault
+ * secretRef on a Loom Connection), the catalog is read with THAT credential
+ * instead of the Console UAMI's AAD token — so a source that only accepts SQL
+ * auth still enumerates its real tables. Pass `undefined` to use the UAMI path.
+ * Backs the mirrored-database per-item `tables` route.
+ */
+export async function listTablesWithAuth(
+  server: string,
+  database: string,
+  auth?: SqlExplicitAuth,
+): Promise<SqlObjectRow[]> {
+  const rows = auth
+    ? await executeWithCredential<any>(server, database, LIST_TABLES_SQL, auth)
+    : await executeParameterized<any>(server, database, LIST_TABLES_SQL);
   return rows.map(shapeObject);
 }
 

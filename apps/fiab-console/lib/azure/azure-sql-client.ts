@@ -339,6 +339,55 @@ export async function executeParameterized<T = Record<string, unknown>>(
 }
 
 // ============================================================
+// Credential-backed query path (SQL login / connection string)
+//
+// The default query paths above authenticate as the Console UAMI (AAD token).
+// A Loom **Connection** can instead carry a SQL login + password or a full
+// connection string, with the secret stored in Key Vault (never in Cosmos). The
+// mirror's credential-aware table enumerator resolves that KV secret and queries
+// the source with it here — so a source that only accepts SQL auth (no Entra
+// admin for the UAMI) still enumerates its real tables. A transient pool is used
+// (no caching of password-backed pools) and always closed.
+// ============================================================
+
+/** SQL login + password (resolved from a Key Vault secretRef). */
+export interface SqlPasswordAuth { user: string; password: string }
+/** A full TDS connection string (resolved from a Key Vault secretRef). */
+export interface SqlConnStringAuth { connectionString: string }
+export type SqlExplicitAuth = SqlPasswordAuth | SqlConnStringAuth;
+
+export async function executeWithCredential<T = Record<string, unknown>>(
+  server: string,
+  database: string,
+  sqlText: string,
+  auth: SqlExplicitAuth,
+): Promise<T[]> {
+  let pool: sql.ConnectionPool;
+  if ('connectionString' in auth) {
+    pool = new sql.ConnectionPool(auth.connectionString);
+  } else {
+    const host = server.includes('.') ? server : `${server}.${sqlHostSuffix()}`;
+    pool = new sql.ConnectionPool({
+      server: host,
+      database,
+      user: auth.user,
+      password: auth.password,
+      options: { encrypt: true, trustServerCertificate: false },
+      pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
+      requestTimeout: 60_000,
+      connectionTimeout: 30_000,
+    } as sql.config);
+  }
+  try {
+    await pool.connect();
+    const result = await pool.request().query(sqlText);
+    return (result.recordset || []) as T[];
+  } finally {
+    await pool.close().catch(() => { /* already closed */ });
+  }
+}
+
+// ============================================================
 // Mirroring (Fabric Mirror to OneLake)
 // ============================================================
 

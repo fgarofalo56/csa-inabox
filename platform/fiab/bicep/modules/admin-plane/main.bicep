@@ -224,6 +224,12 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
+@description('Opt-in ADF CDC mirroring — name of the pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server / PostgreSQL). Empty = mirrored databases use the built-in CSV snapshot engine (still Azure-native, no Fabric).')
+param loomMirrorSourceLinkedService string = ''
+
+@description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
+param loomMirrorAdlsLinkedService string = ''
+
 @description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
 param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
 
@@ -1026,6 +1032,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
+            // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
+            // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
+            // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
+            { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
+            { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
             // Approval activity (F25) - Consumption Logic App + O365 approval
             // email backing the pipeline editor's Approval activity. Empty name
             // -> the approval-logicapp route returns an honest 503 naming the

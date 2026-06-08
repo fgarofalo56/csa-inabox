@@ -74,7 +74,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         mirroringStatus,
         lastStateChange: new Date().toISOString(),
         tablesStatus: run.tables,
-        lastRun: { at: new Date().toISOString(), status: run.status, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed },
+        lastRun: { at: new Date().toISOString(), status: run.status, engine: run.engine, cdcName: run.cdcName, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed },
       },
       updatedAt: new Date().toISOString(),
     };
@@ -88,6 +88,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       action,
       status: { mirroringStatus },
       tables: run.tables,
+      engine: run.engine,
+      cdcName: run.cdcName,
       changeFeed: run.changeFeed,
       basePath: run.basePath,
       note: run.note,

@@ -28,6 +28,11 @@ import { uploadFile, pathToHttpsUrl, getAccountName } from './adls-client';
 import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
+import {
+  upsertAdfCdc, startAdfCdc, adfCdcConfigGate,
+  type AdfCdcSpec, type MapperConnection, type MapperTable,
+} from './adf-client';
+import { dfsSuffix } from './cloud-endpoints';
 
 /** SQL-family sources the engine can snapshot directly via TDS. */
 export const MIRROR_SQL_FAMILY = new Set(['AzureSqlDatabase', 'AzureSqlMI', 'SqlServer2025', 'MSSQL']);
@@ -95,6 +100,18 @@ export interface MirrorRunResult {
   ok: boolean;
   status: 'Running' | 'Error' | 'Gated';
   backend: 'azure-native-cdc';
+  /**
+   * Which Azure-native engine ran:
+   *   - `csv-snapshot` — the built-in TDS/PG/Cosmos read → CSV-in-Bronze engine
+   *     (the default, no extra infra).
+   *   - `adf-cdc`      — an Azure Data Factory ChangeDataCapture resource doing an
+   *     initial full load + continuous CDC → Delta-in-Bronze (opt-in: needs
+   *     LOOM_ADF_NAME + the two linked-service env vars). The canonical no-Fabric
+   *     mirrored-database backend per no-fabric-dependency.md.
+   */
+  engine?: 'csv-snapshot' | 'adf-cdc';
+  /** ADF CDC resource name (the run-id receipt) when engine === 'adf-cdc'. */
+  cdcName?: string;
   changeFeed?: MirroringConfig;
   tables: MirrorTableResult[];
   /** Bronze landing root for the whole mirror (folder of folders). */
@@ -405,6 +422,161 @@ async function snapshotTable(
   }
 }
 
+// ============================================================
+// ADF Change Data Capture path (opt-in) — the canonical no-Fabric backend:
+// ADF CDC resource → ADLS Bronze **Delta**. Selected when LOOM_ADF_NAME and the
+// two linked-service env vars are set (and the source is a relational family ADF
+// can capture). Otherwise the built-in CSV snapshot engine below runs — both are
+// Azure-native; neither needs Microsoft Fabric.
+// ============================================================
+
+/** The pre-existing ADF source linked service to bind, or null when unset. */
+function mirrorSourceLinkedService(): string | null {
+  const v = process.env.LOOM_MIRROR_SOURCE_LINKED_SERVICE;
+  return v && v.trim() ? v.trim() : null;
+}
+/** The pre-existing ADF AzureBlobFS (ADLS) linked service to bind, or null. */
+function mirrorAdlsLinkedService(): string | null {
+  const v = process.env.LOOM_MIRROR_ADLS_LINKED_SERVICE;
+  return v && v.trim() ? v.trim() : null;
+}
+
+/** Is the opt-in ADF CDC path fully configured (factory + both linked services)? */
+function adfCdcConfigured(): boolean {
+  return !!process.env.LOOM_ADF_NAME
+    && !adfCdcConfigGate()
+    && !!mirrorSourceLinkedService()
+    && !!mirrorAdlsLinkedService();
+}
+
+/** Loom source type → the ADF CDC mapper connector type for the source connection. */
+function adfSourceConnectorType(sourceType: string): string {
+  if (sourceType === 'AzureSqlDatabase') return 'AzureSqlDatabase';
+  if (sourceType === 'AzureSqlMI') return 'AzureSqlMI';
+  if (sourceType === 'AzurePostgreSql') return 'AzurePostgreSql';
+  return 'SqlServer'; // SqlServer2025 / MSSQL
+}
+
+/** ADF resource names allow [A-Za-z0-9_]; derive a stable, safe CDC name. */
+function adfCdcName(mirrorId: string): string {
+  const safe = (mirrorId || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'mirror';
+  return `loom_mirror_${safe}`;
+}
+
+/**
+ * Provision + start an ADF ChangeDataCapture resource that does an initial full
+ * load followed by continuous CDC from the relational source into ADLS Bronze in
+ * **Delta** format. Returns a MirrorRunResult carrying the CDC resource name (the
+ * ADF run-id receipt) and per-table Delta landing paths. The two linked services
+ * (relational source + AzureBlobFS) are pre-existing ADF linked services bound by
+ * env var. Real ARM calls (upsertAdfCdc + startAdfCdc); failures surface verbatim.
+ */
+export async function runMirrorAdfCdc(
+  mirrorId: string, workspaceId: string, src: MirrorSource, tableSpecs: MirrorTableSpec[], note: string,
+): Promise<MirrorRunResult> {
+  const sourceLs = mirrorSourceLinkedService();
+  const adlsLs = mirrorAdlsLinkedService();
+  const adfGate = adfCdcConfigGate();
+  if (adfGate || !sourceLs || !adlsLs) {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
+      gate: {
+        missing: adfGate?.missing || 'LOOM_MIRROR_SOURCE_LINKED_SERVICE / LOOM_MIRROR_ADLS_LINKED_SERVICE',
+        message:
+          'ADF CDC mirroring needs the env-pinned factory plus two pre-existing ADF linked services: ' +
+          'set LOOM_MIRROR_SOURCE_LINKED_SERVICE to the relational source linked service and ' +
+          'LOOM_MIRROR_ADLS_LINKED_SERVICE to the AzureBlobFS linked service pointing at the DLZ ADLS account.',
+      },
+      note,
+    };
+  }
+  if (!tableSpecs.length) {
+    return {
+      ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
+      gate: { missing: 'tables', message: 'Select at least one source table to mirror, or load the source tables in the wizard.' },
+      note,
+    };
+  }
+
+  const cdcName = adfCdcName(mirrorId);
+  const basePath = `mirrors/${workspaceId}/${mirrorId}`;
+  const account = getAccountName();
+  const abfssBase = `abfss://${BRONZE}@${account}.${dfsSuffix()}/${basePath}/`;
+  const srcConnType = adfSourceConnectorType(src.sourceType);
+
+  // Source entities — one per selected table, carrying the schema/table DSL props.
+  const sourceEntities: MapperTable[] = tableSpecs.map((t) => ({
+    name: `${t.schema}.${t.table}`,
+    dslConnectorProperties: [
+      { name: 'schemaName', value: t.schema },
+      { name: 'tableName', value: t.table },
+    ],
+  }));
+  // Target entities — one Delta folder per table under the per-mirror Bronze root.
+  const targetEntities: MapperTable[] = tableSpecs.map((t) => ({
+    name: `${t.schema}.${t.table}`,
+    dslConnectorProperties: [
+      { name: 'fileSystem', value: BRONZE },
+      { name: 'folderPath', value: `${basePath}/${t.schema}.${t.table}` },
+      { name: 'format', value: 'delta' },
+    ],
+  }));
+
+  const sourceConn: MapperConnection = {
+    linkedService: { referenceName: sourceLs, type: 'LinkedServiceReference' },
+    linkedServiceType: srcConnType,
+    type: 'linkedservicetype',
+    isInlineDataset: false,
+  };
+  const targetConn: MapperConnection = {
+    linkedService: { referenceName: adlsLs, type: 'LinkedServiceReference' },
+    linkedServiceType: 'AzureBlobFS',
+    type: 'linkedservicetype',
+    isInlineDataset: false,
+  };
+
+  const spec: AdfCdcSpec = {
+    description: `Loom mirrored database ${mirrorId} (${src.sourceType} → ADLS Bronze Delta)`,
+    folder: { name: 'loom-mirrors' },
+    policy: { mode: 'Continuous' },
+    sourceConnectionsInfo: [{ sourceEntities, connection: sourceConn }],
+    targetConnectionsInfo: [{ targetEntities, connection: targetConn }],
+    allowVNetOverride: false,
+  };
+
+  const adfNote =
+    'Azure-native mirror via ADF Change Data Capture (no Microsoft Fabric): an initial full load + ' +
+    `continuous CDC lands each selected table as Delta in ADLS Bronze. ADF CDC resource: ${cdcName}. ` +
+    `Bronze root: ${abfssBase}`;
+
+  try {
+    await upsertAdfCdc(cdcName, spec);
+    await startAdfCdc(cdcName);
+  } catch (e: any) {
+    return {
+      ok: false, status: 'Error', backend: 'azure-native-cdc', engine: 'adf-cdc', cdcName, tables: [],
+      basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note: adfNote,
+      error: `ADF CDC provisioning failed: ${e?.message || String(e)}`,
+    };
+  }
+
+  const lastSync = new Date().toISOString();
+  const tables: MirrorTableResult[] = tableSpecs.map((t) => {
+    const folderUrl = pathToHttpsUrl(BRONZE, `${basePath}/${t.schema}.${t.table}/`);
+    const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'DELTA') AS rows`;
+    return {
+      schema: t.schema, table: t.table, status: 'replicated', mode: 'snapshot',
+      rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset,
+      note: 'ADF CDC: initial full load in progress, then continuous CDC. Row/byte metrics populate in the ADF monitor.',
+    };
+  });
+
+  return {
+    ok: true, status: 'Running', backend: 'azure-native-cdc', engine: 'adf-cdc', cdcName, tables,
+    basePath: pathToHttpsUrl(BRONZE, `${basePath}/`), note: adfNote,
+  };
+}
+
 /**
  * Run an Azure-native mirror Start: change feed + snapshot of the source's
  * tables into Bronze. Returns real per-table metrics for the editor's grid.
@@ -448,6 +620,34 @@ export async function runMirrorSnapshot(
       note,
     };
   }
+
+  // Opt-in ADF CDC path (continuous CDC → ADLS Bronze **Delta**) — the canonical
+  // no-Fabric mirrored-database backend per no-fabric-dependency.md. Selected when
+  // LOOM_ADF_NAME + the two linked-service env vars are set and the source is a
+  // relational family ADF can capture (SQL / PG). When unset, the built-in CSV
+  // snapshot engine below runs instead — both are Azure-native, no Fabric.
+  if ((isSqlFamily || isPg) && adfCdcConfigured()) {
+    if (!bronzeConfigured()) {
+      return {
+        ok: false, status: 'Gated', backend: 'azure-native-cdc', engine: 'adf-cdc', tables: [],
+        gate: { missing: 'LOOM_BRONZE_URL', message: 'The ADLS Bronze landing zone is not configured — set LOOM_BRONZE_URL (DLZ Bicep output) so mirrored Delta data has somewhere to land.' },
+        note,
+      };
+    }
+    // Resolve the table subset: the wizard's explicit selection, else enumerate
+    // (best-effort). On enumeration failure the CDC helper gates asking the user
+    // to select tables — no silent empty mirror.
+    let adfTables: MirrorTableSpec[] = (src.tables && src.tables.length) ? src.tables : [];
+    if (!adfTables.length) {
+      try {
+        adfTables = isPg
+          ? (await listPostgresTables(src.server, src.database)).slice(0, MAX_TABLES)
+          : (await listTables(src.server, src.database)).slice(0, MAX_TABLES).map((t) => ({ schema: t.schema, table: t.name }));
+      } catch { /* leave empty → runMirrorAdfCdc gates asking to select tables */ }
+    }
+    return await runMirrorAdfCdc(mirrorId, workspaceId, src, adfTables, note);
+  }
+
   // Source-reachability gate per family.
   if (isPg) {
     const pg = postgresQueryGate();

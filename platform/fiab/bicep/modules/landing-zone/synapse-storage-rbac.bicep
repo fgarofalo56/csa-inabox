@@ -30,6 +30,9 @@ param adxClusterPrincipalId string = ''
 @description('Grant the Console UAMI "Storage Blob Data Owner" on the lakehouse ADLS account so the OneLake Security tab (F7) can SET POSIX ACLs on Delta folders/tables on behalf of role members. Owner is the only built-in role with the ACL-modify superuser bit. Only enabled when loomOnelakeSecurityEnabled=true — keep OFF in deployments that do not use OneLake security roles.')
 param consolePrincipalNeedsOwner bool = false
 
+@description('Grant the Console UAMI "Storage Blob Data Contributor" on the lakehouse ADLS account so the mirrored-database engine can WRITE snapshot CSV (built-in CSV engine) to ADLS Bronze. The opt-in ADF CDC path writes Delta via the ADF system MI (granted separately in adf.bicep), so this Contributor grant covers the default CSV engine writes only. Defaults true — the Azure-native mirror engine is the no-Fabric default per no-fabric-dependency.md.')
+param consolePrincipalNeedsContributor bool = true
+
 // Storage Blob Data Contributor
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 // Storage Blob Data Reader (read-only data plane — sufficient for the catalog scan)
@@ -62,6 +65,24 @@ resource consoleReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: consolePrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Console UAMI → Storage Blob Data Contributor on the lakehouse storage account.
+// Powers the built-in mirrored-database engine's Bronze snapshot WRITES: it reads
+// the source over TDS/PG/Cosmos and uploads CSV under mirrors/<ws>/<mirror>/. The
+// opt-in ADF CDC path writes Delta via the ADF system MI (granted in adf.bicep),
+// so this grant covers the default CSV engine. Gated behind
+// consolePrincipalNeedsContributor (default true — the Azure-native mirror engine
+// is the no-Fabric default). Read-only catalog scan stays on Reader above.
+resource consoleContributorGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (consolePrincipalNeedsContributor && !empty(consolePrincipalId)) {
+  name: guid(sa.id, consolePrincipalId, storageBlobDataContributorRoleId)
+  scope: sa
+  properties: {
+    principalId: consolePrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalType: 'ServicePrincipal'
+    description: 'Console UAMI — Storage Blob Data Contributor for mirrored-database engine Bronze snapshot writes (no Fabric).'
   }
 }
 
