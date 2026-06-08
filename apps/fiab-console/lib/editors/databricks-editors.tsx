@@ -34,6 +34,7 @@ import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipelin
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -614,6 +615,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  // Visual (no-code) query canvas — Power-Query diagram-view parity (Spark SQL).
+  const [vqOpen, setVqOpen] = useState(false);
 
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -896,10 +899,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     void refreshCatalogs();
   }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
 
+  // Tables drilled-down in the UC tree → {schema, table} for the visual-query
+  // Add-table picker. (Spark SQL session catalog/schema come from props.)
+  const vqSourceTables = useMemo<VqSourceTable[]>(
+    () => tables.map((t) => ({ schema: activeSchema || undefined, table: t })),
+    [tables, activeSchema],
+  );
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
+        { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — compiles to Spark SQL' },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
         { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
@@ -1257,6 +1268,28 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
+
+          <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
+              <DialogBody>
+                <DialogTitle>Visual query — Databricks SQL (Spark SQL)</DialogTitle>
+                <DialogContent>
+                  <VisualQueryCanvas
+                    engine="databricks-sql-warehouse"
+                    id={id}
+                    dialect="sparksql"
+                    warehouseId={warehouseId}
+                    catalog={activeCatalog || undefined}
+                    schema={activeSchema || undefined}
+                    sourceTables={vqSourceTables}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setVqOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

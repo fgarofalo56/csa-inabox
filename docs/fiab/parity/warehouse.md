@@ -29,7 +29,7 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 1 | ✅ | Explorer tree from `/schema` (sys.tables/schemas + row counts) |
 | 2 | ✅ | Tree leaf click loads `SELECT TOP 100`; New measure loads CREATE FUNCTION template |
 | 3 | ✅ | Monaco T-SQL editor + Run via `/query` (Dedicated pool TDS); Results grid |
-| 4 | ❌ MISSING | No-code visual Power-Query canvas not built — SQL editor is the authoring surface today |
+| 4 | ✅ | No-code visual Power-Query canvas (`lib/editors/components/visual-query-canvas.tsx`): drag tables from the Explorer (or Add-table picker), add Filter / Choose columns / Group by + aggregate / Keep top rows steps, Merge two chains with a 6-kind join picker, Applied-Steps inspector with controlled pickers (no freeform except the Filter WHERE box), live read-only generated-SQL pane (Monaco), Run via `/api/items/warehouse/[id]/visual-query`. Compiler `visual-query-compiler.ts` (12 unit tests). |
 | 5 | ✅ | Save-as-view achievable via CREATE VIEW in editor; CTAS dialog covers table |
 | 6 | ✅ | `Save as table` CTAS dialog (`submitCtas`) → real CREATE TABLE AS SELECT |
 | 7 | ✅ | `Open in Excel` → `/iqy` returns a real .iqy web-query file |
@@ -42,7 +42,8 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 
 ## Backend per control
 - Schema / query / CTAS / DMV actions → Synapse Dedicated pool TDS (`executeQuery` / `dedicatedTarget`) via `/api/items/warehouse/[id]/query` + `/schema`.
+- Visual query → `/api/items/[type]/[id]/visual-query` compiles the canvas graph server-side (same pure compiler the UI previews with) and executes it over the Dedicated pool TDS; describe mode resolves table columns via a zero-row `SELECT TOP 0` probe.
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **B+ — SQL authoring + explorer + CTAS + Excel + permissions/relationships all real. One genuine MISSING (visual Power-Query canvas) recorded honestly; two honest-gates (Power BI visualize, workspace Git).**
+Grade: **A — SQL authoring + explorer + CTAS + Excel + permissions/relationships all real, and the no-code visual query canvas is built end-to-end (real backend, unit-tested compiler). Two honest-gates remain (Power BI visualize, workspace Git). The same canvas is wired into the Synapse Serverless / Dedicated and Databricks SQL editors (Spark SQL dialect).**
