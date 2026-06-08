@@ -2,17 +2,20 @@
 
 /**
  * /governance/catalog — REAL data asset inventory. Backed by
- * /api/governance/catalog which enumerates the tenant's data items
- * (lakehouse / warehouse / KQL DB / semantic model / mirrored DB /
- * data-product / vector store etc) from Cosmos.
+ * /api/governance/catalog which serves the tenant's data items from the
+ * `loom-governance-items` AI Search index (real facet counts + a
+ * discoverability filter) when LOOM_AI_SEARCH_SERVICE is set, and falls back to
+ * a Cosmos query otherwise.
  *
- * No Purview required. When Purview is bound a future iteration merges
- * Purview-only classifications into each row.
+ * Domain scope comes from the live tenant domains (/api/admin/domains). Facet
+ * chips/dropdowns (type, domain, endorsement, sensitivity) reflect real counts
+ * returned by the backend. A Promoted/Certified item the caller cannot open
+ * still appears (isDiscoverable) with a Request-Access CTA instead of "Open".
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button, Subtitle2, Title3,
+  Badge, Caption1, Body1, Input, Button, Title3,
   MessageBar, MessageBarBody, MessageBarTitle,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Field, Dropdown, Option, Textarea, Divider,
@@ -21,6 +24,7 @@ import {
 import {
   Search24Regular, ArrowSync24Regular, Open16Regular, Dismiss24Regular,
   ShieldCheckmark16Regular, BranchFork16Regular, Key16Regular, Open20Regular,
+  Eye16Regular, DatabaseSearch20Regular,
 } from '@fluentui/react-icons';
 import { useRouter } from 'next/navigation';
 import { GovernanceShell } from '@/lib/components/governance-shell';
@@ -38,15 +42,30 @@ interface Asset {
   sensitivity: string | null;
   endorsement?: string | null;
   description?: string | null;
+  domainId?: string | null;
+  isDiscoverable?: boolean;
+  /** False for a discoverable item in a workspace the caller cannot open. */
+  canOpen?: boolean;
   updatedAt: string;
   rowCount?: number;
   sizeBytes?: number;
 }
 
+interface FacetBucket { value: string; count: number; }
+interface Facets {
+  itemType?: FacetBucket[];
+  domainId?: FacetBucket[];
+  endorsement?: FacetBucket[];
+  sensitivity?: FacetBucket[];
+  classifications?: FacetBucket[];
+}
+interface DomainOption { id: string; name: string; }
+
 const useStyles = makeStyles({
   toolbar: {
     display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
     paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    flexWrap: 'wrap',
   },
   spacer: { flex: 1 },
   filterChip: {
@@ -99,10 +118,18 @@ export default function GovernanceCatalogPage() {
   const router = useRouter();
   const [q, setQ] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
+  const [domainFilter, setDomainFilter] = useState<string>('');
+  const [endorsementFilter, setEndorsementFilter] = useState<string>('');
+  const [sensitivityFilter, setSensitivityFilter] = useState<string>('');
   const [assets, setAssets] = useState<Asset[] | null>(null);
+  const [facets, setFacets] = useState<Facets>({});
+  const [domains, setDomains] = useState<DomainOption[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState('');
+  const [reindexBusy, setReindexBusy] = useState(false);
+  const [reindexMsg, setReindexMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Asset detail drawer + request-access form.
   const [selected, setSelected] = useState<Asset | null>(null);
   const [reqPerm, setReqPerm] = useState<'read' | 'write' | 'admin'>('read');
@@ -132,34 +159,78 @@ export default function GovernanceCatalogPage() {
     } finally { setReqBusy(false); }
   }, [selected, reqPerm, reqJustify]);
 
+  // Live tenant domains for the domain scope selector (Cosmos-backed).
+  useEffect(() => {
+    fetch('/api/admin/domains')
+      .then((r) => r.json())
+      .then((j) => { if (j?.ok) setDomains((j.domains || []).map((d: any) => ({ id: d.id, name: d.name }))); })
+      .catch(() => {});
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       if (typeFilter) params.set('type', typeFilter);
+      if (domainFilter) params.set('domain', domainFilter);
+      if (endorsementFilter) params.set('endorsement', endorsementFilter);
+      if (sensitivityFilter) params.set('sensitivity', sensitivityFilter);
       const r = await fetch(`/api/governance/catalog?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setAssets(j.assets || []);
+      setFacets(j.facets || {});
+      setTotal(typeof j.total === 'number' ? j.total : (j.assets || []).length);
       setSource(j.source || 'cosmos');
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally { setLoading(false); }
-  }, [q, typeFilter]);
+  }, [q, typeFilter, domainFilter, endorsementFilter, sensitivityFilter]);
 
   useEffect(() => { load(); }, [load]);
 
+  const reindex = useCallback(async () => {
+    setReindexBusy(true); setReindexMsg(null);
+    try {
+      const r = await fetch('/api/admin/governance-catalog/reindex', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        setReindexMsg({ ok: true, text: `Indexed ${j.indexed} asset${j.indexed === 1 ? '' : 's'}${j.indexCreated ? ' (index created)' : ''}.` });
+        await load();
+      } else {
+        setReindexMsg({ ok: false, text: j.hint || j.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) {
+      setReindexMsg({ ok: false, text: e?.message || String(e) });
+    } finally { setReindexBusy(false); }
+  }, [load]);
+
+  // Facet-driven counts (real, returned by the backend).
   const typeCounts = useMemo(() => {
     const out = new Map<string, number>();
-    for (const a of (assets || [])) out.set(a.itemType, (out.get(a.itemType) || 0) + 1);
+    for (const f of (facets.itemType || [])) out.set(f.value, f.count);
     return out;
-  }, [assets]);
+  }, [facets.itemType]);
+
+  const domainCounts = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const f of (facets.domainId || [])) out.set(f.value, f.count);
+    return out;
+  }, [facets.domainId]);
 
   const typeChips = useMemo(() => {
     const seen = Array.from(typeCounts.keys());
     return [...TYPE_ORDER.filter((t) => seen.includes(t)), ...seen.filter((t) => !TYPE_ORDER.includes(t))];
   }, [typeCounts]);
+
+  const endorsementOptions = useMemo(() => (facets.endorsement || []).map((f) => f.value), [facets.endorsement]);
+  const sensitivityOptions = useMemo(() => (facets.sensitivity || []).map((f) => f.value), [facets.sensitivity]);
+
+  const domainName = useMemo(() => {
+    if (!domainFilter) return 'All domains';
+    return domains.find((d) => d.id === domainFilter)?.name || domainFilter;
+  }, [domainFilter, domains]);
 
   // Sortable / filterable / resizable columns for the shared LoomDataTable.
   const catalogColumns: LoomColumn<Asset>[] = useMemo(() => [
@@ -172,6 +243,11 @@ export default function GovernanceCatalogPage() {
           {a.endorsement && (
             <Badge appearance="tint" color={a.endorsement === 'Certified' ? 'success' : 'brand'} size="small" icon={<ShieldCheckmark16Regular />}>
               {a.endorsement}
+            </Badge>
+          )}
+          {a.isDiscoverable && a.canOpen === false && (
+            <Badge appearance="outline" color="informative" size="small" icon={<Eye16Regular />}>
+              Discoverable
             </Badge>
           )}
         </span>
@@ -197,22 +273,29 @@ export default function GovernanceCatalogPage() {
     { key: 'sizeBytes', label: 'Size', sortable: true, filterable: false, width: 110, getValue: (a) => a.sizeBytes || 0, render: (a) => fmtBytes(a.sizeBytes) },
     { key: 'updatedAt', label: 'Updated', sortable: true, filterable: false, width: 130, getValue: (a) => a.updatedAt || '', render: (a) => a.updatedAt ? new Date(a.updatedAt).toLocaleDateString() : '—' },
     {
-      key: 'open', label: '', sortable: false, filterable: false, width: 90,
-      render: (a) => (
-        <a href={`/items/${a.itemType}/${a.id}`} onClick={(e) => e.stopPropagation()}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-          Open <Open16Regular />
-        </a>
-      ),
+      key: 'open', label: '', sortable: false, filterable: false, width: 130,
+      render: (a) => a.canOpen === false
+        ? (
+          <Button size="small" appearance="subtle" icon={<Key16Regular />}
+            onClick={(e) => { e.stopPropagation(); openAsset(a); }}>
+            Request access
+          </Button>
+        )
+        : (
+          <a href={`/items/${a.itemType}/${a.id}`} onClick={(e) => e.stopPropagation()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+            Open <Open16Regular />
+          </a>
+        ),
     },
-  ], [s.classChips, s.classChip]);
+  ], [s.classChips, s.classChip, openAsset]);
 
   return (
     <GovernanceShell sectionTitle="Data catalog">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
         Single inventory across every Lakehouse, Warehouse, Semantic Model, KQL DB, Mirrored DB, Data Product, and Vector Store in your tenant.
         {source && (
-          <Badge appearance="outline" color={source === 'purview' ? 'brand' : 'informative'} size="small" style={{ marginLeft: 8 }}>
+          <Badge appearance="outline" color={source === 'aisearch' ? 'brand' : 'informative'} size="small" style={{ marginLeft: 8 }}>
             source: {source}
           </Badge>
         )}
@@ -224,14 +307,63 @@ export default function GovernanceCatalogPage() {
           placeholder="Search assets, owners, classifications…"
           value={q}
           onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 480 }}
+          style={{ flex: 1, minWidth: 240, maxWidth: 420 }}
         />
+        <Field style={{ minWidth: 170 }}>
+          <Dropdown
+            aria-label="Domain scope"
+            value={domainName}
+            selectedOptions={[domainFilter]}
+            onOptionSelect={(_, d) => setDomainFilter(d.optionValue || '')}
+          >
+            <Option value="">All domains</Option>
+            {domains.map((dm) => (
+              <Option key={dm.id} value={dm.id} text={dm.name}>
+                {dm.name}{domainCounts.has(dm.id) ? ` (${domainCounts.get(dm.id)})` : ''}
+              </Option>
+            ))}
+          </Dropdown>
+        </Field>
+        {endorsementOptions.length > 0 && (
+          <Dropdown
+            aria-label="Endorsement"
+            style={{ minWidth: 150 }}
+            value={endorsementFilter || 'Any endorsement'}
+            selectedOptions={[endorsementFilter]}
+            onOptionSelect={(_, d) => setEndorsementFilter(d.optionValue || '')}
+          >
+            <Option value="">Any endorsement</Option>
+            {endorsementOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+          </Dropdown>
+        )}
+        {sensitivityOptions.length > 0 && (
+          <Dropdown
+            aria-label="Sensitivity"
+            style={{ minWidth: 150 }}
+            value={sensitivityFilter || 'Any sensitivity'}
+            selectedOptions={[sensitivityFilter]}
+            onOptionSelect={(_, d) => setSensitivityFilter(d.optionValue || '')}
+          >
+            <Option value="">Any sensitivity</Option>
+            {sensitivityOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+          </Dropdown>
+        )}
         <div className={s.spacer} />
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          {(assets || []).length} asset{(assets || []).length === 1 ? '' : 's'}
+          {total} asset{total === 1 ? '' : 's'}
         </Caption1>
+        <Button appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={reindex} disabled={reindexBusy}
+          title="Rebuild the AI Search catalog index from Cosmos">
+          {reindexBusy ? 'Rebuilding…' : 'Rebuild index'}
+        </Button>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
       </div>
+
+      {reindexMsg && (
+        <MessageBar intent={reindexMsg.ok ? 'success' : 'warning'} style={{ marginBottom: 12 }}>
+          <MessageBarBody>{reindexMsg.text}</MessageBarBody>
+        </MessageBar>
+      )}
 
       {typeChips.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -241,7 +373,7 @@ export default function GovernanceCatalogPage() {
             role="button"
             tabIndex={0}
           >
-            All ({(assets || []).length})
+            All ({total})
           </span>
           {typeChips.map((t) => (
             <span
@@ -273,7 +405,7 @@ export default function GovernanceCatalogPage() {
           getRowId={(a) => a.id}
           loading={loading}
           onRowClick={openAsset}
-          empty={q || typeFilter
+          empty={q || typeFilter || domainFilter || endorsementFilter || sensitivityFilter
             ? 'No assets match the current filters.'
             : 'No data assets in your tenant yet. Create a lakehouse, warehouse, or semantic model and it will appear here.'}
         />
@@ -300,13 +432,28 @@ export default function GovernanceCatalogPage() {
                     {selected.sensitivity}
                   </Badge>
                 )}
+                {selected.isDiscoverable && selected.canOpen === false && (
+                  <Badge appearance="outline" color="informative" icon={<Eye16Regular />}>Discoverable</Badge>
+                )}
               </div>
+
+              {selected.canOpen === false && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Discoverable asset</MessageBarTitle>
+                    This {typeLabel(selected.itemType)} is published to the catalog but lives in a workspace you don&apos;t have access to.
+                    Request access below — the owner grants it in Governance → Policies.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
 
               {selected.description && <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{selected.description}</Body1>}
 
               <div className={s.metaGrid}>
                 <Caption1 className={s.metaLabel}>Workspace</Caption1><Caption1>{selected.workspaceName}</Caption1>
                 <Caption1 className={s.metaLabel}>Owner</Caption1><Caption1>{selected.ownerUpn || selected.owner}</Caption1>
+                <Caption1 className={s.metaLabel}>Domain</Caption1>
+                <Caption1>{selected.domainId ? (domains.find((d) => d.id === selected.domainId)?.name || selected.domainId) : '—'}</Caption1>
                 <Caption1 className={s.metaLabel}>Classifications</Caption1>
                 <div className={s.classChips}>
                   {selected.classifications?.length
@@ -318,10 +465,12 @@ export default function GovernanceCatalogPage() {
                 <Caption1 className={s.metaLabel}>Updated</Caption1><Caption1>{selected.updatedAt ? new Date(selected.updatedAt).toLocaleString() : '—'}</Caption1>
               </div>
 
-              <div className={s.actionRow}>
-                <Button appearance="primary" icon={<Open20Regular />} onClick={() => router.push(`/items/${selected.itemType}/${selected.id}`)}>Open in editor</Button>
-                <Button icon={<BranchFork16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(selected.id)}`)}>View lineage</Button>
-              </div>
+              {selected.canOpen !== false && (
+                <div className={s.actionRow}>
+                  <Button appearance="primary" icon={<Open20Regular />} onClick={() => router.push(`/items/${selected.itemType}/${selected.id}`)}>Open in editor</Button>
+                  <Button icon={<BranchFork16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(selected.id)}`)}>View lineage</Button>
+                </div>
+              )}
 
               <Divider />
 
