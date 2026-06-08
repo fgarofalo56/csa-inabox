@@ -8,6 +8,7 @@ import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
 import { saveUserToken } from '@/lib/azure/user-token-store';
+import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import type { UserClaims } from '@/lib/auth/msal';
 
 export const runtime = 'nodejs';
@@ -37,6 +38,34 @@ async function captureUserArmToken(
     }
   } catch {
     // ARM scope not consented / not available — picker falls back to UAMI.
+  }
+}
+
+/**
+ * Best-effort capture of the user's Azure SQL access token (F10 — "user's
+ * identity" data-access mode for SQL analytics endpoints). Same swallow-all
+ * pattern as the ARM capture: login MUST proceed unchanged whether or not the
+ * SQL scope was consented. The token is never logged and is encrypted at rest
+ * by sql-user-token-store. The SQL audience host is cloud-portable via
+ * LOOM_SYNAPSE_SQL_TOKEN_SCOPE (Commercial/GCC vs GCC-High/IL5).
+ */
+async function captureUserSqlToken(
+  client: ReturnType<typeof getMsalClient>,
+  account: import('@azure/msal-node').AccountInfo,
+  oid: string,
+): Promise<void> {
+  try {
+    const sqlHost = process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net';
+    const tok = await client.acquireTokenSilent({
+      account,
+      scopes: [`https://${sqlHost}/user_impersonation`],
+    });
+    if (tok?.accessToken) {
+      await saveUserSqlToken(oid, tok.accessToken, tok.expiresOn ?? null);
+    }
+  } catch {
+    // SQL scope not consented / not available — query routes set to "user's
+    // identity" mode surface an honest gate instead of a silent failure.
   }
 }
 
@@ -105,6 +134,10 @@ export async function GET(req: NextRequest) {
     // Additive + non-breaking: capture the user's ARM token for per-user RBAC.
     // Never await-throws into the login path (the helper swallows all errors).
     await captureUserArmToken(client, account, claims.oid);
+    // Additive + non-breaking: capture the user's SQL token for "user's
+    // identity" data-access mode on SQL analytics endpoints (F10). Same
+    // best-effort contract — neither gate blocks the login flow.
+    await captureUserSqlToken(client, account, claims.oid);
     return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';
