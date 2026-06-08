@@ -62,6 +62,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { isGovCloud } from './cloud-endpoints';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -195,16 +196,22 @@ function purviewAccount(): string {
   if (!raw) throw new PurviewNotConfiguredError(notConfiguredHint('LOOM_PURVIEW_ACCOUNT'));
   // Accept either a bare account name or a full URL (tolerate copy/paste of the
   // classic OR the -api host) and normalize down to the short account name.
+  // Handles both the Commercial (.purview.azure.com) and US Gov (.purview.azure.us)
+  // hosts so a Gov account name copy/pasted as a URL still resolves cleanly.
   return raw
     .replace(/^https?:\/\//, '')
-    .replace(/-api\.purview\.azure\.com.*$/, '')
-    .replace(/\.purview\.azure\.com.*$/, '')
+    .replace(/-api\.purview\.azure\.(com|us).*$/, '')
+    .replace(/\.purview\.azure\.(com|us).*$/, '')
     .replace(/\/+$/, '');
 }
 
-/** Classic Data Map base host — `{account}.purview.azure.com` (NOT -api). */
+/**
+ * Classic Data Map base host — `{account}.purview.azure.{com|us}` (NOT -api).
+ * The TLD follows the cloud: `.us` in the US Government clouds (where the
+ * Purview data plane is `*.purview.azure.us`), `.com` everywhere else.
+ */
 function purviewBase(): string {
-  return `https://${purviewAccount()}.purview.azure.com`;
+  return `https://${purviewAccount()}.purview.azure.${isGovCloud() ? 'us' : 'com'}`;
 }
 
 /** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
@@ -471,8 +478,76 @@ export async function searchPurview(q: string, limit = 50): Promise<PurviewAsset
   }));
 }
 
-// ============================================================
-// Collections — Account data plane
+export interface DataMapSearchOpts {
+  q: string;
+  /** Purview collection referenceName (the classic mirror of a domain). Unset = all collections. */
+  collectionName?: string;
+  /** Atlas typeName list for type-chip filtering. Empty/unset = all types. */
+  entityTypes?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Domain-scoped + type-filtered asset search for the F9 "Add data assets"
+ * panel. Same Discovery endpoint as searchPurview, but builds the structured
+ * `filter` the Data Map search supports so results can be constrained to a
+ * single collection (the classic equivalent of a governance domain) and to a
+ * set of Atlas entity types (the Table/View/File chips).
+ *
+ *   POST {base}/datamap/api/search/query?api-version=2023-09-01
+ *   body: {
+ *     keywords, limit, offset,
+ *     filter: { and: [ { collectionId: "<ref>" }, { or: [ { entityType: "azure_sql_table" }, ... ] } ] }
+ *   }
+ *
+ * The `filter` grammar is the recursive Data Map search filter: leaf terms
+ * `{ collectionId }` / `{ entityType }` combined with `and` / `or` / `not`.
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *
+ * The Loom UAMI needs at minimum a Data Map READ role (Data Reader or Data
+ * Curator) on the target collection — see consolePurviewRoleGrant in
+ * platform/fiab/bicep/modules/admin-plane/catalog.bicep, applied by
+ * scripts/csa-loom/grant-purview-datamap-role.sh.
+ */
+export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<PurviewAssetHit[]> {
+  purviewAccount();
+  const { q, collectionName, entityTypes, limit = 20, offset = 0 } = opts;
+  const andClauses: Record<string, unknown>[] = [];
+  if (collectionName) andClauses.push({ collectionId: collectionName });
+  if (entityTypes && entityTypes.length > 0) {
+    andClauses.push(
+      entityTypes.length === 1
+        ? { entityType: entityTypes[0] }
+        : { or: entityTypes.map((t) => ({ entityType: t })) },
+    );
+  }
+  const body: Record<string, unknown> = {
+    keywords: q && q.trim() ? q.trim() : '*',
+    limit,
+    offset,
+  };
+  if (andClauses.length === 1) body.filter = andClauses[0];
+  else if (andClauses.length > 1) body.filter = { and: andClauses };
+
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((v: any) => ({
+    source: 'purview' as const,
+    id: v.id || v.guid,
+    name: v.name || v.qualifiedName || v.id,
+    qualifiedName: v.qualifiedName,
+    entityType: v.entityType || v.typeName,
+    classification: v.classification || v.classifications,
+    description: v.description,
+    owner: v.owner || (Array.isArray(v.contact) ? v.contact[0]?.id : undefined),
+    domain: v.domain,
+    updatedAt: v.updateTime || v.modifiedTime,
+  }));
+}
 //   GET {base}/collections?api-version=2019-11-01-preview
 //   https://learn.microsoft.com/rest/api/purview/accountdataplane/collections/list-collections
 // ============================================================
@@ -1036,7 +1111,7 @@ async function rootCollectionName(): Promise<string | undefined> {
 }
 
 /** Stable Purview collection referenceName for a Loom domain (≤ 36 chars). */
-function domainCollectionName(idOrName: string): string {
+export function domainCollectionName(idOrName: string): string {
   return (idOrName || 'domain')
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')

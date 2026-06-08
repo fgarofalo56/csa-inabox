@@ -22,14 +22,17 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
+  Database20Regular, Warning20Filled, MoreHorizontal20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { AddDataAssetsPanel, type DataAssetRef as DataAssetWithFlags } from './components/add-data-assets-panel';
 import { ImportDataProductsFlyout } from './components/import-data-products-flyout';
 import {
   SelectAttributePanel, LinkListAttributePanel, type AttrReceipt,
@@ -1773,6 +1776,8 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
 
 interface DataProductDataset { name: string; typeName: string; qualifiedName: string; classifications: string[]; guid?: string; }
 interface DataProductGlossaryLink { name: string; guid?: string; }
+/** F9 — physical Data Map asset attached to the product (persisted refs only). */
+interface PersistedAssetRef { guid: string; name: string; qualifiedName?: string; entityType?: string; addedAt?: string; }
 interface DataProductState {
   displayName: string;
   description: string;
@@ -1791,6 +1796,10 @@ interface DataProductState {
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
   datasets?: DataProductDataset[];
   glossaryLinks?: DataProductGlossaryLink[];
+  // F9 — curated physical Data Map assets this product wraps (the T6 publish
+  // guard counts these). Persisted under state.dataAssets; runtime deleted /
+  // dqRunning flags live only in the Data assets tab, never in Cosmos.
+  dataAssets?: PersistedAssetRef[];
   // Phase 1 Purview Unified Catalog wiring — populated by
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
@@ -2053,8 +2062,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const domains = useGovernanceDomains();
 
-  // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
-  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
+  // Tabs: Overview | Datasets | Data assets | Glossary | Lineage | Access policies
+  const [tab, setTab] = useState<'overview' | 'datasets' | 'data-assets' | 'glossary' | 'lineage' | 'policies'>('overview');
 
   // Bulk "Import from CSV" flyout (F2 import + F18 monitoring) — creates many
   // draft data-product items from a CSV in one shot. Available on /new and on
@@ -2084,6 +2093,14 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [glDesc, setGlDesc] = useState('');
   const [glBusy, setGlBusy] = useState(false);
   const [glMsg, setGlMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // F9 — Data assets (curated physical Data Map assets, with deleted/dqRunning flags).
+  const [assets, setAssets] = useState<DataAssetWithFlags[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsErr, setAssetsErr] = useState<string | null>(null);
+  const [assetPanelOpen, setAssetPanelOpen] = useState(false);
+  const [assetMsg, setAssetMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [removingGuid, setRemovingGuid] = useState<string | null>(null);
 
   // Lineage.
   const [lineage, setLineage] = useState<{ nodes: any[]; edges: any[] } | null>(null);
@@ -2409,6 +2426,67 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const removeGlossaryLink = (name: string) => { setState((prev) => ({ ...prev, glossaryLinks: (prev.glossaryLinks || []).filter((g) => g.name !== name) })); setDirty(true); };
 
+  // ---- F9 Data assets (curate physical Data Map assets the product wraps) ----
+  // The /api/data-products/[id]/assets route is the source of truth: it persists
+  // state.dataAssets directly to Cosmos AND computes deleted / dqRunning flags.
+  // We mirror the persisted refs back into editor state so a later Overview Save
+  // round-trips them instead of clobbering state.dataAssets with the empty form.
+  const syncAssetRefs = useCallback((persisted: PersistedAssetRef[]) => {
+    setState((prev) => ({
+      ...prev,
+      dataAssets: persisted.map((a) => ({
+        guid: a.guid, name: a.name, qualifiedName: a.qualifiedName,
+        entityType: a.entityType, addedAt: a.addedAt,
+      })),
+    }));
+  }, []);
+
+  const loadAssets = useCallback(async () => {
+    if (id === 'new') { setAssets([]); return; }
+    setAssetsLoading(true); setAssetsErr(null);
+    try {
+      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/assets`);
+      const j = await r.json();
+      if (!j.ok) { setAssetsErr(j.error || `HTTP ${r.status}`); return; }
+      const list: DataAssetWithFlags[] = j.assets || [];
+      setAssets(list);
+      syncAssetRefs(list);
+    } catch (e: any) {
+      setAssetsErr(e?.message || String(e));
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, [id, syncAssetRefs]);
+
+  // After the panel attaches assets (route already persisted), refresh flags.
+  const onAssetsAdded = useCallback((persisted: PersistedAssetRef[]) => {
+    syncAssetRefs(persisted);
+    setAssetMsg({ intent: 'success', text: `Added ${persisted.length} attached asset${persisted.length === 1 ? '' : 's'}.` });
+    void loadAssets();
+  }, [syncAssetRefs, loadAssets]);
+
+  const removeAsset = useCallback(async (guid: string, force = false) => {
+    setRemovingGuid(guid); setAssetMsg(null);
+    try {
+      const r = await fetch(
+        `/api/data-products/${encodeURIComponent(id)}/assets?guid=${encodeURIComponent(guid)}${force ? '&force=1' : ''}`,
+        { method: 'DELETE' },
+      );
+      const j = await r.json();
+      if (!j.ok) {
+        setAssetMsg({ intent: 'error', text: j.blocked ? `Blocked: ${j.error}` : (j.error || `HTTP ${r.status}`) });
+        return;
+      }
+      syncAssetRefs(j.dataAssets || []);
+      setAssetMsg({ intent: 'success', text: 'Asset removed.' });
+      void loadAssets();
+    } catch (e: any) {
+      setAssetMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setRemovingGuid(null);
+    }
+  }, [id, syncAssetRefs, loadAssets]);
+
   // ---- Lineage ----
   const loadLineage = useCallback(async () => {
     const guid = state.datasets?.[0]?.guid || state.purviewDataProductId;
@@ -2458,7 +2536,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   useEffect(() => {
     if (tab === 'lineage') loadLineage();
     if (tab === 'policies') loadPolicies();
-  }, [tab, loadLineage, loadPolicies]);
+    if (tab === 'data-assets') loadAssets();
+  }, [tab, loadLineage, loadPolicies, loadAssets]);
 
   // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save. Matches notebook-editor.
   useEffect(() => {
@@ -2523,6 +2602,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Govern', actions: [
         { label: 'Datasets', onClick: () => setTab('datasets') },
+        { label: 'Data assets', onClick: () => setTab('data-assets') },
         { label: 'Glossary', onClick: () => setTab('glossary') },
         { label: 'Lineage', onClick: () => setTab('lineage') },
         { label: 'Access policies', onClick: () => setTab('policies') },
@@ -2731,6 +2811,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
           <Tab value="datasets" icon={<Code20Regular />}>Datasets</Tab>
+          <Tab value="data-assets" icon={<Database20Regular />}>Data assets</Tab>
           <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
@@ -2846,6 +2927,97 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
               </TableBody>
             </Table>
+          </div>
+        )}
+
+        {tab === 'data-assets' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Body1 style={{ flex: 1 }}>
+                Physical assets this data product wraps, curated from the Microsoft Purview Data Map and scoped to the product&apos;s governance domain. The publish guard requires at least one attached asset.
+              </Body1>
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadAssets} disabled={assetsLoading || id === 'new'}>
+                {assetsLoading ? 'Loading…' : 'Refresh'}
+              </Button>
+              <Button appearance="primary" icon={<Add20Regular />} onClick={() => setAssetPanelOpen(true)} disabled={id === 'new'} title={id === 'new' ? 'Create the data product first' : undefined}>
+                Add assets
+              </Button>
+            </div>
+            {id === 'new' && (
+              <MessageBar intent="info"><MessageBarBody>Create (Save) the data product before adding data assets.</MessageBarBody></MessageBar>
+            )}
+            {assetsErr && <MessageBar intent="error"><MessageBarBody>{assetsErr}</MessageBarBody></MessageBar>}
+            {assetMsg && <MessageBar intent={assetMsg.intent}><MessageBarBody>{assetMsg.text}</MessageBarBody></MessageBar>}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Badge appearance="filled" color="brand">{assets.length} attached</Badge>
+              {assets.some((a) => a.deleted) && (
+                <Badge appearance="outline" color="warning">{assets.filter((a) => a.deleted).length} deleted in Data Map</Badge>
+              )}
+            </div>
+            <Table size="small" aria-label="Attached data assets">
+              <TableHeader><TableRow>
+                <TableHeaderCell style={{ width: 28 }} />
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Type</TableHeaderCell>
+                <TableHeaderCell>Qualified name</TableHeaderCell>
+                <TableHeaderCell>Added</TableHeaderCell>
+                <TableHeaderCell style={{ width: 44 }} />
+              </TableRow></TableHeader>
+              <TableBody>
+                {assets.length === 0 && !assetsLoading && (
+                  <TableRow><TableCell>No data assets attached yet. Click <strong>Add assets</strong> to search the Data Map.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>
+                )}
+                {assets.map((a) => (
+                  <TableRow key={a.guid}>
+                    <TableCell>
+                      {a.deleted && (
+                        <Tooltip relationship="label" content="This asset has been deleted from the Data Map. It can still be removed.">
+                          <Warning20Filled style={{ color: tokens.colorPaletteYellowForeground1 }} />
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <strong>{a.name}</strong>
+                      {a.dqRunning && <Badge appearance="outline" color="important" style={{ marginLeft: 6 }}>DQ rule running</Badge>}
+                    </TableCell>
+                    <TableCell><code style={{ fontSize: 11 }}>{a.entityType || '—'}</code></TableCell>
+                    <TableCell><code style={{ fontSize: 11, wordBreak: 'break-all' }}>{a.qualifiedName || '—'}</code></TableCell>
+                    <TableCell><Caption1>{a.addedAt ? new Date(a.addedAt).toLocaleDateString() : '—'}</Caption1></TableCell>
+                    <TableCell>
+                      <Menu>
+                        <MenuTrigger disableButtonEnhancement>
+                          <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${a.name}`} />
+                        </MenuTrigger>
+                        <MenuPopover>
+                          <MenuList>
+                            {a.dqRunning && !a.deleted ? (
+                              <Tooltip relationship="label" content={`Blocked: data-quality rule "${a.dqRuleName || ''}" is running against this asset. Disable it first.`}>
+                                <MenuItem disabled icon={<Delete20Regular />}>Remove (blocked — DQ rule running)</MenuItem>
+                              </Tooltip>
+                            ) : (
+                              <MenuItem
+                                icon={<Delete20Regular />}
+                                disabled={removingGuid === a.guid}
+                                onClick={() => removeAsset(a.guid)}
+                              >
+                                {removingGuid === a.guid ? 'Removing…' : 'Remove'}
+                              </MenuItem>
+                            )}
+                          </MenuList>
+                        </MenuPopover>
+                      </Menu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <AddDataAssetsPanel
+              productId={id}
+              open={assetPanelOpen}
+              onClose={() => setAssetPanelOpen(false)}
+              onAdded={onAssetsAdded}
+              existingGuids={new Set(assets.map((a) => a.guid))}
+            />
           </div>
         )}
 
