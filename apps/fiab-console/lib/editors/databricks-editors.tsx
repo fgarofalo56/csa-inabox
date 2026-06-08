@@ -26,13 +26,14 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
-  Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
+  Save20Regular, Delete20Regular, Add20Regular, Key20Regular, Sparkle20Regular,
   DataBarVertical20Regular,
   TableAdd20Regular, Copy20Regular,
   Eye20Regular, MathFormula20Regular,
   ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { AiFunctionsHelper } from './components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -684,6 +685,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  // AI functions helper (sentiment/classify/translate/summarize/extract).
+  const [aiFnOpen, setAiFnOpen] = useState(false);
+  // Last table the user clicked in the tree — context for the AI functions SQL.
+  const [aiTable, setAiTable] = useState<string>('');
   // Visual (no-code) query canvas — Power-Query diagram-view parity (Spark SQL).
   const [vqOpen, setVqOpen] = useState(false);
 
@@ -1322,6 +1327,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'New SQL query', onClick: newSql },
         { label: 'New visual query', onClick: () => setVqOpen(true), title: 'Build a query visually (Power Query diagram view) — compiles to Spark SQL' },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'AI functions', onClick: () => setAiFnOpen(true), title: 'Sentiment / classify / translate / summarize / extract over a text column (Databricks ai_query() or Azure OpenAI)' },
         { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined,
           disabled: !canRun || !sqlText.trim(),
           title: !canRun ? 'Start the warehouse first' : !sqlText.trim() ? 'Enter a SELECT first' : 'CTAS — CREATE TABLE … USING DELTA AS SELECT …' },
@@ -1426,6 +1432,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 value={`t-${c}.${sch}.${t}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setAiTable(`\`${c}\`.\`${sch}\`.\`${t}\``);
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                 }}
                               >
@@ -1571,6 +1578,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 style={{ marginLeft: 'auto' }}
               >
                 Run
+              </Button>
+            </Tooltip>
+            <Tooltip content="AI functions — sentiment / classify / translate / summarize / extract over a text column" relationship="label">
+              <Button appearance="outline" icon={<Sparkle20Regular />} onClick={() => setAiFnOpen(true)}>
+                AI functions
               </Button>
             </Tooltip>
           </div>
@@ -2070,6 +2082,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
 
+          <AiFunctionsHelper
+            open={aiFnOpen}
+            onOpenChange={setAiFnOpen}
+            itemType="databricks-sql-warehouse"
+            itemId={id}
+            warehouseId={warehouseId}
+            catalog={activeCatalog}
+            schema={activeSchema}
+            table={aiTable}
+            onInsert={(sql) => setSqlText(sql)}
+          />
           <Dialog open={vqOpen} onOpenChange={(_, d) => setVqOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1280px', width: '96vw' }}>
               <DialogBody>
