@@ -11,6 +11,15 @@
 // deletes tombstoned files. Storage Blob Data Contributor is required for all of
 // these — no additional role assignment is needed for maintenance.
 //
+// It ALSO covers the mirror-paired SQL analytics endpoint (Paired SQL analytics
+// endpoint over the mirror): the Azure-native mirror engine lands each mirrored
+// table as CSV under the Bronze container of THIS same `defaultStorageAccountName`
+// (mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/), so the Synapse Serverless
+// `WorkspaceIdentity` credential (IDENTITY = 'Managed Identity') reads it under
+// the Contributor grant below — no extra role assignment in the common single-DLZ
+// topology. The optional `mirrorBronzeStorageAccountName` param below covers the
+// split topology where mirror Bronze lives on a SEPARATE storage account.
+//
 // Deployed at the storage account's resource group scope (it may differ from the
 // workspace RG), so the parent passes the storage RG via a module scope.
 targetScope = 'resourceGroup'
@@ -20,6 +29,9 @@ param defaultStorageAccountName string
 
 @description('Synapse workspace system-assigned MI principal (object) id.')
 param synapseManagedIdentityPrincipalId string
+
+@description('OPTIONAL — a SEPARATE ADLS Gen2 account that hosts the mirror Bronze container, when it differs from defaultStorageAccountName (split-DLZ topology). When set, the Synapse workspace MSI is granted Storage Blob Data Reader on it so the mirror-paired Serverless SQL analytics endpoint can OPENROWSET the mirrored CSV. Must reside in this module RG scope. Empty = skip (the common topology where mirror Bronze == defaultStorageAccountName is already covered by the Contributor grant).')
+param mirrorBronzeStorageAccountName string = ''
 
 @description('Console UAMI principal (object) id — granted Storage Blob Data Reader so the BFF live Tables catalog scan can list paths + read _delta_log entries without needing write/Contributor. Empty = skip.')
 param consolePrincipalId string = ''
@@ -92,6 +104,25 @@ resource consoleOwnerGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   properties: {
     principalId: consolePrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Synapse workspace MSI → Storage Blob Data Reader on a SEPARATE mirror Bronze
+// storage account (split-DLZ topology only). Read-only: the mirror-paired
+// Serverless SQL analytics endpoint reads the mirrored CSV via OPENROWSET but
+// never writes back. Skipped in the common topology where mirror Bronze ==
+// defaultStorageAccountName (already covered by the Contributor grant above).
+resource mirrorBronzeSa 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(mirrorBronzeStorageAccountName)) {
+  name: empty(mirrorBronzeStorageAccountName) ? defaultStorageAccountName : mirrorBronzeStorageAccountName
+}
+
+resource synapseMirrorBronzeReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(mirrorBronzeStorageAccountName) && !empty(synapseManagedIdentityPrincipalId)) {
+  name: guid(mirrorBronzeSa.id, synapseManagedIdentityPrincipalId, storageBlobDataReaderRoleId)
+  scope: mirrorBronzeSa
+  properties: {
+    principalId: synapseManagedIdentityPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
     principalType: 'ServicePrincipal'
   }
 }

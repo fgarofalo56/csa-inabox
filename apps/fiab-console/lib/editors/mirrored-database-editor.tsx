@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field, Dropdown, Option, Divider, Checkbox,
   Tree, TreeItem, TreeItemLayout, Select, Tab, TabList,
@@ -27,7 +28,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
-  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled, ShieldTask20Regular,
+  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled, ShieldTask20Regular, DatabasePlug20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
@@ -116,6 +117,7 @@ interface Props { item: FabricItemType; id: string; }
 export function MirroredDatabaseEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+  const router = useRouter();
   const [workspaceId, setWorkspaceId] = useState('');
   const [mirrors, setMirrors] = useState<MirroredLite[] | null>(null);
   const [mirrorId, setMirrorId] = useState('');
@@ -131,6 +133,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [editing, setEditing] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<{ intent: 'success' | 'error' | 'info'; text: string } | null>(null);
+  // Paired Synapse Serverless SQL analytics endpoint (auto-created at install by
+  // the mirror→synapse-serverless-sql-pool pairing rule, Azure-native default).
+  const [sqlPaired, setSqlPaired] = useState<{ itemId: string; endpoint: string | null; database: string | null } | null>(null);
+  const [sqlPairedLoading, setSqlPairedLoading] = useState(false);
 
   // create wizard
   const [createOpen, setCreateOpen] = useState(false);
@@ -235,6 +241,23 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && mirrorId) loadDetail(workspaceId, mirrorId); }, [workspaceId, mirrorId, loadDetail]);
+
+  // Resolve the paired Serverless SQL analytics endpoint for the selected mirror.
+  useEffect(() => {
+    if (!workspaceId || !mirrorId) { setSqlPaired(null); return; }
+    let cancelled = false;
+    setSqlPairedLoading(true);
+    fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/sql-endpoint?workspaceId=${encodeURIComponent(workspaceId)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        if (j.ok && j.provisioned && j.sqlItemId) setSqlPaired({ itemId: j.sqlItemId, endpoint: j.endpoint, database: j.database });
+        else setSqlPaired(null);
+      })
+      .catch(() => { if (!cancelled) setSqlPaired(null); })
+      .finally(() => { if (!cancelled) setSqlPairedLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceId, mirrorId]);
 
   const act = useCallback(async (action: 'start' | 'stop') => {
     if (!workspaceId || !mirrorId) return;
@@ -357,11 +380,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
         { label: 'Stop', onClick: mirrorId && !acting ? () => act('stop') : undefined, disabled: !mirrorId || acting },
         { label: 'Status', onClick: workspaceId && mirrorId ? () => loadDetail(workspaceId, mirrorId) : undefined, disabled: !workspaceId || !mirrorId },
       ]},
+      { label: 'Analytics', actions: [
+        { label: 'SQL analytics endpoint',
+          onClick: sqlPaired ? () => router.push(`/items/synapse-serverless-sql-pool/${encodeURIComponent(sqlPaired.itemId)}${sqlPaired.database ? `?database=${encodeURIComponent(sqlPaired.database)}` : ''}`) : undefined,
+          disabled: !sqlPaired,
+          title: sqlPaired ? `Open the paired Serverless SQL endpoint${sqlPaired.endpoint ? ` (${sqlPaired.endpoint})` : ''}` : 'Install the mirror to provision its SQL analytics endpoint' },
+      ]},
       { label: 'List', actions: [
         { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
       ]},
     ]},
-  ], [workspaceId, mirrorId, detail, acting, testing, del, act, loadDetail, loadList, openEdit, testConnection]);
+  ], [workspaceId, mirrorId, detail, acting, testing, del, act, loadDetail, loadList, openEdit, testConnection, sqlPaired, router]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -408,6 +437,21 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
             <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId} onClick={() => { setEditing(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateErr(null); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); setCreateOpen(true); }}>New mirror</Button>
             {mirrorId && detail && <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={openEdit}>Edit</Button>}
             {mirrorId && detail && <Button appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={testing} onClick={testConnection}>{testing ? 'Testing…' : 'Test connection'}</Button>}
+            {sqlPaired && (
+              <Button appearance="outline" icon={<DatabasePlug20Regular />}
+                onClick={() => router.push(`/items/synapse-serverless-sql-pool/${encodeURIComponent(sqlPaired.itemId)}${sqlPaired.database ? `?database=${encodeURIComponent(sqlPaired.database)}` : ''}`)}
+                title={sqlPaired.endpoint ? `Serverless SQL endpoint: ${sqlPaired.endpoint}` : 'Open the paired Serverless SQL analytics endpoint'}>
+                SQL analytics endpoint
+              </Button>
+            )}
+            {sqlPaired?.endpoint && (
+              <Badge appearance="tint" color="success" title="Synapse Serverless SQL endpoint over the mirror Bronze">{sqlPaired.endpoint}</Badge>
+            )}
+            {mirrorId && !sqlPaired && !sqlPairedLoading && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                No SQL analytics endpoint paired yet — Install the mirror (Azure-native ADF-CDC) to auto-provision it.
+              </Caption1>
+            )}
             <Dialog open={createOpen} onOpenChange={(_, d) => { setCreateOpen(d.open); if (!d.open) setEditing(false); }}>
               <DialogSurface style={{ maxWidth: '680px' }}>
                 <DialogBody>

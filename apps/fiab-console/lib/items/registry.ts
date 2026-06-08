@@ -50,6 +50,59 @@ export const ITEM_PAIRING_RULES: Record<string, PairedItemDef[]> = {
       deriveName: (input) => `${input.displayName} SQL Analytics`,
     },
   ],
+  // Mirrored database (no-fabric-dependency.md): the Azure-native ADF-CDC backend
+  // lands each mirrored table as CSV under the ADLS Bronze container at
+  // `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/`. We pair the mirror 1:1
+  // with a `synapse-serverless-sql-pool` so the Bronze Delta/CSV is immediately
+  // queryable as T-SQL — the same Serverless built-in endpoint, scoped to a
+  // per-mirror user database with one OPENROWSET view per mirrored table.
+  //
+  // deriveContent returns null on the opt-in Fabric backend (result.secondaryIds
+  // has no `adlsRoot` — Fabric manages Bronze as OneLake, which the Synapse MSI
+  // can't read), so no pairing occurs and there is no Fabric dependency.
+  'mirrored-database': [
+    {
+      pairedType: 'synapse-serverless-sql-pool',
+      deriveContent: (result, input) => {
+        // ADF-CDC path emits adlsRoot = abfss://bronze@<acct>.dfs.core.*/mirrors/<wsId>/<mirrorId>.
+        const adlsRoot = result.secondaryIds?.adlsRoot ?? null;
+        if (!adlsRoot) return null; // Fabric backend / Bronze not configured — honest skip (no pairing).
+        const c = (input.content || {}) as Record<string, unknown>;
+        const src = (c.source || {}) as Record<string, unknown>;
+        // Mirror tables can arrive as `content.source.tables` (string[] like
+        // 'dbo.Sales' — bundle shape) or `content.tables` (objects {schema,table}
+        // — editor shape). Normalize both to {schema,table}[] so the paired
+        // provisioner can emit one OPENROWSET view per mirrored table.
+        const rawTables =
+          (Array.isArray(src.tables) ? src.tables : undefined) ??
+          (Array.isArray((c as any).tables) ? (c as any).tables : []);
+        const tables = (rawTables as unknown[])
+          .map((t) => {
+            if (typeof t === 'string') {
+              const parts = t.split('.');
+              return parts.length > 1
+                ? { schema: parts[0], table: parts.slice(1).join('.') }
+                : { schema: 'dbo', table: parts[0] };
+            }
+            const o = (t || {}) as Record<string, unknown>;
+            const table = String(o.table || '').trim();
+            return table ? { schema: String(o.schema || 'dbo').trim(), table } : null;
+          })
+          .filter((t): t is { schema: string; table: string } => !!t && !!t.table && !t.table.endsWith('*'));
+        const sanitized =
+          String(input.displayName || 'mirror').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'mirror';
+        return {
+          adlsRoot,
+          mirrorItemId: input.cosmosItemId,
+          mirrorName: input.displayName,
+          // Per-mirror Serverless user database — read back by the SQL-endpoint API.
+          database: `loom_mirror_${sanitized}`.slice(0, 128),
+          tables,
+        };
+      },
+      deriveName: (input) => `${input.displayName} SQL Analytics`,
+    },
+  ],
   // Data Marketplace (Wave 4): the data-product type is registered so the
   // provisioning engine treats it as a known item. It catalogs into Loom's own
   // Azure-native Cosmos DataProductStore (no Fabric / Purview-unified-catalog

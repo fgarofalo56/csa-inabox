@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Badge, Button, Caption1, Spinner, Tooltip, Dropdown, Option, Label,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -147,7 +148,12 @@ function resultsToJson(columns: string[], rows: unknown[][]): string {
 
 export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [database, setDatabase] = useState('master');
+  // A paired editor (e.g. opened from a mirror's "SQL analytics endpoint" link)
+  // may pass ?database=<db> to land directly on that database so its views are
+  // visible without manually picking it from the connect-to dropdown.
+  const searchParams = useSearchParams();
+  const initialDb = searchParams?.get('database') || 'master';
+  const [database, setDatabase] = useState(initialDb);
   const [databases, setDatabases] = useState<string[]>([]);
   const [endpoint, setEndpoint] = useState<string>('');
   const [configured, setConfigured] = useState(true);

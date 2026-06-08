@@ -29,6 +29,7 @@ import {
   upsertPipeline,
   runPipeline,
 } from '@/lib/azure/adf-client';
+import { resolveAbfssRoot } from '@/lib/azure/adls-client';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -224,6 +225,16 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
 
     const secondaryIds: Record<string, string> = { backend: 'adf-cdc', pipeline: pipelineName, bronze: `${adlsAccount}/${bronzeContainer}` };
     if (runId) secondaryIds.lastRunId = runId;
+    // Publish the abfss Bronze root for THIS mirror so the install engine's
+    // pairing rule (registry.ts) can auto-create a paired
+    // synapse-serverless-sql-pool over it. The mirror engine lands each table's
+    // CSV under `mirrors/<workspaceId>/<mirrorId>/<schema>.<table>/`, so the
+    // mirror root is `<bronze>/mirrors/<workspaceId>/<mirrorId>`. resolveAbfssRoot
+    // derives the DFS host from LOOM_BRONZE_URL → sovereign-cloud-correct
+    // (dfs.core.windows.net vs dfs.core.usgovcloudapi.net) with no hard-coded
+    // domain. Null (LOOM_BRONZE_URL unset) simply skips pairing — honest, no gate.
+    const mirrorRoot = resolveAbfssRoot('bronze', `mirrors/${input.workspaceId}/${input.cosmosItemId}`);
+    if (mirrorRoot) secondaryIds.adlsRoot = mirrorRoot;
     return { status: 'created', resourceId: pipelineName, secondaryIds, steps };
   } catch (e: any) {
     const msg = e?.message || String(e);
