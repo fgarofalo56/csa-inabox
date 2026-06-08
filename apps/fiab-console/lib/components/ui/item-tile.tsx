@@ -18,7 +18,7 @@
  */
 
 import * as React from 'react';
-import { Text, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
+import { Text, Badge, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
 import { itemVisual } from './item-type-visual';
 
 export interface ItemTileProps {
@@ -31,9 +31,22 @@ export interface ItemTileProps {
   meta?: React.ReactNode;
   /** Optional trailing badge node (Preview tag, status pill, etc.). */
   badge?: React.ReactNode;
+  /**
+   * MIP sensitivity label name (e.g. 'Confidential'). Renders as a tinted
+   * Fluent Badge chip below the title, colour-tiered by sensitivity.
+   */
+  sensitivityLabel?: string;
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
+}
+
+/** Tier a sensitivity-label name onto a Fluent Badge colour. */
+export function sensitivityBadgeColor(name: string): 'danger' | 'warning' | 'subtle' {
+  const n = (name || '').toLowerCase();
+  if (n.includes('highly confidential') || n.includes('restricted') || n.includes('secret')) return 'danger';
+  if (n.includes('confidential')) return 'warning';
+  return 'subtle';
 }
 
 const useStyles = makeStyles({
@@ -97,6 +110,11 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  labelChip: {
+    alignSelf: 'flex-start',
+    marginTop: '2px',
+    maxWidth: '100%',
+  },
   meta: {
     color: tokens.colorNeutralForeground4,
   },
@@ -112,6 +130,7 @@ export function ItemTile({
   subtitle,
   meta,
   badge,
+  sensitivityLabel,
   onClick,
   size = 'md',
 }: ItemTileProps): React.ReactElement {
@@ -159,6 +178,18 @@ export function ItemTile({
             <Text size={200} className={styles.subtitle} title={String(subtitle)}>
               {subtitle}
             </Text>
+          )}
+          {sensitivityLabel && (
+            <Badge
+              className={styles.labelChip}
+              appearance="tint"
+              size="small"
+              color={sensitivityBadgeColor(sensitivityLabel)}
+              aria-label={`Sensitivity: ${sensitivityLabel}`}
+              title={`Sensitivity label: ${sensitivityLabel}`}
+            >
+              {sensitivityLabel}
+            </Badge>
           )}
         </span>
         {badge != null && <span className={styles.badge}>{badge}</span>}
