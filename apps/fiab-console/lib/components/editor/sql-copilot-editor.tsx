@@ -77,6 +77,8 @@ export interface SqlCopilotEditorProps {
   extraBody?: Record<string, unknown>;
   /** Called after a generated suggestion is applied (e.g. to clear the result panel). */
   onApply?: () => void;
+  /** Forwarded to the inner Monaco editor — used to register schema IntelliSense. */
+  onReady?: MonacoTextareaProps['onReady'];
 }
 
 export function SqlCopilotEditor({
@@ -92,6 +94,7 @@ export function SqlCopilotEditor({
   resultError,
   extraBody,
   onApply,
+  onReady,
 }: SqlCopilotEditorProps) {
   const s = useStyles();
   const [assistView, setAssistView] = useState<AssistView>('idle');
@@ -238,6 +241,7 @@ export function SqlCopilotEditor({
         height={height}
         minHeight={minHeight}
         ariaLabel={ariaLabel}
+        onReady={onReady}
       />
 
       {/* Suggestion / explanation result */}

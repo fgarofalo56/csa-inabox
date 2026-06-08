@@ -21,6 +21,11 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 11 | Permissions (object/row-level security) | Manage |
 | 12 | Source control (Git integration) | Workspace ribbon |
 | 13 | Cross-warehouse 3-part-name query | Editor |
+| 14 | Run selection (execute only highlighted text) | Editor |
+| 15 | Cancel a running query | Editor |
+| 16 | Multi-tab query editor | Editor tab strip |
+| 17 | Schema-aware IntelliSense (column completions) | Editor |
+| 18 | Database picker for cross-database 3-part queries | Editor toolbar |
 
 ## Loom coverage
 
@@ -40,6 +45,11 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 | 12 | ⚠️ honest-gate | `Source control` opens Fabric Git Learn (Git is workspace-level) |
 | 13 | ✅ | 3-part names work through the same TDS path |
 | 14 | ✅ | **Query parameters** — `{{name}}` tokens auto-detected into widgets above the editor; rewritten to `@name` and bound via `req.input()` → `sp_executesql` (injection-safe; value never concatenated) |
+| 15 | ✅ | `getRunSql()` sends only the highlighted selection to `/query` when present; else full text. |
+| 16 | ✅ | **Cancel** button (while running) → `POST /[id]/cancel` `{queryId}` → `cancelActiveQuery()` → mssql `Request.cancel()` (TDS ATTENTION) aborts the batch; canceled runs show a `warning` MessageBar. |
+| 17 | ✅ | Multi-tab via `useSqlTabs` + `SqlTabBar`; **New SQL query** opens a fresh tab (replaced the old single-tab reset). |
+| 18 | ✅ | `registerSqlIntelliSense` completion provider fed from `/schema` (sys.schemas + `?table=` → INFORMATION_SCHEMA.COLUMNS, cached). |
+| 19 | ✅ | Toolbar **Database** dropdown (sys.databases) re-targets the TDS connection so `other_db.schema.table` 3-part names resolve. |
 
 ## Backend per control
 - Schema / query / CTAS / DMV actions → Synapse Dedicated pool TDS (`executeQuery` / `dedicatedTarget`) via `/api/items/warehouse/[id]/query` + `/schema`.
@@ -49,4 +59,6 @@ Backend: Warehouse compute is the Synapse Dedicated SQL pool (`/api/items/wareho
 - Open in Excel → `/api/items/warehouse/[id]/iqy`.
 - Compute lifecycle (Resume/Pause) → `ComputePicker` → ARM (`synapse-pool-arm`).
 
-Grade: **A — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships + in-Loom visualize + parameterized queries all real, and the no-code visual query canvas is now built end-to-end (real backend, unit-tested compiler). Two honest-gates remain (Power BI visualize removed — built Azure-native; workspace Git). The same canvas is wired into the Synapse Serverless / Dedicated and Databricks SQL editors (Spark SQL dialect).**
+Grade: **A — SQL authoring + explorer (schemas/tables/views/SPs/functions with row counts + CREATE/ALTER/DROP script-out) + CTAS + Excel + permissions/relationships + in-Loom visualize + parameterized queries + run-selection + cancel + multi-tab + IntelliSense + cross-DB picker all real, and the no-code visual query canvas is now built end-to-end (real backend, unit-tested compiler). Two honest-gates remain (Power BI visualize removed — built Azure-native; workspace Git). The same canvas is wired into the Synapse Serverless / Dedicated and Databricks SQL editors (Spark SQL dialect).**
+
+> **rev — SQL-editor parity sweep.** Added rows 15–19 (run-selection, Cancel via TDS ATTENTION `/cancel`, multi-tab tab bar, schema IntelliSense, database picker). All over the existing Synapse Dedicated TDS path — no new env vars, no Fabric dependency.

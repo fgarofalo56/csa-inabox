@@ -2,13 +2,14 @@
  * GET /api/items/databricks-sql-warehouse/[id]/schema?warehouseId=&catalog=&schema=
  *
  * Returns the Unity Catalog tree, scoped progressively:
- *   - no catalog              → { catalogs }
- *   - catalog, no schema      → { catalogs, schemas }
- *   - catalog + schema        → { catalogs, schemas, tables, views, functions }
+ *   - no catalog                    → { catalogs }
+ *   - catalog, no schema            → { catalogs, schemas }
+ *   - catalog + schema              → { catalogs, schemas, tables, views, functions }
+ *   - catalog + schema + table      → { columns }  (DESCRIBE TABLE — IntelliSense)
  *
- * Each level runs a single SHOW … statement against the warehouse. At the
- * leaf level tables / views / user-functions enumerate in parallel
- * (SHOW TABLES / SHOW VIEWS / SHOW USER FUNCTIONS).
+ * Each level runs a single SHOW … / DESCRIBE statement against the warehouse.
+ * At the schema leaf level tables / views / user-functions enumerate in
+ * parallel (SHOW TABLES / SHOW VIEWS / SHOW USER FUNCTIONS).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -46,6 +47,7 @@ export async function GET(req: NextRequest) {
   const warehouseId = req.nextUrl.searchParams.get('warehouseId');
   const catalog = req.nextUrl.searchParams.get('catalog') || undefined;
   const schema = req.nextUrl.searchParams.get('schema') || undefined;
+  const table = req.nextUrl.searchParams.get('table') || undefined;
   if (!warehouseId) return NextResponse.json({ error: 'warehouseId is required' }, { status: 400 });
 
   const w = await getWarehouse(warehouseId).catch(() => null);
@@ -57,6 +59,23 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Column-completion request: catalog + schema + table → DESCRIBE TABLE.
+    // DESCRIBE returns [col_name, data_type, comment]; rows after a blank /
+    // '#'-prefixed line are partition metadata, not columns — stop there.
+    if (catalog && schema && table) {
+      const descRes = await executeStatement(
+        warehouseId,
+        `DESCRIBE TABLE \`${catalog}\`.\`${schema}\`.\`${table}\``,
+      );
+      const columns: string[] = [];
+      for (const r of descRes.rows) {
+        const name = String(r[0] ?? '').trim();
+        if (!name || name.startsWith('#')) break;
+        columns.push(name);
+      }
+      return NextResponse.json({ ok: true, state: 'RUNNING', columns });
+    }
+
     const catalogsRes = await executeStatement(warehouseId, 'SHOW CATALOGS');
     const catalogs = firstColumn(catalogsRes.rows);
 

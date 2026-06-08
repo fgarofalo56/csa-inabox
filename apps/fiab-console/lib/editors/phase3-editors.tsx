@@ -28,7 +28,7 @@ import { getItem, createItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { WarehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
-  Tab, TabList,
+  Tab, TabList, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
@@ -39,7 +39,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
-  Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
+  Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular, Stop20Regular,
   MathFormula20Regular, Table20Regular, DatabaseLink20Regular,
   Flowchart20Regular,
   Apps20Regular, List20Regular, Open20Regular,
@@ -72,6 +72,8 @@ import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-script
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
+import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
 import { WarehouseAlerts } from './components/warehouse-alerts';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
@@ -8226,6 +8228,7 @@ interface WHQueryResult {
   code?: string;
   sqlNumber?: number;
   warehouse?: string;
+  canceled?: boolean;
 }
 interface WHSchemaResp {
   ok: boolean;
@@ -8234,6 +8237,8 @@ interface WHSchemaResp {
   warehouse?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  databases?: string[];
+  columns?: string[];
   views?: { schema: string; name: string }[];
   procedures?: { schema: string; name: string }[];
   functions?: { schema: string; name: string; type: string }[];
@@ -8271,10 +8276,30 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const dbtModels = bundleContent?.dbtModels ?? [];
   const hasBundle = !!bundleContent && (!!bundleContent.ddl || starterQueries.length > 0 || dbtModels.length > 0);
 
-  const [sqlText, setSqlText] = useState(SAMPLE_SQL);
+  const [sqlText0] = useState(SAMPLE_SQL);
+  const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
+    useSqlTabs<WHQueryResult>(sqlText0);
+  const sqlText = activeTab.sql;
+  const setSqlText = setActiveSql;
+  const result = activeTab.result;
+  const loading = activeTab.loading;
+  const setResult = setActiveResult;
+  const editorRef = useRef<any>(null);
+  const schemaCacheRef = useRef<SqlSchemaCache>(createEmptyCache());
+  const [canceling, setCanceling] = useState(false);
+  const [database, setDatabase] = useState('');
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
-  const [result, setResult] = useState<WHQueryResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const handleEditorReady = useCallback((ed: any, mc: any) => {
+    editorRef.current = ed;
+    registerSqlIntelliSense(mc, 'sql', () => schemaCacheRef.current);
+  }, []);
+  const cacheColumns = useCallback(async (schemaName: string, tbl: string) => {
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
+      const j = (await r.json()) as WHSchemaResp;
+      if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${schemaName}.${tbl}`, j.columns);
+    } catch { /* best-effort */ }
+  }, [id]);
   // Query | Model | Monitoring — the Model view is the Loom-native parity of
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
@@ -8309,6 +8334,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema`);
       const j = (await r.json()) as WHSchemaResp;
       setSchema(j);
+      if (j.ok) schemaCacheRef.current.catalogs = Object.keys(j.schemas || {});
     } catch (e: any) {
       setSchema({ ok: false, error: e?.message || String(e) });
     }
@@ -8317,21 +8343,40 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   useEffect(() => { loadSchema(); }, [loadSchema]);
 
   const run = useCallback(async () => {
-    setLoading(true); setResult(null);
+    const sqlToRun = getRunSql(editorRef, sqlText);
+    if (!sqlToRun.trim()) return;
+    const tabId = activeTabId;
+    const queryId = `wh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    patchTab(tabId, { loading: true, result: null, queryId });
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
-      const statement = substituteSynapse(sqlText, queryParams);
+      const statement = substituteSynapse(sqlToRun, queryParams);
       const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: statement, parameters: queryParams }),
+        body: JSON.stringify({ sql: statement, parameters: queryParams, queryId, database: database || undefined }),
       });
       const j = (await r.json()) as WHQueryResult;
-      setResult(j);
+      patchTab(tabId, { result: j });
       if (r.status === 409 && j.state) loadSchema();
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
-    } finally { setLoading(false); }
-  }, [id, sqlText, queryParams, loadSchema]);
+      patchTab(tabId, { result: { ok: false, error: e?.message || String(e) } });
+    } finally {
+      patchTab(tabId, { loading: false, queryId: undefined });
+      setCanceling(false);
+    }
+  }, [id, sqlText, database, queryParams, loadSchema, activeTabId, patchTab]);
+
+  const cancel = useCallback(async () => {
+    const qid = activeTab.queryId;
+    if (!qid) return;
+    setCanceling(true);
+    try {
+      await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/cancel`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queryId: qid }),
+      });
+    } catch { /* TDS attention may already have landed */ }
+  }, [id, activeTab.queryId]);
 
   const schemaEntries = Object.entries(schema?.schemas || {});
   const ready = schema?.ok === true;
@@ -8374,12 +8419,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [secOpen, setSecOpen] = useState(false);
 
   const newSql = useCallback(() => {
-    // Multi-tab is a future v3.x — for now "New SQL query" resets the
-    // current tab to a fresh template, matching Fabric Warehouse's
-    // single-tab UX inside the embedded editor.
-    setSqlText(SAMPLE_SQL.replace(/SELECT 1 AS smoke[^;]*;/, 'SELECT TOP 100 * FROM INFORMATION_SCHEMA.TABLES;'));
-    setResult(null);
-  }, []);
+    // Open a fresh tab (multi-tab is wired via the tab bar + "+" control).
+    addTab();
+  }, [addTab]);
 
   const openCtas = useCallback(() => {
     setCtasError(null);
@@ -8616,7 +8658,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           key={t.table}
                           itemType="leaf"
                           value={`t-${schemaName}.${t.table}`}
-                          onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
+                          onClick={() => { setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}
                         >
                           <TreeItemLayout
                             iconBefore={<DocumentTable20Regular />}
@@ -8749,6 +8791,24 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
             <Badge appearance="outline">{schema?.sku || 'DW—'}</Badge>
             <Button appearance="outline" onClick={loadSchema}>Refresh</Button>
+            <Dropdown
+              aria-label="Database"
+              placeholder={schema?.warehouse || 'database'}
+              value={database || schema?.warehouse || ''}
+              selectedOptions={database ? [database] : (schema?.warehouse ? [schema.warehouse] : [])}
+              onOptionSelect={(_, d) => setDatabase(d.optionValue === schema?.warehouse ? '' : (d.optionValue || ''))}
+              disabled={!ready || (schema?.databases?.length ?? 0) === 0}
+              style={{ minWidth: 160 }}
+            >
+              {(schema?.databases || []).map((d) => (
+                <Option key={d} value={d} text={d}>{d}</Option>
+              ))}
+            </Dropdown>
+            {loading && (
+              <Button appearance="outline" icon={<Stop20Regular />} onClick={cancel} disabled={canceling}>
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </Button>
+            )}
             <Tooltip content="Generate T-SQL from a description" relationship="label">
               <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
                 disabled={assistView === 'loading'}
@@ -8793,6 +8853,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             value={computeId}
             onChange={setComputeId}
           />
+          <SqlTabBar tabs={tabs} activeTabId={activeTabId} onSelect={setActiveTabId} onAdd={addTab} onClose={closeTab} />
           {/* NL prompt input — generate mode */}
           {assistView === 'prompt' && (
             <div className={s.assistBar}>
@@ -8824,6 +8885,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             height={260}
             minHeight={200}
             ariaLabel="Warehouse T-SQL editor"
+            onReady={handleEditorReady}
           />
           {/* Suggestion / explanation result */}
           {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
@@ -8854,9 +8916,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
-            <MessageBar intent="error">
+            <MessageBar intent={result.canceled ? 'warning' : 'error'}>
               <MessageBarBody>
-                <MessageBarTitle>Query failed</MessageBarTitle>
+                <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
                 {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
               </MessageBarBody>
             </MessageBar>

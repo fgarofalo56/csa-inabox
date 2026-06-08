@@ -3,9 +3,12 @@
  *
  * Mirrors the Dedicated SQL pool schema endpoint — Warehouse is backed by
  * the same compute. Returns 409 with state info when Paused.
+ *
+ * ?table=<schema.table> → { ok, columns } (INFORMATION_SCHEMA.COLUMNS) for
+ * editor IntelliSense. Otherwise returns { schemas, databases }.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
@@ -14,7 +17,7 @@ import { enumerateSqlObjects } from '@/lib/azure/sql-object-scripting';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
@@ -32,7 +35,23 @@ export async function GET() {
     );
   }
 
+  const tableParam = req.nextUrl.searchParams.get('table') || '';
+
   try {
+    if (tableParam) {
+      const [schemaName, tableName] = tableParam.includes('.')
+        ? tableParam.split('.', 2)
+        : ['dbo', tableParam];
+      const cols = await executeQuery(
+        dedicatedTarget(),
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
+           AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+         ORDER BY ORDINAL_POSITION`,
+      );
+      return NextResponse.json({ ok: true, state: 'Online', columns: cols.rows.map((r) => String(r[0])) });
+    }
+
     const tablesP = executeQuery(
       dedicatedTarget(),
       `SELECT TOP 200 s.name + '.' + t.name AS qualified, t.name AS table_name, s.name AS schema_name,
@@ -50,12 +69,20 @@ export async function GET() {
       const [, tableName, schemaName, rowCount] = row as [string, string, string, number];
       (schemas[schemaName] ||= []).push({ table: tableName, rows: Number(rowCount || 0) });
     }
+
+    let databases: string[] = [];
+    try {
+      const dbs = await executeQuery(dedicatedTarget(), `SELECT name FROM sys.databases WHERE state = 0 ORDER BY name`);
+      databases = dbs.rows.map((r) => String(r[0]));
+    } catch { databases = []; }
+
     return NextResponse.json({
       ok: true,
       state: 'Online',
       sku: state.sku,
       warehouse: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
       schemas,
+      databases,
       views: objects.views,
       procedures: objects.procedures,
       functions: objects.functions,

@@ -23,7 +23,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
+  Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
   Flowchart20Regular,
   DataBarVertical20Regular,
@@ -38,6 +38,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
+import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
 import { VisualQueryCanvas, type VqSourceTable } from './components/visual-query-canvas';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
@@ -78,6 +80,7 @@ interface QueryResponse {
   state?: string;
   code?: string;
   sqlNumber?: number;
+  canceled?: boolean;
 }
 
 // A row from sys.dm_pdw_exec_requests (Dedicated) / sys.dm_exec_requests
@@ -129,9 +132,9 @@ function ResultsPanel({
   if (!result.ok) {
     return (
       <div className={s.resultBox}>
-        <MessageBar intent="error">
+        <MessageBar intent={result.canceled ? 'warning' : 'error'}>
           <MessageBarBody>
-            <MessageBarTitle>Query failed</MessageBarTitle>
+            <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
             {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
           </MessageBarBody>
         </MessageBar>
@@ -212,13 +215,21 @@ interface ServerlessSchema {
 
 export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [sqlText, setSqlText] = useState<string>(
-    `-- Synapse Serverless SQL — runs against the Loom workspace endpoint.\nSELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`,
+  const [sqlText0] = useState<string>(
+    `-- Synapse Serverless SQL — runs against the Loom workspace endpoint.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`,
   );
+  const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
+    useSqlTabs<QueryResponse>(sqlText0);
+  const sqlText = activeTab.sql;
+  const setSqlText = setActiveSql;
+  const result = activeTab.result;
+  const loading = activeTab.loading;
+  const setResult = setActiveResult;
+  const editorRef = useRef<any>(null);
+  const schemaCacheRef = useRef<SqlSchemaCache>(createEmptyCache());
+  const [canceling, setCanceling] = useState(false);
   const [database, setDatabase] = useState('master');
   const [schema, setSchema] = useState<ServerlessSchema | null>(null);
-  const [result, setResult] = useState<QueryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
   // Query parameters auto-detected from {{name}} tokens in the editor.
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   // v3.29: surface the shared ComputePicker so the Serverless surface shows
@@ -237,30 +248,56 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     let cancelled = false;
     fetch(`/api/items/synapse-serverless-sql-pool/${id}/schema`)
       .then((r) => r.json())
-      .then((j) => { if (!cancelled) setSchema(j); })
+      .then((j) => {
+        if (cancelled) return;
+        setSchema(j);
+        // Feed the IntelliSense cache with database names (offered as catalogs).
+        schemaCacheRef.current.catalogs = ['master', ...((j?.databases as string[]) || [])];
+      })
       .catch(() => { if (!cancelled) setSchema({ ok: false }); });
     return () => { cancelled = true; };
   }, [id]);
 
+  const handleEditorReady = useCallback((ed: any, mc: any) => {
+    editorRef.current = ed;
+    registerSqlIntelliSense(mc, 'sql', () => schemaCacheRef.current);
+  }, []);
+
   const run = useCallback(async () => {
-    setLoading(true);
-    setResult(null);
+    const sqlToRun = getRunSql(editorRef, sqlText);
+    if (!sqlToRun.trim()) return;
+    const tabId = activeTabId;
+    const queryId = `srv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    patchTab(tabId, { loading: true, result: null, queryId });
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
-      const statement = substituteSynapse(sqlText, queryParams);
+      const statement = substituteSynapse(sqlToRun, queryParams);
       const res = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: statement, database, parameters: queryParams }),
+        body: JSON.stringify({ sql: statement, database, parameters: queryParams, queryId }),
       });
       const json = (await res.json()) as QueryResponse;
-      setResult(json);
+      patchTab(tabId, { result: json });
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
+      patchTab(tabId, { result: { ok: false, error: e?.message || String(e) } });
     } finally {
-      setLoading(false);
+      patchTab(tabId, { loading: false, queryId: undefined });
+      setCanceling(false);
     }
-  }, [id, sqlText, database, queryParams]);
+  }, [id, sqlText, database, queryParams, activeTabId, patchTab]);
+
+  const cancel = useCallback(async () => {
+    const qid = activeTab.queryId;
+    if (!qid) return;
+    setCanceling(true);
+    try {
+      await fetch(`/api/items/synapse-serverless-sql-pool/${id}/cancel`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queryId: qid }),
+      });
+    } catch { /* TDS attention may already have landed */ }
+  }, [id, activeTab.queryId]);
 
   // Open-in-Excel — download a .iqy web-query for the current SQL + database.
   // Excel refreshes by POSTing back to the serverless /query route (real TDS).
@@ -400,7 +437,24 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             <Badge appearance="outline" color={schema?.ok ? 'success' : 'severe'}>
               {schema?.endpoint || 'endpoint not configured'}
             </Badge>
-            <Caption1>db: <strong>{database}</strong></Caption1>
+            {/* Database picker — drives TDS database context for 3-part cross-DB queries. */}
+            <Dropdown
+              aria-label="Database"
+              value={database}
+              selectedOptions={[database]}
+              onOptionSelect={(_, d) => { if (d.optionValue) setDatabase(d.optionValue); }}
+              style={{ minWidth: 160 }}
+            >
+              <Option value="master" text="master">master</Option>
+              {(schema?.databases || []).map((d) => (
+                <Option key={d} value={d} text={d}>{d}</Option>
+              ))}
+            </Dropdown>
+            {loading && (
+              <Button appearance="outline" icon={<Stop20Regular />} onClick={cancel} disabled={canceling}>
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </Button>
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run} style={{ marginLeft: 'auto' }}>
               Run
             </Button>
@@ -417,6 +471,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             showLifecycle={false}
           />
           <SqlAccessModeSection itemId={id} itemType="synapse-serverless-sql-pool" />
+          <SqlTabBar tabs={tabs} activeTabId={activeTabId} onSelect={setActiveTabId} onAdd={addTab} onClose={closeTab} />
           <SqlCopilotEditor
             engine="synapse-serverless-sql-pool"
             id={id}
@@ -427,6 +482,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             height={240}
             minHeight={200}
             ariaLabel="Serverless T-SQL editor"
+            onReady={handleEditorReady}
             resultError={result && !result.ok ? result.error || null : null}
             extraBody={{ db: database }}
             onApply={() => setResult(null)}
@@ -484,6 +540,7 @@ interface DedicatedSchema {
   pool?: string;
   message?: string;
   schemas?: Record<string, { table: string; rows: number }[]>;
+  databases?: string[];
   views?: { schema: string; name: string }[];
   procedures?: { schema: string; name: string }[];
   functions?: { schema: string; name: string; type: string }[];
@@ -499,13 +556,22 @@ function poolBadgeColor(state: string): 'success' | 'warning' | 'severe' | 'info
 
 export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [sqlText, setSqlText] = useState<string>(
-    `-- Synapse Dedicated SQL pool — MPP T-SQL. Pool auto-pauses overnight; click Resume if Paused.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`,
+  const [sqlText0] = useState<string>(
+    `-- Synapse Dedicated SQL pool — MPP T-SQL. Pool auto-pauses overnight; click Resume if Paused.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`,
   );
+  const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
+    useSqlTabs<QueryResponse>(sqlText0);
+  const sqlText = activeTab.sql;
+  const setSqlText = setActiveSql;
+  const result = activeTab.result;
+  const loading = activeTab.loading;
+  const setResult = setActiveResult;
+  const editorRef = useRef<any>(null);
+  const schemaCacheRef = useRef<SqlSchemaCache>(createEmptyCache());
+  const [canceling, setCanceling] = useState(false);
+  const [database, setDatabase] = useState('');
   const [poolState, setPoolState] = useState<PoolState | null>(null);
   const [schema, setSchema] = useState<DedicatedSchema | null>(null);
-  const [result, setResult] = useState<QueryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
   const [resuming, setResuming] = useState(false);
   // Query | Model — Loom-native Model view (relationships + measures), no Power BI.
   const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
@@ -579,6 +645,25 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema`);
     const j = (await r.json()) as DedicatedSchema;
     setSchema(j);
+    if (j.ok) {
+      // Offer schema names as top-level completions; columns are fetched lazily.
+      schemaCacheRef.current.catalogs = Object.keys(j.schemas || {});
+    }
+  }, [id]);
+
+  const handleEditorReady = useCallback((ed: any, mc: any) => {
+    editorRef.current = ed;
+    registerSqlIntelliSense(mc, 'sql', () => schemaCacheRef.current);
+  }, []);
+
+  // Fetch a table's columns (INFORMATION_SCHEMA.COLUMNS) for IntelliSense so
+  // typing `schema.table.` suggests real column names.
+  const cacheColumns = useCallback(async (schemaName: string, tbl: string) => {
+    try {
+      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
+      const j = (await r.json()) as { ok?: boolean; columns?: string[] };
+      if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${schemaName}.${tbl}`, j.columns);
+    } catch { /* best-effort */ }
   }, [id]);
 
   useEffect(() => {
@@ -619,29 +704,45 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   }, [id, refreshState]);
 
   const run = useCallback(async () => {
-    setLoading(true);
-    setResult(null);
+    const sqlToRun = getRunSql(editorRef, sqlText);
+    if (!sqlToRun.trim()) return;
+    const tabId = activeTabId;
+    const queryId = `ded-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    patchTab(tabId, { loading: true, result: null, queryId });
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
-      const statement = substituteSynapse(sqlText, queryParams);
+      const statement = substituteSynapse(sqlToRun, queryParams);
       const res = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: statement, parameters: queryParams }),
+        body: JSON.stringify({ sql: statement, parameters: queryParams, queryId, database: database || undefined }),
       });
       const json = (await res.json()) as QueryResponse;
       if (res.status === 409 && json.state) {
-        setResult({ ok: false, error: `Pool is ${json.state}. Click Resume.` });
+        patchTab(tabId, { result: { ok: false, error: `Pool is ${json.state}. Click Resume.` } });
         refreshState();
       } else {
-        setResult(json);
+        patchTab(tabId, { result: json });
       }
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
+      patchTab(tabId, { result: { ok: false, error: e?.message || String(e) } });
     } finally {
-      setLoading(false);
+      patchTab(tabId, { loading: false, queryId: undefined });
+      setCanceling(false);
     }
-  }, [id, sqlText, queryParams, refreshState]);
+  }, [id, sqlText, database, queryParams, refreshState, activeTabId, patchTab]);
+
+  const cancel = useCallback(async () => {
+    const qid = activeTab.queryId;
+    if (!qid) return;
+    setCanceling(true);
+    try {
+      await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/cancel`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queryId: qid }),
+      });
+    } catch { /* TDS attention may already have landed */ }
+  }, [id, activeTab.queryId]);
 
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
@@ -864,7 +965,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                           key={t.table}
                           itemType="leaf"
                           value={`t-${schemaName}.${t.table}`}
-                          onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
+                          onClick={() => { setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}
                         >
                           <TreeItemLayout
                             iconBefore={<DocumentTable20Regular />}
@@ -1012,6 +1113,25 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               <Button appearance="outline" icon={<Pause20Regular />} onClick={pause}>Pause</Button>
             )}
             <Button appearance="outline" onClick={() => { refreshState(); if (isOnline) refreshSchema(); }}>Refresh</Button>
+            {/* Database picker — switches the TDS connection database for 3-part cross-DB queries. */}
+            <Dropdown
+              aria-label="Database"
+              placeholder={poolState?.pool || 'database'}
+              value={database || poolState?.pool || ''}
+              selectedOptions={database ? [database] : (poolState?.pool ? [poolState.pool] : [])}
+              onOptionSelect={(_, d) => setDatabase(d.optionValue === poolState?.pool ? '' : (d.optionValue || ''))}
+              disabled={!isOnline || (schema?.databases?.length ?? 0) === 0}
+              style={{ minWidth: 160 }}
+            >
+              {(schema?.databases || []).map((d) => (
+                <Option key={d} value={d} text={d}>{d}</Option>
+              ))}
+            </Dropdown>
+            {loading && (
+              <Button appearance="outline" icon={<Stop20Regular />} onClick={cancel} disabled={canceling}>
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </Button>
+            )}
             <Button
               appearance="primary"
               icon={<Play20Regular />}
@@ -1050,6 +1170,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </MessageBarBody>
             </MessageBar>
           )}
+          <SqlTabBar tabs={tabs} activeTabId={activeTabId} onSelect={setActiveTabId} onAdd={addTab} onClose={closeTab} />
           <SqlCopilotEditor
             engine="synapse-dedicated-sql-pool"
             id={id}
@@ -1060,6 +1181,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             height={240}
             minHeight={200}
             ariaLabel="Dedicated T-SQL editor"
+            onReady={handleEditorReady}
             resultError={result && !result.ok ? result.error || null : null}
             onApply={() => setResult(null)}
           />
