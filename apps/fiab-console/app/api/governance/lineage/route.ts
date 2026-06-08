@@ -12,7 +12,8 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer, workspacesContainer, labelPropagationContainer } from '@/lib/azure/cosmos-client';
+import { computePropagation, type PropagationStatus } from '@/lib/governance/label-propagation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,14 @@ interface LineageNode {
   workspaceId: string;
   classifications?: string[];
   sensitivity?: string;
+  /** F15 — downstream label-propagation status for this node. */
+  propagation?: {
+    status: PropagationStatus;
+    currentLabel: string;
+    expectedLabel: string;
+    /** ISO timestamp of the last Function run that wrote this row, if any. */
+    lastRunAt?: string;
+  };
 }
 interface LineageEdge {
   from: string;
@@ -106,11 +115,60 @@ export async function GET() {
       id: `ws:${w.id}`, label: w.name, type: 'workspace', workspaceId: w.id,
     }));
 
+    // 6. F15 — overlay label-propagation status. We compute it LIVE over the
+    //    current graph (so the indicator is never empty/stale before the timer
+    //    Function runs) and MERGE the persisted state written by the
+    //    label-propagation Function (its last-run timestamp = real provenance).
+    const live = computePropagation(
+      nodes.map((n) => ({ id: n.id, sensitivity: n.sensitivity })),
+      edges.map((e) => ({ from: e.from, to: e.to })),
+    );
+    const liveById = new Map(live.map((r) => [r.itemId, r]));
+    let lastRunAt: string | undefined;
+    let propagationSource: 'cosmos' | 'live' = 'live';
+    try {
+      const propC = await labelPropagationContainer();
+      const { resources: stored } = await propC.items.query({
+        query: 'SELECT c.itemId, c.runAt FROM c WHERE c.tenantId = @t',
+        parameters: [{ name: '@t', value: s.claims.oid }],
+      }, { partitionKey: s.claims.oid }).fetchAll();
+      const storedRun = new Map<string, string>();
+      for (const r of stored as Array<{ itemId: string; runAt?: string }>) {
+        if (r.runAt) {
+          storedRun.set(r.itemId, r.runAt);
+          if (!lastRunAt || r.runAt > lastRunAt) lastRunAt = r.runAt;
+        }
+      }
+      if (stored.length > 0) propagationSource = 'cosmos';
+      for (const n of nodes) {
+        const rec = liveById.get(n.id);
+        if (rec) {
+          n.propagation = {
+            status: rec.status,
+            currentLabel: rec.currentLabel,
+            expectedLabel: rec.expectedLabel,
+            lastRunAt: storedRun.get(n.id),
+          };
+        }
+      }
+    } catch {
+      // Container unavailable — still attach the live status so the UI works.
+      for (const n of nodes) {
+        const rec = liveById.get(n.id);
+        if (rec) n.propagation = { status: rec.status, currentLabel: rec.currentLabel, expectedLabel: rec.expectedLabel };
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       workspaces: workspaceNodes,
       nodes,
       edges,
+      propagation: {
+        source: propagationSource,   // 'cosmos' once the timer Function has written state
+        lastRunAt: lastRunAt || null,
+        pending: live.filter((r) => r.status === 'pending').length,
+      },
       counts: {
         workspaces: workspaces.length,
         items: items.length,

@@ -104,6 +104,12 @@ param agentFoundryEnabled bool = false
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
 
+@description('Deploy the label-propagation timer Function (F15) — polls the Loom Cosmos lineage graph and writes sensitivity-label downstream propagation state. Defaults on; a no-op without a Cosmos account.')
+param labelPropagationEnabled bool = true
+
+@description('NCRONTAB schedule for the label-propagation timer (6-field). Default every 15 minutes.')
+param labelPropagationCron string = '0 */15 * * * *'
+
 @description('SQL server FQDN the DAB preview runtime targets (e.g. <srv>.database.windows.net). Required when dabRuntimeEnabled.')
 param dabSqlServerFqdn string = ''
 
@@ -1368,12 +1374,27 @@ module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerAp
   }
 }
 
+// label-propagation timer Function (F15) — sensitivity-label downstream
+// propagation over the Loom Cosmos lineage graph. No-op without a Cosmos
+// account (loomCosmosEndpoint empty). The Function identity is granted Cosmos
+// DB Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
+module labelPropagation 'label-propagation-function.bicep' = if (labelPropagationEnabled) {
+  name: 'label-propagation-function'
+  params: {
+    location: location
+    loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
+    loomCosmosDatabase: 'loom'
+    labelPropagationCron: labelPropagationCron
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
 // =====================================================================
 // User access patterns (Bastion is always-on via network.bicep).
 // Each module is flag-gated so operators can pick the right path
 // without rewriting Bicep. See docs/fiab/access-patterns.md.
 // =====================================================================
-
 module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
   name: 'vpn-gateway'
   params: {
@@ -1484,3 +1505,8 @@ output vanityPublicUrl string = fdOn ? frontDoor.outputs.vanityPublicUrl : ''
 output vanityCnameTarget string = fdOn ? frontDoor.outputs.vanityCnameTarget : ''
 output vanityDnsTxtName string = fdOn ? frontDoor.outputs.vanityDnsTxtName : ''
 output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationToken : ''
+
+// label-propagation timer Function (F15). principalId is granted Cosmos DB
+// Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
+output labelPropagationFunctionName string = labelPropagationEnabled ? labelPropagation.outputs.siteName : ''
+output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropagation.outputs.principalId : ''

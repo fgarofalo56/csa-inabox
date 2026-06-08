@@ -44,6 +44,7 @@ let _mcpServers: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
+let _labelPropagation: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -142,6 +143,11 @@ async function ensure() {
   // submitted to a Synapse Spark Livy session, partitioned by tenant so the
   // Monitor "Maintenance" view hits a single physical partition.
   _maintenanceJobs = await mk('maintenance-jobs', '/tenantId');
+  // Sensitivity-label downstream propagation state (F15). One row per item
+  // (id = 'prop:<itemId>'), written by the label-propagation timer Function
+  // and read live-overlaid by the lineage view. PK /tenantId so the governance
+  // lineage read hits a single physical partition.
+  _labelPropagation = await mk('label-propagation', '/tenantId');
   _ensured = true;
 }
 
@@ -151,6 +157,7 @@ export async function mcpServersContainer(): Promise<Container> { await ensure()
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
+export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -213,7 +220,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs',
+  'maintenance-jobs', 'label-propagation',
 ];
 
 /** List all Loom containers with their current throughput shape. */
