@@ -591,6 +591,69 @@ export function getPbiGovHost(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (XMLA data plane)
+// ---------------------------------------------------------------------------
+//
+// AAS connection-string / HTTP endpoint format (Microsoft Learn —
+// "Asynchronous refresh with the REST API"):
+//   connection string : asazure://<region>.asazure.windows.net/<serverName>
+//   HTTP base URL      : https://<region>.asazure.windows.net/servers/<serverName>/...
+//   Token audience     : EXACTLY https://*.asazure.windows.net  (the `*` is a
+//                        literal subdomain, NOT a placeholder — custom audiences
+//                        such as https://westus.asazure.windows.net fail auth).
+//   Permission         : the calling principal needs the AAS server-admin role.
+//   Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh#authentication
+//
+// Azure Analysis Services IS available in Azure Government regions (USGov
+// Virginia / Arizona / Texas) using the `asazure.usgovcloudapi.net` suffix.
+// This is an Azure-native service — NOT Fabric / Power BI — so it is permitted
+// here per no-fabric-dependency.md (AAS is the optional Azure-native backend
+// for the semantic-model item type).
+
+/** AAS XMLA data-plane hostname suffix (no leading dot). */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * AAD `.default` scope for AAS XMLA data-plane tokens. The audience must
+ * contain the literal `*` subdomain exactly as shown (per Microsoft Learn —
+ * the `*` is NOT a wildcard placeholder; any other subdomain fails auth).
+ *   Commercial / GCC     : https://*.asazure.windows.net/.default
+ *   GCC-High / IL5 / DoD : https://*.asazure.usgovcloudapi.net/.default
+ */
+export function aasScope(): string {
+  return `https://*.${aasSuffix()}/.default`;
+}
+
+/**
+ * Normalise an AAS connection-string or HTTP URL into a canonical HTTPS server
+ * base URL (no trailing slash). Accepts the three forms operators paste in:
+ *   asazure://westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   https://westus.asazure.windows.net/servers/myserver  (already resolved)
+ *     -> https://westus.asazure.windows.net/servers/myserver   (passthrough)
+ * Returns '' for an empty / unparseable input so callers can gate honestly.
+ */
+export function aasServerBase(server: string): string {
+  if (!server) return '';
+  const trimmed = server.trim();
+  // Already an HTTPS base URL — strip any trailing slash and pass through.
+  if (/^https:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '');
+  // asazure:// connection string form.
+  const m = trimmed.match(/^asazure:\/\/([^/]+)\/(.+)$/i);
+  if (m) return `https://${m[1]}/servers/${m[2].replace(/\/+$/, '')}`;
+  // Bare "region.asazure.<suffix>/serverName" form.
+  const parts = trimmed.replace(/\/+$/, '').split('/');
+  if (parts.length === 2 && parts[0].includes('.')) {
+    return `https://${parts[0]}/servers/${parts[1]}`;
+  }
+  return '';
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

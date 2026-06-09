@@ -569,6 +569,12 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services connection string backing TMSL measure persistence when loomSemanticBackend="analysis-services". Format: asazure://<region>.asazure.windows.net/<serverName> (asazure.usgovcloudapi.net in Gov). The Console UAMI must hold the AAS server-administrator role. Leave empty otherwise — the editor shows an honest infra-gate and DAX validation still works on every backend.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services model (database) name. Required alongside loomAasServer for measure createOrReplace / evaluate via XMLA.')
+param loomAasDatabase string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -1297,6 +1303,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // AAS XMLA measure persistence (loomSemanticBackend=analysis-services
+            // reads these). Empty string = unconfigured → aas-client surfaces an
+            // honest infra-gate and DAX validation still works on every backend.
+            // The XMLA scope (https://*.asazure.<suffix>/.default) is derived per
+            // cloud by aas-client.ts from cloud-endpoints.aasSuffix() — no extra var.
+            // NOTE: the Console UAMI must be added as an AAS server administrator
+            // out-of-band (ARM can't set admins on an existing server):
+            //   az analysis-services server update --name <srv> -g <rg> \
+            //     --admin-users <consolePrincipalId>
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
