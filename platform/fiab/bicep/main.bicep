@@ -87,6 +87,9 @@ param atlasOnAksEnabled bool = false
 @description('Grant the Console UAMI "Storage Account Contributor" on each DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default.')
 param consolePrincipalNeedsLifecycleWrite bool = false
 
+@description('Grant the Console UAMI "Storage Account Contributor" on each DLZ storage account so the Customer-Managed Keys (F14) editor can PATCH encryption.keyVaultProperties. Shares the lifecycle grant. Off by default.')
+param consolePrincipalNeedsCmkBind bool = false
+
 @description('OpenAI region for chat models')
 param openaiLocation string
 
@@ -391,6 +394,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     openaiChatModel: openaiChatModel
     openaiEmbeddingsModel: openaiEmbeddingsModel
     keyVaultHsmIsolated: keyVaultHsmIsolated
+    consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     adminEntraGroupId: adminEntraGroupId
     loomTenantAdminGroupId: loomTenantAdminGroupId
     loomTenantAdminOid: loomTenantAdminOid
@@ -507,6 +511,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
+    consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
   }
@@ -583,6 +588,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
+    consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
   }

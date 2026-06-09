@@ -113,6 +113,9 @@ param recycleRetentionDays int = 30
 @description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default; set true when the lifecycle feature is enabled.')
 param consolePrincipalNeedsLifecycleWrite bool = false
 
+@description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the Customer-Managed Keys (F14) editor can PATCH encryption.keyVaultProperties. Shares the lifecycle role grant. Off by default.')
+param consolePrincipalNeedsCmkBind bool = false
+
 // =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
@@ -254,6 +257,7 @@ module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     consolePrincipalId: consolePrincipalId
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
+    consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
   }
 }
