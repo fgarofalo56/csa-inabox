@@ -330,3 +330,71 @@ export function resolvePersona(id?: string | null): CopilotPersonaDef | null {
   if (!id) return null;
   return COPILOT_PERSONAS[String(id).trim().toLowerCase()] ?? null;
 }
+
+/**
+ * CSA Loom Copilot persona registry (single-purpose authoring system prompts).
+ *
+ * A "persona" here is a named, single-purpose system prompt the Loom copilot
+ * family uses for a focused authoring task (distinct from the general
+ * cross-item orchestrator in `copilot-orchestrator.ts`). Each persona ships its
+ * system prompt + a short tooling description so editors can surface a labelled
+ * "copilot" action that produces a structured, reviewable result.
+ *
+ * The first persona — AGENT_CONFIG_COPILOT — generates example natural-language
+ * → query pairs and per-field semantic descriptions for a CSA Loom data agent,
+ * grounded ONLY on the REAL schema of the agent's bound Azure-native source
+ * (Synapse SQL / ADX / AI Search). It never invents tables or columns; the
+ * generated examples run against the live backend on the next test-chat turn.
+ */
+
+export interface PersonaDef {
+  /** Stable id used in tooling / telemetry. */
+  name: string;
+  /** One-line description (shown in registries / build-assist). */
+  description: string;
+  /** The system prompt that grounds this persona's single task. */
+  systemPrompt: string;
+}
+
+/**
+ * Data-agent config copilot. Given a `## Source` block (type + selected tables)
+ * and a `## Schema` block (REAL column names + types pulled from the live
+ * backend), it emits realistic example question→query pairs in the source's
+ * native query language + a 1-sentence description per field.
+ */
+export const AGENT_CONFIG_COPILOT: PersonaDef = {
+  name: 'agent-config-copilot',
+  description:
+    'Generates example NL→query pairs and per-field descriptions for a CSA Loom data agent, grounded on the bound source\'s real schema.',
+  systemPrompt: [
+    'You are the CSA Loom data-agent config assistant. CSA Loom is its own Azure-based data + AI platform (not Microsoft Fabric).',
+    'You help an author configure ONE attached data source on a data agent by proposing (a) example question → query pairs and (b) a short description for each field, grounded ONLY in the REAL schema provided.',
+    '',
+    'You receive a "## Source" block (the source type + selected tables) and a "## Schema" block listing the ACTUAL tables and columns (with data types) discovered from the live backend.',
+    '',
+    'Rules:',
+    '- Generate 3 to 5 realistic example pairs. Each pair is a business question a user might ask and the EXACT query that answers it.',
+    '- Write each query in the language appropriate to the source type:',
+    '    warehouse → T-SQL (SELECT only).',
+    '    lakehouse → Spark SQL / T-SQL-compatible SELECT (runs via Synapse serverless over the delta tables).',
+    '    kql       → KQL (read-only; no "." management commands).',
+    '    ai-search → a plain Azure AI Search query string (keywords / Lucene), NOT SQL.',
+    '- Every query MUST be read-only (SELECT / WITH for SQL; a query expression for KQL; a search string for AI Search). NEVER emit INSERT/UPDATE/DELETE/DDL or ADX control commands.',
+    '- Reference ONLY table and column names that appear verbatim in the ## Schema block. NEVER invent a table or column that is not listed.',
+    '- For descriptions: write a single concise sentence per column explaining what it holds, in business terms.',
+    '',
+    'Output EXACTLY ONE fenced ```json code block and NOTHING else, in this shape:',
+    '```json',
+    '{"examples":[{"question":"...","query":"..."}],"descriptions":{"<tableName>":{"<columnName>":"<one-sentence description>"}}}',
+    '```',
+    'If the ## Schema block is empty or says no schema is available, return ```json {"gate":"<reason>"} ``` and nothing else — do NOT fabricate a schema.',
+  ].join('\n'),
+};
+
+/** All registered personas (extend as more focused copilots land). */
+export const PERSONAS: PersonaDef[] = [AGENT_CONFIG_COPILOT];
+
+/** Look a persona up by its `name`. */
+export function getPersona(name: string): PersonaDef | undefined {
+  return PERSONAS.find((p) => p.name === name);
+}
