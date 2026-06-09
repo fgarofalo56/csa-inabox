@@ -569,6 +569,16 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. B1=Basic (cheapest with SLA), S0=Standard, D1=Developer (no SLA). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
+@allowed(['B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'D1'])
+param loomAasSku string = 'B1'
+
+@description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
+param loomAasServerUrl string = ''
+
+@description('AAS database (TMSL Catalog) name used by the Console for column-metadata XMLA reads/writes. Default: loomdb.')
+param loomAasDatabase string = 'loomdb'
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -630,6 +640,25 @@ module network 'network.bicep' = {
     containerPlatform: containerPlatform
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// Azure Analysis Services — optional semantic-model XMLA backend.
+// Deployed only when the operator opts into the AAS backend AND has not
+// supplied a pre-existing server URL. Guarded on the boundary because AAS
+// is Commercial / GCC only (not available in GCC-High / IL5). In Gov the
+// Console falls back to LOOM_POWERBI_XMLA_ENDPOINT or an honest gate.
+// =====================================================================
+var deployAas = loomSemanticBackend == 'analysis-services' && empty(loomAasServerUrl) && !contains(['GCC-High', 'IL5'], boundary)
+
+module analysisServices 'analysis-services.bicep' = if (deployAas) {
+  name: 'analysis-services'
+  params: {
+    location: location
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    sku: loomAasSku
+    tags: complianceTags
   }
 }
 
@@ -1297,6 +1326,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // Analysis Services XMLA endpoint (semantic-model column metadata).
+            // Set when the AAS backend is opted into: either a deployed server
+            // (analysisServices module) or a pre-existing one (loomAasServerUrl).
+            // Empty otherwise — the Console renders an honest gate or uses
+            // LOOM_POWERBI_XMLA_ENDPOINT. No Fabric/Power BI workspace required.
+            { name: 'LOOM_AAS_SERVER_URL', value: !empty(loomAasServerUrl) ? loomAasServerUrl : (deployAas ? analysisServices.outputs.aasServerUrl : '') }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no

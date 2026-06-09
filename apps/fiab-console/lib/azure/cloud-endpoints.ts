@@ -591,6 +591,59 @@ export function getPbiGovHost(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (XMLA data plane) — semantic-model column metadata
+// ---------------------------------------------------------------------------
+//
+// AAS exposes an XMLA HTTP endpoint per server/model that accepts TMSL
+// Execute (Alter/Create/Delete) and Discover (TMSCHEMA_* rowsets). The token
+// audience is the server host itself (`https://<region>.asazure.windows.net`).
+//
+// AAS is COMMERCIAL / GCC only — it is NOT offered in the Azure Government
+// clouds (GCC-High / IL5 / DoD). So there is no Gov suffix; `aasSuffix()`
+// always returns the Commercial host suffix and the aas-client / bicep guard
+// on `isGovCloud()` to surface an honest "not available in this boundary"
+// gate instead of attempting a call that cannot succeed.
+//
+// The Power BI Premium XMLA endpoint is the opt-in alternative for tenants
+// that license it; its token scope differs per sovereign cloud, hence
+// `pbiXmlaScope()` (Commercial vs USGov vs DoD).
+
+/** AAS server hostname suffix (no leading dot). Commercial/GCC only — AAS is unavailable in Gov. */
+export function aasSuffix(): string {
+  return 'asazure.windows.net';
+}
+
+/**
+ * AAD `.default` scope for an Azure Analysis Services server token. The
+ * audience is the server host (e.g. `https://eastus2.asazure.windows.net`),
+ * so the region-qualified host must be passed in. Falls back to the bare
+ * suffix when no host is supplied.
+ */
+export function aasScope(host?: string): string {
+  const h = (host || aasSuffix()).replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  return `https://${h}/.default`;
+}
+
+/**
+ * AAD `.default` scope for a Power BI Premium XMLA endpoint token. The Power
+ * BI analysis resource differs per sovereign cloud (verified against Microsoft
+ * Learn power-bi national-cloud guidance):
+ *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
+ *   GCC-High         : https://high.analysis.usgovcloudapi.net/powerbi/api/.default
+ *   DoD / IL5        : https://mil.analysis.usgovcloudapi.net/powerbi/api/.default
+ */
+export function pbiXmlaScope(): string {
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC-High':
+      return 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default';
+    default:
+      return 'https://analysis.windows.net/powerbi/api/.default';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

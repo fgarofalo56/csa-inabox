@@ -1029,3 +1029,41 @@ DACPAC) + `SqlPackage /Action:Script` (diff against the checked-in schema). On
 GCC-High / DoD use the Azure DevOps Government endpoints, not the commercial
 `dev.azure.com`.
 
+
+## Semantic-model column metadata — Azure Analysis Services XMLA {#semantic-model-aas-xmla}
+
+The Semantic model editor's **Tables** tab edits column metadata (data
+category, format string, summarize-by, display folder, sort-by, hidden, and
+calculated columns / tables) over the **XMLA** endpoint of a Tabular model. The
+Azure-native backend is **Azure Analysis Services** — a standalone Azure
+resource, so this requires **no Microsoft Fabric / Power BI workspace** (per
+`.claude/rules/no-fabric-dependency.md`).
+
+### Step 1 — Deploy AAS (bicep, automatic)
+
+Set `loomSemanticBackend=analysis-services`. `admin-plane/main.bicep` then
+deploys `analysis-services.bicep`, adds the Console UAMI as a server
+administrator (`app:<clientId>@<tenantId>`), and wires
+`LOOM_AAS_SERVER_URL=asazure://<region>.asazure.windows.net/<name>` +
+`LOOM_AAS_DATABASE=loomdb` to the Console app. AAS is **Commercial / GCC only**
+— the module is guarded off at `GCC-High` / `IL5`.
+
+### Step 1b — Existing deployment / pre-existing server
+
+Set `loomAasServerUrl` to an existing `asazure://…` URL (and add the Console
+UAMI as a server administrator on that server). The module is skipped and the
+URL is wired through verbatim.
+
+### GCC-High / IL5 / DoD
+
+AAS is not offered in Azure Government. If a tenant licenses **Power BI
+Premium**, set `LOOM_POWERBI_XMLA_ENDPOINT` to the Premium XMLA endpoint and the
+editor uses it instead (token scope `https://high.analysis.usgovcloudapi.net/powerbi/api/.default`).
+Otherwise the Tables tab renders read-only structure with an honest gate
+MessageBar — no fabricated data.
+
+### Verify
+
+`GET /api/items/semantic-model/<id>/model` returns `{ ok: true, backend, tables }`
+with real columns; a column `Apply` (`PATCH … op=alter-column`) returns
+`{ ok: true, tmsl }` echoing the exact TMSL Alter sent.
