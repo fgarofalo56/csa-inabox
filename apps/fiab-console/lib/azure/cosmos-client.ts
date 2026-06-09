@@ -19,6 +19,11 @@ let _db: Database | null = null;
 let _workspaces: Container | null = null;
 let _items: Container | null = null;
 let _copilotSessions: Container | null = null;
+// Per-message Copilot feedback (thumbs up/down) — append-only audit log, one
+// row per rating, partitioned by /sessionId so every per-session feedback read
+// hits a single physical partition. NO defaultTtl: feedback is a permanent
+// audit record (unlike copilot-sessions, which auto-expire after 28 days).
+let _copilotFeedback: Container | null = null;
 let _appsCatalog: Container | null = null;
 let _workloadsCatalog: Container | null = null;
 let _userPrefs: Container | null = null;
@@ -142,8 +147,29 @@ async function ensure() {
   const { container: cs } = await database.containers.createIfNotExists({
     id: 'copilot-sessions',
     partitionKey: { paths: ['/sessionId'] },
+    defaultTtl: 2419200, // 28 days = 28 * 24 * 3600 — chat sessions auto-expire
   });
   _copilotSessions = cs;
+  // Idempotent TTL upgrade. createIfNotExists ignores `defaultTtl` for a
+  // PRE-EXISTING container, so environments whose copilot-sessions container
+  // was created before TTL was added would never expire. Read the current
+  // container def and, if TTL isn't 28 days, replace() it once. Best-effort:
+  // a failure here (e.g. transient throttle) never blocks the BFF.
+  try {
+    const csDef = await cs.read();
+    if (csDef.resource && (csDef.resource as any).defaultTtl !== 2419200) {
+      await cs.replace({ ...(csDef.resource as any), defaultTtl: 2419200 });
+    }
+  } catch {
+    /* TTL upgrade is best-effort */
+  }
+  // Per-message Copilot feedback (thumbs up/down). PK /sessionId. NO defaultTtl
+  // — feedback is a permanent audit record, unlike the sessions above.
+  const { container: cf } = await database.containers.createIfNotExists({
+    id: 'copilot-feedback',
+    partitionKey: { paths: ['/sessionId'] },
+  });
+  _copilotFeedback = cf;
 
   // Chunk 0 — UI foundation containers
   const mk = async (id: string, pk: string) =>
@@ -347,6 +373,12 @@ export async function copilotSessionsContainer(): Promise<Container> {
   return _copilotSessions!;
 }
 
+/** Per-message Copilot feedback (thumbs up/down) — PK /sessionId, no TTL. */
+export async function copilotFeedbackContainer(): Promise<Container> {
+  await ensure();
+  return _copilotFeedback!;
+}
+
 export async function appsCatalogContainer(): Promise<Container> { await ensure(); return _appsCatalog!; }
 export async function workloadsCatalogContainer(): Promise<Container> { await ensure(); return _workloadsCatalog!; }
 export async function userPrefsContainer(): Promise<Container> { await ensure(); return _userPrefs!; }
@@ -377,7 +409,7 @@ export interface ContainerThroughputInfo {
 }
 
 const KNOWN_CONTAINER_IDS = [
-  'workspaces', 'items', 'copilot-sessions',
+  'workspaces', 'items', 'copilot-sessions', 'copilot-feedback',
   'apps-catalog', 'workloads-catalog', 'user-prefs',
   'tabs-state', 'notifications', 'audit-log', 'comments',
   'shares', 'folders', 'downloads', 'search-history',
