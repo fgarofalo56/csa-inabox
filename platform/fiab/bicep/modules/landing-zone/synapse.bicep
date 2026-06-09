@@ -323,6 +323,9 @@ param grantSynapseStorageRole bool = true
 @description('Shared ADX cluster system-assigned MI principal id. When set, granted Storage Blob Data Reader on the lakehouse storage account so the Eventhouse Delta-endpoint (.create external table kind=delta) can read this lakehouse over managed identity. Empty = skip.')
 param adxClusterPrincipalId string = ''
 
+@description('Grant the Console UAMI Storage Blob Data Contributor on the lakehouse SA so the built-in mirrored-database engine can write Bronze snapshot CSV (no-Fabric default). Defaults true.')
+param consolePrincipalNeedsContributor bool = true
+
 module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorageRole && !skipRoleGrants) {
   name: 'synapse-storage-rbac-${domainName}'
   scope: resourceGroup(defaultStorageResourceGroup)
@@ -338,6 +341,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // F7 — when OneLake Security is enabled, the Console UAMI also gets Storage
     // Blob Data Owner so the Security tab can set ACLs on behalf of role members.
     consolePrincipalNeedsOwner: loomOnelakeSecurityEnabled
+    // Mirrored-database engine writes Bronze snapshot CSV as the Console UAMI
+    // (no-Fabric default backend) → needs Storage Blob Data Contributor.
+    consolePrincipalNeedsContributor: skipRoleGrants ? false : consolePrincipalNeedsContributor
   }
 }
 

@@ -904,6 +904,145 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
 }
 
 // ============================================================
+// Change Data Capture (adfcdcs) — the Azure-native backend for a Loom
+// Mirrored Database's continuous replication. A ChangeDataCapture resource
+// (Microsoft.DataFactory/factories/adfcdcs) does the same job Fabric Mirroring
+// does — an initial full load + continuous CDC from a relational source — but
+// it is an ADF resource, no Microsoft Fabric required. It lands the captured
+// rows in **Delta** format in ADLS Bronze via the factory's own managed
+// identity (granted Storage Blob Data Contributor in adf.bicep).
+//
+// Refs (grounded in @azure/arm-datafactory ChangeDataCapture + Mapper* shapes):
+//   - properties.policy = { mode: 'Continuous'|'Microbatch', recurrence? }
+//   - properties.sourceConnectionsInfo[] = { sourceEntities[], connection }
+//   - properties.targetConnectionsInfo[] = { targetEntities[], connection,
+//       dataMapperMappings[], relationships[] }
+//   - MapperConnection = { linkedService{referenceName,type}, linkedServiceType,
+//       type:'linkedservicetype', commonDslConnectorProperties[] }
+//   - MapperTable = { name, dslConnectorProperties[], schema[] }
+//
+// The source/target linked services are pre-existing ADF linked services
+// (created by operators via the Loom ADF editor): a relational source linked
+// service (Azure SQL / SQL Server / PostgreSQL) and an AzureBlobFS linked
+// service pointing at the DLZ ADLS account.
+// ============================================================
+
+/** A connector property name/value pair (commonDsl / dsl connector props). */
+export interface MapperDslProperty { name: string; value: unknown }
+
+/** A linked-service reference inside a CDC mapper connection. */
+export interface MapperLinkedServiceRef {
+  referenceName: string;
+  type: 'LinkedServiceReference';
+  parameters?: Record<string, unknown>;
+}
+
+/** A CDC mapper connection (source or target). */
+export interface MapperConnection {
+  /** Pre-existing ADF linked service for this endpoint. */
+  linkedService?: MapperLinkedServiceRef;
+  /** ADF connector type, e.g. 'AzureSqlDatabase', 'SqlServer', 'AzurePostgreSql', 'AzureBlobFS'. */
+  linkedServiceType?: string;
+  /** Always the literal 'linkedservicetype' for linked-service-backed connections. */
+  type: 'linkedservicetype';
+  isInlineDataset?: boolean;
+  commonDslConnectorProperties?: MapperDslProperty[];
+}
+
+/** A CDC mapper table/entity (one source table or one target Delta folder). */
+export interface MapperTable {
+  /** Display name — `schema.table` for the source, `schema.table` for the sink. */
+  name: string;
+  dslConnectorProperties?: MapperDslProperty[];
+  schema?: Array<{ name: string; dataType?: string }>;
+}
+
+export interface MapperSourceConnectionsInfo {
+  sourceEntities: MapperTable[];
+  connection: MapperConnection;
+}
+
+export interface MapperTargetConnectionsInfo {
+  targetEntities: MapperTable[];
+  connection: MapperConnection;
+  /** Per-table column mappings (auto-map when omitted). */
+  dataMapperMappings?: unknown[];
+  relationships?: unknown[];
+}
+
+export interface AdfCdcPolicy {
+  /** 'Continuous' = streaming CDC; 'Microbatch' = scheduled batches. */
+  mode: 'Continuous' | 'Microbatch' | string;
+  recurrence?: { frequency: 'Hour' | 'Minute' | 'Second'; interval: number };
+}
+
+export interface AdfCdcSpec {
+  description?: string;
+  folder?: { name: string };
+  policy: AdfCdcPolicy;
+  sourceConnectionsInfo: MapperSourceConnectionsInfo[];
+  targetConnectionsInfo: MapperTargetConnectionsInfo[];
+  allowVNetOverride?: boolean;
+  /** Read-only on GET — 'Running' once started, 'Stopped' otherwise. */
+  status?: string;
+}
+
+export interface AdfCdc {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: AdfCdcSpec;
+}
+
+/**
+ * Honest config gate for the ADF CDC path. Mirrors {@link adfConfigGate} — the
+ * CDC resource lives under the same env-pinned factory, so it needs exactly the
+ * same three env vars. Returns the missing var or null.
+ */
+export function adfCdcConfigGate(): { missing: string } | null {
+  return adfConfigGate();
+}
+
+/** Idempotently create/replace a ChangeDataCapture (adfcdcs) resource. */
+export async function upsertAdfCdc(name: string, spec: AdfCdcSpec): Promise<AdfCdc> {
+  const body = { name, properties: spec };
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<AdfCdc>(r, `upsertAdfCdc(${name})`);
+}
+
+export async function getAdfCdc(name: string): Promise<AdfCdc> {
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}?api-version=${API}`);
+  return jsonOrThrow<AdfCdc>(r, `getAdfCdc(${name})`);
+}
+
+/** Start a CDC resource — transitions it to Running (initial load + continuous CDC). */
+export async function startAdfCdc(name: string): Promise<void> {
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}/start?api-version=${API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startAdfCdc failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/** Stop a running CDC resource (the landed Delta data + the resource remain). */
+export async function stopAdfCdc(name: string): Promise<void> {
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}/stop?api-version=${API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopAdfCdc failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function deleteAdfCdc(name: string): Promise<void> {
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteAdfCdc failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Cross-factory helpers — back the MountedDataFactory editor which
 // targets an externally-referenced ADF by (subscriptionId, resourceGroup,
 // factoryName) rather than the env-pinned default factory above.
