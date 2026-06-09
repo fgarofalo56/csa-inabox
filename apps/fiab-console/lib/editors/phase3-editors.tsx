@@ -9860,6 +9860,63 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [saveResult, setSaveResult] = useState<{ ok: boolean; text: string; remediation?: string; link?: string } | null>(null);
   const [xmlaPersistence, setXmlaPersistence] = useState<boolean | null>(null);
 
+  // DAX Copilot (Loom-native NL2DAX / explain / optimize / auto-describe). Posts
+  // to /api/copilot/dax (Synapse-backed; zero Power BI on this path) and streams
+  // SSE steps. A generated measure auto-inserts into the DAX editor above.
+  const [daxCopilotPrompt, setDaxCopilotPrompt] = useState('');
+  const [daxCopilotBusy, setDaxCopilotBusy] = useState(false);
+  const [daxCopilotResult, setDaxCopilotResult] = useState<string | null>(null);
+  const [daxCopilotErr, setDaxCopilotErr] = useState<string | null>(null);
+
+  const askDaxCopilot = useCallback(async () => {
+    const q = daxCopilotPrompt.trim();
+    if (!q) return;
+    setDaxCopilotBusy(true); setDaxCopilotResult(null); setDaxCopilotErr(null);
+    try {
+      const res = await fetch('/api/copilot/dax', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: q, itemId: id, itemType: item.slug || 'semantic-model' }),
+      });
+      if (!res.ok && !res.body) {
+        let msg = `HTTP ${res.status}`;
+        try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* keep status */ }
+        setDaxCopilotErr(msg); return;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) { setDaxCopilotErr('No response stream.'); return; }
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalText: string | null = null;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const frames = buf.split('\n\n');
+        buf = frames.pop() ?? '';
+        for (const frame of frames) {
+          const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+          if (!dataLine) continue;
+          let step: any;
+          try { step = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+          if (step.kind === 'final') finalText = step.content || '';
+          if (step.kind === 'error') setDaxCopilotErr(step.error || 'DAX Copilot error');
+          if (step.kind === 'tool_result' && step.name === 'dax_nl2measure' && step.result?.daxExpression) {
+            setDaxExpr(step.result.daxExpression); // auto-insert generated DAX
+          }
+          if (step.kind === 'tool_result' && step.name === 'dax_optimize' && step.result?.optimizedExpression) {
+            setDaxExpr(step.result.optimizedExpression);
+          }
+        }
+      }
+      if (finalText) setDaxCopilotResult(finalText);
+    } catch (e: any) {
+      setDaxCopilotErr(e?.message || String(e));
+    } finally {
+      setDaxCopilotBusy(false);
+    }
+  }, [daxCopilotPrompt, id, item.slug]);
+
   // Scheduled-refresh editor (config tab) — mirrors the Power BI service
   // "Scheduled refresh" pane. Writes via PATCH /datasets/{id}/refreshSchedule.
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -11484,6 +11541,45 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           {saveResult.link && <> <a href={saveResult.link} target="_blank" rel="noreferrer">Learn more</a>.</>}
                         </MessageBarBody>
                       </MessageBar>
+                    )}
+
+                    {/* DAX Copilot — Loom-native NL2DAX / explain / optimize / describe.
+                        Synapse-backed; no Power BI on this path. */}
+                    <Subtitle2 style={{ marginTop: 20 }}>DAX Copilot</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Generate, explain, or optimize DAX against this Loom-native model. Grounded on the model
+                      schema and evaluated via Synapse — no Power BI workspace required. A generated measure
+                      auto-inserts into the editor above.
+                    </Caption1>
+                    <div className={s.assistBar} style={{ marginTop: 8, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                      <Sparkle16Regular />
+                      <Input
+                        value={daxCopilotPrompt}
+                        onChange={(_, d) => setDaxCopilotPrompt(d.value)}
+                        placeholder="Ask DAX Copilot (e.g. 'create a YoY revenue measure', 'explain this', 'make it faster')"
+                        style={{ flex: 1 }}
+                        disabled={daxCopilotBusy}
+                        onKeyDown={(e) => { if (e.key === 'Enter') askDaxCopilot(); }}
+                      />
+                      <Button
+                        size="small"
+                        appearance="primary"
+                        icon={daxCopilotBusy ? <Spinner size="tiny" /> : <Sparkle16Regular />}
+                        disabled={daxCopilotBusy || !daxCopilotPrompt.trim()}
+                        onClick={askDaxCopilot}
+                      >
+                        {daxCopilotBusy ? 'Working…' : 'Ask'}
+                      </Button>
+                    </div>
+                    {daxCopilotErr && (
+                      <MessageBar intent="error" style={{ marginTop: 8 }}>
+                        <MessageBarBody><MessageBarTitle>DAX Copilot</MessageBarTitle>{daxCopilotErr}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {daxCopilotResult && (
+                      <div className={s.card} style={{ marginTop: 8 }}>
+                        <pre className={s.assistResult}>{daxCopilotResult}</pre>
+                      </div>
                     )}
 
                     <Subtitle2 style={{ marginTop: 16 }}>Existing measures</Subtitle2>
