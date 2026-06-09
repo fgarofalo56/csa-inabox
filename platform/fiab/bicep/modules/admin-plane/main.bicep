@@ -598,6 +598,10 @@ param loomTenantAdminOid string = ''
 @description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
 param loomDefaultFabricWorkspace string = ''
 
+@description('OPT-IN ONLY: route the cross-item Copilot through a real Fabric/Power BI Copilot capacity workspace. The empty default keeps the Copilot 100% Azure-native (Azure OpenAI) with NO Fabric/Power BI call — no Fabric workspace required (per no-fabric-dependency.md). Set to "fabric" AND provide loomDefaultFabricWorkspace to opt in: the orchestrator then validates the bound workspace via api.fabric.microsoft.com before each session (LLM inference still runs on Azure OpenAI; Fabric Copilot exposes no public invocation API). Ignored in GCC-High / IL5 — Fabric Copilot is not supported in sovereign clouds.')
+@allowed(['', 'fabric'])
+param loomCopilotBackend string = ''
+
 @description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
 @allowed(['synapse-dedicated', 'fabric-warehouse'])
 param loomWarehouseBackend string = 'synapse-dedicated'
@@ -1737,6 +1741,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // operator wants grants ALSO pushed to a bound Fabric item.
           (loomFabricPermissionsEnabled && boundary != 'GCC-High' && boundary != 'IL5') ? [
             { name: 'LOOM_FABRIC_PERMISSIONS_ENABLED', value: 'true' }
+          ] : [],
+          // Fabric / Power BI Copilot opt-in. The cross-item Copilot is
+          // Azure-native (Azure OpenAI) by DEFAULT — these env vars are ONLY
+          // injected when an operator explicitly sets loomCopilotBackend='fabric'
+          // AND binds a workspace AND the boundary is Commercial/GCC. Never set
+          // in GCC-High / IL5 (Fabric Copilot is unavailable in sovereign
+          // clouds). With them unset the orchestrator makes ZERO
+          // api.fabric.microsoft.com calls (per no-fabric-dependency.md).
+          (loomCopilotBackend == 'fabric' && !empty(loomDefaultFabricWorkspace) && boundary != 'GCC-High' && boundary != 'IL5') ? [
+            { name: 'LOOM_COPILOT_BACKEND', value: 'fabric' }
+            { name: 'LOOM_COPILOT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
           ] : [],
           loomPowerBiAdminLabels ? [
             { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }

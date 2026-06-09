@@ -18,6 +18,60 @@ vi.mock('@/lib/azure/foundry-client', () => ({ listConnections: () => listConnec
 vi.mock('@/lib/azure/cosmos-client', () => ({ copilotSessionsContainer: vi.fn() }));
 
 import { looksLikeEmbedding } from '@/lib/types/copilot-config';
+import {
+  isFabricCopilotEnabled,
+  resolveCopilotFabricWorkspace,
+} from '@/lib/types/copilot-config';
+
+const COMMERCIAL = () => false; // isGovCloud stub for Commercial/GCC
+const GOV = () => true;         // isGovCloud stub for GCC-High / IL5 / DoD
+
+describe('isFabricCopilotEnabled — opt-in gate (never default)', () => {
+  beforeEach(() => {
+    delete process.env.LOOM_COPILOT_BACKEND;
+    delete process.env.LOOM_COPILOT_FABRIC_WORKSPACE;
+  });
+
+  it('is false when the flag is unset (Azure-native default path)', () => {
+    expect(isFabricCopilotEnabled(null, COMMERCIAL)).toBe(false);
+    expect(isFabricCopilotEnabled({}, COMMERCIAL)).toBe(false);
+    expect(isFabricCopilotEnabled({ fabricCopilotWorkspaceId: 'ws-1' }, COMMERCIAL)).toBe(false);
+  });
+
+  it('is false when the flag is set but no workspace resolves', () => {
+    expect(isFabricCopilotEnabled({ fabricCopilotBackend: true }, COMMERCIAL)).toBe(false);
+    process.env.LOOM_COPILOT_BACKEND = 'fabric';
+    expect(isFabricCopilotEnabled(null, COMMERCIAL)).toBe(false);
+  });
+
+  it('is false in a Gov boundary even with flag + workspace set', () => {
+    expect(
+      isFabricCopilotEnabled({ fabricCopilotBackend: true, fabricCopilotWorkspaceId: 'ws-1' }, GOV),
+    ).toBe(false);
+    process.env.LOOM_COPILOT_BACKEND = 'fabric';
+    process.env.LOOM_COPILOT_FABRIC_WORKSPACE = 'ws-2';
+    expect(isFabricCopilotEnabled(null, GOV)).toBe(false);
+  });
+
+  it('is true in Commercial with config flag + workspace set', () => {
+    expect(
+      isFabricCopilotEnabled({ fabricCopilotBackend: true, fabricCopilotWorkspaceId: 'ws-1' }, COMMERCIAL),
+    ).toBe(true);
+  });
+
+  it('is true in Commercial when driven purely by env vars', () => {
+    process.env.LOOM_COPILOT_BACKEND = 'fabric';
+    process.env.LOOM_COPILOT_FABRIC_WORKSPACE = 'ws-env';
+    expect(isFabricCopilotEnabled(null, COMMERCIAL)).toBe(true);
+  });
+
+  it('resolveCopilotFabricWorkspace prefers config over env, trims, defaults to ""', () => {
+    expect(resolveCopilotFabricWorkspace(null)).toBe('');
+    process.env.LOOM_COPILOT_FABRIC_WORKSPACE = 'env-ws';
+    expect(resolveCopilotFabricWorkspace(null)).toBe('env-ws');
+    expect(resolveCopilotFabricWorkspace({ fabricCopilotWorkspaceId: '  cfg-ws  ' })).toBe('cfg-ws');
+  });
+});
 
 describe('looksLikeEmbedding', () => {
   it('classifies embedding deployments', () => {
