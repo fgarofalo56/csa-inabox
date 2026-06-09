@@ -569,6 +569,15 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services server name (bare, no region/suffix) backing the semantic-model DirectQuery source binder. When set, the Console can push DirectQuery TMSL to this AAS model — no Microsoft Fabric / Power BI capacity required. Leave empty to honest-gate the DirectQuery source tab. The Console UAMI must be an Analysis Services server administrator on this server (out-of-band tenant grant — see docs/fiab/v3-tenant-bootstrap.md).')
+param loomAasServer string = ''
+
+@description('Azure region of the AAS server (e.g. eastus2). Used only when loomAasServer is set.')
+param loomAasRegion string = location
+
+@description('AAS tabular model (database) name on which DirectQuery partitions are bound. Used only when loomAasServer is set.')
+param loomAasModel string = 'LoomModel'
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -1297,6 +1306,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // Azure Analysis Services DirectQuery source binder (semantic-model).
+            // Empty server → the editor honest-gates the DirectQuery source tab;
+            // no Fabric / Power BI dependency on the default path.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_REGION', value: empty(loomAasServer) ? '' : loomAasRegion }
+            { name: 'LOOM_AAS_MODEL', value: empty(loomAasServer) ? '' : loomAasModel }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no

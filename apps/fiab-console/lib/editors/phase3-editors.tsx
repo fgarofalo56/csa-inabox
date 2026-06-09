@@ -62,6 +62,7 @@ import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
+import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
@@ -9087,7 +9088,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed' | 'datasource'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9296,6 +9297,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   }, [bModelName]);
 
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  // DirectQuery models are live against the source — never refreshable (the
+  // Power BI REST `isRefreshable` already returns false for DQ datasets). When
+  // the model is in DirectQuery storage mode we surface the Source binder tab
+  // and disable Refresh with an honest "no data to import" reason.
+  const isDqMode = (detail?.dataset?.targetStorageMode || '').toLowerCase() === 'directquery';
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
       window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
@@ -9314,13 +9320,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
       { label: 'Source', actions: [
-        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
+        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: (canRefresh && !isDqMode) ? refreshNow : undefined, disabled: !canRefresh || isDqMode, title: isDqMode ? 'DirectQuery model is live — no data to import. Use the DirectQuery source tab to rebind.' : (detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined)) },
+        { label: 'DirectQuery source', onClick: isDqMode ? () => setTab('datasource') : undefined, disabled: !isDqMode, title: isDqMode ? 'Bind a live Azure source for this DirectQuery model' : 'available for DirectQuery storage-mode models' },
       ]},
       { label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -9384,6 +9391,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="measures">Measures (DAX)</Tab>
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
+                  {isDqMode && <Tab value="datasource">DirectQuery source</Tab>}
                   <Tab value="config">Configuration</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
@@ -9660,6 +9668,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBarBody>
                     </MessageBar>
                   </>
+                )}
+                {tab === 'datasource' && isDqMode && datasetId && (
+                  <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

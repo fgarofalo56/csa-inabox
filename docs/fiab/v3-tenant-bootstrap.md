@@ -1029,3 +1029,40 @@ DACPAC) + `SqlPackage /Action:Script` (diff against the checked-in schema). On
 GCC-High / DoD use the Azure DevOps Government endpoints, not the commercial
 `dev.azure.com`.
 
+
+## DirectQuery semantic-model source binder (Azure Analysis Services)
+
+The semantic-model editor's **DirectQuery source** tab binds a model to a live
+Azure source (Synapse Serverless / Dedicated, Azure SQL, or Azure Data
+Explorer) via Azure Analysis Services — no Microsoft Fabric or Power BI
+capacity is required. The tab honest-gates (Fluent MessageBar) until these are
+set; the rest of the editor works regardless.
+
+| Setting | When | Meaning |
+|---|---|---|
+| `LOOM_AAS_SERVER` | to enable DQ binding | bare AAS server name (no region/suffix), e.g. `loom-aas` |
+| `LOOM_AAS_REGION` | with server | Azure region of the server, e.g. `eastus2` |
+| `LOOM_AAS_MODEL`  | with server | tabular model (database) name on the server |
+
+```bicep
+// params/<cloud>-full.bicepparam
+param loomAasServer = 'loom-aas'
+param loomAasRegion = 'eastus2'
+param loomAasModel  = 'LoomModel'
+```
+
+One-time tenant grant (RBAC cannot express this — it is an Analysis Services
+*server administrator* assignment, surfaced honestly in the editor MessageBar):
+
+```bash
+# Add the Console UAMI as an AAS server administrator.
+az resource update \
+  --ids "$(az resource show -g <rg> -n <loomAasServer> \
+            --resource-type Microsoft.AnalysisServices/servers --query id -o tsv)" \
+  --set properties.asAdministrators.members='["app:<uami-app-id>@<tenant-id>"]'
+```
+
+On GCC-High / DoD the AAS data-plane host is `*.asazure.usgovcloudapi.net`
+(resolved automatically by `cloud-endpoints.aasSuffix()`); the bound source
+must also grant the UAMI the appropriate data-plane role (a SQL login for the
+Synapse / Azure SQL TDS sources, or a database viewer on the ADX cluster).

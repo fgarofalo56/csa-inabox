@@ -15,6 +15,9 @@ import {
   getBlobSuffix,
   getOpenAiSuffix,
   getPbiGovHost,
+  aasSuffix,
+  aasScope,
+  aasServerBase,
 } from '../cloud-endpoints';
 
 const ORIG_LOOM = process.env.LOOM_CLOUD;
@@ -121,6 +124,12 @@ const TABLE: Record<string, Record<(typeof CLOUDS)[number], string>> = {
     'GCC-High': 'sql.azuresynapse.usgovcloudapi.net',
     DoD: 'sql.azuresynapse.usgovcloudapi.net',
   },
+  aasSuffix: {
+    Commercial: 'asazure.windows.net',
+    GCC: 'asazure.windows.net',
+    'GCC-High': 'asazure.usgovcloudapi.net',
+    DoD: 'asazure.usgovcloudapi.net',
+  },
   getLogAnalyticsHost: {
     Commercial: 'https://api.loganalytics.azure.com',
     GCC: 'https://api.loganalytics.azure.com',
@@ -168,6 +177,7 @@ const FNS: Record<string, () => string> = {
   getGraphScope,
   getSqlSuffix,
   synapseSqlSuffix,
+  aasSuffix,
   getLogAnalyticsHost,
   getBlobSuffix,
   getOpenAiSuffix,
@@ -185,6 +195,19 @@ describe('cloud-endpoints getters — all 4 clouds via LOOM_CLOUD', () => {
       });
     });
   }
+});
+
+describe('AAS data-plane helpers — scope + server base URL', () => {
+  it('builds the Commercial scope + server base', () => {
+    withCloud('Commercial');
+    expect(aasScope()).toBe('https://asazure.windows.net/.default');
+    expect(aasServerBase('eastus2', 'loom-aas')).toBe('https://eastus2.asazure.windows.net/servers/loom-aas');
+  });
+  it('builds the gov scope + server base for GCC-High', () => {
+    withCloud('GCC-High');
+    expect(aasScope()).toBe('https://asazure.usgovcloudapi.net/.default');
+    expect(aasServerBase('usgovvirginia', 'loom-aas')).toBe('https://usgovvirginia.asazure.usgovcloudapi.net/servers/loom-aas');
+  });
 });
 
 describe('legacy AZURE_CLOUD signal still resolves (back-compat)', () => {
