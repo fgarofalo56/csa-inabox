@@ -60,6 +60,10 @@ export interface Workspace {
    *   Microsoft.Storage/storageAccounts/{name}
    */
   storageAccountId?: string;
+  /** F16 — ARM resource id of the ADLS Gen2 account bound for dataflow staging. */
+  adlsConnectionId?: string;
+  /** F16 — Log Analytics workspace GUID (customerId) bound for query-log export. */
+  lawConnectionId?: string;
   /** Outcome of the post-create Capacity assignment side-effect — captured so the
    * UI can show whether it succeeded, is pending, or failed with a reason. */
   capacityAssignment?: {

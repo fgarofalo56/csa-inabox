@@ -16,6 +16,7 @@
 
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { resolveBoundDataflowAdls } from '@/lib/clients/azure-connections-client';
 import {
   adfConfigGate,
   upsertLinkedService,
@@ -70,16 +71,19 @@ async function buildSink(
   itemId: string,
   outputQuery: string,
   sink: DataflowSink,
+  boundAdls?: { account: string; dfsBase: string; container: string } | null,
 ): Promise<{ sink: WranglingSink } | { gate: { status: number; error: string; hint: string } }> {
   const datasetName = `loom-pqsink-${itemId.slice(0, 8)}`;
   if (sink.type === 'adls') {
-    const adls = resolveAdls();
+    // F16: prefer the workspace's bound ADLS connection (Azure Connections pane)
+    // over the global DLZ lake. Falls back to LOOM_*_URL env when no binding.
+    const adls = boundAdls ?? resolveAdls();
     if (!adls) {
       return {
         gate: {
           status: 503,
           error: 'ADLS Gen2 destination is not configured in this deployment.',
-          hint: 'Set LOOM_BRONZE_URL (or LOOM_ADLS_ACCOUNT) on the Console app — deployed by platform/fiab/bicep/modules/landing-zone/storage.bicep.',
+          hint: 'Connect an ADLS Gen2 account on the workspace Azure Connections pane, or set LOOM_BRONZE_URL (or LOOM_ADLS_ACCOUNT) on the Console app — deployed by platform/fiab/bicep/modules/landing-zone/storage.bicep.',
         },
       };
     }
@@ -94,7 +98,7 @@ async function buildSink(
         typeProperties: { url: adls.dfsBase },
       },
     });
-    const container = sink.container || 'silver';
+    const container = sink.container || ('container' in adls && adls.container) || 'silver';
     const folderPath = (sink.path || `dataflows/${itemId}`).replace(/^\/+|\/+$/g, '');
     const format = sink.format || 'parquet';
     await upsertDataset(datasetName, {
@@ -165,7 +169,10 @@ export async function runDataflowAdf(itemId: string, workspaceId: string): Promi
     };
   }
   const outputQuery = (sink.query && queries.some((q) => q.name === sink.query) ? sink.query : queries[queries.length - 1].name);
-  const built = await buildSink(itemId, outputQuery, sink);
+  // F16: resolve a workspace-bound ADLS staging account (if connected) so the
+  // ADF sink writes there instead of the global DLZ lake. Null → env fallback.
+  const boundAdls = await resolveBoundDataflowAdls(workspaceId);
+  const built = await buildSink(itemId, outputQuery, sink, boundAdls);
   if ('gate' in built) {
     return { ok: false, status: built.gate.status, error: built.gate.error, hint: built.gate.hint };
   }

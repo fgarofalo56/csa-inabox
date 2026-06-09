@@ -1161,6 +1161,36 @@ module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && !empty
   }
 }
 
+// F16 Azure Connections — grant the Console UAMI Storage Blob Data Contributor
+// on the DLZ ADLS account + Log Analytics Contributor on the LAW so a
+// workspace's "Azure connections" bindings are fully functional (dataflow
+// staging + query-log export). Skipped (honest gate in the pane) when
+// loomStorageAccount is unset; the LAW grant always applies (admin-RG LAW).
+module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants) {
+  name: 'console-azure-connections-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    storageAccountName: loomStorageAccount
+    // The LAW lives in the admin RG, not the DLZ RG — granted by the
+    // admin-RG-scoped module below so the scope matches the resource.
+    logAnalyticsWorkspaceName: ''
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Companion grant for the admin-RG Log Analytics workspace (the default
+// query-log-export target). Scoped to the admin RG where the LAW is deployed.
+module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants) {
+  name: 'console-azure-connections-law-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    storageAccountName: ''
+    logAnalyticsWorkspaceName: monitoring.outputs.lawName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Workspace-monitoring ADX database + Azure Monitor diagnostic-export pipeline.
 // Read-only telemetry store (Fabric workspace-monitoring parity, no Fabric).
 // Console UAMI gets Admin (provisioner seeds tables); admin group gets Viewer.
@@ -2000,6 +2030,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // read LOOM_MSAL_CLIENT_SECRET / LOOM_DATAVERSE_CLIENT_SECRET instead.
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            // Console UAMI principal (object) id — used by the F16 Azure
+            // Connections role check (azure-connections-client) to verify the
+            // UAMI holds Storage Blob Data Contributor / Log Analytics
+            // Contributor before recording a connection as 'connected'. Falls
+            // back to decoding the MI token's oid claim when unset.
+            { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
             // Microsoft Graph user enrichment — flipped ON by default so
             // /admin/users surfaces displayName + department from Entra.
             // The Console UAMI also needs the Graph Directory.Read.All
