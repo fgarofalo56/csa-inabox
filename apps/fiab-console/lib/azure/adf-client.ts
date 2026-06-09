@@ -18,7 +18,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope, armHost } from './cloud-endpoints';
+import { armBase, armScope, armHost, adfFactoryDeepLinkId } from './cloud-endpoints';
 
 const API = '2018-06-01';
 
@@ -63,6 +63,36 @@ export function adfConfigGate(): { missing: string } | null {
     if (!process.env[k]) return { missing: k };
   }
   return null;
+}
+
+/**
+ * Bare ARM resource ID of the env-pinned default factory (NO management host
+ * prefix) — `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.DataFactory/factories/{name}`.
+ * This is the value ADF Studio expects as its `factory=` deep-link query
+ * parameter (URL-encoded by the caller). Throws if the factory env vars are
+ * unset (callers should run `adfConfigGate()` first).
+ */
+export function factoryResourceId(): string {
+  return adfFactoryDeepLinkId(sub(), rg(), adfName());
+}
+
+/** The env-pinned default factory name (for honest-gate MessageBar copy). */
+export function defaultFactoryName(): string {
+  return adfName();
+}
+
+/**
+ * GET the env-pinned default factory resource. Used to read
+ * `properties.publicNetworkAccess` (so the "Get data" surface can warn that
+ * ADF Studio's management plane needs corporate VPN / Bastion when the factory
+ * is private) and `location`. Real ARM REST.
+ */
+export async function getDefaultFactory(): Promise<{
+  id?: string; name?: string; location?: string;
+  properties?: { publicNetworkAccess?: string; provisioningState?: string };
+}> {
+  const r = await call(`${base()}?api-version=${API}`);
+  return jsonOrThrow(r, 'getDefaultFactory');
 }
 
 async function call(url: string, init?: RequestInit): Promise<Response> {

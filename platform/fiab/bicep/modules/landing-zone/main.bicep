@@ -96,6 +96,14 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Soft-delete retention days for ADLS Gen2 blob/directory recovery (OneLake Recycle bin restore window). 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
+@description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default; set true when the lifecycle feature is enabled.')
+param consolePrincipalNeedsLifecycleWrite bool = false
+
 // =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
@@ -128,6 +136,7 @@ module storage 'storage.bicep' = {
     privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    recycleRetentionDays: recycleRetentionDays
   }
 }
 
@@ -199,6 +208,23 @@ module storageRbacAdmin 'storage-rbac-admin.bicep' = {
   params: {
     storageAccountName: storage.outputs.storageAccountName
     consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// 4a3. Console UAMI "Storage Account Contributor" on lakehouse storage
+//      (OneLake Lifecycle Management rules editor — read/write
+//       managementPolicies/default via the ARM management plane). Off by
+//       default; enabled via consolePrincipalNeedsLifecycleWrite.
+// =====================================================================
+
+module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
+  name: 'dlz-storage-lifecycle-rbac'
+  params: {
+    storageAccountName: storage.outputs.storageAccountName
+    consolePrincipalId: consolePrincipalId
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -416,6 +442,7 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
   name: 'dlz-cosmos-graph-vector'
   params: {
     location: location
+    boundary: boundary
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos

@@ -182,9 +182,15 @@ resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 // Monitoring Contributor — 749f88ad-0bdc-4e1b-a8b6-bfb96b995e05
-// Lets the Console UAMI PUT Microsoft.Insights/scheduledQueryRules + action
-// groups in this RG, which is what the Azure-native Activator rule wizard does
-// (lib/azure/activator-monitor.ts → monitor-client.upsertScheduledQueryRule).
+// Lets the Console UAMI PUT/DELETE Microsoft.Insights/scheduledQueryRules +
+// action groups in this RG. This single grant backs BOTH Azure-native
+// query-alert surfaces (per .claude/rules/no-fabric-dependency.md):
+//   1. the Activator rule wizard
+//      (lib/azure/activator-monitor.ts → monitor-client.upsertScheduledQueryRule)
+//   2. the warehouse Alerts editor on the Government boundary
+//      (app/api/items/[type]/[id]/alerts → monitor-client.upsertScheduledQueryRule
+//       / listScheduledQueryRules / deleteScheduledQueryRule), the Azure-native
+//      parity for Databricks SQL Alerts where Databricks is not IL5-authorized.
 // LOOM_ALERT_RG defaults to this admin RG (see main.bicep) so the grant scope
 // matches where alert rules are created. No Microsoft Fabric required.
 resource consoleMonitorContrib 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
