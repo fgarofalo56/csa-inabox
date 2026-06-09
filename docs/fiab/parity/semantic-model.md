@@ -50,6 +50,17 @@ Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` -> `SemanticModelEdit
 
 Grade: A — model building (push dataset), relationships read, scheduled-refresh edit, take-over, and DAX validate are all real REST; imported-model XMLA writes honestly gated. Tests: lib/azure/__tests__/powerbi-client-parity.test.ts, app/api/items/__tests__/model-builder-routes.test.ts, app/api/items/__tests__/powerbi-parity-routes.test.ts.
 
+## Per-cloud notes (Power BI opt-in path)
+
+When `LOOM_BI_BACKEND=powerbi` is set, the Power BI REST (`/v1.0/myorg`) path applies and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset. The sovereign endpoint is resolved by `cloud-endpoints.ts`.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | Full coverage. List/tables/relationships/measures-validate/refresh/history/schedule/take-over/build-model all work. |
+| GCC | `api.powerbigov.us` | Datasets, refresh, history, scheduled refresh, take-over, and push-dataset build all work (pure Power BI REST). **Endorsement reads via Fabric Items REST may be unavailable** (Fabric APIs are not offered in GCC) — disclosed via the same honest 401/403 gate. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Full coverage; F-SKU + XMLA available, so imported-model writes are reachable when `LOOM_POWERBI_XMLA_ENDPOINT` is set. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Full coverage; F-SKU + XMLA available. |
+
 ---
 
 ## Azure-native backend — Azure Analysis Services (AAS)
