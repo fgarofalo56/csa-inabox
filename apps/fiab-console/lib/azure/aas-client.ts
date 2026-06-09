@@ -54,7 +54,7 @@
  *    the Analysis Services / XMLA data plane — partition-scoped, incremental,
  *    triggered by ADLS `_delta_log` Event Grid notifications. It is a distinct
  *    concern (and a distinct AAD audience — `pbiRestScope()`, the
- *    `analysis.*/powerbi/api` resource, NOT the AAS `*.asazure.windows.net`
+ *    `analysis.* powerbi/api` resource, NOT the AAS `*.asazure.windows.net`
  *    data-plane audience) from the broad workspace navigation in
  *    powerbi-client.ts:
  *

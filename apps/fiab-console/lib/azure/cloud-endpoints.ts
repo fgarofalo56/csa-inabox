@@ -626,7 +626,7 @@ export function aasRestBase(region: string, serverName: string, databaseName: st
 /**
  * AAD `.default` scope for the **Power BI REST / XMLA endpoint** token used by
  * the Direct-Lake-shim enhanced-refresh client (`aas-client.ts`). This is the
- * `analysis.*/powerbi/api` audience — DISTINCT from the AAS data-plane audience
+ * `analysis.* powerbi/api` audience — DISTINCT from the AAS data-plane audience
  * `https://*.asazure.windows.net` returned by `aasScope()` below. 4-way
  * sovereign split (Commercial / GCC / GCC-High / DoD). `LOOM_AAS_SCOPE`
  * overrides outright for clouds we don't enumerate (e.g. China:
