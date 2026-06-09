@@ -34,6 +34,7 @@ import type {
   ReportContent,
   ScorecardContent,
 } from '@/lib/apps/content-bundles/types';
+import { computeRollups, type ComputedGoal } from '../scorecard/rollup';
 
 /** Prefix that marks a synthetic, Cosmos-backed (not-yet-in-PBI) entry. */
 export const LOOM_ID_PREFIX = 'loom:';
@@ -241,19 +242,15 @@ export function scorecardListEntry(item: WorkspaceItem) {
 }
 
 /**
- * Build scorecard goals from ScorecardContent OKRs. The editor's Goals table
- * reads `{ id, name, description, currentValue, targetValue }`.
+ * Build scorecard goals from ScorecardContent OKRs, applying the rollup +
+ * status-rule engine. The editor's Goals table reads `{ id, name, description,
+ * currentValue, computedValue, targetValue, status, ... }`. Parent goals carry
+ * a rolled-up `computedValue`; every goal carries a resolved `status`.
  */
-export function scorecardGoalsFromContent(item: WorkspaceItem) {
+export function scorecardGoalsFromContent(item: WorkspaceItem): ComputedGoal[] | null {
   const content = contentOf<ScorecardContent>(item, 'scorecard');
   if (!content) return null;
-  return (content.okrs || []).map((o) => ({
-    id: o.id,
-    name: o.name,
-    description: o.description || o.metric,
-    currentValue: typeof o.current === 'number' ? o.current : Number(o.current) || undefined,
-    targetValue: typeof o.target === 'number' ? o.target : Number(o.target) || undefined,
-  }));
+  return computeRollups(content.okrs || []);
 }
 
 export function scorecardMetaFromContent(item: WorkspaceItem) {
