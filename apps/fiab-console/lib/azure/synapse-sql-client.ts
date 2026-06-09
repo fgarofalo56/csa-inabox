@@ -242,6 +242,36 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
 }
 
 /**
+ * Run `EXPLAIN [WITH_RECOMMENDATIONS] <sqlText>` on a Synapse Dedicated SQL pool
+ * and return the raw distributed-query-plan XML from the first result-set cell.
+ *
+ * EXPLAIN compiles (but does NOT execute) the statement and returns the MPP
+ * plan as XML — operation types such as BroadcastMoveOperation /
+ * ShuffleMoveOperation reveal the data-movement steps a query incurs. The
+ * WITH_RECOMMENDATIONS form additionally surfaces engine optimization hints
+ * (missing statistics, alternative distributions). This is the real backend
+ * the Warehouse Copilot "optimize" mode grounds its suggestions in.
+ *
+ * Only supported on Dedicated pools (not Serverless / Databricks) — the caller
+ * must gate. Requires SHOWPLAN, held by any SQL admin (the Console UAMI
+ * qualifies); no extra GRANT is needed.
+ *
+ * Reference: https://learn.microsoft.com/sql/t-sql/queries/explain-transact-sql?view=azure-sqldw-latest
+ */
+export async function explainQuery(
+  target: SynapseTarget,
+  sqlText: string,
+  withRecommendations = true,
+  timeoutMs = 30_000,
+): Promise<string> {
+  const keyword = withRecommendations ? 'EXPLAIN WITH_RECOMMENDATIONS' : 'EXPLAIN';
+  const res = await executeQuery(target, `${keyword}\n${sqlText}`, timeoutMs);
+  if (!res.rows.length) return '';
+  const cell = res.rows[0]?.[0];
+  return cell == null ? '' : String(cell);
+}
+
+/**
  * Get (or open) a per-user TDS pool authenticated with the caller's own Azure
  * SQL access token. Pools are isolated by user oid and never shared, because
  * the connection carries the token's AAD identity (sharing would leak one
