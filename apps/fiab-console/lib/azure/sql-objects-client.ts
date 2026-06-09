@@ -311,6 +311,232 @@ export async function dropObject(
   }
 }
 
+// ============================================================
+// Query Store / Query Performance Insight (Performance dashboard)
+//
+// Reads the real `sys.query_store_*` catalog views over the same AAD-token TDS
+// pool used by the object navigator. This is the Azure-native QPI surface
+// (Azure SQL Database has Query Store ON by default); no Microsoft Fabric or
+// Power BI dependency. All numeric window/top-N inputs are clamped to integer
+// literals server-side; the single user value that varies per row (`queryId`)
+// is bound as a parameter (@p0) so there is no string-injection path.
+// ============================================================
+
+/** Metric the top-queries list is ranked by (column aliases, never raw input). */
+export type PerfMetric = 'cpu' | 'duration' | 'logical-reads' | 'executions';
+
+const PERF_ORDER_COL: Record<PerfMetric, string> = {
+  cpu: 'totalCpuMs',
+  duration: 'totalDurationMs',
+  'logical-reads': 'totalLogicalReads',
+  executions: 'totalExecutions',
+};
+
+export interface QueryStoreStatus {
+  /** 'OFF' | 'READ_ONLY' | 'READ_WRITE' | 'ERROR' | 'READ_CAPTURE_SECONDARY'. */
+  actualState: string;
+  /** Bit map explaining why actual is READ_ONLY when desired is READ_WRITE (null when N/A). */
+  readonlyReason: number | null;
+  currentStorageSizeMb: number;
+  maxStorageSizeMb: number;
+  /** 'ALL' | 'AUTO' | 'NONE' | 'CUSTOM'. */
+  captureMode: string;
+  /** True when Query Store is actively collecting (READ_WRITE). */
+  collecting: boolean;
+}
+
+export interface TopQueryRow {
+  queryId: number;
+  /** First 4000 chars of the normalized query_sql_text. */
+  queryText: string;
+  /** SUM(avg_cpu_time µs * count_executions) / 1000 → milliseconds. */
+  totalCpuMs: number;
+  totalDurationMs: number;
+  /** SUM(avg_logical_io_reads * count_executions) → 8 KB pages. */
+  totalLogicalReads: number;
+  totalExecutions: number;
+  /** ISO timestamp of the most recent interval the query ran in. */
+  lastExecutionTime: string | null;
+}
+
+export interface QueryTimeSeriesPoint {
+  intervalStart: string;
+  intervalEnd: string;
+  executions: number;
+  avgCpuMs: number;
+  avgDurationMs: number;
+  avgLogicalReads: number;
+}
+
+export interface QueryPlanResult {
+  planId: number;
+  queryPlanXml: string | null;
+  lastCompileTime: string | null;
+}
+
+/** Reads sys.database_query_store_options to determine if Query Store is collecting. */
+export async function queryStoreStatus(
+  server: string,
+  database: string,
+): Promise<QueryStoreStatus> {
+  const rows = await executeParameterized<any>(
+    server,
+    database,
+    `SELECT actual_state_desc        AS actualState,
+            readonly_reason          AS readonlyReason,
+            current_storage_size_mb  AS currentStorageSizeMb,
+            max_storage_size_mb      AS maxStorageSizeMb,
+            query_capture_mode_desc  AS captureMode
+     FROM sys.database_query_store_options;`,
+  );
+  const r = rows[0] || {};
+  const actualState = String(r.actualState || 'OFF');
+  return {
+    actualState,
+    readonlyReason: r.readonlyReason == null ? null : Number(r.readonlyReason),
+    currentStorageSizeMb: Number(r.currentStorageSizeMb || 0),
+    maxStorageSizeMb: Number(r.maxStorageSizeMb || 0),
+    captureMode: String(r.captureMode || 'AUTO'),
+    collecting: actualState === 'READ_WRITE',
+  };
+}
+
+/**
+ * Turns Query Store ON (READ_WRITE) on the currently-connected database. This
+ * runs REAL DDL — the console identity must hold ALTER on the database. The
+ * statement is idempotent (re-running on an already-ON database is a no-op),
+ * and we always re-read + return the post-DDL status as the receipt.
+ */
+export async function enableQueryStore(
+  server: string,
+  database: string,
+): Promise<QueryStoreStatus> {
+  await executeParameterized(
+    server,
+    database,
+    `ALTER DATABASE CURRENT SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE);`,
+  );
+  return queryStoreStatus(server, database);
+}
+
+/**
+ * Top-N queries ranked by a resource metric over a trailing window (hours).
+ * `windowHours` ∈ [1,720] and `topN` ∈ [1,50] are clamped to safe integer
+ * literals by the caller; `metric` maps to a known column alias.
+ */
+export async function topQueriesByMetric(
+  server: string,
+  database: string,
+  metric: PerfMetric,
+  windowHours: number,
+  topN: number,
+): Promise<TopQueryRow[]> {
+  const wh = Math.min(720, Math.max(1, Math.trunc(windowHours) || 24));
+  const n = Math.min(50, Math.max(1, Math.trunc(topN) || 10));
+  const orderCol = PERF_ORDER_COL[metric] || PERF_ORDER_COL.cpu;
+  const rows = await executeParameterized<any>(
+    server,
+    database,
+    `SELECT TOP (${n})
+        q.query_id AS queryId,
+        LEFT(qt.query_sql_text, 4000) AS queryText,
+        SUM(rs.avg_cpu_time          * rs.count_executions) / 1000.0 AS totalCpuMs,
+        SUM(rs.avg_duration          * rs.count_executions) / 1000.0 AS totalDurationMs,
+        SUM(rs.avg_logical_io_reads  * rs.count_executions)          AS totalLogicalReads,
+        SUM(rs.count_executions)                                     AS totalExecutions,
+        MAX(rsi.end_time)                                            AS lastExecutionTime
+     FROM sys.query_store_query q
+     JOIN sys.query_store_query_text qt ON qt.query_text_id = q.query_text_id
+     JOIN sys.query_store_plan p        ON p.query_id = q.query_id
+     JOIN sys.query_store_runtime_stats rs
+          ON rs.plan_id = p.plan_id
+     JOIN sys.query_store_runtime_stats_interval rsi
+          ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+     WHERE rsi.start_time >= DATEADD(HOUR, -${wh}, GETUTCDATE())
+       AND rs.execution_type = 0
+     GROUP BY q.query_id, qt.query_sql_text
+     ORDER BY ${orderCol} DESC;`,
+  );
+  return rows.map((r) => ({
+    queryId: Number(r.queryId),
+    queryText: String(r.queryText ?? ''),
+    totalCpuMs: round2(Number(r.totalCpuMs || 0)),
+    totalDurationMs: round2(Number(r.totalDurationMs || 0)),
+    totalLogicalReads: Math.round(Number(r.totalLogicalReads || 0)),
+    totalExecutions: Number(r.totalExecutions || 0),
+    lastExecutionTime: r.lastExecutionTime ? new Date(r.lastExecutionTime).toISOString() : null,
+  }));
+}
+
+/** Per-interval runtime stats time series for a single query_id over a window. */
+export async function queryTimeSeries(
+  server: string,
+  database: string,
+  queryId: number,
+  windowHours: number,
+): Promise<QueryTimeSeriesPoint[]> {
+  const wh = Math.min(720, Math.max(1, Math.trunc(windowHours) || 24));
+  const qid = Math.trunc(queryId);
+  const rows = await executeParameterized<any>(
+    server,
+    database,
+    `SELECT rsi.start_time AS intervalStart, rsi.end_time AS intervalEnd,
+            SUM(rs.count_executions)            AS executions,
+            AVG(rs.avg_cpu_time)    / 1000.0    AS avgCpuMs,
+            AVG(rs.avg_duration)    / 1000.0    AS avgDurationMs,
+            AVG(rs.avg_logical_io_reads)        AS avgLogicalReads
+     FROM sys.query_store_runtime_stats rs
+     JOIN sys.query_store_runtime_stats_interval rsi
+          ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
+     WHERE p.query_id = @p0
+       AND rsi.start_time >= DATEADD(HOUR, -${wh}, GETUTCDATE())
+       AND rs.execution_type = 0
+     GROUP BY rsi.start_time, rsi.end_time
+     ORDER BY rsi.start_time;`,
+    [qid],
+  );
+  return rows.map((r) => ({
+    intervalStart: r.intervalStart ? new Date(r.intervalStart).toISOString() : '',
+    intervalEnd: r.intervalEnd ? new Date(r.intervalEnd).toISOString() : '',
+    executions: Number(r.executions || 0),
+    avgCpuMs: round2(Number(r.avgCpuMs || 0)),
+    avgDurationMs: round2(Number(r.avgDurationMs || 0)),
+    avgLogicalReads: Math.round(Number(r.avgLogicalReads || 0)),
+  }));
+}
+
+/** Latest showplan XML for a query_id (drill-through to the execution plan). */
+export async function queryStorePlan(
+  server: string,
+  database: string,
+  queryId: number,
+): Promise<QueryPlanResult | null> {
+  const qid = Math.trunc(queryId);
+  const rows = await executeParameterized<any>(
+    server,
+    database,
+    `SELECT TOP 1 p.plan_id AS planId,
+            TRY_CAST(p.query_plan AS nvarchar(MAX)) AS queryPlanXml,
+            p.last_compile_start_time AS lastCompileTime
+     FROM sys.query_store_plan p
+     WHERE p.query_id = @p0
+     ORDER BY p.last_compile_start_time DESC;`,
+    [qid],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    planId: Number(r.planId),
+    queryPlanXml: r.queryPlanXml ? String(r.queryPlanXml) : null,
+    lastCompileTime: r.lastCompileTime ? new Date(r.lastCompileTime).toISOString() : null,
+  };
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 function shapeObject(r: any): SqlObjectRow {
   const schema = String(r.schema);
   const name = String(r.name);

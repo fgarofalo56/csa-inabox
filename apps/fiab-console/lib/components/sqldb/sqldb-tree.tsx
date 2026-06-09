@@ -43,8 +43,10 @@ import {
   Database20Regular, Folder20Regular, Column20Regular,
   ContentView20Regular, MoreHorizontal20Regular, Rename16Regular,
   Code20Regular, Notebook20Regular, TableSearch20Regular, KeyMultiple20Regular,
+  BranchRequest20Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable } from '@/lib/components/ui/loom-data-table';
+import { CREATE_TEMPLATES, type CreatableGroup } from '@/lib/azure/sql-templates';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 264 },
@@ -82,7 +84,6 @@ export interface SqlIndexRow {
   filterDefinition: string | null; keyColumns: string; includeColumns: string;
 }
 
-type CreatableGroup = 'table' | 'view' | 'procedure' | 'function';
 type RenameableGroup = 'table' | 'view' | 'procedure' | 'function';
 type ScriptGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type' | 'index';
 type ScriptVariant = 'CREATE' | 'ALTER' | 'DROP';
@@ -107,39 +108,6 @@ export interface SqlDbTreeProps {
   /** Increment to force a refresh from the parent. */
   refreshKey?: number;
 }
-
-const CREATE_TEMPLATES: Record<CreatableGroup, string> = {
-  table:
-`-- New table. Edit and run from the Query tab.
-CREATE TABLE dbo.NewTable (
-    Id        INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    Name      NVARCHAR(200)     NOT NULL,
-    CreatedAt DATETIME2         NOT NULL DEFAULT SYSUTCDATETIME()
-);`,
-  view:
-`-- New view. Edit and run from the Query tab.
-CREATE VIEW dbo.NewView
-AS
-SELECT TOP 100 *
-FROM dbo.NewTable;`,
-  procedure:
-`-- New stored procedure. Edit and run from the Query tab.
-CREATE PROCEDURE dbo.NewProcedure
-    @Id INT
-AS
-BEGIN
-    SET NOCOUNT ON;
-    SELECT * FROM dbo.NewTable WHERE Id = @Id;
-END;`,
-  function:
-`-- New inline table-valued function. Edit and run from the Query tab.
-CREATE FUNCTION dbo.NewFunction (@Id INT)
-RETURNS TABLE
-AS
-RETURN (
-    SELECT * FROM dbo.NewTable WHERE Id = @Id
-);`,
-};
 
 /** Build a Python notebook cell template that runs the given SQL via pyodbc. */
 function notebookCell(sql: string): string {
@@ -448,6 +416,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                 <MenuItem icon={<ContentView20Regular />} onClick={() => newObject('view')}>View</MenuItem>
                 <MenuItem icon={<DocumentText20Regular />} onClick={() => newObject('procedure')}>Stored procedure</MenuItem>
                 <MenuItem icon={<MathFormula20Regular />} onClick={() => newObject('function')}>Function</MenuItem>
+                <MenuItem icon={<BranchRequest20Regular />} onClick={() => newObject('index')}>Index</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>

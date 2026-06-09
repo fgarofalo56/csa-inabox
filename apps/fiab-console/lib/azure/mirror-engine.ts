@@ -24,10 +24,16 @@
  */
 import { executeParameterized, enableMirroring, type MirroringConfig } from './azure-sql-client';
 import { listTables, sqlConfigGate } from './sql-objects-client';
-import { uploadFile, pathToHttpsUrl, getAccountName } from './adls-client';
+import { uploadFile, pathToHttpsUrl, getAccountName, listPaths, resolveAbfssRoot, type PathEntry } from './adls-client';
+import { submitSparkBatchJob, type SparkBatchRequest } from './synapse-dev-client';
+import { listPipelineRuns, adfConfigGate } from './adf-client';
 import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
+// httpsToAbfss lives in cloud-endpoints (pure, sovereign-aware) so it is unit-
+// testable without this module's mssql/identity native chain; re-exported here
+// for the existing `@/lib/azure/mirror-engine` consumers (Thread edges).
+export { httpsToAbfss } from './cloud-endpoints';
 
 /** SQL-family sources the engine can snapshot directly via TDS. */
 export const MIRROR_SQL_FAMILY = new Set(['AzureSqlDatabase', 'AzureSqlMI', 'SqlServer2025', 'MSSQL']);
@@ -102,19 +108,6 @@ export interface MirrorRunResult {
   note: string;
   error?: string;
   gate?: { missing: string; message: string };
-}
-
-/**
- * Convert a landed snapshot's https dfs URL into the abfss form Spark reads:
- *   https://ACCT.dfs.core.windows.net/CONTAINER/PATH
- *     → abfss://CONTAINER@ACCT.dfs.core.windows.net/PATH
- * Returns the input unchanged if it isn't a dfs https URL.
- */
-export function httpsToAbfss(httpsUrl: string): string {
-  const m = (httpsUrl || '').match(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net\/([^/]+)\/(.*)$/i);
-  if (!m) return httpsUrl;
-  const [, account, container, path] = m;
-  return `abfss://${container}@${account}.dfs.core.windows.net/${path}`;
 }
 
 /** Is the ADLS Bronze landing zone configured? */
@@ -515,4 +508,409 @@ export async function runMirrorSnapshot(
     note,
     error: anyOk ? undefined : 'No tables could be replicated — see per-table errors.',
   };
+}
+
+// ============================================================
+// Open mirroring (push model) — Azure-native, no Microsoft Fabric.
+//
+// Fabric's "open mirroring" lets an external producer push Parquet (+ an
+// optional `_metadata.json` describing key columns) into a per-mirror landing
+// zone; Fabric folds it into a managed Delta table the consumer queries.
+//
+// The Azure-native default reproduces this 1:1 with NO Fabric/OneLake:
+//   - Landing zone  = ADLS Gen2 `landing` container, path `<mirrorId>/<table>/`
+//   - Managed Delta = ADLS Gen2 `bronze` container, path
+//                     `mirrors/<workspaceId>/<mirrorId>/Tables/<table>`
+//   - Merge engine  = a Synapse Spark Livy batch (submitSparkBatchJob) that
+//                     reads the new Parquet and MERGEs/append into the Delta
+//                     table (Delta Lake `MERGE`/`append`).
+//   - Query surface = Synapse Serverless `OPENROWSET(... FORMAT='DELTA')`.
+//
+// All host suffixes come from `resolveAbfssRoot` (derived from the configured
+// LOOM_{LANDING,BRONZE}_URL), so the abfss URIs are sovereign-cloud-correct
+// automatically — no hard-coded `.dfs.core.windows.net`.
+// ============================================================
+
+/** Merge schedule options — fixed allowlist, no free-form input (loom-no-freeform-config). */
+export const MERGE_SCHEDULE_OPTIONS = ['on-demand', '15min', '1h', '4h', 'daily'] as const;
+export type MergeSchedule = (typeof MERGE_SCHEDULE_OPTIONS)[number];
+
+export interface OpenMirrorConfig {
+  /** abfss:// landing zone root for this mirror's producer drops. */
+  landingPath: string;
+  /** abfss:// managed Delta output root (bronze container). */
+  deltaBasePath: string;
+  mergeSchedule: MergeSchedule;
+  /** Key columns for MERGE semantics (UPSERT/DELETE). Empty = full append. */
+  keyColumns: string[];
+  lastMergeAt?: string;
+  lastMergeJobId?: number;
+  lastMergeStatus?: string;
+  lastMergeRows?: number;
+  lastMergeError?: string;
+}
+
+export interface OpenMirrorRunResult {
+  ok: boolean;
+  status: 'Submitted' | 'NoNewFiles' | 'Gated' | 'Error';
+  jobId?: number;
+  landingPath: string;
+  deltaPath: string;
+  filesFound: number;
+  note: string;
+  gate?: { missing: string; message: string };
+  error?: string;
+}
+
+const LANDING = 'landing' as const;
+/** Bronze path the inline PySpark merge script is uploaded to before each run. */
+const OPEN_MIRROR_SCRIPT_PATH = 'scripts/open-mirror-merge.py';
+
+/** abfss:// landing zone root for a mirror (sovereign-cloud suffix via the URL). */
+export function openMirrorLandingAbfss(mirrorId: string): string | null {
+  return resolveAbfssRoot(LANDING, mirrorId);
+}
+
+/** abfss:// managed Delta "Tables" root for a mirror. */
+export function openMirrorDeltaAbfss(workspaceId: string, mirrorId: string): string | null {
+  return resolveAbfssRoot(BRONZE, `mirrors/${workspaceId}/${mirrorId}/Tables`);
+}
+
+/** Synapse Serverless OPENROWSET SELECT COUNT(*) over a managed Delta table. */
+export function openMirrorOpenrowset(workspaceId: string, mirrorId: string, tableName: string): string {
+  const url = pathToHttpsUrl(BRONZE, `mirrors/${workspaceId}/${mirrorId}/Tables/${tableName}`);
+  return `SELECT COUNT(*) AS row_count FROM OPENROWSET(BULK '${url}', FORMAT = 'DELTA') AS rows`;
+}
+
+/**
+ * List Parquet files a producer dropped in the landing zone for one table,
+ * optionally only those modified after `sinceIso`. `listPaths` returns the full
+ * path (`<mirrorId>/<table>/<file>.parquet`) so the `.parquet` filter is exact.
+ */
+export async function listLandingFiles(
+  mirrorId: string,
+  tableName: string,
+  sinceIso?: string,
+): Promise<PathEntry[]> {
+  const prefix = `${mirrorId}/${tableName}`;
+  const entries = await listPaths(LANDING, prefix, 500);
+  const parquets = entries.filter((e) => !e.isDirectory && e.name.toLowerCase().endsWith('.parquet'));
+  if (!sinceIso) return parquets;
+  const sinceMs = new Date(sinceIso).getTime();
+  return parquets.filter((e) => (e.lastModified ? new Date(e.lastModified).getTime() > sinceMs : true));
+}
+
+/**
+ * PySpark merge script — reads the new Parquet from the landing zone and folds
+ * it into the managed Delta table. When `_metadata.json` declared key columns
+ * AND the Parquet carries Fabric's `__rowMarker__` column, it does a Delta
+ * MERGE (upsert + delete); otherwise it appends. Uploaded to Bronze at submit
+ * time (idempotent — same bytes), then run as a Livy batch.
+ */
+const OPEN_MIRROR_MERGE_SCRIPT = `\
+from pyspark.sql import SparkSession
+from delta.tables import DeltaTable
+import sys
+
+landing_path = sys.argv[1]   # abfss://landing@<acct>/<mirrorId>/<table>
+delta_path   = sys.argv[2]   # abfss://bronze@<acct>/mirrors/<wsId>/<mirrorId>/Tables/<table>
+key_cols_raw = sys.argv[3]   # comma-separated, or empty string
+
+spark = (SparkSession.builder
+    .appName("loom-open-mirror-merge")
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+    .config("spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+    .getOrCreate())
+
+df = spark.read.parquet(landing_path)
+row_count = df.count()
+key_cols = [c.strip() for c in key_cols_raw.split(",") if c.strip()]
+
+if "__rowMarker__" in df.columns and key_cols:
+    merge_cond = " AND ".join("tgt.\`%s\` = src.\`%s\`" % (c, c) for c in key_cols)
+    upsert_df = df.filter(df["__rowMarker__"].isin([0, 1, 4])).drop("__rowMarker__")
+    delete_df = df.filter(df["__rowMarker__"] == 2).drop("__rowMarker__")
+    if DeltaTable.isDeltaTable(spark, delta_path):
+        dt = DeltaTable.forPath(spark, delta_path)
+        if upsert_df.count() > 0:
+            (dt.alias("tgt").merge(upsert_df.alias("src"), merge_cond)
+               .whenMatchedUpdateAll().whenNotMatchedInsertAll().execute())
+        if delete_df.count() > 0:
+            (dt.alias("tgt").merge(delete_df.alias("src"), merge_cond)
+               .whenMatchedDelete().execute())
+    else:
+        upsert_df.write.format("delta").mode("overwrite").save(delta_path)
+else:
+    df.write.format("delta").mode("append").save(delta_path)
+
+print("LOOM_MERGE_RESULT: rows=%d delta=%s" % (row_count, delta_path))
+`;
+
+/** Synapse Spark pool that runs the merge job (same convention as other jobs). */
+function openMirrorPool(): string {
+  return (
+    process.env.LOOM_OPEN_MIRROR_POOL ||
+    process.env.LOOM_SYNAPSE_SPARK_POOL ||
+    process.env.LOOM_SPARK_POOL ||
+    'loompool'
+  ).trim();
+}
+
+/** Honest infra gate for the open-mirror merge path. Null = ready. */
+function openMirrorGate(): { missing: string; message: string } | null {
+  if (!process.env.LOOM_LANDING_URL) {
+    return {
+      missing: 'LOOM_LANDING_URL',
+      message:
+        'ADLS landing container not configured — set LOOM_LANDING_URL (DLZ Bicep output landingContainerUrl) ' +
+        'so producers have somewhere to drop Parquet.',
+    };
+  }
+  if (!bronzeConfigured()) {
+    return {
+      missing: 'LOOM_BRONZE_URL',
+      message: 'ADLS Bronze not configured — set LOOM_BRONZE_URL so the managed Delta table has a home.',
+    };
+  }
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) {
+    return {
+      missing: 'LOOM_SYNAPSE_WORKSPACE',
+      message:
+        'Synapse workspace not configured — set LOOM_SYNAPSE_WORKSPACE (and a Spark pool via LOOM_SPARK_POOL) ' +
+        'so the Parquet→Delta merge job can be submitted.',
+    };
+  }
+  return null;
+}
+
+/**
+ * Upload the merge script (idempotent) and submit a Synapse Spark Livy batch
+ * job that folds new Parquet from the landing zone into managed Delta.
+ * Returns the Livy batch id (for the receipt) plus the resolved paths.
+ */
+export async function runOpenMirrorMerge(
+  mirrorId: string,
+  workspaceId: string,
+  tableName: string,
+  keyColumns: string[],
+  sinceIso?: string,
+): Promise<OpenMirrorRunResult> {
+  const note =
+    'Azure-native open mirroring (no Microsoft Fabric): Parquet files pushed to the ADLS landing zone are merged ' +
+    'into a managed Delta table by a Synapse Spark Livy batch. Query it from Synapse Serverless SQL (FORMAT=\'DELTA\').';
+  const landingRoot = openMirrorLandingAbfss(mirrorId);
+  const deltaRoot = openMirrorDeltaAbfss(workspaceId, mirrorId);
+
+  const gate = openMirrorGate();
+  if (gate) {
+    return { ok: false, status: 'Gated', landingPath: landingRoot ?? '', deltaPath: deltaRoot ?? '', filesFound: 0, note, gate };
+  }
+  if (!landingRoot || !deltaRoot) {
+    return {
+      ok: false, status: 'Gated', landingPath: landingRoot ?? '', deltaPath: deltaRoot ?? '', filesFound: 0, note,
+      gate: { missing: 'abfss path', message: 'Could not resolve the landing/Delta abfss paths — check LOOM_LANDING_URL and LOOM_BRONZE_URL.' },
+    };
+  }
+
+  const tableLandingPath = `${landingRoot}/${tableName}`;
+  const tableDeltaPath = `${deltaRoot}/${tableName}`;
+
+  // 1) Detect new Parquet drops for this table since the last merge.
+  let files: PathEntry[];
+  try {
+    files = await listLandingFiles(mirrorId, tableName, sinceIso);
+  } catch (e: any) {
+    return { ok: false, status: 'Error', landingPath: landingRoot, deltaPath: deltaRoot, filesFound: 0, note, error: `Listing the landing zone failed: ${e?.message || String(e)}` };
+  }
+  if (!files.length) {
+    return { ok: true, status: 'NoNewFiles', landingPath: landingRoot, deltaPath: deltaRoot, filesFound: 0, note: note + ' No new Parquet files found in the landing zone since the last merge.' };
+  }
+
+  // 2) Upload the merge script to Bronze (idempotent — same bytes each run).
+  let scriptAbfss: string | null;
+  try {
+    await uploadFile(BRONZE, OPEN_MIRROR_SCRIPT_PATH, Buffer.from(OPEN_MIRROR_MERGE_SCRIPT, 'utf-8'), 'text/x-python');
+    scriptAbfss = resolveAbfssRoot(BRONZE, OPEN_MIRROR_SCRIPT_PATH);
+  } catch (e: any) {
+    return { ok: false, status: 'Error', landingPath: landingRoot, deltaPath: deltaRoot, filesFound: files.length, note, error: `Uploading the merge script failed: ${e?.message || String(e)}` };
+  }
+  if (!scriptAbfss) {
+    return { ok: false, status: 'Gated', landingPath: landingRoot, deltaPath: deltaRoot, filesFound: files.length, note, gate: { missing: 'LOOM_BRONZE_URL', message: 'Could not resolve the merge-script abfss path — check LOOM_BRONZE_URL.' } };
+  }
+
+  // 3) Submit the Synapse Spark Livy batch merge job.
+  const job: SparkBatchRequest = {
+    name: `loom-open-mirror-${mirrorId.slice(0, 8)}-${tableName}-${Date.now()}`,
+    file: scriptAbfss,
+    args: [tableLandingPath, tableDeltaPath, keyColumns.join(',')],
+    conf: {
+      'spark.sql.extensions': 'io.delta.sql.DeltaSparkSessionExtension',
+      'spark.sql.catalog.spark_catalog': 'org.apache.spark.sql.delta.catalog.DeltaCatalog',
+    },
+    driverMemory: '4g', driverCores: 2,
+    executorMemory: '4g', executorCores: 2, numExecutors: 2,
+  };
+  try {
+    const batch = await submitSparkBatchJob(openMirrorPool(), job);
+    return { ok: true, status: 'Submitted', jobId: batch.id, landingPath: landingRoot, deltaPath: deltaRoot, filesFound: files.length, note };
+  } catch (e: any) {
+    return { ok: false, status: 'Error', landingPath: landingRoot, deltaPath: deltaRoot, filesFound: files.length, note, error: `Submitting the Spark merge batch failed: ${e?.message || String(e)}` };
+  }
+}
+/* ────────────────────────────────────────────────────────────────────────────
+ * MONITOR + LIFECYCLE
+ *
+ * The Monitor tab needs a real-time, GET-able snapshot of per-table replication
+ * status, true row counts, and last-sync timestamps, plus the provisioner-backed
+ * ADF pipeline-run telemetry. Lifecycle (stop/start/restart) is implemented in
+ * the BFF route, but the shared status assembly + the restart primitive live
+ * here so the route and the editor agree on shapes.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** A single per-table row for the Monitor grid. */
+export interface MirrorTableMonitorRow {
+  schema: string;
+  table: string;
+  status: 'Replicated' | 'Error' | 'NotStarted' | 'Syncing';
+  /** Rows landed by the last engine run (Cosmos tablesStatus). */
+  rows: number;
+  bytes: number;
+  lastSync: string | null;
+  error?: string;
+  mode?: 'snapshot' | 'incremental';
+  note?: string;
+  /** ADLS probe: CSV files in the table's Bronze landing folder. */
+  landingFiles?: number;
+  /** ADLS probe: total bytes of those landing files. */
+  landingBytes?: number;
+}
+
+/** A best-effort summary of the most recent ADF Bronze-copy pipeline run. */
+export interface AdfRunSummary {
+  runId: string;
+  pipelineName: string;
+  status: string;
+  runStart?: string;
+  runEnd?: string;
+  durationMs?: number;
+}
+
+/** The full payload returned by the Monitor route + lifecycle receipts. */
+export interface MirrorMonitorPayload {
+  mirroringStatus: string;
+  tables: MirrorTableMonitorRow[];
+  lastStateChange?: string | null;
+  basePath?: string | null;
+  /** ADF pipeline-run telemetry when the provisioner-backed pipeline is found. */
+  adfLastRun?: AdfRunSummary;
+  note?: string;
+}
+
+/**
+ * ADF object name: letters/digits/_ only, first char a letter. Byte-for-byte
+ * the same transform the provisioner's `adfName()` applies, so the derived
+ * pipeline name matches the one `provisionAdfCdc()` created (`<name>_to_bronze`).
+ */
+function adfSafeName(s: string): string {
+  let n = s.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+/, '').slice(0, 120);
+  if (!/^[A-Za-z]/.test(n)) n = `t_${n}`;
+  return n || 'loom_mirror';
+}
+
+/**
+ * Assemble a monitor snapshot for a mirrored database:
+ *   1. Project Cosmos `tablesStatus` → typed MirrorTableMonitorRow[] (primary,
+ *      real per-table status + true row counts + real last-sync timestamps).
+ *   2. Probe the ADLS Bronze landing folder per table → landingFiles +
+ *      landingBytes (a real `_delta_log`-style file/byte probe of what is
+ *      actually committed on storage).
+ *   3. If ADF is configured, queryPipelineRuns the provisioner-backed
+ *      `<name>_to_bronze` pipeline → adfLastRun (real ADF run-state telemetry).
+ * All three sources are best-effort and degrade gracefully with disclosure —
+ * no mocks, no fabricated values (no-vaporware).
+ */
+export async function getMirrorStatus(
+  mirrorId: string,
+  workspaceId: string,
+  state: Record<string, any>,
+  displayName: string,
+): Promise<MirrorMonitorPayload> {
+  const mirroringStatus = String(state.mirroringStatus || 'NotStarted');
+  const storedTables: any[] = Array.isArray(state.tablesStatus) ? state.tablesStatus : [];
+  const lastStateChange = state.lastStateChange || state.updatedAt || null;
+  const basePath = state.lastRun?.basePath || null;
+
+  // 1) Project Cosmos tablesStatus → typed rows.
+  const tableRows: MirrorTableMonitorRow[] = storedTables.map((t) => ({
+    schema: t.schema || '',
+    table: t.table || '',
+    status: t.status === 'replicated' ? 'Replicated' : t.status === 'error' ? 'Error' : 'NotStarted',
+    rows: typeof t.rows === 'number' ? t.rows : 0,
+    bytes: typeof t.bytes === 'number' ? t.bytes : 0,
+    lastSync: t.lastSync || null,
+    error: t.error,
+    mode: t.mode,
+    note: t.note,
+  }));
+
+  // 2) ADLS probe — list the landing folder per table to get committed file
+  //    counts + byte sums. Best-effort: a failure simply omits the probe.
+  const basePrefix = `mirrors/${workspaceId}/${mirrorId}`;
+  if (bronzeConfigured()) {
+    for (const row of tableRows) {
+      try {
+        const prefix = `${basePrefix}/${row.schema}.${row.table}`;
+        const paths = await listPaths(BRONZE, prefix, 500);
+        const files = paths.filter((p) => !p.isDirectory && p.name.endsWith('.csv'));
+        row.landingFiles = files.length;
+        row.landingBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
+      } catch { /* probe failed — omit landingFiles/landingBytes for this table */ }
+    }
+  }
+
+  // 3) ADF pipeline-run telemetry — derive the pipeline name from displayName
+  //    (mirrors the provisioner). Only attempted when ADF is fully configured.
+  let adfLastRun: AdfRunSummary | undefined;
+  if (!adfConfigGate()) {
+    const pipelineName = `${adfSafeName(displayName)}_to_bronze`;
+    try {
+      const runs = await listPipelineRuns(pipelineName, 7);
+      const last = runs[0];
+      if (last) {
+        adfLastRun = {
+          runId: last.runId,
+          pipelineName: last.pipelineName,
+          status: last.status || 'Unknown',
+          runStart: last.runStart,
+          runEnd: last.runEnd ?? undefined,
+          durationMs: last.durationInMs,
+        };
+      }
+    } catch { /* ADF telemetry unavailable — omit adfLastRun */ }
+  }
+
+  const note =
+    'Per-table status, row counts, and last-sync are from the last direct-engine run (Cosmos). ' +
+    'Landing file/byte counts are a live probe of what is committed in ADLS Bronze. ' +
+    `ADF pipeline-run telemetry is shown when the provisioner-backed '${adfSafeName(displayName)}_to_bronze' ` +
+    'pipeline is found in the factory (45-day native window).';
+
+  return { mirroringStatus, tables: tableRows, lastStateChange, basePath, adfLastRun, note };
+}
+
+/**
+ * Restart: clear all per-table Change-Tracking watermarks (empty
+ * `prevTableStatus`) so every table is re-snapshotted from scratch on this run
+ * — identical to a first Start, even for SQL-family tables that previously
+ * synced incrementally. The source change feed is re-enabled by the snapshot
+ * path. Disclosure: any prior incremental delta CSVs remain in the Bronze
+ * folder; the fresh `snapshot.csv` is read together with them by the
+ * folder-scoped OPENROWSET, so the re-snapshot supersedes stale rows on the
+ * next query rather than physically deleting old files.
+ */
+export async function restartMirrorSnapshot(
+  mirrorId: string, workspaceId: string, src: MirrorSource,
+): Promise<MirrorRunResult> {
+  return runMirrorSnapshot(mirrorId, workspaceId, src, /* prevTableStatus = */ []);
 }

@@ -26,8 +26,20 @@
  *     /sqlDatabases/{db}/containers/{c}/throughputSettings/default  read (RU/s)
  *
  * Auth scope: the sovereign-cloud ARM `.default` scope (cloud-endpoints.armScope()).
- * UAMI role:  "Cosmos DB Operator" (control-plane CRUD on databases/containers)
- *             or "DocumentDB Account Contributor" at the account scope.
+ * UAMI role:  "DocumentDB Account Contributor" at the account scope (covers the
+ *             control-plane CRUD on databases/containers AND the Connect panel's
+ *             ARM listKeys / listConnectionStrings actions). NOTE: "Cosmos DB
+ *             Operator" is NOT sufficient for the Connect panel — it explicitly
+ *             excludes key access (Microsoft.DocumentDB/databaseAccounts/listKeys).
+ *
+ * Keys / connection strings (Connect panel): the control-plane key actions
+ *   POST …/databaseAccounts/{acct}/listKeys                 → 4 master keys
+ *   POST …/databaseAccounts/{acct}/listConnectionStrings    → per-API strings
+ *   POST …/databaseAccounts/{acct}/regenerateKey            → rotate one key
+ * The returned connection strings already embed the cloud-correct data-plane
+ * suffix (getCosmosSuffix() — documents.azure.com / documents.azure.us); no
+ * manual suffix assembly is needed. accountEndpointFallback() uses
+ * getCosmosSuffix() only when ARM omits documentEndpoint.
  *
  * Config gate: cosmosConfigGate() returns the missing env var so the BFF can
  * emit an honest 503 instead of a fake list (per no-vaporware.md).
@@ -41,7 +53,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, getCosmosSuffix } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const COSMOS_ARM_API = '2024-11-15';
@@ -77,8 +89,11 @@ export function cosmosConfigGate(): CosmosConfigGate | null {
     'Set LOOM_COSMOS_ACCOUNT (the Cosmos DB account name to navigate — distinct ' +
     "from Loom's own LOOM_COSMOS_ENDPOINT store), LOOM_COSMOS_ACCOUNT_RG, and " +
     'LOOM_SUBSCRIPTION_ID on the Console Container App, then grant the Console ' +
-    'UAMI the "Cosmos DB Operator" (or "DocumentDB Account Contributor") role at ' +
-    'the account scope.';
+    'UAMI the "DocumentDB Account Contributor" role (role ID ' +
+    '5bd9cd88-fe45-4216-938b-f97437e15450) at the account scope. ' +
+    '"DocumentDB Account Contributor" covers both the control-plane navigator ' +
+    'AND the Connect panel (listKeys / listConnectionStrings); "Cosmos DB ' +
+    'Operator" is NOT sufficient — it explicitly blocks key access.';
   if (!sub) return { missing: 'LOOM_SUBSCRIPTION_ID', hint };
   if (!acct) return { missing: 'LOOM_COSMOS_ACCOUNT', hint };
   if (!rg) return { missing: 'LOOM_COSMOS_ACCOUNT_RG', hint };
@@ -96,6 +111,17 @@ function accountBase(): string {
   const rg = required('LOOM_COSMOS_ACCOUNT_RG');
   const acct = required('LOOM_COSMOS_ACCOUNT');
   return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;
+}
+
+/**
+ * ARM resource id for the configured Cosmos DB navigator account (no
+ * api-version / trailing path). Used by the metrics route to build the Azure
+ * Monitor `…/providers/microsoft.insights/metrics` URL without duplicating the
+ * env-var resolution. Throws when LOOM_SUBSCRIPTION_ID / LOOM_COSMOS_ACCOUNT_RG
+ * / LOOM_COSMOS_ACCOUNT are unset (callers gate with cosmosConfigGate first).
+ */
+export function cosmosAccountResourceId(): string {
+  return accountBase();
 }
 
 export class CosmosArmError extends Error {
@@ -328,6 +354,86 @@ export async function listContainers(db: string, opts: { withThroughput?: boolea
   return containers;
 }
 
+// ---------------------------------------------------------------------------
+// Indexing policy / unique-key policy shapes (form-driven; no raw JSON).
+// Grounded in Microsoft.DocumentDB sqlContainers resource (api 2024-11-15):
+//   properties.resource.indexingPolicy   { indexingMode, automatic,
+//                                           includedPaths[], excludedPaths[],
+//                                           compositeIndexes[][] }
+//   properties.resource.uniqueKeyPolicy  { uniqueKeys[] { paths[] } }
+// ---------------------------------------------------------------------------
+
+export interface IndexingPath { path: string }
+export interface CompositePath { path: string; order?: 'ascending' | 'descending' }
+export interface CosmosIndexingPolicy {
+  indexingMode: 'consistent' | 'lazy' | 'none';
+  automatic: boolean;
+  includedPaths: IndexingPath[];
+  excludedPaths: IndexingPath[];
+  /** Each inner array is one composite-index group (ordered paths). */
+  compositeIndexes: CompositePath[][];
+}
+export interface CosmosUniqueKeyPolicy {
+  uniqueKeys: { paths: string[] }[];
+}
+
+/** ContainerSummary + the policies the Settings panel edits. */
+export interface ContainerDetail extends ContainerSummary {
+  indexingPolicy?: CosmosIndexingPolicy;
+  uniqueKeyPolicy?: CosmosUniqueKeyPolicy;
+}
+
+function shapeIndexingPolicy(raw: any): CosmosIndexingPolicy | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const composite: CompositePath[][] = Array.isArray(raw.compositeIndexes)
+    ? raw.compositeIndexes.map((group: any[]) =>
+        (group || []).map((p: any) => ({
+          path: p?.path,
+          order: p?.order === 'descending' ? 'descending' : 'ascending',
+        })),
+      )
+    : [];
+  return {
+    indexingMode: (raw.indexingMode || 'consistent').toString().toLowerCase() as CosmosIndexingPolicy['indexingMode'],
+    automatic: raw.automatic !== false,
+    includedPaths: Array.isArray(raw.includedPaths) ? raw.includedPaths.map((p: any) => ({ path: p?.path })).filter((p: IndexingPath) => p.path) : [],
+    excludedPaths: Array.isArray(raw.excludedPaths) ? raw.excludedPaths.map((p: any) => ({ path: p?.path })).filter((p: IndexingPath) => p.path) : [],
+    compositeIndexes: composite,
+  };
+}
+
+function shapeUniqueKeyPolicy(raw: any): CosmosUniqueKeyPolicy | undefined {
+  if (!raw || !Array.isArray(raw.uniqueKeys)) return undefined;
+  return {
+    uniqueKeys: raw.uniqueKeys.map((k: any) => ({ paths: Array.isArray(k?.paths) ? k.paths : [] })),
+  };
+}
+
+/** Build the ARM `properties.resource.indexingPolicy` payload (no raw JSON). */
+function indexingPolicyToArm(p: CosmosIndexingPolicy): any {
+  const out: any = {
+    indexingMode: p.indexingMode,
+    automatic: p.automatic,
+    includedPaths: (p.includedPaths || []).filter((x) => x.path?.trim()).map((x) => ({ path: x.path.trim() })),
+    excludedPaths: (p.excludedPaths || []).filter((x) => x.path?.trim()).map((x) => ({ path: x.path.trim() })),
+  };
+  const composite = (p.compositeIndexes || [])
+    .map((group) => (group || []).filter((x) => x.path?.trim()).map((x) => ({ path: x.path.trim(), order: x.order || 'ascending' })))
+    .filter((group) => group.length > 0);
+  if (composite.length) out.compositeIndexes = composite;
+  return out;
+}
+
+/** Build the ARM `properties.resource.uniqueKeyPolicy` payload, or undefined. */
+function uniqueKeyPolicyToArm(p?: CosmosUniqueKeyPolicy): any | undefined {
+  if (!p) return undefined;
+  const keys = (p.uniqueKeys || [])
+    .map((k) => ({ paths: (k.paths || []).map((x) => (x?.trim().startsWith('/') ? x.trim() : `/${x?.trim()}`)).filter(Boolean) }))
+    .filter((k) => k.paths.length > 0);
+  if (!keys.length) return undefined;
+  return { uniqueKeys: keys };
+}
+
 export interface CreateContainerInput {
   id: string;
   /** Partition key path, e.g. /id or /tenantId (required by Cosmos NoSQL). */
@@ -336,6 +442,12 @@ export interface CreateContainerInput {
   throughput?: number;
   /** Autoscale max RU/s (mutually exclusive with throughput). */
   maxThroughput?: number;
+  /** Default TTL: -1 = on (per-item only); positive = on with default seconds; omit = off. */
+  defaultTtl?: number;
+  /** Custom indexing policy (form-built; replaces the Cosmos default when present). */
+  indexingPolicy?: CosmosIndexingPolicy;
+  /** Unique-key constraints — set ONLY at creation time (immutable afterwards). */
+  uniqueKeyPolicy?: CosmosUniqueKeyPolicy;
 }
 
 export async function createContainer(db: string, input: CreateContainerInput): Promise<ContainerSummary> {
@@ -347,22 +459,138 @@ export async function createContainer(db: string, input: CreateContainerInput): 
   const options: any = {};
   if (input.maxThroughput) options.autoscaleSettings = { maxThroughput: input.maxThroughput };
   else if (input.throughput) options.throughput = input.throughput;
-  const body = {
-    properties: {
-      resource: {
-        id,
-        partitionKey: { paths: [pk], kind: 'Hash', version: 2 },
-      },
-      options,
-    },
+  const resource: any = {
+    id,
+    partitionKey: { paths: [pk], kind: 'Hash', version: 2 },
   };
+  if (typeof input.defaultTtl === 'number') resource.defaultTtl = input.defaultTtl;
+  if (input.indexingPolicy) resource.indexingPolicy = indexingPolicyToArm(input.indexingPolicy);
+  const uk = uniqueKeyPolicyToArm(input.uniqueKeyPolicy);
+  if (uk) resource.uniqueKeyPolicy = uk;
+  const body = { properties: { resource, options } };
   const path = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(id)}`;
   const res = await armFetch(path, { method: 'PUT', body: JSON.stringify(body) });
   if (!res.ok && res.status !== 202) {
     await readJson<unknown>(res);
   }
   await waitForProvisioned(path);
-  return { id, name: id, partitionKey: pk, partitionKeyKind: 'Hash' };
+  return { id, name: id, partitionKey: pk, partitionKeyKind: 'Hash', defaultTtl: typeof input.defaultTtl === 'number' ? input.defaultTtl : null };
+}
+
+/**
+ * Read a single container's full control-plane shape (the Settings "receipt"):
+ * partition key, defaultTtl, indexing policy, unique-key policy, and live
+ * throughput. Returns null when the container does not exist (404).
+ */
+export async function getContainer(db: string, container: string): Promise<ContainerDetail | null> {
+  const path = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(container)}`;
+  const res = await armFetch(path);
+  const j = await readJson<any>(res);
+  if (!j) return null;
+  const r = j?.properties?.resource || {};
+  const base = shapeContainer(j);
+  const throughput = await readThroughput(path);
+  return {
+    ...base,
+    throughput,
+    indexingPolicy: shapeIndexingPolicy(r.indexingPolicy),
+    uniqueKeyPolicy: shapeUniqueKeyPolicy(r.uniqueKeyPolicy),
+  };
+}
+
+export interface UpdateContainerSettingsInput {
+  /** undefined = leave unchanged; null = TTL off; -1 = on/per-item; >0 = on/seconds. */
+  defaultTtl?: number | null;
+  /** New indexing policy (replaces the current one when present). */
+  indexingPolicy?: CosmosIndexingPolicy;
+}
+
+/**
+ * Update a container's TTL and/or indexing policy via a full-resource PUT.
+ * Preserves id / partitionKey / uniqueKeyPolicy and any other resource fields
+ * (uniqueKeyPolicy is immutable, so it is read back and re-sent verbatim).
+ */
+export async function updateContainerSettings(
+  db: string,
+  container: string,
+  input: UpdateContainerSettingsInput,
+): Promise<ContainerDetail> {
+  const path = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(container)}`;
+  const getRes = await armFetch(path);
+  const current = await readJson<any>(getRes);
+  if (!current) throw new CosmosArmError(404, null, `container ${db}/${container} not found`);
+  // Start from the live resource, stripping the system (_-prefixed) fields ARM rejects on PUT.
+  const resource: any = { ...(current?.properties?.resource || {}) };
+  for (const k of Object.keys(resource)) { if (k.startsWith('_')) delete resource[k]; }
+  if (input.indexingPolicy) resource.indexingPolicy = indexingPolicyToArm(input.indexingPolicy);
+  if (input.defaultTtl === null) {
+    delete resource.defaultTtl; // omitted body = TTL off
+  } else if (typeof input.defaultTtl === 'number') {
+    resource.defaultTtl = input.defaultTtl;
+  }
+  const body = { properties: { resource } };
+  const res = await armFetch(path, { method: 'PUT', body: JSON.stringify(body) });
+  if (!res.ok && res.status !== 202) {
+    await readJson<unknown>(res);
+  }
+  await waitForProvisioned(path);
+  const detail = await getContainer(db, container);
+  if (!detail) throw new CosmosArmError(500, null, 'container update succeeded but re-read returned nothing');
+  return detail;
+}
+
+/** Read the container's live throughput (manual RU / autoscale max / serverless). */
+export async function getContainerThroughput(db: string, container: string): Promise<ThroughputInfo> {
+  return readThroughput(`/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(container)}`);
+}
+
+/**
+ * Change a container's provisioned throughput **within its current mode**.
+ * Switching mode (manual↔autoscale) requires the migrate actions below — a
+ * plain PUT cannot change the mode (ARM returns 400).
+ */
+export async function updateContainerThroughput(
+  db: string,
+  container: string,
+  mode: 'manual' | 'autoscale',
+  value: number,
+): Promise<ThroughputInfo> {
+  if (!(value > 0)) throw new CosmosArmError(400, null, 'throughput value must be a positive number');
+  const tpPath = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(container)}/throughputSettings/default`;
+  const resource = mode === 'autoscale'
+    ? { autoscaleSettings: { maxThroughput: value } }
+    : { throughput: value };
+  const res = await armFetch(tpPath, { method: 'PUT', body: JSON.stringify({ properties: { resource } }) });
+  if (!res.ok && res.status !== 202) {
+    await readJson<unknown>(res);
+  }
+  await waitForProvisioned(tpPath);
+  return getContainerThroughput(db, container);
+}
+
+/** Migrate a container's throughput from manual → autoscale (long-running 202). */
+export async function migrateContainerToAutoscale(db: string, container: string): Promise<ThroughputInfo> {
+  return migrateContainerThroughput(db, container, 'migrateToAutoscale');
+}
+
+/** Migrate a container's throughput from autoscale → manual (long-running 202). */
+export async function migrateContainerToManual(db: string, container: string): Promise<ThroughputInfo> {
+  return migrateContainerThroughput(db, container, 'migrateToManualThroughput');
+}
+
+async function migrateContainerThroughput(
+  db: string,
+  container: string,
+  action: 'migrateToAutoscale' | 'migrateToManualThroughput',
+): Promise<ThroughputInfo> {
+  const base = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(container)}/throughputSettings/default`;
+  const res = await armFetch(`${base}/${action}`, { method: 'POST' });
+  if (!res.ok && res.status !== 202) {
+    await readJson<unknown>(res);
+  }
+  // The migrate action is async; poll the throughputSettings resource until settled.
+  await waitForProvisioned(base);
+  return getContainerThroughput(db, container);
 }
 
 export async function deleteContainer(db: string, container: string): Promise<void> {
@@ -443,6 +671,13 @@ export interface CosmosAccountInfo {
   serverless: boolean;
   provisioningState?: string;
   enableFreeTier?: boolean;
+  /**
+   * True when the account disables key/connection-string (local) auth. ARM
+   * still RETURNS the master keys via listKeys, but the data plane rejects them
+   * — only AAD/RBAC tokens authenticate. The Connect panel discloses this so
+   * operators don't try to use keys that will be refused at the data plane.
+   */
+  disableLocalAuth?: boolean;
 }
 
 export async function getAccountInfo(): Promise<CosmosAccountInfo | null> {
@@ -458,5 +693,92 @@ export async function getAccountInfo(): Promise<CosmosAccountInfo | null> {
     serverless: caps.includes('EnableServerless'),
     provisioningState: j?.properties?.provisioningState,
     enableFreeTier: j?.properties?.enableFreeTier,
+    disableLocalAuth: j?.properties?.disableLocalAuth === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Keys & connection strings (Connect panel) — ARM control-plane key actions.
+//
+// listKeys / listConnectionStrings / regenerateKey are POST actions on the
+// account. They require Microsoft.DocumentDB/databaseAccounts/listKeys/action
+// (and …/listConnectionStrings/action), which "DocumentDB Account Contributor"
+// (5bd9cd88-…) grants via the databaseAccounts/* wildcard. "Cosmos DB Operator"
+// (230815da-…) does NOT — it explicitly excludes key access. A UAMI without the
+// action gets ARM 403, surfaced by the BFF as an honest role gate.
+// Learn: https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts
+// ---------------------------------------------------------------------------
+
+export interface CosmosAccountKeys {
+  primaryMasterKey: string;
+  secondaryMasterKey: string;
+  primaryReadonlyMasterKey: string;
+  secondaryReadonlyMasterKey: string;
+}
+
+export interface CosmosConnectionString {
+  /** The full connection string (AccountEndpoint=…;AccountKey=…;). */
+  connectionString: string;
+  /** ARM-supplied label, e.g. "Primary SQL Connection String". */
+  description: string;
+  /** Mongo/Gremlin/Cassandra/Table strings carry the API kind on newer ARM. */
+  keyKind?: string;
+  type?: string;
+}
+
+export type CosmosKeyKind = 'primary' | 'secondary' | 'primaryReadonly' | 'secondaryReadonly';
+
+/**
+ * Account data-plane endpoint, preferring ARM's reported documentEndpoint and
+ * falling back to the cloud-correct host built from getCosmosSuffix() (the
+ * canonical sovereign suffix — documents.azure.com / documents.azure.us).
+ */
+export function accountEndpointFallback(documentEndpoint?: string): string {
+  if (documentEndpoint) return documentEndpoint;
+  const acct = required('LOOM_COSMOS_ACCOUNT');
+  return `https://${acct}.${getCosmosSuffix()}:443/`;
+}
+
+/** POST …/listKeys — the four master keys (read-write + read-only pairs). */
+export async function listAccountKeys(): Promise<CosmosAccountKeys> {
+  const res = await armFetch('/listKeys', { method: 'POST' });
+  const j = await readJson<any>(res);
+  return {
+    primaryMasterKey: j?.primaryMasterKey ?? '',
+    secondaryMasterKey: j?.secondaryMasterKey ?? '',
+    primaryReadonlyMasterKey: j?.primaryReadonlyMasterKey ?? '',
+    secondaryReadonlyMasterKey: j?.secondaryReadonlyMasterKey ?? '',
+  };
+}
+
+/**
+ * POST …/listConnectionStrings — ARM returns every enabled API's connection
+ * strings in one call (SQL/NoSQL always; Mongo when EnableMongo; Gremlin when
+ * EnableGremlin; etc.), each labeled by `description`. The embedded endpoint is
+ * already cloud-correct — no manual suffix assembly.
+ */
+export async function listConnectionStrings(): Promise<CosmosConnectionString[]> {
+  const res = await armFetch('/listConnectionStrings', { method: 'POST' });
+  const j = await readJson<{ connectionStrings?: any[] }>(res);
+  return (j?.connectionStrings || []).map((c) => ({
+    connectionString: c?.connectionString ?? '',
+    description: c?.description ?? 'Connection String',
+    keyKind: c?.keyKind,
+    type: c?.type,
+  }));
+}
+
+/**
+ * POST …/regenerateKey — rotate one of the four keys. ARM runs this async
+ * (202 + Azure-AsyncOperation); we don't block on completion (the new key is
+ * fetched by the caller via a fresh listKeys). Throws CosmosArmError on a
+ * non-2xx/202 (e.g. 403 when the UAMI lacks the action).
+ */
+export async function regenerateKey(keyKind: CosmosKeyKind): Promise<void> {
+  const res = await armFetch('/regenerateKey', {
+    method: 'POST',
+    body: JSON.stringify({ keyKind }),
+  });
+  if (res.ok || res.status === 202) return;
+  await readJson<unknown>(res); // throws CosmosArmError with ARM's message
 }

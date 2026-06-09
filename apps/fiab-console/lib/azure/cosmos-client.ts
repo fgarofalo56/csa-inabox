@@ -68,6 +68,12 @@ let _labelAssignments: Container | null = null;
 // container above: this one is partitioned by /tenantId and drives the
 // multi-tier approval inbox + final real-RBAC grant.
 let _accessRequestWorkflow: Container | null = null;
+// Saved SQL queries — per-item "My Queries" (private) + "Shared Queries" rows
+// for the SQL-database editor. Partitioned by /itemId so every per-item fetch
+// (and bulk delete) hits a single physical partition. Created lazily; no
+// ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
+// Cosmos DB Built-in Data Contributor at account scope).
+let _savedQueries: Container | null = null;
 let _ensured = false;
 
 /**
@@ -276,6 +282,13 @@ async function ensure() {
   // (PK /dataProductId) above. Created lazily so a fresh environment needs no
   // extra ARM step.
   _accessRequestWorkflow = await mk('access-request-workflow', '/tenantId');
+  // Saved SQL queries (My Queries / Shared Queries) — one row per saved query
+  // per SQL-database item. PK /itemId so the editor's per-item list and the
+  // bulk-delete both hit a single physical partition. Private rows are scoped
+  // by ownerId; shared rows are visible to workspace Admin/Member/Contributor
+  // (RBAC enforced in the route). Created lazily so a fresh environment needs
+  // no extra ARM/Bicep step beyond the account+database.
+  _savedQueries = await mk('saved-queries', '/itemId');
   _ensured = true;
 }
 
@@ -299,6 +312,8 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 // F16 — access-request approval workflow container (PK /tenantId). Distinct
 // from the marketplace accessRequestsContainer() below (PK /dataProductId).
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
+/** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
+export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -378,6 +393,7 @@ const KNOWN_CONTAINER_IDS = [
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
   'access-request-workflow',
+  'saved-queries',
 ];
 
 /** List all Loom containers with their current throughput shape. */

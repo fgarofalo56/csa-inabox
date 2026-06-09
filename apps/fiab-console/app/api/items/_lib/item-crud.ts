@@ -21,6 +21,26 @@ import { labelRank } from '@/lib/governance/label-propagation';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 /**
+ * Soft-delete (Recycle bin) metadata stamped onto an item's `state._recycled`.
+ * An item with this present is soft-deleted: invisible to the catalog/list
+ * queries (they filter `IS_DEFINED(c.state._recycled)`) but still in Cosmos,
+ * recoverable via restoreOwnedItem() until `purgeAfter`.
+ */
+export interface RecycledState {
+  /** ISO-8601 timestamp the item was moved to the recycle bin. */
+  deletedAt: string;
+  /** UPN / email / oid of the user who deleted it. */
+  deletedBy: string;
+  /** ISO-8601 = deletedAt + LOOM_RECYCLE_RETENTION_DAYS — when it is eligible for auto-purge. */
+  purgeAfter: string;
+  /** Best-effort ADLS soft-delete references, captured so restore can un-delete the blobs. */
+  adlsRefs?: Array<{ container: string; path: string; deletionId: string }>;
+}
+
+/** Soft-deleted-items filter fragment — excludes recycle-bin items from a query. */
+const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)';
+
+/**
  * Mirror a data-catalog item into the `loom-governance-items` AI Search index
  * (best-effort, never throws). Skips non-data item types so facet counts in the
  * catalog reflect data assets only. No-op when AI Search isn't configured.
@@ -201,7 +221,7 @@ export async function listOwnedItems(itemType: string, tenantId: string): Promis
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.itemType = @t',
+      query: `SELECT * FROM c WHERE c.itemType = @t AND ${NOT_RECYCLED}`,
       parameters: [{ name: '@t', value: itemType }],
     })
     .fetchAll();
@@ -233,8 +253,8 @@ export async function listOwnedItems(itemType: string, tenantId: string): Promis
 export async function listAllOwnedItems(tenantId: string, workspaceId?: string): Promise<WorkspaceItem[]> {
   const items = await itemsContainer();
   const query = workspaceId
-    ? { query: 'SELECT * FROM c WHERE c.workspaceId = @w', parameters: [{ name: '@w', value: workspaceId }] }
-    : { query: 'SELECT * FROM c', parameters: [] as { name: string; value: string }[] };
+    ? { query: `SELECT * FROM c WHERE c.workspaceId = @w AND ${NOT_RECYCLED}`, parameters: [{ name: '@w', value: workspaceId }] }
+    : { query: `SELECT * FROM c WHERE ${NOT_RECYCLED}`, parameters: [] as { name: string; value: string }[] };
   const { resources } = await items.items.query<WorkspaceItem>(query).fetchAll();
   if (resources.length === 0) return [];
   const ws = await workspacesContainer();
@@ -354,6 +374,148 @@ export async function deleteOwnedItem(
   void deleteLoomDoc(`it:${current.id}`);
   // Remove the data-product mirror from the discovery index (best-effort; no-throw).
   if (itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
+  void deleteGovernanceItem(current.id);
+  return true;
+}
+
+/**
+ * Look up an item by id across ALL types, returning it ONLY when it is
+ * currently soft-deleted (`state._recycled` defined) AND the caller's tenant
+ * owns its parent workspace. Used by the recycle-bin restore/purge paths,
+ * which can't use loadOwnedItem (that filter would never see recycled items
+ * and also requires the itemType up-front).
+ */
+export async function loadRecycledItem(itemId: string, tenantId: string): Promise<WorkspaceItem | null> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<WorkspaceItem>({
+      query: 'SELECT * FROM c WHERE c.id = @id AND IS_DEFINED(c.state._recycled)',
+      parameters: [{ name: '@id', value: itemId }],
+    })
+    .fetchAll();
+  const current = resources[0];
+  if (!current) return null;
+  const ws = await workspacesContainer();
+  try {
+    const { resource } = await ws.item(current.workspaceId, tenantId).read<Workspace>();
+    if (!resource || resource.tenantId !== tenantId) return null;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+  return current;
+}
+
+/**
+ * Soft-delete an owned item (move it to the Recycle bin):
+ *   1. Stamp state._recycled = { deletedAt, deletedBy, purgeAfter, adlsRefs[] }.
+ *   2. Best-effort ADLS soft-delete of any supplied item folders (HNS blob
+ *      soft-delete) — the deletionId is captured for restore.
+ *   3. Remove from the AI Search + governance catalog indexes so it's invisible
+ *      until restored.
+ *
+ * Does NOT hard-delete the Cosmos doc; the item stays in the `items` container
+ * and is filtered out of listOwnedItems / by-type by the _recycled predicate.
+ */
+export async function softDeleteOwnedItem(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+  deletedBy: string,
+  adlsHints?: Array<{ container: string; path: string }>,
+): Promise<WorkspaceItem | null> {
+  const current = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!current) return null;
+
+  const retentionDays = Number(process.env.LOOM_RECYCLE_RETENTION_DAYS ?? '30') || 30;
+  const now = new Date();
+  const purgeAfter = new Date(now.getTime() + retentionDays * 86_400_000).toISOString();
+
+  // Best-effort ADLS soft-delete of the item's folders. Cosmos remains the
+  // source of truth; ADLS soft-delete is captured only when a path is known.
+  const adlsRefs: Array<{ container: string; path: string; deletionId: string }> = [];
+  if (adlsHints?.length) {
+    const { softDeleteDirectory } = await import('@/lib/azure/adls-client');
+    for (const hint of adlsHints) {
+      if (!hint?.container || !hint?.path) continue;
+      try {
+        const r = await softDeleteDirectory(hint.container, hint.path);
+        if (r?.deletionId) adlsRefs.push({ container: hint.container, path: hint.path, deletionId: r.deletionId });
+      } catch { /* swallow — Cosmos state is the source of truth */ }
+    }
+  }
+
+  const recycled: RecycledState = {
+    deletedAt: now.toISOString(),
+    deletedBy,
+    purgeAfter,
+    ...(adlsRefs.length ? { adlsRefs } : {}),
+  };
+
+  const next: WorkspaceItem = {
+    ...current,
+    state: { ...(current.state ?? {}), _recycled: recycled },
+    updatedAt: now.toISOString(),
+  };
+  const items = await itemsContainer();
+  const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
+
+  // Remove from search / governance indexes so it's invisible until restored.
+  void deleteLoomDoc(`it:${current.id}`);
+  if (itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
+  void deleteGovernanceItem(current.id);
+  return resource!;
+}
+
+/**
+ * Restore a soft-deleted item:
+ *   1. Clear state._recycled.
+ *   2. Un-delete any captured ADLS folders (best-effort).
+ *   3. Re-index in AI Search + governance + data-product catalogs.
+ */
+export async function restoreOwnedItem(
+  itemId: string,
+  tenantId: string,
+): Promise<WorkspaceItem | null> {
+  const current = await loadRecycledItem(itemId, tenantId);
+  if (!current) return null;
+
+  // Best-effort ADLS restore via undeletePath().
+  const recycled = current.state?._recycled as RecycledState | undefined;
+  if (recycled?.adlsRefs?.length) {
+    const { unDeleteDirectory } = await import('@/lib/azure/adls-client');
+    for (const ref of recycled.adlsRefs) {
+      try { await unDeleteDirectory(ref.container, ref.path, ref.deletionId); } catch { /* best-effort */ }
+    }
+  }
+
+  const { _recycled: _removed, ...stateWithout } = (current.state ?? {}) as Record<string, unknown>;
+  const next: WorkspaceItem = {
+    ...current,
+    state: stateWithout,
+    updatedAt: new Date().toISOString(),
+  };
+  const items = await itemsContainer();
+  const { resource: restored } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
+  // Re-index (best-effort; no-throw).
+  void upsertLoomDoc(docForItem(restored!, tenantId));
+  void mirrorDataProduct(restored!, tenantId);
+  void mirrorGovernanceDoc(restored!, tenantId);
+  return restored!;
+}
+
+/**
+ * Purge (hard-delete) a soft-deleted item from the Recycle bin. Only operates
+ * on items that are currently recycled and owned by the caller's tenant.
+ * Returns false when the id is not a recycled item the tenant owns.
+ */
+export async function purgeRecycledItem(itemId: string, tenantId: string): Promise<boolean> {
+  const current = await loadRecycledItem(itemId, tenantId);
+  if (!current) return false;
+  const items = await itemsContainer();
+  await items.item(current.id, current.workspaceId).delete();
+  void deleteLoomDoc(`it:${current.id}`);
+  if (current.itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   void deleteGovernanceItem(current.id);
   return true;
 }

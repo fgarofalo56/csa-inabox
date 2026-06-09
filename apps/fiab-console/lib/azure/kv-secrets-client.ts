@@ -35,6 +35,63 @@ export function vaultUrl(): string | null {
   return null;
 }
 
+/**
+ * Resolve the vault base URL for SHORTCUT external-source credentials. Operators
+ * may isolate shortcut credentials (S3/GCS/SAS/SA-JSON) to a dedicated vault via
+ * `LOOM_SHORTCUT_KEYVAULT` (a full https URI or a bare vault name); when unset it
+ * falls back to the general Loom vault (`vaultUrl()`). The sovereign suffix is
+ * preserved because a full URI is passed through verbatim.
+ */
+export function shortcutVaultUrl(): string | null {
+  const ov = (process.env.LOOM_SHORTCUT_KEYVAULT || '').trim();
+  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : `https://${ov}.vault.azure.net`;
+  return vaultUrl();
+}
+
+/** Honest-gate for the shortcut credential vault. Names LOOM_SHORTCUT_KEYVAULT. */
+export function shortcutKeyVaultConfigGate(): { missing: string; detail: string } | null {
+  if (!shortcutVaultUrl()) {
+    return {
+      missing: 'LOOM_SHORTCUT_KEYVAULT',
+      detail:
+        'No Key Vault configured for shortcut external-source credentials. Set LOOM_SHORTCUT_KEYVAULT ' +
+        '(or LOOM_KEY_VAULT_URI) and grant the Console identity the "Key Vault Secrets Officer" role on that vault.',
+    };
+  }
+  return null;
+}
+
+/** PUT a secret into the SHORTCUT vault; returns the secret name actually used. */
+export async function putShortcutSecret(name: string, value: string): Promise<{ name: string }> {
+  const base = shortcutVaultUrl();
+  if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
+  const secretName = sanitizeSecretName(name);
+  const res = await fetch(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ value }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new KeyVaultError(`Key Vault set-secret failed (${res.status}): ${body.slice(0, 300)}`, res.status);
+  }
+  return { name: secretName };
+}
+
+/** GET the current value of a secret from the SHORTCUT vault. */
+export async function getShortcutSecretValue(name: string): Promise<string> {
+  const base = shortcutVaultUrl();
+  if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
+  const res = await fetch(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+    headers: { authorization: `Bearer ${await token()}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new KeyVaultError(`Key Vault get-secret failed (${res.status})`, res.status);
+  const j = await res.json();
+  return j?.value || '';
+}
+
 export function kvSecretsConfigGate(): { missing: string; detail: string } | null {
   if (!vaultUrl()) {
     return {

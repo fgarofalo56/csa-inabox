@@ -34,6 +34,11 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Soft-delete retention days for blob/directory recovery (Recycle bin restore window). 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
 var saName = take('saloom${replace(domainName, '-', '')}${uniqueString(resourceGroup().id)}', 24)
 
 resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
@@ -78,19 +83,20 @@ resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   }
 }
 
-// Containers: bronze (raw), silver (cleansed), gold (curated), landing-zone
-// (Open Mirroring publisher drops), checkpoints (Spark checkpoint dirs)
+// Containers: bronze (raw), silver (cleansed), gold (curated), landing
+// (Open Mirroring publisher drops — producers push Parquet here, merged into
+// managed Delta under bronze/mirrors/**), checkpoints (Spark checkpoint dirs)
 resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: sa
   name: 'default'
   properties: {
     deleteRetentionPolicy: {
       enabled: true
-      days: 30
+      days: recycleRetentionDays
     }
     containerDeleteRetentionPolicy: {
       enabled: true
-      days: 30
+      days: recycleRetentionDays
     }
     // Blob versioning conflicts with HNS (ADLS Gen2) — disable.
     // Delta Lake's _delta_log/ already gives us per-commit time travel,
@@ -100,7 +106,7 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   }
 }
 
-var containers = ['bronze', 'silver', 'gold', 'landing-zone', 'checkpoints', 'csv-imports']
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs
@@ -220,4 +226,4 @@ output eventGridTopicId string = sysTopic.id
 output bronzeContainerUrl string = '${sa.properties.primaryEndpoints.dfs}bronze'
 output silverContainerUrl string = '${sa.properties.primaryEndpoints.dfs}silver'
 output goldContainerUrl string = '${sa.properties.primaryEndpoints.dfs}gold'
-output landingZoneContainerUrl string = '${sa.properties.primaryEndpoints.dfs}landing-zone'
+output landingContainerUrl string = '${sa.properties.primaryEndpoints.dfs}landing'
