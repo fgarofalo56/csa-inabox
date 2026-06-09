@@ -661,3 +661,64 @@ export function getArmEndpoint(): string {
 export function getKustoSuffix(): string {
   return kustoSuffix();
 }
+
+// ---------------------------------------------------------------------------
+// Azure Analysis Services (AAS) data plane — Loom-native report renderer
+// ---------------------------------------------------------------------------
+//
+// Commercial / GCC : asazure.windows.net
+// GCC-High / IL5   : asazure.usgovcloudapi.net
+//
+// The AAD token scope is ALWAYS the literal string `https://*.asazure.windows.net`
+// (or `*.asazure.usgovcloudapi.net` for Gov). Per the AAS REST API auth spec
+// the `*` is NOT a wildcard — it is the required subdomain character. Using a
+// real subdomain (e.g. https://eastus2.asazure.windows.net) FAILS auth.
+// Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+
+/** AAS XMLA/REST hostname suffix for the active cloud (no leading dot). */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
+ * `*` character must appear as the subdomain — it is NOT a wildcard:
+ *   "the audience must have the `*` character as the subdomain"
+ */
+export function aasScope(): string {
+  return `https://*.${aasSuffix()}`;
+}
+
+/**
+ * Parse a Loom `state.aasServer` value into `{ region, serverName }`.
+ *
+ * Accepts:
+ *   - XMLA URI: "asazure://eastus2.asazure.windows.net/my-server"
+ *   - FQDN:     "my-server.eastus2.asazure.windows.net"
+ *
+ * Returns null when the value cannot be parsed (e.g. a bare server name with
+ * no region — callers must then supply the region via env).
+ */
+export function parseAasServer(
+  raw: string,
+): { region: string; serverName: string } | null {
+  const s = (raw || '').trim();
+  if (!s) return null;
+  // XMLA URI form: asazure://<region>.asazure.{windows|usgovcloudapi}.net/<serverName>
+  const xmla = s.match(/^asazure:\/\/([^.]+)\.asazure\.(?:windows|usgovcloudapi)\.net\/(.+)$/i);
+  if (xmla) return { region: xmla[1], serverName: xmla[2] };
+  // FQDN form: <serverName>.<region>.asazure.{windows|usgovcloudapi}.net
+  const fqdn = s.match(/^([^.]+)\.([^.]+)\.asazure\.(?:windows|usgovcloudapi)\.net$/i);
+  if (fqdn) return { serverName: fqdn[1], region: fqdn[2] };
+  // Bare name — region unknown.
+  return null;
+}
+
+/**
+ * Build the AAS data-plane REST base URL for a given server + model, e.g.
+ * https://eastus2.asazure.windows.net/servers/my-server/models/AdventureWorks
+ * (no trailing slash).
+ */
+export function aasModelUrl(region: string, serverName: string, modelName: string): string {
+  return `https://${region}.${aasSuffix()}/servers/${encodeURIComponent(serverName)}/models/${encodeURIComponent(modelName)}`;
+}

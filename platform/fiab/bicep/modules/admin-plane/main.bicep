@@ -223,6 +223,12 @@ param loomPostgresAadUser string = ''
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Azure Analysis Services connection string (asazure://<region>.asazure.windows.net/<server>) backing the semantic-model Power Query ingest refresh. Empty = the AAS refresh phase is honestly gated (Delta still lands; query via Synapse Serverless). Set from landing-zone aas.bicep output aasConnectionString when deployAas=true. AAS is unavailable in Government clouds — leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
+param loomAasModel string = ''
+
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
@@ -575,6 +581,16 @@ param aasEnabled bool = false
 @description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). S0/S1/S2/S4 = Standard (prod).')
 @allowed(['D1', 'B1', 'S0', 'S1', 'S2', 'S4'])
 param aasSku string = 'D1'
+
+@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
+@allowed(['', 'powerbi'])
+param loomBiBackend string = ''
+
+@description('Azure Analysis Services server XMLA URI — platform-level default for the Loom-native report renderer. Format: asazure://{region}.asazure.windows.net/{serverName} (gov: asazure.usgovcloudapi.net). Leave empty to require a per-item state.aasServer binding. The Console UAMI must be a server admin on this AAS instance.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer. Leave empty to require a per-item state.aasDatabase binding.')
+param loomAasDatabase string = ''
 
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
@@ -1120,6 +1136,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in Azure Analysis Services semantic layer — backs the
+            // semantic-model "Get data" (Power Query M) ingest refresh phase.
+            // Empty values honestly gate the AAS phase (Delta still lands; query
+            // via Synapse Serverless). Unavailable in Government clouds.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
             // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
             // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
             // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
@@ -1324,6 +1346,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // Report editor BI backend. Empty (default) → Loom-native renderer
+            // that queries the bound AAS model with DAX (no Power BI / Fabric).
+            // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
+            // the client editor branch without a round-trip. (no-fabric-dependency.md)
+            { name: 'LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
             // Microsoft Fabric / Purview-unified-catalog dependency). Set to
