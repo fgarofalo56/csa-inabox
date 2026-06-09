@@ -656,17 +656,11 @@ param loomAasXmlaEndpoint string = ''
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
 
-@description('Azure Analysis Services server — bare server name (no region/suffix) used by the DirectQuery source binder, OR an asazure://{region}.asazure.windows.net/{server} URI for the opt-in aas semantic backend (calc groups + field parameters + RLS/OLS). Empty = the AAS DirectQuery + calc-group paths are honest-gated; the semantic-model item still works fully on the Loom-native tabular layer (no-fabric-dependency.md). The Console UAMI must be an Analysis Services server administrator on this server (out-of-band tenant grant — see docs/fiab/v3-tenant-bootstrap.md).')
-param loomAasServer string = ''
-
 @description('AAS database (TMSL Catalog) name. Used by the Console for column-metadata XMLA reads/writes, calc-group/field-param writes, and the Loom-native report renderer. Defaults to the last path segment of loomAasXmlaEndpoint when empty for the incremental-refresh path; otherwise defaults to loomdb for the column-editor path.')
 param loomAasDatabase string = 'loomdb'
 
 @description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
 param loomAasResourceGroup string = ''
-
-@description('Deploy an Azure Analysis Services server. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on to opt into a standalone composite-model host AND/OR the RLS/OLS Security tab backend; both use the same AAS server over XMLA.')
-param aasEnabled bool = false
 
 @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
 param aasSpnClientId string = ''
