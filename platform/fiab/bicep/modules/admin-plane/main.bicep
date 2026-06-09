@@ -1486,6 +1486,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // AAS XMLA measure persistence (loomSemanticBackend=analysis-services
+            // reads these). Empty string = unconfigured → aas-client surfaces an
+            // honest infra-gate and DAX validation still works on every backend.
+            // The XMLA scope (https://*.asazure.<suffix>/.default) is derived per
+            // cloud by aas-client.ts from cloud-endpoints.aasSuffix() — no extra var.
+            // NOTE: the Console UAMI must be added as an AAS server administrator
+            // out-of-band (ARM can't set admins on an existing server):
+            //   az analysis-services server update --name <srv> -g <rg> \
+            //     --admin-users <consolePrincipalId>
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
             // Report editor BI backend. Empty (default) → Loom-native renderer
             // that queries the bound AAS model with DAX (no Power BI / Fabric).

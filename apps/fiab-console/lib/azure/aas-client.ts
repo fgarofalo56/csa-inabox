@@ -1658,3 +1658,106 @@ export async function getAasServer(serverName: string): Promise<ProvisionedAasSe
   }
   return shapeProvisionedServer(j, cfg, serverName);
 }
+
+// ===========================================================================
+// Single-measure save (PR #980) — Monaco DAX editor's "Save to model (XMLA)"
+// path. Wraps the per-server executeTmsl() with the convenience-shape callers
+// expect: an opts object that includes optional formatString / displayFolder,
+// plus an evaluator that returns the just-saved measure's value to prove the
+// write took (no fake "Saved!" toast, per no-vaporware.md). Honest 501 when
+// LOOM_AAS_SERVER / LOOM_AAS_DATABASE are unset.
+// ===========================================================================
+
+import {
+  buildMeasureUpsertTmsl as buildMeasureUpsertTmslPure,
+  buildMeasureEvalQuery as buildMeasureEvalQueryPure,
+} from './aas-tmsl';
+
+// Re-export the pure measure builders so callers (and tests) can import them
+// from aas-client alongside the network functions.
+export { buildMeasureUpsertTmsl, buildMeasureEvalQuery } from './aas-tmsl';
+
+/** True when LOOM_AAS_SERVER (the asazure:// connection string) is set. */
+export function isAasConfigured(): boolean {
+  return !!(process.env.LOOM_AAS_SERVER || '').trim();
+}
+
+/** Configured AAS model database name (LOOM_AAS_DATABASE), or '' if unset. */
+export function aasDefaultDatabase(): string {
+  return (process.env.LOOM_AAS_DATABASE || '').trim();
+}
+
+function resolveAasMeasureDatabase(database?: string): string {
+  const db = (database || aasDefaultDatabase()).trim();
+  if (!db) {
+    throw new AasError(
+      'LOOM_AAS_DATABASE is not configured. Set it to the AAS model database name.',
+      501,
+    );
+  }
+  return db;
+}
+
+function requireAasServer(): string {
+  const server = (process.env.LOOM_AAS_SERVER || '').trim();
+  if (!server) {
+    throw new AasError(
+      'LOOM_AAS_SERVER is not configured. Set it to the AAS connection string ' +
+        '(asazure://<region>.asazure.windows.net/<serverName>).',
+      501,
+    );
+  }
+  return server;
+}
+
+/**
+ * Upsert a single measure (with optional formatString + displayFolder) via TMSL
+ * createOrReplace over XMLA. Throws AasError(501) when the AAS server / database
+ * are not configured (honest infra-gate, no mock); AasError(422) on a TMSL
+ * fault; AasError(<status>) on HTTP error.
+ */
+export async function upsertMeasure(opts: {
+  database?: string;
+  tableName: string;
+  measureName: string;
+  expression: string;
+  formatString?: string;
+  displayFolder?: string;
+}): Promise<void> {
+  const server = requireAasServer();
+  const db = resolveAasMeasureDatabase(opts.database);
+  const tmsl = buildMeasureUpsertTmslPure({
+    database: db,
+    tableName: opts.tableName,
+    measureName: opts.measureName,
+    expression: opts.expression,
+    formatString: opts.formatString,
+    displayFolder: opts.displayFolder,
+  });
+  await executeTmsl(server, db, JSON.stringify(tmsl));
+}
+
+/**
+ * Evaluate a single measure and return its raw value — used to confirm a
+ * just-saved measure (with its dynamic format string) computes against the live
+ * model. Reuses the AAS data-plane DAX query endpoint via executeAasQuery.
+ */
+export async function evaluateMeasure(opts: {
+  database?: string;
+  tableName: string;
+  measureName: string;
+}): Promise<{ value: unknown; rows: Record<string, unknown>[] }> {
+  const server = requireAasServer();
+  const db = resolveAasMeasureDatabase(opts.database);
+  const m = server.match(/^(?:asazure|https?):\/\/([^/]+)\/([^/?#]+)/i);
+  if (!m) throw new AasError('LOOM_AAS_SERVER is malformed: "' + server + '"', 400);
+  const region = m[1].split('.')[0];
+  const serverName = m[2];
+  const dax = buildMeasureEvalQueryPure(opts.tableName, opts.measureName);
+  const result = await executeAasQuery(region, serverName, db, dax);
+  const rows: Record<string, unknown>[] =
+    ((result?.results?.[0]?.tables?.[0]?.rows as Record<string, unknown>[]) || []);
+  const first = rows[0] || {};
+  const value = Object.values(first)[0];
+  return { value, rows };
+}

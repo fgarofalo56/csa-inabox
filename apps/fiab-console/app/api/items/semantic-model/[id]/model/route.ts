@@ -67,6 +67,7 @@ import {
   aasConfig, fabricWriteEnabled,
   aasAvailabilityGate, executeTmsl, buildCalcGroupTmsl, buildFieldParamTmsl, AasError,
   xmlaConfigGate, buildAggTableTmsl, executeAggTmsl,
+  upsertMeasure, evaluateMeasure, isAasConfigured, aasDefaultDatabase,
   type TmslRelationship, type TmslTable, type TmslCardinality,
   type AltMap, type AggSummarization,
 } from '@/lib/azure/aas-client';
@@ -780,6 +781,84 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   return NextResponse.json({ ok: true, relationship: rel, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
 }
 
+interface MeasurePutBody {
+  tableName?: string;
+  measureName?: string;
+  expression?: string;
+  formatString?: string;
+  displayFolder?: string;
+  database?: string;
+}
+
+/**
+ * Handle the PR #980 single-measure save dispatch (Monaco DAX editor's "Save to
+ * model (XMLA)" button). Honest 501 infra-gates when the AAS XMLA backend isn't
+ * configured (no fake "Saved!" toast per no-vaporware.md); on success, evaluate
+ * the just-saved measure so the response confirms it (and its dynamic format)
+ * computes against the live model.
+ */
+async function handleMeasurePut(body: MeasurePutBody): Promise<NextResponse> {
+  const tableName = body.tableName?.trim();
+  const measureName = body.measureName?.trim();
+  const expression = body.expression?.trim();
+  const formatString = body.formatString?.trim() || undefined;
+  const displayFolder = body.displayFolder?.trim() || undefined;
+  const database = body.database?.trim() || undefined;
+  if (!tableName || !measureName || !expression) {
+    return NextResponse.json(
+      { ok: false, error: 'tableName, measureName, and expression are required' },
+      { status: 400 },
+    );
+  }
+
+  const backend = (process.env.LOOM_SEMANTIC_BACKEND || 'loom-native').trim().toLowerCase();
+  if (backend !== 'analysis-services' && backend !== 'aas') {
+    return NextResponse.json({
+      ok: false,
+      error: `TMSL measure persistence requires LOOM_SEMANTIC_BACKEND=analysis-services (current: ${backend}).`,
+      gate: 'XMLA',
+      remediation: backend === 'powerbi'
+        ? 'The Power BI Premium XMLA endpoint speaks the analysis-services TDS protocol over powerbi://, not plain HTTP — persist measures from Power BI Desktop or Tabular Editor, or switch LOOM_SEMANTIC_BACKEND to analysis-services with an AAS server.'
+        : 'Set LOOM_SEMANTIC_BACKEND=analysis-services and provide LOOM_AAS_SERVER + LOOM_AAS_DATABASE to enable XMLA measure persistence. DAX validation still works on every backend via the measures route.',
+      link: 'https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-overview',
+    }, { status: 501 });
+  }
+
+  if (!isAasConfigured()) {
+    return NextResponse.json({
+      ok: false,
+      error: 'LOOM_AAS_SERVER is not configured.',
+      gate: 'XMLA',
+      remediation: 'Set LOOM_AAS_SERVER to the AAS connection string (e.g. asazure://westus.asazure.windows.net/myserver) and LOOM_AAS_DATABASE to the model database name. The Console UAMI must hold the AAS server-administrator role.',
+      link: 'https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh',
+    }, { status: 501 });
+  }
+
+  try {
+    await upsertMeasure({ database, tableName, measureName, expression, formatString, displayFolder });
+    // Best-effort evaluate so the response confirms the measure (and its
+    // dynamic format string) computes — failure does NOT fail the save.
+    let evaluate: { value: unknown } | undefined;
+    try {
+      const r = await evaluateMeasure({ database, tableName, measureName });
+      evaluate = { value: r.value };
+    } catch {
+      evaluate = undefined;
+    }
+    return NextResponse.json({
+      ok: true,
+      persisted: true,
+      backend: 'analysis-services',
+      measure: { tableName, measureName, expression, formatString, displayFolder },
+      evaluate,
+      database: database || aasDefaultDatabase() || null,
+    });
+  } catch (e: any) {
+    const status = e instanceof AasError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+  }
+}
+
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -787,6 +866,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({}));
+
+  // PR #980 — Monaco DAX editor's "Save to model (XMLA)" dispatches PUT with a
+  // {tableName, measureName, expression, formatString?, displayFolder?} body
+  // (no relId). Persist the single measure via TMSL createOrReplace through
+  // the AAS XMLA endpoint, then evaluate so the response confirms it computes.
+  if (typeof body?.measureName === 'string' && !body?.relId) {
+    return handleMeasurePut(body);
+  }
+
   const relId = String(body?.relId || '').trim();
   if (!relId) return NextResponse.json({ ok: false, error: 'relId is required' }, { status: 400 });
 

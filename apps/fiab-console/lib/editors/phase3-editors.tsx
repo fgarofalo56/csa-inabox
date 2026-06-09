@@ -9754,6 +9754,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [daxExpr, setDaxExpr] = useState('SUM(\'Sales\'[Amount])');
   const [daxBusy, setDaxBusy] = useState(false);
   const [daxResult, setDaxResult] = useState<{ ok: boolean; value?: unknown; error?: string } | null>(null);
+  // Format string + display folder + XMLA persistence (analysis-services backend).
+  const [formatString, setFormatString] = useState('');
+  const [displayFolder, setDisplayFolder] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ ok: boolean; text: string; remediation?: string; link?: string } | null>(null);
+  const [xmlaPersistence, setXmlaPersistence] = useState<boolean | null>(null);
 
   // Scheduled-refresh editor (config tab) — mirrors the Power BI service
   // "Scheduled refresh" pane. Writes via PATCH /datasets/{id}/refreshSchedule.
@@ -10467,6 +10473,53 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     finally { setDaxBusy(false); }
   }, [workspaceId, datasetId, measureName, measureTable, daxExpr]);
 
+  // Probe the model route once a dataset is selected so the Measures tab can
+  // show the Save-to-model button when LOOM_SEMANTIC_BACKEND=analysis-services
+  // + LOOM_AAS_SERVER are wired (vs an honest infra-gate otherwise).
+  useEffect(() => {
+    if (!datasetId) { setXmlaPersistence(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model`);
+        const j = await r.json();
+        if (!cancelled) setXmlaPersistence(!!j?.xmlaPersistence);
+      } catch { if (!cancelled) setXmlaPersistence(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [datasetId]);
+
+  // Persist the measure (DAX + format string + display folder) into the model
+  // via TMSL createOrReplace over the AAS XMLA endpoint. The route evaluates
+  // the saved measure server-side so success reflects a real computed value —
+  // not a fake toast (no-vaporware.md). When AAS isn't wired the route returns
+  // an honest 501 gate we surface verbatim.
+  const saveMeasure = useCallback(async () => {
+    if (!datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
+    setSaveBusy(true); setSaveResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tableName: measureTable.trim(),
+          measureName: measureName.trim(),
+          expression: daxExpr,
+          formatString: formatString.trim() || undefined,
+          displayFolder: displayFolder.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setSaveResult({ ok: false, text: j.error || `HTTP ${r.status}`, remediation: j.remediation, link: j.link });
+        return;
+      }
+      const evalNote = j?.evaluate ? ` Evaluated value: ${j.evaluate.value === null || j.evaluate.value === undefined ? 'NULL' : String(j.evaluate.value)}.` : '';
+      setSaveResult({ ok: true, text: `Measure "${measureName.trim()}" saved to the model via TMSL createOrReplace.${evalNote}` });
+      if (workspaceId && datasetId) loadDetail(workspaceId, datasetId);
+    } catch (e: any) { setSaveResult({ ok: false, text: e?.message || String(e) }); }
+    finally { setSaveBusy(false); }
+  }, [datasetId, workspaceId, measureName, measureTable, daxExpr, formatString, displayFolder, loadDetail]);
+
   const focusNewMeasure = useCallback(() => {
     setTab('measures');
     if (!measureTable && detail?.tables?.[0]?.name) setMeasureTable(detail.tables[0].name);
@@ -10553,6 +10606,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       ]},
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
+        { label: saveBusy ? 'Saving…' : 'Save to model (XMLA)', onClick: datasetId ? () => { setTab('measures'); saveMeasure(); } : undefined, disabled: !datasetId || saveBusy, title: !datasetId ? 'select a dataset first' : 'Persist the measure (DAX + format string + display folder) via TMSL createOrReplace (requires LOOM_SEMANTIC_BACKEND=analysis-services + LOOM_AAS_SERVER)' },
       ]},
       { label: 'Aggregations', actions: [
         { label: 'Manage aggregations', onClick: datasetId ? () => setTab('aggregations') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Define an automatic-aggregation table (alternateOf) so the engine routes matching queries to a small pre-aggregated cache' },
@@ -10568,7 +10622,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -10964,11 +11018,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <>
                     <MessageBar intent="info">
                       <MessageBarBody>
-                        <MessageBarTitle>DAX measure validator (no persistence)</MessageBarTitle>
-                        Author + validate a candidate DAX expression server-side via Power BI <code>executeQueries</code>.
-                        Persistence into the model requires the <strong>XMLA endpoint</strong> (Premium / Fabric capacity)
-                        or Power BI Desktop / Tabular Editor. The validator surfaces the engine's real syntax + semantic
-                        errors so you can iterate before opening the model in Desktop.
+                        <MessageBarTitle>DAX measure editor</MessageBarTitle>
+                        <strong>Validate</strong> runs the expression server-side via Power BI <code>executeQueries</code> — the engine returns its real syntax + semantic errors, not a mock.{' '}
+                        <strong>Save to model</strong> persists the measure (with its format string + display folder) via TMSL <code>createOrReplace</code> over the XMLA endpoint, then evaluates it so the result reflects a real computed value.{' '}
+                        Save requires <code>LOOM_SEMANTIC_BACKEND=analysis-services</code> plus <code>LOOM_AAS_SERVER</code> / <code>LOOM_AAS_DATABASE</code>.{' '}
+                        For Power BI Premium XMLA, use Power BI Desktop or Tabular Editor — that endpoint speaks the analysis-services protocol over <code>powerbi://</code>, not plain HTTP.
+                        {xmlaPersistence === false && <> {' '}<Badge appearance="tint" color="warning">XMLA persistence not wired</Badge></>}
+                        {xmlaPersistence === true && <> {' '}<Badge appearance="tint" color="success">XMLA persistence ready</Badge></>}
                       </MessageBarBody>
                     </MessageBar>
                     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
@@ -10981,12 +11037,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <Field label="Measure name" style={{ minWidth: 200 }}>
                         <Input value={measureName} onChange={(_, d) => setMeasureName(d.value)} placeholder="TotalSales" />
                       </Field>
+                      <Field label="Format string" hint="TMSL formatString — e.g. $#,0.00 currency, 0.00% percent, #,0 integer" style={{ minWidth: 200 }}>
+                        <Input value={formatString} onChange={(_, d) => setFormatString(d.value)} placeholder="$#,0.00;($#,0.00);$#,0.00" />
+                      </Field>
+                      <Field label="Display folder" hint="Organizes the measure in reporting tools (backslash-separated)" style={{ minWidth: 200 }}>
+                        <Input value={displayFolder} onChange={(_, d) => setDisplayFolder(d.value)} placeholder={'Finance\\KPIs'} />
+                      </Field>
                     </div>
                     <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
                     <MonacoTextarea
                       value={daxExpr}
                       onChange={setDaxExpr}
-                      language="sql"
+                      language="dax"
                       height={140}
                       minHeight={100}
                       ariaLabel="DAX expression editor"
@@ -10997,8 +11059,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         icon={<Play20Regular />}
                         disabled={daxBusy || !workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
                         onClick={validateDax}
+                        title={!workspaceId ? 'Validate uses the Power BI executeQueries REST endpoint — select a Power BI workspace first' : undefined}
                       >
                         {daxBusy ? 'Validating…' : 'Validate DAX'}
+                      </Button>
+                      <Button
+                        appearance="outline"
+                        icon={<Save20Regular />}
+                        disabled={saveBusy || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
+                        onClick={saveMeasure}
+                        title="Persist this measure (DAX + format string + display folder) via TMSL createOrReplace to Azure Analysis Services (requires LOOM_SEMANTIC_BACKEND=analysis-services + LOOM_AAS_SERVER)"
+                      >
+                        {saveBusy ? 'Saving…' : 'Save to model (XMLA)'}
                       </Button>
                       {daxResult?.ok && (
                         <Badge appearance="filled" color="success">valid · probe value: <code style={{ marginLeft: 4 }}>{daxResult.value === null || daxResult.value === undefined ? 'NULL' : String(daxResult.value)}</code></Badge>
@@ -11009,6 +11081,16 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <MessageBarBody>
                           <MessageBarTitle>DAX validation failed</MessageBarTitle>
                           {daxResult.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {saveResult && (
+                      <MessageBar intent={saveResult.ok ? 'success' : 'warning'} style={{ marginTop: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{saveResult.ok ? 'Saved to model' : 'Not persisted'}</MessageBarTitle>
+                          {saveResult.text}
+                          {saveResult.remediation && <> {saveResult.remediation}</>}
+                          {saveResult.link && <> <a href={saveResult.link} target="_blank" rel="noreferrer">Learn more</a>.</>}
                         </MessageBarBody>
                       </MessageBar>
                     )}

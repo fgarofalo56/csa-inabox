@@ -178,3 +178,37 @@ export function buildModelBimTmsl(
     2,
   );
 }
+
+/**
+ * Build the TMSL createOrReplace command for a single measure (pure — testable).
+ * Used by the Monaco DAX editor's "Save to model (XMLA)" path. Optional format
+ * string + display folder are included only when supplied.
+ */
+export function buildMeasureUpsertTmsl(opts: {
+  database: string;
+  tableName: string;
+  measureName: string;
+  expression: string;
+  formatString?: string;
+  displayFolder?: string;
+}): object {
+  const measure: Record<string, string> = {
+    name: opts.measureName,
+    expression: opts.expression,
+  };
+  if (opts.formatString) measure.formatString = opts.formatString;
+  if (opts.displayFolder) measure.displayFolder = opts.displayFolder;
+  return {
+    createOrReplace: {
+      object: { database: opts.database, table: opts.tableName, measure: opts.measureName },
+      measure,
+    },
+  };
+}
+
+/** Build EVALUATE ROW("value", 'Table'[Measure]) for a single-measure probe. */
+export function buildMeasureEvalQuery(tableName: string, measureName: string): string {
+  const tbl = "'" + (tableName || '').replace(/'/g, "''") + "'";
+  const meas = '[' + (measureName || '').replace(/]/g, '') + ']';
+  return 'EVALUATE ROW("value", ' + tbl + meas + ')';
+}

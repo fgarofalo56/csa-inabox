@@ -747,6 +747,34 @@ export function getAasSuffix(): string {
   return aasSuffix();
 }
 
+
+/**
+ * Normalise an AAS connection-string or HTTP URL into a canonical HTTPS server
+ * base URL (no trailing slash). Accepts the three forms operators paste in:
+ *   asazure://westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   https://westus.asazure.windows.net/servers/myserver  (already resolved)
+ *     -> https://westus.asazure.windows.net/servers/myserver   (passthrough)
+ * Returns '' for an empty / unparseable input so callers can gate honestly.
+ */
+export function aasServerBase(server: string): string {
+  if (!server) return '';
+  const trimmed = server.trim();
+  // Already an HTTPS base URL — strip any trailing slash and pass through.
+  if (/^https:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '');
+  // asazure:// connection string form.
+  const m = trimmed.match(/^asazure:\/\/([^/]+)\/(.+)$/i);
+  if (m) return `https://${m[1]}/servers/${m[2].replace(/\/+$/, '')}`;
+  // Bare "region.asazure.<suffix>/serverName" form.
+  const parts = trimmed.replace(/\/+$/, '').split('/');
+  if (parts.length === 2 && parts[0].includes('.')) {
+    return `https://${parts[0]}/servers/${parts[1]}`;
+  }
+  return '';
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
