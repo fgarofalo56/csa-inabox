@@ -48,12 +48,13 @@ public class DeltaLogEventHandler : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Master switch (LOOM_DIRECT_LAKE_SHIM_ENABLED, set by admin-plane/main.bicep
-        // from loomDirectLakeShimEnabled). When not "1" the shim idles even if a
-        // queue is configured, letting operators pause refresh without a redeploy.
+        // from loomDirectLakeShimEnabled). When not "1"/"true" the shim idles even
+        // if a queue is configured, letting operators pause refresh without redeploy.
         var enabled = _config["LOOM_DIRECT_LAKE_SHIM_ENABLED"];
-        if (!string.Equals(enabled, "1", StringComparison.Ordinal))
+        if (!string.Equals(enabled, "1", StringComparison.Ordinal) &&
+            !string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
         {
-            _log.LogWarning("DeltaLogEventHandler idling - LOOM_DIRECT_LAKE_SHIM_ENABLED not set to '1'");
+            _log.LogWarning("DeltaLogEventHandler idling - LOOM_DIRECT_LAKE_SHIM_ENABLED not set to '1'/'true'");;
             while (!stoppingToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
