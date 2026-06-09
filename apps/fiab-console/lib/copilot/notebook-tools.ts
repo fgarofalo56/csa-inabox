@@ -6,6 +6,11 @@
  *   - inCellResultAction  : mode (+ prompt) → 'insert-below' | 'propose-edit'
  *   - buildAssistMessages : mode → AOAI system + user message pair
  *
+ * It also hosts the pure helpers for the "Fix with Copilot" inline cell-error
+ * remediation (buildCellFixMessages / parseCellFixResponse / stripCodeFences),
+ * extracted from /api/copilot/sessions so the prompt assembly and response
+ * parsing can be unit-tested without spinning up Next.js or Azure OpenAI.
+ *
  * It is import-minimal on PURPOSE: no React, no Azure SDK, no Next runtime —
  * only the NotebookCell language type. That lets BOTH surfaces share it:
  *   • code-cell.tsx ('use client') imports parseInCellCommand + inCellResultAction
@@ -76,6 +81,15 @@ const LANG_LABEL: Record<string, string> = {
   pyspark: 'PySpark (Python)',
   spark: 'Spark (Scala)',
   sql: 'Spark SQL',
+  sparksql: 'Spark SQL',
+  sparkr: 'SparkR (R)',
+  python: 'Python',
+  tsql: 'T-SQL',
+};
+
+export const CELL_FIX_LANG_LABEL: Record<string, string> = {
+  pyspark: 'PySpark (Python)',
+  spark: 'Spark (Scala)',
   sparksql: 'Spark SQL',
   sparkr: 'SparkR (R)',
   python: 'Python',
@@ -190,4 +204,148 @@ export function buildAssistMessages(
     },
     { role: 'user', content: `Cell source:\n\`\`\`\n${source}\n\`\`\`\n\nError:\n${errorText || '(no error text supplied)'}` },
   ];
+}
+export interface ChatMessage {
+  role: 'system' | 'user';
+  content: string;
+}
+
+export interface CellFixErrorContext {
+  ename?: string;
+  evalue?: string;
+  traceback?: string[];
+}
+
+export interface CellFixExecutionDetails {
+  executionCount?: number;
+  durationMs?: number;
+  executedAtUtc?: string;
+  /** Livy / Spark pool name (from LOOM_SYNAPSE_SPARK_POOL on the server). */
+  sessionPool?: string;
+}
+
+export interface CellFixRequest {
+  cellSource: string;
+  lang: string;
+  errorContext: CellFixErrorContext;
+  executionDetails?: CellFixExecutionDetails;
+}
+
+export interface CellFixResult {
+  /** 1-2 sentence plain-language summary of what went wrong. */
+  summary: string;
+  /** 1 sentence root cause. */
+  rootCause: string;
+  /** Corrected, runnable cell code — no markdown fences. */
+  proposedCode: string;
+}
+
+/**
+ * Strip a single leading ```lang fence and a trailing ``` fence the model may
+ * add despite instructions, then trim. Shared with the route so there is one
+ * implementation.
+ */
+export function stripCodeFences(raw: string): string {
+  return String(raw ?? '')
+    .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+}
+
+/** Compose the human-readable error text from the normalized Livy fields. */
+function composeErrorText(ec: CellFixErrorContext): string {
+  const ename = (ec.ename || '').trim();
+  const evalue = (ec.evalue || '').trim();
+  const traceback = Array.isArray(ec.traceback) ? ec.traceback.filter(Boolean) : [];
+  return [[ename, evalue].filter(Boolean).join(': '), traceback.join('\n')]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Render the optional execution-details block, or '' when nothing is present. */
+function composeExecutionDetails(d?: CellFixExecutionDetails): string {
+  if (!d) return '';
+  const lines: string[] = [];
+  if (typeof d.executionCount === 'number') lines.push(`Execution count: ${d.executionCount}`);
+  if (typeof d.durationMs === 'number') lines.push(`Duration: ${d.durationMs} ms`);
+  if (d.executedAtUtc) lines.push(`Executed at (UTC): ${d.executedAtUtc}`);
+  if (d.sessionPool) lines.push(`Spark pool: ${d.sessionPool}`);
+  return lines.length ? `\n\nExecution details:\n${lines.join('\n')}` : '';
+}
+
+/**
+ * Build the AOAI chat-completions messages for a cell-fix request. The system
+ * prompt pins the response to a strict JSON object so the pane can render a
+ * summary + root cause above the proposed-fix diff.
+ */
+export function buildCellFixMessages(req: CellFixRequest): ChatMessage[] {
+  const langName = CELL_FIX_LANG_LABEL[req.lang] || req.lang;
+  const errorText = composeErrorText(req.errorContext);
+  const execBlock = composeExecutionDetails(req.executionDetails);
+
+  const system =
+    `You are a Spark notebook debugger for the CSA Loom platform. You are given a ` +
+    `${langName} cell that failed and the REAL error it produced. Assume a SparkSession ` +
+    `named \`spark\` is already available. Diagnose the failure and produce a corrected, ` +
+    `runnable version of the cell.\n\n` +
+    `Respond with ONLY a single valid JSON object — no markdown fences, no prose before ` +
+    `or after — with exactly these keys:\n` +
+    `  "summary": a 1-2 sentence plain-language summary of what went wrong,\n` +
+    `  "rootCause": a single sentence naming the underlying cause,\n` +
+    `  "proposedCode": the full corrected ${langName} cell as a string (runnable, no ` +
+    `markdown fences, no language tag).\n` +
+    `The "proposedCode" must address the actual error shown — do not invent table, ` +
+    `column, or container names that are not implied by the cell or error.`;
+
+  const user =
+    `Cell source:\n\`\`\`\n${req.cellSource}\n\`\`\`\n\n` +
+    `Error:\n${errorText}` +
+    execBlock;
+
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+}
+
+function asString(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/**
+ * Parse the model's reply into a structured CellFixResult. On a valid JSON
+ * object with a non-empty proposedCode, extracts all three fields (proposedCode
+ * fence-stripped for safety). On any parse failure or missing code, falls back
+ * to treating the whole reply as the proposed code (fences stripped) and is
+ * honest in `summary` about the parse failure — never fabricates a diagnosis.
+ */
+export function parseCellFixResponse(raw: string): CellFixResult {
+  const text = String(raw ?? '').trim();
+
+  // The model may still wrap JSON in a ```json fence despite instructions.
+  const unfenced = stripCodeFences(text);
+
+  try {
+    const parsed = JSON.parse(unfenced);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const proposedCode = stripCodeFences(asString((parsed as Record<string, unknown>).proposedCode));
+      if (proposedCode) {
+        return {
+          summary: asString((parsed as Record<string, unknown>).summary).trim(),
+          rootCause: asString((parsed as Record<string, unknown>).rootCause).trim(),
+          proposedCode,
+        };
+      }
+    }
+  } catch {
+    /* fall through to the honest fallback below */
+  }
+
+  // Fallback: the reply was not the structured JSON we asked for. Treat it as
+  // raw code so the user still gets a usable fix, and say so plainly.
+  return {
+    summary: 'AOAI response could not be parsed as structured JSON; showing the raw suggestion as the proposed fix.',
+    rootCause: '',
+    proposedCode: stripCodeFences(text),
+  };
 }
