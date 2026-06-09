@@ -96,5 +96,11 @@ resource aasReaderRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 @description('AAS serverFullName for LOOM_AAS_ENDPOINT (asazure://…)')
 output serverFullName string = aasServer.properties.serverFullName
 
+@description('asazure:// connection string for LOOM_AAS_SERVER_URL (used by the column metadata editor via XMLA Alter/Create — see PR #984).')
+output aasServerUrl string = 'asazure://${aasServer.properties.serverFullName}/${aasServer.name}'
+
+@description('Bare AAS resource name.')
+output aasServerName string = aasServer.name
+
 @description('AAS database name for LOOM_AAS_DATABASE')
 output database string = aasDatabase

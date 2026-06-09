@@ -1761,3 +1761,510 @@ export async function evaluateMeasure(opts: {
   const value = Object.values(first)[0];
   return { value, rows };
 }
+
+// ===========================================================================
+// Column metadata editor (PR #984) — Tables tab column editor surface.
+//
+// XMLA Alter/Create command path for editing per-column metadata (data
+// category, format string, summarize-by, display folder, sort-by, hidden) and
+// adding calculated columns / calculated tables. Backend selection:
+//   1. LOOM_AAS_SERVER_URL  — asazure://<region>.asazure.windows.net/<name>
+//   2. LOOM_POWERBI_XMLA_ENDPOINT — Power BI Premium XMLA endpoint URL
+// Distinct from the older LOOM_AAS_SERVER (asazure://...) used by the
+// async-refresh + measure paths above. The TMSL builders are pure and the
+// transport (postXmla / command / discover / readModel) calls the real XMLA
+// endpoint — no mocks, per no-vaporware.md.
+// ===========================================================================
+
+export type TmslSummarizeBy =
+  | 'default' | 'none' | 'sum' | 'min' | 'max' | 'count' | 'average' | 'distinctCount';
+export type TmslDataType =
+  | 'string' | 'int64' | 'double' | 'dateTime' | 'decimal' | 'boolean' | 'binary' | 'unknown' | 'variant';
+export type TmslColumnType = 'data' | 'calculated' | 'rowNumber' | 'calculatedTableColumn';
+
+/** Complete column definition (Alter requires ALL read-write props, not a partial patch). */
+export interface TmslColumnDef {
+  name: string;
+  dataType: TmslDataType;
+  type?: TmslColumnType;
+  dataCategory?: string;
+  isHidden?: boolean;
+  summarizeBy?: TmslSummarizeBy;
+  formatString?: string;
+  displayFolder?: string;
+  sortByColumn?: string;
+  expression?: string; // calculated columns only
+}
+
+export interface TmslCalcColumnDef extends Omit<TmslColumnDef, 'type'> {
+  expression: string; // required for a calculated column
+}
+
+/** Parsed model column row (from a TMSCHEMA Discover, enums resolved). */
+export interface ColEditorModelColumn {
+  name: string;
+  type: TmslColumnType;
+  dataType: TmslDataType | string;
+  dataCategory?: string;
+  isHidden: boolean;
+  summarizeBy?: TmslSummarizeBy | string;
+  formatString?: string;
+  displayFolder?: string;
+  sortByColumn?: string;
+  expression?: string;
+}
+
+export interface ColEditorModelMeasure {
+  name: string;
+  expression?: string;
+  formatString?: string;
+  displayFolder?: string;
+  isHidden?: boolean;
+}
+
+export interface ColEditorModelTable {
+  name: string;
+  isCalculatedTable: boolean;
+  calculatedExpression?: string;
+  columns: ColEditorModelColumn[];
+  measures: ColEditorModelMeasure[];
+}
+
+// TMSL command shapes (also the exact JSON sent to the engine).
+export interface TmslAlterCommand {
+  alter: {
+    object: { database: string; table: string; column: string };
+    column: Record<string, unknown>;
+  };
+}
+export interface TmslCreateColumnCommand {
+  create: {
+    parentObject: { database: string; table: string };
+    column: Record<string, unknown>;
+  };
+}
+export interface TmslCreateTableCommand {
+  create: {
+    parentObject: { database: string };
+    table: Record<string, unknown>;
+  };
+}
+
+export interface AasXmlaConfig {
+  xmlaUrl: string;
+  scope: string;
+  database: string;
+  backend: 'analysis-services' | 'powerbi';
+}
+
+import { pbiXmlaScope as colCloudPbiXmlaScope, cloudBoundaryLabel as colCloudBoundaryLabel } from './cloud-endpoints';
+
+/**
+ * Derive the XMLA HTTP URL + AAD token scope from the configured backend.
+ * Returns null when neither LOOM_AAS_SERVER_URL nor LOOM_POWERBI_XMLA_ENDPOINT
+ * is set. Distinct from readAasConfig()/LOOM_AAS_SERVER which targets the
+ * async-refresh REST surface.
+ */
+export function aasXmlaConfig(): AasXmlaConfig | null {
+  const raw = (process.env.LOOM_AAS_SERVER_URL || '').trim();
+  const database = (process.env.LOOM_AAS_DATABASE || 'loomdb').trim();
+  if (raw.startsWith('asazure://')) {
+    const stripped = raw.replace('asazure://', '');
+    const slash = stripped.indexOf('/');
+    const host = slash >= 0 ? stripped.slice(0, slash) : stripped;
+    const serverName = slash >= 0 ? stripped.slice(slash + 1).replace(/\/+$/, '') : '';
+    if (host && serverName) {
+      // The host-specific .default scope (the audience must be the AAS server
+      // host, not the wildcard). cloud-endpoints.aasScope() is the no-arg
+      // data-plane form, so we compute the host scope inline here.
+      return {
+        xmlaUrl: `https://${host}/servers/${serverName}/models/${database}/xmla`,
+        scope: `https://${host}/.default`,
+        database,
+        backend: 'analysis-services',
+      };
+    }
+  }
+  const pbiXmla = (process.env.LOOM_POWERBI_XMLA_ENDPOINT || '').trim();
+  if (pbiXmla) {
+    const xmlaUrl = pbiXmla.replace(/^powerbi:\/\//, 'https://').replace(/\/+$/, '');
+    return {
+      xmlaUrl,
+      scope: colCloudPbiXmlaScope(),
+      database: (process.env.LOOM_AAS_DATABASE || '').trim(),
+      backend: 'powerbi',
+    };
+  }
+  return null;
+}
+
+/**
+ * Honest config / availability gate for the COLUMN EDITOR path (PR #984).
+ * Distinct from aasConfigGate() above (which gates the async-refresh path on
+ * LOOM_AAS_SERVER/LOOM_AAS_MODEL). Returns null when an XMLA backend is ready.
+ */
+export function aasColumnEditorGate(): { missing: string; detail: string } | null {
+  const cfg = aasXmlaConfig();
+  if (cfg) return null;
+  if (isGovCloud()) {
+    return {
+      missing: 'LOOM_POWERBI_XMLA_ENDPOINT',
+      detail:
+        `Azure Analysis Services is not available in the current cloud boundary (${colCloudBoundaryLabel()}). ` +
+        'Column metadata editing (data category, format string, summarize-by, display folder, sort-by, hidden, ' +
+        'calculated columns/tables) requires an XMLA endpoint. In Azure Government, set LOOM_POWERBI_XMLA_ENDPOINT ' +
+        'to a licensed Power BI Premium XMLA endpoint, or edit the model with Power BI Desktop / Tabular Editor ' +
+        'against a Commercial Azure Analysis Services instance reachable from your network.',
+    };
+  }
+  return {
+    missing: 'LOOM_AAS_SERVER_URL or LOOM_POWERBI_XMLA_ENDPOINT',
+    detail:
+      'Neither LOOM_AAS_SERVER_URL (Azure Analysis Services) nor LOOM_POWERBI_XMLA_ENDPOINT (Power BI Premium) ' +
+      'is configured. Set one to enable column metadata editing — data category, format string, summarize-by, ' +
+      'display folder, sort-by, hidden toggle, and calculated columns / tables. Deploy AAS with ' +
+      'platform/fiab/bicep/modules/admin-plane/analysis-services.bicep (loomSemanticBackend=analysis-services).',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Column editor TMSL builders (pure)
+// ---------------------------------------------------------------------------
+
+function compactObj(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null && v !== '') out[k] = v;
+  }
+  return out;
+}
+
+function tmslColumnBody(col: TmslColumnDef, includeName: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = compactObj({
+    name: includeName ? col.name : undefined,
+    dataType: col.dataType,
+    dataCategory: col.dataCategory,
+    summarizeBy: col.summarizeBy,
+    formatString: col.formatString,
+    displayFolder: col.displayFolder,
+    sortByColumn: col.sortByColumn,
+    expression: col.expression,
+    type: col.type,
+  });
+  if (col.isHidden !== undefined) body.isHidden = col.isHidden;
+  return body;
+}
+
+export function buildAlterColumnTmsl(
+  database: string,
+  tableName: string,
+  column: TmslColumnDef,
+): TmslAlterCommand {
+  return {
+    alter: {
+      object: { database, table: tableName, column: column.name },
+      column: tmslColumnBody(column, true),
+    },
+  };
+}
+
+export function buildCreateCalcColumnTmsl(
+  database: string,
+  tableName: string,
+  column: TmslCalcColumnDef,
+): TmslCreateColumnCommand {
+  const body = tmslColumnBody({ ...column, type: 'calculated' }, true);
+  body.type = 'calculated';
+  body.expression = column.expression;
+  return {
+    create: {
+      parentObject: { database, table: tableName },
+      column: body,
+    },
+  };
+}
+
+export function buildCreateCalcTableTmsl(
+  database: string,
+  tableName: string,
+  daxExpression: string,
+): TmslCreateTableCommand {
+  return {
+    create: {
+      parentObject: { database },
+      table: {
+        name: tableName,
+        partitions: [
+          {
+            name: tableName,
+            mode: 'import',
+            source: {
+              type: 'calculated',
+              expression: daxExpression,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// XMLA SOAP transport for the column-editor surface
+// ---------------------------------------------------------------------------
+
+const COL_XMLA_NS = 'urn:schemas-microsoft-com:xml-analysis';
+const COL_SOAP_NS = 'http://schemas.xmlsoap.org/soap/envelope/';
+
+function colXmlEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function colXmlUnescape(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+export function buildExecuteEnvelope(tmslJson: string, catalog: string): string {
+  return (
+    `<Envelope xmlns="${COL_SOAP_NS}"><Body>` +
+    `<Execute xmlns="${COL_XMLA_NS}">` +
+    `<Command><Statement>${colXmlEscape(tmslJson)}</Statement></Command>` +
+    `<Properties><PropertyList>${catalog ? `<Catalog>${colXmlEscape(catalog)}</Catalog>` : ''}</PropertyList></Properties>` +
+    `</Execute></Body></Envelope>`
+  );
+}
+
+export function buildDiscoverEnvelope(
+  requestType: string,
+  restrictions: Record<string, string>,
+  catalog: string,
+): string {
+  const restr = Object.entries(restrictions)
+    .map(([k, v]) => `<${k}>${colXmlEscape(String(v))}</${k}>`)
+    .join('');
+  return (
+    `<Envelope xmlns="${COL_SOAP_NS}"><Body>` +
+    `<Discover xmlns="${COL_XMLA_NS}">` +
+    `<RequestType>${colXmlEscape(requestType)}</RequestType>` +
+    `<Restrictions><RestrictionList>${restr}</RestrictionList></Restrictions>` +
+    `<Properties><PropertyList>${catalog ? `<Catalog>${colXmlEscape(catalog)}</Catalog>` : ''}<Format>Tabular</Format></PropertyList></Properties>` +
+    `</Discover></Body></Envelope>`
+  );
+}
+
+function colExtractFault(xml: string): string | null {
+  const fs = xml.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
+  if (fs) return colXmlUnescape(fs[1].trim());
+  const err = xml.match(/<Error[^>]*\bDescription="([^"]*)"/i);
+  if (err) return colXmlUnescape(err[1].trim());
+  const ex = xml.match(/<Exception[^>]*\bMessage="([^"]*)"/i);
+  if (ex) return colXmlUnescape(ex[1].trim());
+  return null;
+}
+
+export function parseExecuteResponse(xml: string): void {
+  const fault = colExtractFault(xml);
+  if (fault) throw new AasError(fault, 502, xml.slice(0, 2000));
+}
+
+export function parseRowset(xml: string): Record<string, string>[] {
+  const fault = colExtractFault(xml);
+  if (fault) throw new AasError(fault, 502, xml.slice(0, 2000));
+  const rows: Record<string, string>[] = [];
+  const rowRe = /<row[\s>]([\s\S]*?)<\/row>/gi;
+  let m: RegExpExecArray | null;
+  const normalized = xml.replace(/<row>/gi, '<row >');
+  while ((m = rowRe.exec(normalized)) !== null) {
+    const inner = m[1];
+    const fields: Record<string, string> = {};
+    const fieldRe = /<([A-Za-z_][\w.:-]*)[^>]*>([\s\S]*?)<\/\1>/g;
+    let f: RegExpExecArray | null;
+    while ((f = fieldRe.exec(inner)) !== null) {
+      const tag = f[1].includes(':') ? f[1].split(':').pop()! : f[1];
+      fields[tag] = colXmlUnescape(f[2].trim());
+    }
+    rows.push(fields);
+  }
+  return rows;
+}
+
+async function colGetToken(scope: string): Promise<string> {
+  const t = await credential.getToken(scope);
+  if (!t?.token) throw new AasError(`Failed to acquire AAD token for ${scope}`, 401);
+  return t.token;
+}
+
+async function postXmla(envelope: string, scope: string, xmlaUrl: string): Promise<string> {
+  const token = await colGetToken(scope);
+  let res: Response;
+  try {
+    res = await fetch(xmlaUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'text/xml; charset=utf-8',
+        SOAPAction: `"${COL_XMLA_NS}:Execute"`,
+      },
+      body: envelope,
+    });
+  } catch (e: any) {
+    throw new AasError(`XMLA request failed: ${e?.message || String(e)}`, 502);
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    const fault = colExtractFault(text) || `XMLA HTTP ${res.status}`;
+    throw new AasError(fault, res.status, text.slice(0, 2000));
+  }
+  return text;
+}
+
+/**
+ * Execute a TMSL command (Alter / Create / CreateOrReplace / Delete) via XMLA
+ * against the column-editor configured backend. Returns the serialized TMSL.
+ * Distinct from executeTmsl() above (server-URI form) — `command` uses the
+ * aasXmlaConfig() endpoint.
+ */
+export async function command(statement: object, database?: string): Promise<{ tmsl: string }> {
+  const cfg = aasXmlaConfig();
+  if (!cfg) throw new AasError('No XMLA backend configured (set LOOM_AAS_SERVER_URL or LOOM_POWERBI_XMLA_ENDPOINT)', 412);
+  const db = database || cfg.database;
+  const tmsl = JSON.stringify(statement);
+  const envelope = buildExecuteEnvelope(tmsl, db);
+  const xml = await postXmla(envelope, cfg.scope, cfg.xmlaUrl);
+  parseExecuteResponse(xml);
+  return { tmsl };
+}
+
+export async function discover(
+  requestType: string,
+  restrictions: Record<string, string> = {},
+  database?: string,
+): Promise<Record<string, string>[]> {
+  const cfg = aasXmlaConfig();
+  if (!cfg) throw new AasError('No XMLA backend configured (set LOOM_AAS_SERVER_URL or LOOM_POWERBI_XMLA_ENDPOINT)', 412);
+  const db = database || cfg.database;
+  const envelope = buildDiscoverEnvelope(requestType, restrictions, db);
+  const xml = await postXmla(envelope, cfg.scope, cfg.xmlaUrl);
+  return parseRowset(xml);
+}
+
+// ---------------------------------------------------------------------------
+// TMSCHEMA enum decoders
+// ---------------------------------------------------------------------------
+
+const COL_COLUMN_TYPE: Record<string, TmslColumnType> = {
+  '1': 'data', '2': 'calculated', '3': 'rowNumber', '4': 'calculatedTableColumn',
+};
+const COL_DATA_TYPE: Record<string, TmslDataType> = {
+  '1': 'unknown', '2': 'string', '6': 'int64', '8': 'double', '9': 'dateTime',
+  '10': 'decimal', '11': 'boolean', '17': 'binary', '19': 'unknown', '20': 'variant',
+};
+const COL_SUMMARIZE_BY: Record<string, TmslSummarizeBy> = {
+  '1': 'default', '2': 'none', '3': 'sum', '4': 'min', '5': 'max',
+  '6': 'count', '7': 'average', '8': 'distinctCount',
+};
+const COL_PARTITION_CALCULATED = '2';
+
+function colDecode<T>(map: Record<string, T>, raw: string | undefined, fallback?: T): T | string | undefined {
+  if (raw === undefined || raw === '') return fallback;
+  return map[raw] ?? raw;
+}
+
+/**
+ * Read the full tabular model (tables + columns + measures) via TMSCHEMA
+ * Discover rowsets, resolving the integer enums + ID joins into friendly
+ * names. Real backend read for the editor's Tables tab.
+ */
+export async function readModel(database?: string): Promise<ColEditorModelTable[]> {
+  const cfg = aasXmlaConfig();
+  if (!cfg) throw new AasError('No XMLA backend configured', 412);
+  const db = database || cfg.database;
+
+  const [tablesRows, colsRows, measuresRows, partRows] = await Promise.all([
+    discover('TMSCHEMA_TABLES', {}, db),
+    discover('TMSCHEMA_COLUMNS', {}, db),
+    discover('TMSCHEMA_MEASURES', {}, db).catch(() => [] as Record<string, string>[]),
+    discover('TMSCHEMA_PARTITIONS', {}, db).catch(() => [] as Record<string, string>[]),
+  ]);
+
+  const tableById = new Map<string, string>();
+  for (const t of tablesRows) {
+    const id = t.ID || t.TableID;
+    const name = t.Name || t.ExplicitName || t.InferredName;
+    if (id && name) tableById.set(id, name);
+  }
+
+  const colNameById = new Map<string, string>();
+  for (const c of colsRows) {
+    const id = c.ID || c.ColumnID;
+    const name = c.ExplicitName || c.InferredName || c.Name;
+    if (id && name) colNameById.set(id, name);
+  }
+
+  const calcTableExpr = new Map<string, string>();
+  for (const p of partRows) {
+    const tid = p.TableID;
+    const type = p.Type || p.SourceType;
+    if (tid && type === COL_PARTITION_CALCULATED) {
+      calcTableExpr.set(tid, p.QueryDefinition || p.Expression || '');
+    }
+  }
+
+  const colsByTable = new Map<string, ColEditorModelColumn[]>();
+  for (const c of colsRows) {
+    const tid = c.TableID;
+    if (!tid) continue;
+    const name = c.ExplicitName || c.InferredName || c.Name || '';
+    if (!name || name.startsWith('RowNumber-')) continue;
+    const typeRaw = c.Type;
+    if (typeRaw === '3') continue;
+    const col: ColEditorModelColumn = {
+      name,
+      type: (colDecode(COL_COLUMN_TYPE, typeRaw, 'data') as TmslColumnType),
+      dataType: (colDecode(COL_DATA_TYPE, c.ExplicitDataType || c.InferredDataType, 'string') as string),
+      dataCategory: c.DataCategory || undefined,
+      isHidden: c.IsHidden === 'true' || c.IsHidden === '1',
+      summarizeBy: (colDecode(COL_SUMMARIZE_BY, c.SummarizeBy, 'default') as string),
+      formatString: c.FormatString || undefined,
+      displayFolder: c.DisplayFolder || undefined,
+      sortByColumn: c.SortByColumnID ? colNameById.get(c.SortByColumnID) : undefined,
+      expression: c.Expression || undefined,
+    };
+    const arr = colsByTable.get(tid) || [];
+    arr.push(col);
+    colsByTable.set(tid, arr);
+  }
+
+  const measuresByTable = new Map<string, ColEditorModelMeasure[]>();
+  for (const m of measuresRows) {
+    const tid = m.TableID;
+    if (!tid) continue;
+    const measure: ColEditorModelMeasure = {
+      name: m.Name || m.ExplicitName || '',
+      expression: m.Expression || undefined,
+      formatString: m.FormatString || undefined,
+      displayFolder: m.DisplayFolder || undefined,
+      isHidden: m.IsHidden === 'true' || m.IsHidden === '1',
+    };
+    const arr = measuresByTable.get(tid) || [];
+    arr.push(measure);
+    measuresByTable.set(tid, arr);
+  }
+
+  const out: ColEditorModelTable[] = [];
+  for (const [id, name] of tableById) {
+    out.push({
+      name,
+      isCalculatedTable: calcTableExpr.has(id),
+      calculatedExpression: calcTableExpr.get(id) || undefined,
+      columns: colsByTable.get(id) || [],
+      measures: measuresByTable.get(id) || [],
+    });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}

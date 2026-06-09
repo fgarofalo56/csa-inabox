@@ -9073,6 +9073,43 @@ interface TableLite {
   columns?: Array<{ name: string; dataType?: string }>;
   measures?: Array<{ name: string; expression?: string }>;
 }
+// Full tabular-model column/table shapes returned by the XMLA-backed
+// GET /api/items/semantic-model/[id]/model (Azure Analysis Services / Power BI
+// Premium XMLA). These carry the editable column metadata (data category,
+// format string, summarize-by, display folder, sort-by, hidden, calc DAX).
+interface SmColumn {
+  name: string;
+  type?: 'data' | 'calculated' | 'calculatedTableColumn' | 'rowNumber';
+  dataType?: string;
+  dataCategory?: string;
+  isHidden?: boolean;
+  summarizeBy?: string;
+  formatString?: string;
+  displayFolder?: string;
+  sortByColumn?: string;
+  expression?: string;
+}
+interface SmTable {
+  name: string;
+  isCalculatedTable?: boolean;
+  calculatedExpression?: string;
+  columns: SmColumn[];
+  measures: Array<{ name: string; expression?: string }>;
+}
+const SM_DATA_CATEGORIES = ['WebUrl', 'ImageUrl', 'Country', 'StateOrProvince', 'City', 'PostalCode', 'County', 'Continent', 'Address', 'Place', 'Latitude', 'Longitude', 'Barcode'];
+const SM_SUMMARIZE = ['default', 'none', 'sum', 'min', 'max', 'count', 'average', 'distinctCount'];
+const SM_DATA_TYPES = ['string', 'int64', 'double', 'dateTime', 'decimal', 'boolean'];
+const SM_FORMATS: Array<{ value: string; label: string }> = [
+  { value: '', label: '— none —' },
+  { value: '#,0', label: 'Integer (#,0)' },
+  { value: '#,0.00', label: '2 decimals (#,0.00)' },
+  { value: '0%', label: 'Percent (0%)' },
+  { value: '0.00%', label: 'Percent 2dp (0.00%)' },
+  { value: '$#,0.##;($#,0.##)', label: 'Currency ($)' },
+  { value: 'yyyy-mm-dd', label: 'Date (yyyy-mm-dd)' },
+  { value: 'yyyy-mm-dd hh:mm:ss', label: 'DateTime' },
+  { value: 'General Date', label: 'General Date' },
+];
 interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
@@ -9772,6 +9809,114 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // --- XMLA column-metadata editor (Tables tab) -------------------------
+  // Reads + writes the tabular model via the Azure-native XMLA backend
+  // (Azure Analysis Services by default, or Power BI Premium XMLA opt-in)
+  // through GET/PATCH /api/items/semantic-model/[id]/model. No Fabric / PBI
+  // workspace required (no-fabric-dependency.md). When no XMLA endpoint is
+  // configured the route returns an honest gate which we surface below.
+  const [modelTables, setModelTables] = useState<SmTable[] | null>(null);
+  const [modelBackend, setModelBackend] = useState<string>('');
+  const [modelGate, setModelGate] = useState<{ missing: string; detail: string } | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [selectedTableName, setSelectedTableName] = useState('');
+  const [editCol, setEditCol] = useState<{ tableName: string; col: SmColumn } | null>(null);
+  const [colPatch, setColPatch] = useState<Partial<SmColumn>>({});
+  const [patchBusy, setPatchBusy] = useState(false);
+  const [patchMsg, setPatchMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [calcColDlgOpen, setCalcColDlgOpen] = useState(false);
+  const [calcColName, setCalcColName] = useState('');
+  const [calcColExpr, setCalcColExpr] = useState('[Revenue] - [Cost]');
+  const [calcColType, setCalcColType] = useState('double');
+  const [calcColCat, setCalcColCat] = useState('');
+  const [calcColFolder, setCalcColFolder] = useState('');
+  const [calcTableDlgOpen, setCalcTableDlgOpen] = useState(false);
+  const [calcTableName, setCalcTableName] = useState('');
+  const [calcTableExpr, setCalcTableExpr] = useState('CALENDAR(DATE(2020,1,1), DATE(2025,12,31))');
+  const [calcBusy, setCalcBusy] = useState(false);
+  const [calcMsg, setCalcMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadModel = useCallback(async () => {
+    if (!datasetId) return;
+    setModelLoading(true); setModelGate(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok && j.gate) { setModelGate(j.gate); setModelTables(null); return; }
+      if (!j.ok) { setModelGate({ missing: 'error', detail: j.error || `HTTP ${r.status}` }); setModelTables(null); return; }
+      setModelTables(j.tables || []);
+      setModelBackend(j.backend || '');
+      setSelectedTableName((prev) => prev || (j.tables?.[0]?.name ?? ''));
+    } catch (e: any) {
+      setModelGate({ missing: 'error', detail: e?.message || String(e) });
+    } finally { setModelLoading(false); }
+  }, [datasetId, workspaceId]);
+
+  // Lazy-load the XMLA model the first time the Tables tab is opened for a
+  // dataset. Re-fetches when the dataset changes.
+  useEffect(() => { setModelTables(null); setSelectedTableName(''); setEditCol(null); }, [datasetId]);
+  useEffect(() => {
+    if (tab === 'tables' && datasetId && modelTables === null && !modelGate && !modelLoading) loadModel();
+  }, [tab, datasetId, modelTables, modelGate, modelLoading, loadModel]);
+
+  const patchColumn = useCallback(async () => {
+    if (!editCol || !datasetId) return;
+    setPatchBusy(true); setPatchMsg(null);
+    // Merge current column with the user's edits → COMPLETE column object
+    // (TMSL Alter requires every read-write property, not a partial patch).
+    const full: SmColumn = { ...editCol.col, ...colPatch };
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'alter-column', tableName: editCol.tableName, columnName: editCol.col.name, column: full }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setPatchMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setPatchMsg({ ok: true, text: `Column "${full.name}" updated.` });
+      setEditCol(null); setColPatch({});
+      setModelTables(null); await loadModel();
+    } catch (e: any) { setPatchMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setPatchBusy(false); }
+  }, [editCol, colPatch, datasetId, workspaceId, loadModel]);
+
+  const addCalcColumn = useCallback(async () => {
+    if (!datasetId || !selectedTableName || !calcColName.trim() || !calcColExpr.trim()) return;
+    setCalcBusy(true); setCalcMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          op: 'add-calculated-column', tableName: selectedTableName,
+          column: { name: calcColName.trim(), dataType: calcColType, expression: calcColExpr.trim(), dataCategory: calcColCat || undefined, displayFolder: calcColFolder || undefined },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCalcMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setCalcMsg({ ok: true, text: `Calculated column "${calcColName}" added to ${selectedTableName}.` });
+      setModelTables(null); await loadModel();
+      setTimeout(() => { setCalcColDlgOpen(false); setCalcMsg(null); }, 1200);
+    } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCalcBusy(false); }
+  }, [datasetId, workspaceId, selectedTableName, calcColName, calcColExpr, calcColType, calcColCat, calcColFolder, loadModel]);
+
+  const addCalcTable = useCallback(async () => {
+    if (!datasetId || !calcTableName.trim() || !calcTableExpr.trim()) return;
+    setCalcBusy(true); setCalcMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'add-calculated-table', tableName: calcTableName.trim(), expression: calcTableExpr.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCalcMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setCalcMsg({ ok: true, text: `Calculated table "${calcTableName}" created.` });
+      setSelectedTableName(calcTableName.trim());
+      setModelTables(null); await loadModel();
+      setTimeout(() => { setCalcTableDlgOpen(false); setCalcMsg(null); }, 1200);
+    } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCalcBusy(false); }
+  }, [datasetId, workspaceId, calcTableName, calcTableExpr, loadModel]);
 
   // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
   // Mirrors the Power BI Desktop "Incremental refresh and real-time data" dialog:
@@ -10615,6 +10760,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Calc groups', onClick: datasetId ? () => setTab('calcGroups') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Author calculation groups (SELECTEDMEASURE patterns) — switch a visual’s aggregation via a slicer' },
         { label: 'Field parameters', onClick: datasetId ? () => setTab('fieldParams') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Build field-parameter calculated tables (NAMEOF) — swap a visual’s measure via a slicer' },
       ]},
+      { label: 'Columns', actions: [
+        { label: 'Edit columns', onClick: datasetId ? () => setTab('tables') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Tables tab to edit column metadata (data category, format, summarize-by, display folder, sort-by, hidden) via XMLA' },
+        { label: 'Add calc. column', onClick: (datasetId && modelTables && selectedTableName) ? () => { setCalcMsg(null); setCalcColDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables || !selectedTableName, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated columns' : 'Add a calculated column (DAX)' },
+        { label: 'Add calc. table', onClick: (datasetId && modelTables) ? () => { setCalcMsg(null); setCalcTableDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated tables' : 'Create a calculated table (DAX)' },
+      ]},
       { label: 'Source', actions: [
         { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
       ]},
@@ -10622,9 +10772,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
 
   return (
+    <>
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <PowerBiTree
@@ -10815,7 +10966,185 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               <div className={s.pad}>
                 {tab === 'tables' && (
                   <>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 8 }}>
+                    {modelLoading && <Spinner size="tiny" label="Loading column metadata via XMLA…" style={{ justifyContent: 'flex-start', marginBottom: 8 }} />}
+                    {modelGate && (
+                      <MessageBar intent={modelGate.missing === 'error' ? 'error' : 'warning'} style={{ marginBottom: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{modelGate.missing === 'error' ? 'Column metadata load failed' : 'Column editor not configured'}</MessageBarTitle>
+                          {modelGate.detail}
+                          {modelGate.missing !== 'error' && (
+                            <> Showing read-only table structure below. Deploy <code>analysis-services.bicep</code> (<code>loomSemanticBackend=analysis-services</code>) and set <code>LOOM_AAS_SERVER_URL</code> to enable data category, format string, summarize-by, display folder, sort-by, hidden, and calculated columns/tables.</>
+                          )}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {modelBackend && (
+                      <div style={{ marginBottom: 8 }}>
+                        <Badge appearance="tint" color="brand">XMLA backend: {modelBackend === 'analysis-services' ? 'Azure Analysis Services' : 'Power BI Premium XMLA'}</Badge>
+                      </div>
+                    )}
+                    {/* Table selector + add actions */}
+                    {(modelTables || detail?.tables) && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                        <Field label="Table" style={{ minWidth: 220 }}>
+                          <Select value={selectedTableName} onChange={(_, d) => { setSelectedTableName(d.value); setEditCol(null); setColPatch({}); }}>
+                            {(modelTables ?? (detail?.tables as any[]) ?? []).map((t: { name: string; isCalculatedTable?: boolean }) => (
+                              <option key={t.name} value={t.name}>{t.name}{t.isCalculatedTable ? ' (calc)' : ''}</option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setCalcMsg(null); setCalcColDlgOpen(true); }}
+                          disabled={!selectedTableName || !modelTables}
+                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated columns' : 'Add a calculated column (DAX)'}>
+                          Add calculated column
+                        </Button>
+                        <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setCalcMsg(null); setCalcTableDlgOpen(true); }}
+                          disabled={!modelTables}
+                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated tables' : 'Create a calculated table (DAX)'}>
+                          Add calculated table
+                        </Button>
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setModelTables(null); setModelGate(null); loadModel(); }}
+                          disabled={!datasetId || modelLoading}>
+                          Reload
+                        </Button>
+                      </div>
+                    )}
+                    {/* Column grid for the selected table */}
+                    {(() => {
+                      const tbl: SmTable | undefined =
+                        (modelTables?.find((t) => t.name === selectedTableName)) ??
+                        (detail?.tables?.find((t) => t.name === selectedTableName) as any);
+                      if (!tbl) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No table selected.</Caption1>;
+                      const cols: SmColumn[] = (tbl.columns as SmColumn[]) ?? [];
+                      return (
+                        <div className={s.tableWrap}>
+                          <Table aria-label={`Columns of ${tbl.name}`} size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Column</TableHeaderCell>
+                              <TableHeaderCell>Type</TableHeaderCell>
+                              <TableHeaderCell>Data type</TableHeaderCell>
+                              <TableHeaderCell>Category</TableHeaderCell>
+                              <TableHeaderCell>Format</TableHeaderCell>
+                              <TableHeaderCell>Summarize</TableHeaderCell>
+                              <TableHeaderCell>Display folder</TableHeaderCell>
+                              <TableHeaderCell>Hidden</TableHeaderCell>
+                              {modelTables && <TableHeaderCell>Edit</TableHeaderCell>}
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {cols.length === 0 && (
+                                <TableRow><TableCell>—</TableCell><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell />{modelTables && <TableCell />}</TableRow>
+                              )}
+                              {cols.map((c) => (
+                                <TableRow key={c.name} aria-label={c.name}>
+                                  <TableCell>
+                                    {c.name}
+                                    {c.type === 'calculated' && <Badge appearance="outline" size="small" color="brand" style={{ marginLeft: 4 }}>calc</Badge>}
+                                  </TableCell>
+                                  <TableCell>{c.type ?? 'data'}</TableCell>
+                                  <TableCell>{c.dataType ?? '—'}</TableCell>
+                                  <TableCell>{c.dataCategory || '—'}</TableCell>
+                                  <TableCell className={s.cell}>{c.formatString || '—'}</TableCell>
+                                  <TableCell>{c.summarizeBy || '—'}</TableCell>
+                                  <TableCell>{c.displayFolder || '—'}</TableCell>
+                                  <TableCell>{c.isHidden ? 'hidden' : '—'}</TableCell>
+                                  {modelTables && (
+                                    <TableCell>
+                                      <Button size="small" appearance="subtle" icon={<Wrench16Regular />} aria-label={`Edit ${c.name}`}
+                                        onClick={() => { setEditCol({ tableName: tbl.name, col: c }); setColPatch({}); setPatchMsg(null); }}>
+                                        Edit
+                                      </Button>
+                                    </TableCell>
+                                  )}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      );
+                    })()}
+                    {/* Column edit panel — full metadata surface */}
+                    {editCol && (
+                      <div className={s.card} style={{ marginTop: 12 }}>
+                        <Subtitle2>Edit column: {editCol.tableName}[{editCol.col.name}]</Subtitle2>
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                          <Field label="Data category" style={{ minWidth: 180 }}>
+                            <Select value={colPatch.dataCategory ?? editCol.col.dataCategory ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, dataCategory: d.value || undefined }))}>
+                              <option value="">— none —</option>
+                              {SM_DATA_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Summarize by" style={{ minWidth: 160 }}>
+                            <Select value={colPatch.summarizeBy ?? editCol.col.summarizeBy ?? 'default'}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, summarizeBy: d.value }))}>
+                              {SM_SUMMARIZE.map((v) => <option key={v} value={v}>{v}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Format string" style={{ minWidth: 200 }}>
+                            <Select value={colPatch.formatString ?? editCol.col.formatString ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, formatString: d.value }))}>
+                              {SM_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Display folder" style={{ minWidth: 200 }}>
+                            <Input value={colPatch.displayFolder ?? editCol.col.displayFolder ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, displayFolder: d.value }))}
+                              placeholder={'e.g. Geography or Finance\\KPIs'} />
+                          </Field>
+                          <Field label="Sort by column" style={{ minWidth: 180 }}>
+                            <Select value={colPatch.sortByColumn ?? editCol.col.sortByColumn ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, sortByColumn: d.value || undefined }))}>
+                              <option value="">— self (default) —</option>
+                              {(modelTables?.find((t) => t.name === editCol.tableName)?.columns ?? [])
+                                .filter((c) => c.name !== editCol.col.name)
+                                .map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Hidden">
+                            <Switch checked={colPatch.isHidden ?? editCol.col.isHidden ?? false}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, isHidden: d.checked }))} />
+                          </Field>
+                        </div>
+                        {editCol.col.type === 'calculated' && (
+                          <div style={{ marginTop: 10 }}>
+                            <Caption1>DAX expression</Caption1>
+                            <MonacoTextarea
+                              value={colPatch.expression ?? editCol.col.expression ?? ''}
+                              onChange={(v) => setColPatch((p) => ({ ...p, expression: v }))}
+                              language="sql" height={120} minHeight={80}
+                              ariaLabel="Calculated column DAX expression" />
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
+                          <Button appearance="primary" icon={<Save20Regular />}
+                            disabled={patchBusy || Object.keys(colPatch).length === 0}
+                            onClick={patchColumn}>
+                            {patchBusy ? 'Saving…' : 'Apply'}
+                          </Button>
+                          <Button appearance="subtle" onClick={() => { setEditCol(null); setColPatch({}); setPatchMsg(null); }}>Cancel</Button>
+                        </div>
+                        {patchMsg && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                      </div>
+                    )}
+                    {patchMsg && !editCol && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                    {/* Read-only measures for the selected table */}
+                    {(() => {
+                      const tbl: SmTable | undefined =
+                        (modelTables?.find((t) => t.name === selectedTableName)) ??
+                        (detail?.tables?.find((t) => t.name === selectedTableName) as any);
+                      if (!tbl?.measures?.length) return null;
+                      return (
+                        <div style={{ marginTop: 12 }}>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Measures in {tbl.name} (read-only — edit via the Measures tab)</Caption1>
+                          <div className={s.cell}>{tbl.measures.map((m) => m.name).join(', ')}</div>
+                        </div>
+                      );
+                    })()}
+                    {/* Composite (per-table storage mode) controls — origin/main integration */}
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 16, marginBottom: 8 }}>
                       Set a per-table <strong>storage mode</strong> to build a composite model that mixes
                       Import, DirectQuery, and Dual tables. Apply pushes a <code>model.bim</code> TMSL with a
                       per-partition mode (Fabric updateDefinition), or returns it as an <code>Invoke-ASCmd</code>
@@ -11893,6 +12222,65 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         </>
       }
     />
+    {/* Add calculated column (DAX) dialog */}
+    <Dialog open={calcColDlgOpen} onOpenChange={(_, d) => { setCalcColDlgOpen(d.open); if (!d.open) setCalcMsg(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Add calculated column — {selectedTableName}</DialogTitle>
+          <DialogContent>
+            <Field label="Column name" required>
+              <Input value={calcColName} onChange={(_, d) => setCalcColName(d.value)} placeholder="Margin" />
+            </Field>
+            <Field label="Data type" style={{ marginTop: 8 }}>
+              <Select value={calcColType} onChange={(_, d) => setCalcColType(d.value)}>
+                {SM_DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </Select>
+            </Field>
+            <Field label="Data category" style={{ marginTop: 8 }}>
+              <Select value={calcColCat} onChange={(_, d) => setCalcColCat(d.value)}>
+                <option value="">— none —</option>
+                {SM_DATA_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </Field>
+            <Field label="Display folder" style={{ marginTop: 8 }}>
+              <Input value={calcColFolder} onChange={(_, d) => setCalcColFolder(d.value)} placeholder="e.g. Finance" />
+            </Field>
+            <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
+            <MonacoTextarea value={calcColExpr} onChange={setCalcColExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated column DAX" />
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" disabled={calcBusy || !calcColName.trim() || !calcColExpr.trim()} onClick={addCalcColumn}>
+              {calcBusy ? 'Creating…' : 'Create'}
+            </Button>
+            <DialogTrigger disableButtonEnhancement><Button appearance="subtle">Cancel</Button></DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+    {/* Add calculated table (DAX) dialog */}
+    <Dialog open={calcTableDlgOpen} onOpenChange={(_, d) => { setCalcTableDlgOpen(d.open); if (!d.open) setCalcMsg(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Add calculated table</DialogTitle>
+          <DialogContent>
+            <Field label="Table name" required>
+              <Input value={calcTableName} onChange={(_, d) => setCalcTableName(d.value)} placeholder="DimDate" />
+            </Field>
+            <Caption1 style={{ marginTop: 8 }}>DAX table expression</Caption1>
+            <MonacoTextarea value={calcTableExpr} onChange={setCalcTableExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated table DAX" />
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" disabled={calcBusy || !calcTableName.trim() || !calcTableExpr.trim()} onClick={addCalcTable}>
+              {calcBusy ? 'Creating…' : 'Create'}
+            </Button>
+            <DialogTrigger disableButtonEnhancement><Button appearance="subtle">Cancel</Button></DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+    </>
   );
 }
 

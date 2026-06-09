@@ -776,6 +776,28 @@ export function aasServerBase(server: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (XMLA data plane) — semantic-model column metadata
+// ---------------------------------------------------------------------------
+//
+// AAS exposes an XMLA HTTP endpoint per server/model that accepts TMSL
+// Execute (Alter/Create/Delete) and Discover (TMSCHEMA_* rowsets). The token
+// audience is the server host itself (`https://<region>.asazure.windows.net`).
+//
+// AAS is COMMERCIAL / GCC only — it is NOT offered in the Azure Government
+// clouds (GCC-High / IL5 / DoD). So there is no Gov suffix; `aasSuffix()`
+// always returns the Commercial host suffix and the aas-client / bicep guard
+// on `isGovCloud()` to surface an honest "not available in this boundary"
+// gate instead of attempting a call that cannot succeed.
+//
+// The Power BI Premium XMLA endpoint is the opt-in alternative for tenants
+// that license it; its token scope differs per sovereign cloud, hence
+// `pbiXmlaScope()` (Commercial vs USGov vs DoD).
+
+// NOTE: aasSuffix(), aasScope(), and pbiXmlaScope() are each declared once
+// elsewhere in this file (single source of truth). The PR #984 column-editor
+// path uses those existing exports — no duplicate declarations here.
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

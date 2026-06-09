@@ -634,22 +634,29 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. B1=Basic (cheapest with SLA), S0=Standard, D1=Developer (no SLA). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
+@allowed(['B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'D1'])
+param loomAasSku string = 'B1'
+
+@description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
+param loomAasServerUrl string = ''
+
 @description('Azure Analysis Services XMLA endpoint base URL (no /xmla or /refreshes suffix), e.g. https://eastus2.asazure.windows.net/servers/loom-aas/models/FiabModel. Required only when loomSemanticBackend=analysis-services to enable the incremental-refresh / hybrid-table surface. GCC-High / IL5 / DoD must use the asazure.usgovcloudapi.net suffix. AAS is Azure-native (NOT Microsoft Fabric); the semantic-model default stays loom-native, so leaving this empty is fully supported.')
 param loomAasXmlaEndpoint string = ''
 
-@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
+@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
 
 @description('Azure Analysis Services server URI (asazure://{region}.asazure.windows.net/{server}) for the opt-in aas semantic backend. Empty = the AAS path is honest-gated; calc groups + field parameters still work on the loom-native default. Requires loomSemanticBackend=aas.')
 param loomAasServer string = ''
 
-@description('Azure Analysis Services database/model name (also the XMLA Catalog property for the incremental-refresh surface). Required alongside loomAasServer for the aas backend, and the platform-level default model database for the Loom-native report renderer (loomBiBackend). Defaults to the last path segment of loomAasXmlaEndpoint when empty for the incremental-refresh path.')
-param loomAasDatabase string = ''
+@description('AAS database (TMSL Catalog) name. Used by the Console for column-metadata XMLA reads/writes, calc-group/field-param writes, and the Loom-native report renderer. Defaults to the last path segment of loomAasXmlaEndpoint when empty for the incremental-refresh path; otherwise defaults to loomdb for the column-editor path.')
+param loomAasDatabase string = 'loomdb'
 
 @description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
 param loomAasResourceGroup string = ''
 
-@description('Deploy an Azure Analysis Services server. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on to opt into a standalone composite-model host AND/OR the RLS/OLS Security tab backend; both use the same AAS server over XMLA. When false, the Security + Aggregations tabs show an honest config-gate and the opt-in Power BI XMLA path (loomPowerbiXmlaEndpoint) still works.')
+@description('Deploy an Azure Analysis Services server. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on to opt into a standalone composite-model host AND/OR the RLS/OLS Security tab backend; both use the same AAS server over XMLA.')
 param aasEnabled bool = false
 
 @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
@@ -659,7 +666,7 @@ param aasSpnClientId string = ''
 @allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
 param aasSku string = 'D1'
 
-@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
+@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to powerbi to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
 @allowed(['', 'powerbi'])
 param loomBiBackend string = ''
 
@@ -725,6 +732,25 @@ module network 'network.bicep' = {
     containerPlatform: containerPlatform
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// Azure Analysis Services — optional semantic-model XMLA backend.
+// Deployed only when the operator opts into the AAS backend AND has not
+// supplied a pre-existing server URL. Guarded on the boundary because AAS
+// is Commercial / GCC only (not available in GCC-High / IL5). In Gov the
+// Console falls back to LOOM_POWERBI_XMLA_ENDPOINT or an honest gate.
+// =====================================================================
+var deployAas = loomSemanticBackend == 'analysis-services' && empty(loomAasServerUrl) && !contains(['GCC-High', 'IL5'], boundary)
+
+module analysisServices 'analysis-services.bicep' = if (deployAas) {
+  name: 'analysis-services'
+  params: {
+    location: location
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    sku: loomAasSku
+    tags: complianceTags
   }
 }
 
@@ -1486,15 +1512,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // Analysis Services XMLA endpoint (semantic-model column metadata, PR #984).
+            { name: 'LOOM_AAS_SERVER_URL', value: !empty(loomAasServerUrl) ? loomAasServerUrl : (deployAas ? analysisServices.outputs.aasServerUrl : '') }
             // AAS XMLA measure persistence (loomSemanticBackend=analysis-services
             // reads these). Empty string = unconfigured → aas-client surfaces an
             // honest infra-gate and DAX validation still works on every backend.
-            // The XMLA scope (https://*.asazure.<suffix>/.default) is derived per
-            // cloud by aas-client.ts from cloud-endpoints.aasSuffix() — no extra var.
-            // NOTE: the Console UAMI must be added as an AAS server administrator
-            // out-of-band (ARM can't set admins on an existing server):
-            //   az analysis-services server update --name <srv> -g <rg> \
-            //     --admin-users <consolePrincipalId>
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }

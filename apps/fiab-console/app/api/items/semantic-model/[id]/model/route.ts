@@ -68,6 +68,10 @@ import {
   aasAvailabilityGate, executeTmsl, buildCalcGroupTmsl, buildFieldParamTmsl, AasError,
   xmlaConfigGate, buildAggTableTmsl, executeAggTmsl,
   upsertMeasure, evaluateMeasure, isAasConfigured, aasDefaultDatabase,
+  // PR #984 — column metadata editor (XMLA Alter/Create) surface
+  aasColumnEditorGate, aasXmlaConfig, command as executeXmlaCommand,
+  buildAlterColumnTmsl, buildCreateCalcColumnTmsl, buildCreateCalcTableTmsl,
+  type TmslColumnDef, type TmslCalcColumnDef,
   type TmslRelationship, type TmslTable, type TmslCardinality,
   type AltMap, type AggSummarization,
 } from '@/lib/azure/aas-client';
@@ -918,4 +922,86 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
   const backend = removed ? await writeBackendRelationship(mctx, workspaceId, id, { kind: 'delete', name: removed.name }, merged, state) : null;
   return NextResponse.json({ ok: true, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
+}
+
+
+// ── Column metadata editor (PR #984) — Tables tab XMLA Alter/Create path ────
+//
+// PATCH ops:
+//   { op: 'alter-column',          tableName, columnName, column: TmslColumnDef }
+//   { op: 'add-calculated-column', tableName, column: TmslCalcColumnDef }
+//   { op: 'add-calculated-table',  tableName, expression }
+// Runs the real XMLA Alter/Create against the configured backend
+// (LOOM_AAS_SERVER_URL — Azure Analysis Services by default; or the
+// LOOM_POWERBI_XMLA_ENDPOINT opt-in) and returns the exact TMSL JSON sent.
+// Per no-vaporware.md: no mocks. Per no-fabric-dependency.md: no Fabric/Power
+// BI *workspace* requirement — AAS is a standalone Azure resource.
+
+interface AlterColumnBody {
+  op: 'alter-column';
+  tableName?: string;
+  columnName?: string;
+  column?: TmslColumnDef;
+}
+interface AddCalcColumnBody {
+  op: 'add-calculated-column';
+  tableName?: string;
+  column?: TmslCalcColumnDef;
+}
+interface AddCalcTableBody {
+  op: 'add-calculated-table';
+  tableName?: string;
+  expression?: string;
+}
+type ModelPatch = AlterColumnBody | AddCalcColumnBody | AddCalcTableBody;
+
+export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const gate = aasColumnEditorGate();
+  if (gate) return NextResponse.json({ ok: false, gate }, { status: 200 });
+
+  const cfg = aasXmlaConfig()!;
+  const body = (await req.json().catch(() => ({}))) as ModelPatch;
+
+  try {
+    if (body.op === 'alter-column') {
+      if (!body.tableName || !body.column?.name || !body.column?.dataType) {
+        return NextResponse.json(
+          { ok: false, error: 'alter-column requires tableName and a complete column object (name + dataType)' },
+          { status: 400 },
+        );
+      }
+      const { tmsl } = await executeXmlaCommand(buildAlterColumnTmsl(cfg.database, body.tableName, body.column), cfg.database);
+      return NextResponse.json({ ok: true, tmsl });
+    }
+
+    if (body.op === 'add-calculated-column') {
+      if (!body.tableName || !body.column?.name || !body.column?.expression || !body.column?.dataType) {
+        return NextResponse.json(
+          { ok: false, error: 'add-calculated-column requires tableName and column { name, dataType, expression }' },
+          { status: 400 },
+        );
+      }
+      const { tmsl } = await executeXmlaCommand(buildCreateCalcColumnTmsl(cfg.database, body.tableName, body.column), cfg.database);
+      return NextResponse.json({ ok: true, tmsl });
+    }
+
+    if (body.op === 'add-calculated-table') {
+      if (!body.tableName || !body.expression) {
+        return NextResponse.json(
+          { ok: false, error: 'add-calculated-table requires tableName and a DAX expression' },
+          { status: 400 },
+        );
+      }
+      const { tmsl } = await executeXmlaCommand(buildCreateCalcTableTmsl(cfg.database, body.tableName, body.expression), cfg.database);
+      return NextResponse.json({ ok: true, tmsl });
+    }
+
+    return NextResponse.json({ ok: false, error: `unknown op "${(body as any).op}"` }, { status: 400 });
+  } catch (e: any) {
+    const status = e instanceof AasError ? (e.status === 401 ? 401 : 502) : 500;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
+  }
 }
