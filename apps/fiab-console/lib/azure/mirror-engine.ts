@@ -24,7 +24,8 @@
  */
 import { executeParameterized, enableMirroring, type MirroringConfig } from './azure-sql-client';
 import { listTables, sqlConfigGate } from './sql-objects-client';
-import { uploadFile, pathToHttpsUrl, getAccountName } from './adls-client';
+import { uploadFile, pathToHttpsUrl, getAccountName, listPaths } from './adls-client';
+import { listPipelineRuns, adfConfigGate } from './adf-client';
 import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
@@ -506,4 +507,161 @@ export async function runMirrorSnapshot(
     note,
     error: anyOk ? undefined : 'No tables could be replicated — see per-table errors.',
   };
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * MONITOR + LIFECYCLE
+ *
+ * The Monitor tab needs a real-time, GET-able snapshot of per-table replication
+ * status, true row counts, and last-sync timestamps, plus the provisioner-backed
+ * ADF pipeline-run telemetry. Lifecycle (stop/start/restart) is implemented in
+ * the BFF route, but the shared status assembly + the restart primitive live
+ * here so the route and the editor agree on shapes.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** A single per-table row for the Monitor grid. */
+export interface MirrorTableMonitorRow {
+  schema: string;
+  table: string;
+  status: 'Replicated' | 'Error' | 'NotStarted' | 'Syncing';
+  /** Rows landed by the last engine run (Cosmos tablesStatus). */
+  rows: number;
+  bytes: number;
+  lastSync: string | null;
+  error?: string;
+  mode?: 'snapshot' | 'incremental';
+  note?: string;
+  /** ADLS probe: CSV files in the table's Bronze landing folder. */
+  landingFiles?: number;
+  /** ADLS probe: total bytes of those landing files. */
+  landingBytes?: number;
+}
+
+/** A best-effort summary of the most recent ADF Bronze-copy pipeline run. */
+export interface AdfRunSummary {
+  runId: string;
+  pipelineName: string;
+  status: string;
+  runStart?: string;
+  runEnd?: string;
+  durationMs?: number;
+}
+
+/** The full payload returned by the Monitor route + lifecycle receipts. */
+export interface MirrorMonitorPayload {
+  mirroringStatus: string;
+  tables: MirrorTableMonitorRow[];
+  lastStateChange?: string | null;
+  basePath?: string | null;
+  /** ADF pipeline-run telemetry when the provisioner-backed pipeline is found. */
+  adfLastRun?: AdfRunSummary;
+  note?: string;
+}
+
+/**
+ * ADF object name: letters/digits/_ only, first char a letter. Byte-for-byte
+ * the same transform the provisioner's `adfName()` applies, so the derived
+ * pipeline name matches the one `provisionAdfCdc()` created (`<name>_to_bronze`).
+ */
+function adfSafeName(s: string): string {
+  let n = s.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+/, '').slice(0, 120);
+  if (!/^[A-Za-z]/.test(n)) n = `t_${n}`;
+  return n || 'loom_mirror';
+}
+
+/**
+ * Assemble a monitor snapshot for a mirrored database:
+ *   1. Project Cosmos `tablesStatus` → typed MirrorTableMonitorRow[] (primary,
+ *      real per-table status + true row counts + real last-sync timestamps).
+ *   2. Probe the ADLS Bronze landing folder per table → landingFiles +
+ *      landingBytes (a real `_delta_log`-style file/byte probe of what is
+ *      actually committed on storage).
+ *   3. If ADF is configured, queryPipelineRuns the provisioner-backed
+ *      `<name>_to_bronze` pipeline → adfLastRun (real ADF run-state telemetry).
+ * All three sources are best-effort and degrade gracefully with disclosure —
+ * no mocks, no fabricated values (no-vaporware).
+ */
+export async function getMirrorStatus(
+  mirrorId: string,
+  workspaceId: string,
+  state: Record<string, any>,
+  displayName: string,
+): Promise<MirrorMonitorPayload> {
+  const mirroringStatus = String(state.mirroringStatus || 'NotStarted');
+  const storedTables: any[] = Array.isArray(state.tablesStatus) ? state.tablesStatus : [];
+  const lastStateChange = state.lastStateChange || state.updatedAt || null;
+  const basePath = state.lastRun?.basePath || null;
+
+  // 1) Project Cosmos tablesStatus → typed rows.
+  const tableRows: MirrorTableMonitorRow[] = storedTables.map((t) => ({
+    schema: t.schema || '',
+    table: t.table || '',
+    status: t.status === 'replicated' ? 'Replicated' : t.status === 'error' ? 'Error' : 'NotStarted',
+    rows: typeof t.rows === 'number' ? t.rows : 0,
+    bytes: typeof t.bytes === 'number' ? t.bytes : 0,
+    lastSync: t.lastSync || null,
+    error: t.error,
+    mode: t.mode,
+    note: t.note,
+  }));
+
+  // 2) ADLS probe — list the landing folder per table to get committed file
+  //    counts + byte sums. Best-effort: a failure simply omits the probe.
+  const basePrefix = `mirrors/${workspaceId}/${mirrorId}`;
+  if (bronzeConfigured()) {
+    for (const row of tableRows) {
+      try {
+        const prefix = `${basePrefix}/${row.schema}.${row.table}`;
+        const paths = await listPaths(BRONZE, prefix, 500);
+        const files = paths.filter((p) => !p.isDirectory && p.name.endsWith('.csv'));
+        row.landingFiles = files.length;
+        row.landingBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
+      } catch { /* probe failed — omit landingFiles/landingBytes for this table */ }
+    }
+  }
+
+  // 3) ADF pipeline-run telemetry — derive the pipeline name from displayName
+  //    (mirrors the provisioner). Only attempted when ADF is fully configured.
+  let adfLastRun: AdfRunSummary | undefined;
+  if (!adfConfigGate()) {
+    const pipelineName = `${adfSafeName(displayName)}_to_bronze`;
+    try {
+      const runs = await listPipelineRuns(pipelineName, 7);
+      const last = runs[0];
+      if (last) {
+        adfLastRun = {
+          runId: last.runId,
+          pipelineName: last.pipelineName,
+          status: last.status || 'Unknown',
+          runStart: last.runStart,
+          runEnd: last.runEnd ?? undefined,
+          durationMs: last.durationInMs,
+        };
+      }
+    } catch { /* ADF telemetry unavailable — omit adfLastRun */ }
+  }
+
+  const note =
+    'Per-table status, row counts, and last-sync are from the last direct-engine run (Cosmos). ' +
+    'Landing file/byte counts are a live probe of what is committed in ADLS Bronze. ' +
+    `ADF pipeline-run telemetry is shown when the provisioner-backed '${adfSafeName(displayName)}_to_bronze' ` +
+    'pipeline is found in the factory (45-day native window).';
+
+  return { mirroringStatus, tables: tableRows, lastStateChange, basePath, adfLastRun, note };
+}
+
+/**
+ * Restart: clear all per-table Change-Tracking watermarks (empty
+ * `prevTableStatus`) so every table is re-snapshotted from scratch on this run
+ * — identical to a first Start, even for SQL-family tables that previously
+ * synced incrementally. The source change feed is re-enabled by the snapshot
+ * path. Disclosure: any prior incremental delta CSVs remain in the Bronze
+ * folder; the fresh `snapshot.csv` is read together with them by the
+ * folder-scoped OPENROWSET, so the re-snapshot supersedes stale rows on the
+ * next query rather than physically deleting old files.
+ */
+export async function restartMirrorSnapshot(
+  mirrorId: string, workspaceId: string, src: MirrorSource,
+): Promise<MirrorRunResult> {
+  return runMirrorSnapshot(mirrorId, workspaceId, src, /* prevTableStatus = */ []);
 }
