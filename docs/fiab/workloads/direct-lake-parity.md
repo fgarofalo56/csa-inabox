@@ -3,15 +3,24 @@
 > **This is the hardest single workload to parity.** Loom is honest
 > about the gap.
 
-!!! warning "Shipped reality vs. design (2026-06-06)"
+!!! warning "Shipped reality vs. design (2026-06-09)"
     **What ships today** is the Loom Thread **"Build a Power BI model"** edge
     (`/api/thread/build-powerbi-model`): it reads a warehouse table (or a custom
     SQL query) and creates a real Power BI **push dataset** with typed columns +
-    a sample of rows — *no XMLA required*. The **TOM/XMLA partition-refresh
-    engine, TMDL editor, and visual model designer described below are the target
-    DESIGN**, not the current Console path; `apps/fiab-direct-lake-shim` is not
-    wired into the Console. Treat the sections below as roadmap until this banner
-    is removed.
+    a sample of rows — *no XMLA required*. The **Direct-Lake-Shim backend
+    service** (`apps/fiab-direct-lake-shim`) is real, tested, and bicep-deployed
+    (Delta-log ingestion + TOM partition/full refresh + Cosmos refresh-policy
+    store), but it is **not yet wired into the Console**: the TOM/XMLA
+    partition-refresh editor, per-table refresh-policy picker, DirectQuery
+    fallback, and incremental-refresh editor described below are the target
+    DESIGN (tasks **T4–T6**, see `docs/fiab/prp/power-bi.md`). Treat the Console
+    "Semantic Model" pane sections as roadmap until all three land in `main`.
+    Per-capability status is tracked in
+    [`parity/direct-lake.md`](../parity/direct-lake.md).
+    **Removal trigger:** delete this banner only when T4, T5, and T6 are merged
+    to `main` with real-data E2E receipts (Delta write → shim → warm cache → DAX
+    returns new rows within SLA; stale cache → Serverless fallback badge;
+    incremental + DQ current-period partition provisioned).
 
 ## What Fabric does
 

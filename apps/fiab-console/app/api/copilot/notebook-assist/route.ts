@@ -46,14 +46,30 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
-import { cogScope } from '@/lib/azure/cloud-endpoints';
+import { cogScope, detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import { buildDatastoreSchema } from '@/lib/azure/delta-schema';
+import { NOTEBOOK_PERSONA, type PersonaSystemCtx } from '@/lib/azure/copilot-personas-notebook';
+import {
+  notebookProfileTableTool,
+  notebookPerfInsightsTool,
+  notebookGenerateCodeTool,
+  notebookSummarizeTool,
+  notebookRefactorCellsTool,
+} from '@/lib/copilot/notebook-persona-tools';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 
-// The four supported slash commands — a FIXED server-validated allowlist (no
-// arbitrary free-form command injected into the model prompt).
-const COMMANDS = ['fix', 'explain', 'comments', 'optimize'] as const;
+// The supported slash commands — a FIXED server-validated allowlist (no
+// arbitrary free-form command injected into the model prompt). The first four
+// are single-cell helpers; the latter five are the context-aware notebook
+// persona tools (summarize / generate / profile / perf / refactor).
+const COMMANDS = [
+  'fix', 'explain', 'comments', 'optimize',
+  'summarize', 'generate', 'profile', 'perf', 'refactor',
+] as const;
 type Command = (typeof COMMANDS)[number];
+
+/** A minimal ToolContext for the read-only notebook tools (no item mutation). */
+const TOOL_CTX = { userOid: 'system', session: { claims: { oid: 'system' } } } as const;
 
 // ---------- Credential (identical pattern to copilot-orchestrator) ----------
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -144,6 +160,53 @@ function userMessage(command: Command, cells: NotebookCell[], activeCellId: stri
   return msg;
 }
 
+/** Per-command instruction for the persona path. */
+function personaInstruction(command: Command, freeText: string): string {
+  switch (command) {
+    case 'summarize':
+      return (
+        'Summarize this notebook. For EACH cell give one line: what it does, its key inputs/outputs, ' +
+        'and how it feeds the next cell — referencing the actual variable and column names. End with a ' +
+        '2-3 sentence overall purpose. Plain prose; do not rewrite the code.'
+      );
+    case 'generate':
+      return (
+        `Generate runnable code for this request: "${freeText || '(describe the data task)'}". ` +
+        'Use the REAL table and column names from the schema in the system prompt and the ' +
+        '[TOOL notebook_generate_code] result. Return the code as a single fenced code block; if the ' +
+        'task naturally spans multiple cells, return one fenced block per cell in order. Add a one-line ' +
+        'explanation after the code.'
+      );
+    case 'profile':
+      return (
+        'Using the [TOOL notebook_profile_table] result, present the table profile in a compact, readable ' +
+        'form (size, latest version, last modified, row count). If rowCount is null, state that Synapse ' +
+        'Serverless was unavailable so the count is omitted — do NOT fabricate a number. Then suggest 1-2 ' +
+        'follow-up actions (e.g. OPTIMIZE/VACUUM, partitioning).'
+      );
+    case 'perf':
+      return (
+        'Using the [TOOL notebook_perf_insights] result (Livy session sizing + last-run output), give concrete ' +
+        'Spark tuning recommendations: executor count & memory, broadcast-join thresholds, partition pruning, ' +
+        'caching of reused DataFrames, and skew mitigation. If telemetry is absent, say so and give general ' +
+        'tuning guidance grounded in the cells shown.'
+      );
+    case 'refactor':
+    default:
+      return (
+        `Refactor the code cells per this instruction: "${freeText || 'improve structure, readability, and reuse'}". ` +
+        'Return ONE fenced code block per output cell, in the SAME order as the input cells, preserving the ' +
+        "user's variable names and the overall behaviour. The user will review and apply the cells via the diff."
+      );
+  }
+}
+
+interface AttachedSourceLite {
+  kind: string;
+  displayName: string;
+  isDefault?: boolean;
+}
+
 interface AssistBody {
   sessionId?: string;
   command?: string;
@@ -151,6 +214,40 @@ interface AssistBody {
   activeCellId?: string;
   lang?: NotebookCellLang;
   errorText?: string;
+  /** Free-text argument after a slash command (e.g. `/generate <text>`). */
+  text?: string;
+  // ---- Notebook persona context (real call-time data) ----
+  notebookName?: string;
+  workspaceId?: string;
+  attachedSources?: AttachedSourceLite[];
+  /** Livy session-create receipt from the editor (id, numExecutors, …). */
+  sessionReceipt?: Record<string, unknown>;
+  /** User session sizing (numExecutors, executorMemoryGb, timeoutMinutes). */
+  sessionConfig?: Record<string, unknown>;
+  /** textPlain of the last cell run — for /perf telemetry. */
+  lastOutput?: string;
+  /** `/profile <table>` arg + optional container. */
+  profileTable?: string;
+  profileContainer?: string;
+}
+
+/** Persona commands route through copilot-personas.ts + notebook-tools.ts. */
+const PERSONA_COMMANDS = new Set<Command>(['summarize', 'generate', 'profile', 'perf', 'refactor']);
+
+/** Compact, multi-line attached-source list for the persona system prompt. */
+function formatAttachedSources(sources?: AttachedSourceLite[]): string {
+  if (!Array.isArray(sources) || sources.length === 0) return '';
+  return sources
+    .map((s) => `${s.kind} "${s.displayName}"${s.isDefault ? ' (default)' : ''}`)
+    .join('\n');
+}
+
+/** Compact last-run telemetry block (Livy receipt + last output) for /perf. */
+function formatLastRunTelemetry(receipt?: Record<string, unknown>, lastOutput?: string): string {
+  const parts: string[] = [];
+  if (receipt && Object.keys(receipt).length) parts.push(`Livy session: ${JSON.stringify(receipt)}`);
+  if (lastOutput && lastOutput.trim()) parts.push(`Last cell output:\n${lastOutput.trim().slice(0, 2000)}`);
+  return parts.join('\n');
 }
 
 export async function POST(req: NextRequest) {
@@ -203,11 +300,74 @@ export async function POST(req: NextRequest) {
   }
 
   const langName = LANG_LABEL[lang] || lang;
-  const schema = await buildDatastoreSchema().catch(() => '');
-  const messages = [
-    { role: 'system' as const, content: systemPrompt(command, langName, schema) },
-    { role: 'user' as const, content: userMessage(command, cells, activeCellId, errorText) },
-  ];
+  const schema = await buildDatastoreSchema(
+    Number(process.env.LOOM_NOTEBOOK_PERSONA_CONTEXT_MAX_TABLES) || 30,
+  ).catch(() => '');
+
+  let messages: { role: 'system' | 'user'; content: string }[];
+
+  if (PERSONA_COMMANDS.has(command)) {
+    // ---- Context-aware notebook persona path (summarize/generate/profile/perf/refactor) ----
+    const freeText = String(body.text || '').trim();
+    const personaCtx: PersonaSystemCtx = {
+      notebookName: String(body.notebookName || 'notebook'),
+      cellCount: cells.length,
+      defaultLang: lang,
+      attachedSources: formatAttachedSources(body.attachedSources),
+      schema,
+      lastRunTelemetry: formatLastRunTelemetry(body.sessionReceipt, body.lastOutput),
+      cloud: detectLoomCloud(),
+    };
+
+    // Inject a REAL tool-result block (read-only tools, no AOAI tool-call round-trip).
+    let toolSection = '';
+    if (command === 'profile') {
+      const tableName = String(body.profileTable || freeText || '').trim();
+      const result = await notebookProfileTableTool.handler(
+        { tableName, container: body.profileContainer },
+        TOOL_CTX,
+      );
+      toolSection = `\n\n[TOOL notebook_profile_table]\n${JSON.stringify(result, null, 2)}`;
+    } else if (command === 'perf') {
+      const result = await notebookPerfInsightsTool.handler(
+        { sessionReceipt: body.sessionReceipt, lastOutput: body.lastOutput, sessionConfig: body.sessionConfig },
+        TOOL_CTX,
+      );
+      toolSection = `\n\n[TOOL notebook_perf_insights]\n${JSON.stringify(result, null, 2)}`;
+    } else if (command === 'generate') {
+      const result = await notebookGenerateCodeTool.handler(
+        { description: freeText, lang },
+        TOOL_CTX,
+      );
+      toolSection = `\n\n[TOOL notebook_generate_code]\n${JSON.stringify(result, null, 2)}`;
+    } else if (command === 'summarize') {
+      const result = await notebookSummarizeTool.handler({ cells }, TOOL_CTX);
+      toolSection = `\n\n[TOOL notebook_summarize]\n${JSON.stringify(result, null, 2)}`;
+    } else if (command === 'refactor') {
+      const result = await notebookRefactorCellsTool.handler(
+        { cells: cells.filter((c) => c.type === 'code'), instruction: freeText },
+        TOOL_CTX,
+      );
+      toolSection = `\n\n[TOOL notebook_refactor_cells]\n${JSON.stringify(result, null, 2)}`;
+    }
+
+    const instruction = personaInstruction(command, freeText);
+    const userContent =
+      `${instruction}\n\n` +
+      `Notebook cells (in order):\n${userMessage('explain', cells, activeCellId, '')}` +
+      toolSection;
+
+    messages = [
+      { role: 'system', content: NOTEBOOK_PERSONA.systemPrompt(personaCtx) },
+      { role: 'user', content: userContent },
+    ];
+  } else {
+    // ---- Single-cell helper path (fix/explain/comments/optimize) ----
+    messages = [
+      { role: 'system', content: systemPrompt(command, langName, schema) },
+      { role: 'user', content: userMessage(command, cells, activeCellId, errorText) },
+    ];
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

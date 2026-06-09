@@ -1,78 +1,71 @@
-# CSA Loom → Azure portal 1:1 parity scorecard
+# scorecard — parity with Fabric Scorecard (Power BI Metrics)
 
-**Honest baseline, 2026-05-31.** Each service was audited by grounding the REAL
-Azure portal/studio feature inventory in Microsoft Learn, then grading the
-actual Loom editor/navigator/route code per capability (built ✅ / partial ⚠️ /
-gated ⚠️ / missing ❌), conservative when unsure. Per `.claude/rules/ui-parity.md`
-+ `no-vaporware.md`. Per-service detail in `docs/fiab/parity/<slug>.md`.
+**Source UI:**
+- Power BI Metrics / Scorecards (goals) — https://learn.microsoft.com/power-bi/create-reports/service-goals-introduction
+- Goals hub + check-ins — https://learn.microsoft.com/power-bi/create-reports/service-goals-create
+- Fabric Scorecards REST (preview) — https://learn.microsoft.com/rest/api/power-bi/scorecards
 
-> **Bottom line:** the **data plane works** — every navigator is wired to real
-> Azure REST and validated 34/34 live (`csa_loom_navigators_live_green`) — but
-> the **editors are NOT 1:1 feature-complete with the Azure portal**. Average
-> grade ≈ **C**. Of ~570 enumerated Azure capabilities: roughly **40% built,
-> 20% partial, 7% honest-gate, 33% missing**. The framework is correct
-> (Fluent UI v9 = Azure/Fabric's own design system); the gap is feature
-> build-out + fidelity, not the stack.
+**Loom surface:** `apps/fiab-console/lib/editors/phase3-editors.tsx` → `ScorecardEditor` (line 10334)
+**BFF routes:** `app/api/items/scorecard/route.ts` (list) · `app/api/items/scorecard/[id]/route.ts` (detail + check-in)
+**Client:** `apps/fiab-console/lib/azure/powerbi-client.ts` → `listScorecards` / `getScorecard` / `listScorecardGoals` / `addScorecardGoalValue`
+**Azure-native fallback:** `app/api/items/scorecard/_lib/pbi-content-fallback.ts` → `listContentBackedItems` / `scorecardGoalsFromContent` (Loom bundle-template OKRs from Cosmos `state.content`)
 
-| Service | Grade | built | partial | gated | missing | doc |
-|---|:---:|---:|---:|---:|---:|---|
-| Azure Databricks | **B** | 41 | 9 | 5 | 33 | databricks-workspace.md |
-| Power Platform | C | 28 | 4 | 1 | 38 | power-platform.md |
-| Power BI / Fabric | C | 26 | 4 | 3 | 20 | powerbi-workspace.md |
-| API Management | C | 18 | 8 | 0 | 21 | apim-service.md |
-| Azure Data Explorer (Kusto) | C | 17 | 21 | 2 | 24 | adx-kusto.md |
-| Azure AI Search | C | 17 | 3 | 4 | 16 | ai-search.md |
-| Azure AI Foundry | C | 13 | 12 | 3 | 5 | ai-foundry.md |
-| Azure Data Factory | C | 11 | 4 | 2 | 11 | adf-data-factory.md |
-| Azure Cosmos DB | C | 8 | 7 | 5 | 24 | cosmos-db.md |
-| Azure SQL Database | C | 6 | 7 | 0 | 31 | azure-sql-database.md |
-| Azure Synapse Analytics | C | 4 | 17 | 2 | 16 | synapse-analytics.md |
-| Azure Event Hubs | **D** | 3 | 6 | 4 | 16 | event-hubs.md |
+---
 
-## The single biggest theme
-Every service is missing its **flagship "explorer / designer" surface** — the one
-operators live in. Loom often substitutes a read-only grid or a raw-JSON
-textarea, which `ui-parity.md` explicitly forbids as parity:
+## Fabric/Power BI feature inventory
 
-- **Cosmos** — Items **Data Explorer** (browse/query/CRUD documents): "the single
-  most-used Data Explorer feature and the biggest credibility gap; entirely absent."
-- **Event Hubs (D)** — **Send + View events**, SAS keys/connection strings,
-  Capture config, auto-inflate scale.
-- **ADF** — **Mapping Data Flow** visual designer, Copy Data wizard, Expression Builder.
-- **Synapse** — **Notebook editor**, unified Studio shell, data-flow designer.
-- **ADX** — **rich results grid** (sort/filter/group/pivot/profile), cluster
-  lifecycle, principal-assignment RBAC UI, export/share.
-- **AI Foundry** — **Agents editor + playground** (flagship new-Foundry), fine-tuning, connections CRUD, guardrails.
-- **AI Search** — **visual field designer**, search-explorer query options (semantic/vector), indexer scheduling, vector profile designer.
-- **SQL** — wire the real object navigator into the editor; scale; backup/restore; firewall/Entra-admin/replication.
-- **Power BI** — per-item settings/governance (gateway creds, endorsement, sensitivity, workspace ACL).
-- **Power Platform** — environment lifecycle + Dataverse table/data authoring (designers are deep-linked, which ui-parity forbids).
+| # | Capability (real Power BI / Fabric UI) | Where in Power BI |
+| --- | --- | --- |
+| 1 | List scorecards in a workspace | Workspace content list → Scorecards |
+| 2 | View goals + current / target values | Scorecard → Goals table |
+| 3 | Manual check-in — record a goal value (+ optional target, note, date) | Goal row → Add value / Check in |
+| 4 | Scorecard authoring (new goals, connect to report visuals, hierarchy, status rules, owners) | Power BI Web metrics designer |
+| 5 | Open in Power BI / copy link | More options |
 
-## Prioritized build backlog (highest value first)
+---
 
-**Tier 0 — quick wins (backend already exists, just unwired):**
-1. **Databricks cluster EDIT** — `editCluster()` exists; wire into the editor (fields disabled today). Highest value / lowest effort.
-2. **Databricks SQL warehouse EDIT/scale** — `editWarehouse()` exists, no UI calls it.
-3. **Azure SQL: mount the real `SqlDbTree` navigator** into `UnifiedSqlDatabaseEditor` (rich sys.* tree built but the editor shows a flat grid); surface the existing firewall / Entra-admin / geo-replication routes.
-4. **AI Search Search-Explorer query options** — backend already supports `queryType` + `vectorQueries`; expose semantic/vector controls.
-5. **Synapse dedicated-pool DWU scale** on the ribbon (client fn exists, not surfaced).
+## Loom coverage
 
-**Tier 1 — flagship explorers/designers (biggest credibility gaps):**
-6. **Cosmos Items Data Explorer** — documents.azure.com data-plane client (+ data-plane RBAC), Monaco query tab, results grid w/ RU charge, item New/View/Edit/Delete.
-7. **Event Hubs Data Explorer** — Send + View events (Entra data-plane), SAS keys/connection strings, Capture config, auto-inflate.
-8. **AI Search visual field designer** + indexer scheduling/run-history + vector/semantic config designers + Import-data wizard.
-9. **ADX rich results grid** (sort/filter/group/pivot/profile) + cluster lifecycle + principal-assignment RBAC UI + export/share.
-10. **AI Foundry Agents editor + playground** (wire `foundry-agent-client`), Connections CRUD, fine-tuning, guardrails.
+Legend: ✅ built (full 1:1 + real backend) · ⚠️ honest-gate (full surface renders + Fluent MessageBar) · ❌ MISSING
 
-**Tier 2 — heavy designers (large, schedule deliberately):**
-11. **ADF / Synapse Mapping Data Flow** visual designer + Expression Builder + Copy Data wizard.
-12. **Synapse notebook editor** + unified Studio shell.
-13. **APIM** operations authoring + guided policy editor + subscription key/state.
-14. **Power BI** per-item settings/governance pane.
-15. **Power Platform** environment lifecycle + Dataverse authoring + Unity Catalog write surface (Databricks).
+| # | Capability | State | Notes |
+| --- | --- | --- | --- |
+| 1 | List scorecards | ✅ built | Left tree + workspace picker → `GET /api/items/scorecard?workspaceId=…` → `listScorecards()` (Fabric REST). **Azure-native default:** bundle-installed scorecards (`loom:` ids) carry OKRs in Cosmos `state.content` and are merged in via `listContentBackedItems()`, so the editor renders even when no live Fabric scorecard exists. Auto-selects the first scorecard. |
+| 2 | Goals + current/target | ✅ built | Goals table (current, target, status) → `GET /api/items/scorecard/[id]` → `getScorecard()` + `listScorecardGoals()`; bundle items resolve via `scorecardGoalsFromContent()`. |
+| 3 | Manual goal-value check-in | ✅ built | Inline **Add value** dialog (value + optional target + note) → `POST /api/items/scorecard/[id]` → `addScorecardGoalValue()` (Fabric REST). A bundle-template scorecard that is not yet live in Fabric returns an honest **409 `scorecard_template_not_live`** (no silent 404) telling the operator to create it in Fabric first. |
+| 4 | Scorecard authoring (goals / connections / hierarchy / status rules) | ⚠️ honest-gate | The editor renders the full surface (list + goals + check-in) plus an `intent="info"` MessageBar: *"Scorecard authoring … lives in Power BI Web."* with an **Open in Power BI** CTA. Fabric scorecards REST is preview and has no public authoring surface — disclosed, not faked. |
+| 5 | Open in Power BI / copy link | ✅ built | Ribbon + toolbar **Open in Power BI** → `window.open(app.powerbi.com/groups/{ws}/scorecards/{id})`. |
 
-## How "done" is proven from here (no more DOM/network claims)
-Per surface: the parity doc shows every inventory row built ✅ or honest-gate ⚠️
-(zero ❌, zero stub banners) · `tsc --noEmit` + `pnpm uat` green · AND a
-side-by-side against the live Azure portal (operator or browser screenshot).
-DOM strings ≠ parity.
+**Zero ❌.** Every row is built ✅ against real Fabric/Cosmos backends, or the one honest-gate ⚠️ (preview-only authoring) that still renders the full surface — no dead buttons, no stub banners, no mock arrays.
+
+---
+
+## Backend per control
+
+| Control | Backend |
+| --- | --- |
+| Scorecard list (tree) | `GET /api/items/scorecard?workspaceId=…` → `listScorecards()` → Fabric `GET /v1.0/myorg/groups/{ws}/scorecards` **+** `listContentBackedItems()` (Cosmos `state.content` OKR templates) |
+| Goals table | `GET /api/items/scorecard/[id]?workspaceId=…` → `getScorecard()` + `listScorecardGoals()` → Fabric `GET .../scorecards/{id}` + `.../scorecards/{id}/goals` (bundle items → `scorecardGoalsFromContent()`) |
+| Add value (check-in) | `POST /api/items/scorecard/[id]` `{goalId,value,targetValue?,noteText?,goalValueDate?}` → `addScorecardGoalValue()` → Fabric `POST .../scorecards/{id}/goals/{goalId}/goalValues`; bundle template → honest **409 `scorecard_template_not_live`** |
+| Open in Power BI | client `window.open` to `app.powerbi.com/groups/{ws}/scorecards/{id}` |
+
+Auth: Console UAMI via `ManagedIdentityCredential` chained with `DefaultAzureCredential`. Live-Fabric scorecard calls need the UAMI authorized for Fabric APIs + workspace membership; on 401/403 the underlying error surfaces verbatim. The bundle-template (Cosmos) path needs no Fabric access — it is the Azure-native default per `no-fabric-dependency.md`.
+
+---
+
+## Per-cloud notes
+
+Live Fabric scorecards are a **Fabric** surface (`api.fabric.microsoft.com` / preview Power BI metrics REST). The **Loom bundle-template OKR path is Azure-native** (Cosmos `state.content`) and works in every cloud with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+| Cloud | Live Fabric scorecards | Loom bundle-template OKRs (Cosmos) |
+| --- | --- | --- |
+| Commercial | ✅ Fabric / Power BI metrics REST | ✅ Cosmos `state.content` |
+| GCC | ❌ **Fabric / Power BI Metrics not available in GCC** — list returns the honest error only when there are no bundle entries; with bundle entries the editor still renders | ✅ Cosmos `state.content` |
+| GCC-High / IL4 | ✅ Fabric available | ✅ Cosmos `state.content` |
+| DoD / IL5 | ✅ Fabric available | ✅ Cosmos `state.content` |
+
+In GCC the editor never dead-ends: bundle-installed scorecards render their OKR goals from Cosmos, and the live-Fabric list error is surfaced precisely (no silent empty surface), consistent with `no-fabric-dependency.md`.
+
+---
+
+Grade: A — list, goals, manual check-in, and open-in-PBI are all real backend (Fabric REST + Cosmos OKR fallback); preview-only authoring is the single honest-gate. Zero ❌, zero stub banners.
