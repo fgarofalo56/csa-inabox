@@ -110,6 +110,19 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.synapseSqlSuffix()).toBe(SYN_COM);
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
   });
+
+  it('Cost Management + Monitor share the ARM base/scope; DevOps + App Config are commercial', async () => {
+    const m = await load('AzureCloud');
+    expect(m.getCostManagementBase()).toBe(ARM_COM);
+    expect(m.getCostManagementScope()).toBe(`${ARM_COM}/.default`);
+    expect(m.getMonitorBase()).toBe(ARM_COM);
+    expect(m.getMonitorScope()).toBe(`${ARM_COM}/.default`);
+    expect(m.getDevOpsBase()).toBe(`https://${J('dev', 'azure', 'com')}`);
+    const AC_COM = J('azconfig', 'io');
+    expect(m.getAppConfigSuffix()).toBe(AC_COM);
+    expect(m.getAppConfigScope()).toBe(`https://${AC_COM}/.default`);
+    expect(m.appConfigEndpointFromName('ac-loom')).toBe(`https://ac-loom.${AC_COM}`);
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -182,6 +195,19 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     const m = await load('AzureUSGovernment');
     expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+  });
+
+  it('Cost Management + Monitor follow the Gov ARM host; DevOps stays SaaS; App Config is azure.us', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.getCostManagementBase()).toBe('https://management.usgovcloudapi.net');
+    expect(m.getCostManagementScope()).toBe('https://management.usgovcloudapi.net/.default');
+    expect(m.getMonitorBase()).toBe('https://management.usgovcloudapi.net');
+    expect(m.getMonitorScope()).toBe('https://management.usgovcloudapi.net/.default');
+    // Azure DevOps Services is NOT in the Gov endpoint table — same SaaS host.
+    expect(m.getDevOpsBase()).toBe('https://dev.azure.com');
+    expect(m.getAppConfigSuffix()).toBe('azconfig.azure.us');
+    expect(m.getAppConfigScope()).toBe('https://azconfig.azure.us/.default');
+    expect(m.appConfigEndpointFromName('ac-loom')).toBe('https://ac-loom.azconfig.azure.us');
   });
 });
 

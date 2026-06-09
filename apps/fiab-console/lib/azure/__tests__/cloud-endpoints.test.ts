@@ -15,6 +15,14 @@ import {
   getBlobSuffix,
   getOpenAiSuffix,
   getPbiGovHost,
+  getCostManagementBase,
+  getCostManagementScope,
+  getMonitorBase,
+  getMonitorScope,
+  getDevOpsBase,
+  getAppConfigSuffix,
+  getAppConfigScope,
+  appConfigEndpointFromName,
 } from '../cloud-endpoints';
 
 const ORIG_LOOM = process.env.LOOM_CLOUD;
@@ -157,6 +165,48 @@ const TABLE: Record<string, Record<(typeof CLOUDS)[number], string>> = {
     'GCC-High': 'kusto.usgovcloudapi.net',
     DoD: 'kusto.usgovcloudapi.net',
   },
+  getCostManagementBase: {
+    Commercial: 'https://management.azure.com',
+    GCC: 'https://management.azure.com',
+    'GCC-High': 'https://management.usgovcloudapi.net',
+    DoD: 'https://management.azure.microsoft.scloud',
+  },
+  getCostManagementScope: {
+    Commercial: 'https://management.azure.com/.default',
+    GCC: 'https://management.azure.com/.default',
+    'GCC-High': 'https://management.usgovcloudapi.net/.default',
+    DoD: 'https://management.azure.microsoft.scloud/.default',
+  },
+  getMonitorBase: {
+    Commercial: 'https://management.azure.com',
+    GCC: 'https://management.azure.com',
+    'GCC-High': 'https://management.usgovcloudapi.net',
+    DoD: 'https://management.azure.microsoft.scloud',
+  },
+  getMonitorScope: {
+    Commercial: 'https://management.azure.com/.default',
+    GCC: 'https://management.azure.com/.default',
+    'GCC-High': 'https://management.usgovcloudapi.net/.default',
+    DoD: 'https://management.azure.microsoft.scloud/.default',
+  },
+  getDevOpsBase: {
+    Commercial: 'https://dev.azure.com',
+    GCC: 'https://dev.azure.com',
+    'GCC-High': 'https://dev.azure.com',
+    DoD: 'https://dev.azure.com',
+  },
+  getAppConfigSuffix: {
+    Commercial: 'azconfig.io',
+    GCC: 'azconfig.io',
+    'GCC-High': 'azconfig.azure.us',
+    DoD: 'azconfig.azure.us',
+  },
+  getAppConfigScope: {
+    Commercial: 'https://azconfig.io/.default',
+    GCC: 'https://azconfig.io/.default',
+    'GCC-High': 'https://azconfig.azure.us/.default',
+    DoD: 'https://azconfig.azure.us/.default',
+  },
 };
 
 const FNS: Record<string, () => string> = {
@@ -174,6 +224,13 @@ const FNS: Record<string, () => string> = {
   getPbiGovHost,
   getDfsSuffix,
   getKustoSuffix,
+  getCostManagementBase,
+  getCostManagementScope,
+  getMonitorBase,
+  getMonitorScope,
+  getDevOpsBase,
+  getAppConfigSuffix,
+  getAppConfigScope,
 };
 
 describe('cloud-endpoints getters — all 4 clouds via LOOM_CLOUD', () => {
@@ -203,5 +260,52 @@ describe('legacy AZURE_CLOUD signal still resolves (back-compat)', () => {
     expect(getArmEndpoint()).toBe('https://management.usgovcloudapi.net');
     expect(getCosmosSuffix()).toBe('documents.azure.us');
     expect(getGraphHost()).toBe('https://graph.microsoft.us');
+  });
+});
+
+describe('getDevOpsBase — cloud-invariant SaaS + LOOM_DEVOPS_BASE override', () => {
+  const ORIG = process.env.LOOM_DEVOPS_BASE;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.LOOM_DEVOPS_BASE;
+    else process.env.LOOM_DEVOPS_BASE = ORIG;
+  });
+
+  it('is dev.azure.com in every cloud (no LOOM_DEVOPS_BASE)', () => {
+    delete process.env.LOOM_DEVOPS_BASE;
+    for (const cloud of CLOUDS) {
+      withCloud(cloud);
+      expect(getDevOpsBase()).toBe('https://dev.azure.com');
+    }
+  });
+
+  it('passes LOOM_DEVOPS_BASE through verbatim, stripping trailing slashes', () => {
+    process.env.LOOM_DEVOPS_BASE = 'https://devops.my-gov.agency/';
+    expect(getDevOpsBase()).toBe('https://devops.my-gov.agency');
+  });
+});
+
+describe('getAppConfigSuffix — LOOM_APPCONFIG_SUFFIX override', () => {
+  const ORIG = process.env.LOOM_APPCONFIG_SUFFIX;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.LOOM_APPCONFIG_SUFFIX;
+    else process.env.LOOM_APPCONFIG_SUFFIX = ORIG;
+  });
+
+  it('honors LOOM_APPCONFIG_SUFFIX, stripping leading dots and trailing slashes', () => {
+    withCloud('Commercial');
+    process.env.LOOM_APPCONFIG_SUFFIX = '.appconfig.sovereign.example/';
+    expect(getAppConfigSuffix()).toBe('appconfig.sovereign.example');
+    expect(getAppConfigScope()).toBe('https://appconfig.sovereign.example/.default');
+  });
+});
+
+describe('appConfigEndpointFromName', () => {
+  it('builds an azconfig.io URL in Commercial', () => {
+    withCloud('Commercial');
+    expect(appConfigEndpointFromName('ac-loom')).toBe('https://ac-loom.azconfig.io');
+  });
+  it('builds an azconfig.azure.us URL in GCC-High', () => {
+    withCloud('GCC-High');
+    expect(appConfigEndpointFromName('ac-loom')).toBe('https://ac-loom.azconfig.azure.us');
   });
 });

@@ -74,6 +74,29 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Foundation admin containers (shared cloud-endpoints resolver task). All six
+// are Loom-native, Azure-backed registries with NO Fabric dependency.
+//   loom-workspaces    — admin Workspace Catalog (one row per Loom-managed
+//                        workspace), PK /tenantId so the admin workspace-picker
+//                        hits a single physical partition. Distinct from the
+//                        BFF `workspaces` config container.
+//   workspace-folders  — Loom-native folder hierarchy (OneLake folder parity),
+//                        PK /workspaceId so the Explorer tree hits one partition.
+//   task-flows         — task-automation flows owned by a workspace, PK
+//                        /workspaceId for the task-editor list query.
+//   embed-codes        — tenant-scoped embed codes (one per embedded report /
+//                        dashboard), PK /tenantId.
+//   org-visuals        — org-level visual templates (theme / branding / layouts),
+//                        PK /tenantId.
+//   azure-connections  — Azure service connection profiles (ARM subscription /
+//                        resource-group bindings), PK /tenantId. Distinct from
+//                        the secretRef-bearing `connections` container.
+let _loomWorkspaces: Container | null = null;
+let _workspaceFolders: Container | null = null;
+let _taskFlows: Container | null = null;
+let _embedCodes: Container | null = null;
+let _orgVisuals: Container | null = null;
+let _azureConnections: Container | null = null;
 let _ensured = false;
 
 /**
@@ -289,6 +312,16 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Foundation admin containers (shared cloud-endpoints resolver task). ARM-
+  // provisioned in landing-zone/cosmos.bicep for the `loom` database; these
+  // createIfNotExists calls are the idempotent fallback for hotfix deploys that
+  // skip bicep. Partition keys MUST match cosmos.bicep exactly.
+  _loomWorkspaces    = await mk('loom-workspaces',    '/tenantId');
+  _workspaceFolders  = await mk('workspace-folders',  '/workspaceId');
+  _taskFlows         = await mk('task-flows',          '/workspaceId');
+  _embedCodes        = await mk('embed-codes',         '/tenantId');
+  _orgVisuals        = await mk('org-visuals',         '/tenantId');
+  _azureConnections  = await mk('azure-connections',   '/tenantId');
   _ensured = true;
 }
 
@@ -314,6 +347,20 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+
+// Foundation admin containers (shared cloud-endpoints resolver task).
+/** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
+export async function loomWorkspacesContainer(): Promise<Container>  { await ensure(); return _loomWorkspaces!; }
+/** Workspace-native folder hierarchy (OneLake folder parity), PK /workspaceId. */
+export async function workspaceFoldersContainer(): Promise<Container> { await ensure(); return _workspaceFolders!; }
+/** Task-automation flows owned by a workspace, PK /workspaceId. */
+export async function taskFlowsContainer(): Promise<Container>        { await ensure(); return _taskFlows!; }
+/** Tenant-scoped embed codes (one per embedded report/dashboard), PK /tenantId. */
+export async function embedCodesContainer(): Promise<Container>       { await ensure(); return _embedCodes!; }
+/** Org-level visual templates (theme/branding/layouts), PK /tenantId. */
+export async function orgVisualsContainer(): Promise<Container>       { await ensure(); return _orgVisuals!; }
+/** Azure service connection profiles (ARM subscription/RG bindings), PK /tenantId. */
+export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -394,6 +441,9 @@ const KNOWN_CONTAINER_IDS = [
   'attribute-groups', 'okrs',
   'access-request-workflow',
   'saved-queries',
+  // Foundation admin containers (shared cloud-endpoints resolver task).
+  'loom-workspaces', 'workspace-folders', 'task-flows',
+  'embed-codes', 'org-visuals', 'azure-connections',
 ];
 
 /** List all Loom containers with their current throughput shape. */

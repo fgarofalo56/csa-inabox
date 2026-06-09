@@ -96,11 +96,15 @@ var databases = [
 
 // NOTE: The Loom Console creates additional containers lazily at runtime via
 // apps/fiab-console/lib/azure/cosmos-client.ts `ensure()` (createIfNotExists),
-// in the `loom` database (id = LOOM_COSMOS_DATABASE || 'loom'). These do not
-// need ARM provisioning here; they only require the Console UAMI to hold the
-// Cosmos DB Built-in Data Contributor role at account scope (data-plane, not
-// ARM RBAC — bootstrapped by scripts/csa-loom/grant-cosmos-rbac.sh). Current
-// lazily-created containers (PK /tenantId unless noted):
+// in the `loom` database (id = LOOM_COSMOS_DATABASE || 'loom'). The foundation
+// admin containers (loom-workspaces, workspace-folders, task-flows, embed-codes,
+// org-visuals, azure-connections) are ALSO ARM-provisioned below so a fresh
+// environment has them before the Console starts; the createIfNotExists calls
+// remain the idempotent fallback for hotfix deploys that skip bicep. The rest
+// only require the Console UAMI to hold the Cosmos DB Built-in Data Contributor
+// role at account scope (data-plane, not ARM RBAC — bootstrapped by
+// scripts/csa-loom/grant-cosmos-rbac.sh). Other lazily-created containers
+// (PK /tenantId unless noted):
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
@@ -119,6 +123,44 @@ resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-prev
   properties: {
     resource: { id: db.name }
     options: { autoscaleSettings: { maxThroughput: 4000 } }
+  }
+}]
+
+// Loom Console BFF database + foundation admin containers — provisioned at ARM
+// deploy time so a fresh environment has the `loom` database and its core admin
+// containers before the Console starts. cosmos-client.ts `ensure()` calls
+// createIfNotExists for these (idempotent) on every cold start, so hotfix
+// deploys that skip bicep still converge. Partition keys MUST match
+// cosmos-client.ts exactly.
+var loomDatabase = 'loom'
+
+var loomContainers = [
+  { name: 'loom-workspaces',   partitionKey: '/tenantId' }
+  { name: 'workspace-folders', partitionKey: '/workspaceId' }
+  { name: 'task-flows',        partitionKey: '/workspaceId' }
+  { name: 'embed-codes',       partitionKey: '/tenantId' }
+  { name: 'org-visuals',       partitionKey: '/tenantId' }
+  { name: 'azure-connections', partitionKey: '/tenantId' }
+]
+
+resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
+  parent: account
+  name: loomDatabase
+  properties: {
+    resource: { id: loomDatabase }
+    options: { autoscaleSettings: { maxThroughput: 4000 } }
+  }
+}
+
+resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in loomContainers: {
+  parent: loomDb
+  name: c.name
+  properties: {
+    resource: {
+      id: c.name
+      partitionKey: { paths: [c.partitionKey], kind: 'Hash' }
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
   }
 }]
 
