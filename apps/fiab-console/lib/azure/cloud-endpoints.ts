@@ -614,6 +614,25 @@ export function getPbiGovHost(): string {
 }
 
 /**
+/**
+ * Azure Analysis Services token scope for the XMLA / async-refresh REST surface
+ * used by the semantic-model incremental-refresh client. The async-refresh REST
+ * audience is the cloud-specific Power BI analysis audience.
+ * Commercial + GCC : https://analysis.windows.net/powerbi/api/.default
+ * GCC-High / DoD   : https://analysis.usgovcloudapi.net/.default
+ *
+ * (`pbiRestScope()` further down owns the 4-way Direct-Lake-shim scope split;
+ * this 2-way variant matches the existing HEAD test contract.)
+ *
+ * Docs: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+ */
+export function aasXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+/**
  * Build the AAS HTTP REST base URL for a region + server + database. The AAS
  * REST surface only exposes async *refresh* operations; full TMSL command
  * execution (createOrReplace / alter) requires an XMLA TCP connection (TOM/AMO)
