@@ -92,6 +92,25 @@ export interface SemanticModelContent {
   tables: { name: string; columns: { name: string; dataType: string }[] }[];
   measures: { table: string; name: string; expression: string; formatString?: string }[];
   relationships?: { from: string; to: string; cardinality: '1:1' | '1:many' | 'many:many' }[];
+  /**
+   * Calculation groups (TMSL calculationGroup tables). Each item swaps the
+   * aggregation of the visual's SELECTEDMEASURE() via a slicer. Emitted in
+   * TMSL at provision time; mirror of lib/azure/powerbi-client.ts TmslCalcGroup.
+   */
+  calculationGroups?: {
+    name: string;
+    precedence: number;
+    items: { name: string; expression: string; formatStringDefinition?: string; ordinal?: number }[];
+  }[];
+  /**
+   * Field parameters (NAMEOF-based calculated tables). A slicer over the
+   * parameter swaps which measure/column a visual shows. Mirror of
+   * lib/azure/powerbi-client.ts FieldParamDef.
+   */
+  fieldParameters?: {
+    name: string;
+    fields: { displayName: string; fieldRef: string; order: number }[];
+  }[];
 }
 
 export interface ReportContent {
