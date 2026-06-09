@@ -9087,7 +9087,20 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams'>('tables');
+  // --- Calculation groups + field parameters (calc-group / field-param editor)
+  // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
+  // at provision time. AAS / Fabric backends persist to a live model (opt-in).
+  type CgItem = { name: string; expression: string; formatStringDefinition?: string; ordinal?: number };
+  type CgGroup = { name: string; precedence: number; items: CgItem[] };
+  type FpField = { displayName: string; fieldRef: string; order: number };
+  type FpParam = { name: string; fields: FpField[] };
+  const [calcGroups, setCalcGroups] = useState<CgGroup[]>([]);
+  const [cgBusy, setCgBusy] = useState(false);
+  const [cgMsg, setCgMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [fieldParams, setFieldParams] = useState<FpParam[]>([]);
+  const [fpBusy, setFpBusy] = useState(false);
+  const [fpMsg, setFpMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9162,6 +9175,52 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } catch { /* silently keep last */ }
   }, []);
 
+  // Load existing calc groups + field parameters from the model route (Cosmos
+  // content on loom-native, or a live model's TMSL on the fabric backend).
+  const loadModelObjects = useCallback(async (wsId: string, dsId: string) => {
+    try {
+      const q = wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/model${q}`);
+      const j = await r.json();
+      if (j.ok) {
+        if (Array.isArray(j.calculationGroups)) setCalcGroups(j.calculationGroups);
+        if (Array.isArray(j.fieldParameters)) setFieldParams(j.fieldParameters);
+      }
+    } catch { /* keep current in-editor state */ }
+  }, []);
+
+  const saveCalcGroups = useCallback(async () => {
+    if (!datasetId) return;
+    setCgBusy(true); setCgMsg(null);
+    try {
+      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ calculationGroups: calcGroups }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCgMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setCgMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
+    } catch (e: any) { setCgMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCgBusy(false); }
+  }, [datasetId, workspaceId, calcGroups]);
+
+  const saveFieldParams = useCallback(async () => {
+    if (!datasetId) return;
+    setFpBusy(true); setFpMsg(null);
+    try {
+      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fieldParameters: fieldParams }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setFpMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setFpMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
+    } catch (e: any) { setFpMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setFpBusy(false); }
+  }, [datasetId, workspaceId, fieldParams]);
+
   // Auto-pick the first Power BI workspace once loaded so the list fetch fires
   // and the first dataset auto-selects — enabling New measure / Refresh / Open
   // immediately instead of leaving them disabled behind a manual pick. Matches
@@ -9173,6 +9232,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   useEffect(() => {
     if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
   }, [workspaceId, datasetId, loadDetail, loadRefreshes]);
+  useEffect(() => { if (datasetId) loadModelObjects(workspaceId, datasetId); }, [workspaceId, datasetId, loadModelObjects]);
 
   const refreshNow = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
@@ -9313,6 +9373,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
+      { label: 'Advanced', actions: [
+        { label: 'Calc groups', onClick: datasetId ? () => setTab('calcGroups') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Author calculation groups (SELECTEDMEASURE patterns) — switch a visual’s aggregation via a slicer' },
+        { label: 'Field parameters', onClick: datasetId ? () => setTab('fieldParams') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Build field-parameter calculated tables (NAMEOF) — swap a visual’s measure via a slicer' },
+      ]},
       { label: 'Source', actions: [
         { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
       ]},
@@ -9382,6 +9446,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
+                  <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
@@ -9680,6 +9746,118 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       Browse the model metadata and author DAX in the Tables, Relationships, and Measures tabs above. Power BI live-query / external-tool embedding is configured here when a workspace is bound.
                     </MessageBarBody>
                   </MessageBar>
+                )}
+                {tab === 'calcGroups' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Calculation groups</MessageBarTitle>
+                        Author calculation items with <code>SELECTEDMEASURE()</code>. Each group becomes a slicer; selecting an item changes how the visual&rsquo;s measure is aggregated (YTD, MTD, prior year, % of total&hellip;). Saved to this model and emitted in TMSL at provision time on the Loom-native default; set <code>LOOM_SEMANTIC_BACKEND=aas</code> or <code>=fabric</code> to push to a live model.{' '}
+                        <a href="https://learn.microsoft.com/analysis-services/tabular-models/calculation-groups" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {calcGroups.map((cg, gi) => (
+                      <div key={gi} className={s.card}>
+                        <div className={s.toolbar}>
+                          <Field label="Group name" style={{ minWidth: 220 }}>
+                            <Input value={cg.name} placeholder="Time Intelligence"
+                              onChange={(_, d) => setCalcGroups((prev) => prev.map((g, i) => i === gi ? { ...g, name: d.value } : g))} />
+                          </Field>
+                          <Field label="Precedence">
+                            <SpinButton value={cg.precedence} min={0} max={9999}
+                              onChange={(_, d) => setCalcGroups((prev) => prev.map((g, i) => i === gi ? { ...g, precedence: Number(d.value ?? d.displayValue ?? 0) || 0 } : g))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} title="Remove group"
+                            onClick={() => setCalcGroups((prev) => prev.filter((_, i) => i !== gi))} />
+                        </div>
+                        {cg.items.map((ci, ii) => (
+                          <div key={ii} className={s.card} style={{ marginTop: 8 }}>
+                            <div className={s.toolbar}>
+                              <Field label="Item name" style={{ minWidth: 180 }}>
+                                <Input value={ci.name} placeholder="YTD"
+                                  onChange={(_, d) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, name: d.value } : it) }))} />
+                              </Field>
+                              <Field label="Ordinal">
+                                <SpinButton value={ci.ordinal ?? -1} min={-1} max={999}
+                                  onChange={(_, d) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, ordinal: Number(d.value ?? d.displayValue ?? -1) } : it) }))} />
+                              </Field>
+                              <Button appearance="subtle" icon={<Delete20Regular />} title="Remove item"
+                                onClick={() => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.filter((_, j) => j !== ii) }))} />
+                            </div>
+                            <Caption1>DAX expression — use <code>SELECTEDMEASURE()</code></Caption1>
+                            <MonacoTextarea value={ci.expression} language="sql" height={80} minHeight={60} ariaLabel="Calculation item DAX"
+                              onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, expression: v } : it) }))} />
+                            <Caption1 style={{ marginTop: 4 }}>Dynamic format string (optional DAX — e.g. <code>SELECTEDMEASUREFORMATSTRING()</code>)</Caption1>
+                            <MonacoTextarea value={ci.formatStringDefinition || ''} language="sql" height={50} minHeight={40} ariaLabel="Format string DAX"
+                              onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, formatStringDefinition: v || undefined } : it) }))} />
+                          </div>
+                        ))}
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                          onClick={() => setCalcGroups((prev) => prev.map((g, i) => i !== gi ? g : { ...g, items: [...g.items, { name: 'New item', expression: 'SELECTEDMEASURE()' }] }))}>Add item</Button>
+                      </div>
+                    ))}
+                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                      <Button icon={<Add20Regular />}
+                        onClick={() => setCalcGroups((prev) => [...prev, { name: 'New group', precedence: 10, items: [{ name: 'Current', expression: 'SELECTEDMEASURE()' }] }])}>Add group</Button>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={cgBusy || calcGroups.length === 0 || !datasetId}
+                        onClick={saveCalcGroups}>{cgBusy ? 'Saving…' : 'Save calc groups'}</Button>
+                    </div>
+                    {cgMsg && <MessageBar intent={cgMsg.ok ? 'success' : 'error'}><MessageBarBody>{cgMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                )}
+                {tab === 'fieldParams' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Field parameters</MessageBarTitle>
+                        Build a <code>NAMEOF()</code> calculated table that lets report readers swap the measure or dimension a visual shows via a slicer. Pick the fields below; the generated DAX is shown live. Saved to this model and emitted in TMSL at provision time on the Loom-native default.{' '}
+                        <a href="https://learn.microsoft.com/power-bi/create-reports/power-bi-field-parameters" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {fieldParams.map((fp, fi) => (
+                      <div key={fi} className={s.card}>
+                        <div className={s.toolbar}>
+                          <Field label="Parameter name" style={{ minWidth: 220 }}>
+                            <Input value={fp.name} placeholder="Metric Selector"
+                              onChange={(_, d) => setFieldParams((prev) => prev.map((p, i) => i === fi ? { ...p, name: d.value } : p))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} title="Remove parameter"
+                            onClick={() => setFieldParams((prev) => prev.filter((_, i) => i !== fi))} />
+                        </div>
+                        {fp.fields.map((f, fj) => (
+                          <div key={fj} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 6, flexWrap: 'wrap' }}>
+                            <Field label="Display name" style={{ minWidth: 160 }}>
+                              <Input value={f.displayName} placeholder="Total Sales"
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, displayName: d.value } : ff) }))} />
+                            </Field>
+                            <Field label="NAMEOF reference" style={{ flex: 1, minWidth: 200 }}>
+                              <Input value={f.fieldRef} placeholder="'Sales'[Amount]"
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, fieldRef: d.value } : ff) }))} />
+                            </Field>
+                            <Field label="Order">
+                              <SpinButton value={f.order} min={0} max={999}
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, order: Number(d.value ?? d.displayValue ?? 0) || 0 } : ff) }))} />
+                            </Field>
+                            <Button appearance="subtle" icon={<Delete20Regular />} title="Remove field"
+                              onClick={() => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.filter((_, j) => j !== fj) }))} />
+                          </div>
+                        ))}
+                        <Caption1 style={{ marginTop: 8 }}>Generated DAX</Caption1>
+                        <pre className={s.assistResult} style={{ marginTop: 4, padding: '6px 8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+{`${fp.name} = {\n${fp.fields.map((f, i) => `\t("${f.displayName}", NAMEOF(${f.fieldRef}), ${typeof f.order === 'number' ? f.order : i})`).join(',\n')}\n}`}
+                        </pre>
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                          onClick={() => setFieldParams((prev) => prev.map((p, i) => i !== fi ? p : { ...p, fields: [...p.fields, { displayName: 'New field', fieldRef: "'Table'[Column]", order: p.fields.length }] }))}>Add field</Button>
+                      </div>
+                    ))}
+                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                      <Button icon={<Add20Regular />}
+                        onClick={() => setFieldParams((prev) => [...prev, { name: 'New Parameter', fields: [{ displayName: 'Field 1', fieldRef: "'Table'[Column]", order: 0 }] }])}>Add parameter</Button>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={fpBusy || fieldParams.length === 0 || !datasetId}
+                        onClick={saveFieldParams}>{fpBusy ? 'Saving…' : 'Save field parameters'}</Button>
+                    </div>
+                    {fpMsg && <MessageBar intent={fpMsg.ok ? 'success' : 'error'}><MessageBarBody>{fpMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
                 )}
               </div>
             </>

@@ -565,9 +565,18 @@ param loomMirrorBackend string = 'adf-cdc'
 @allowed(['adls', 'fabric'])
 param loomLakehouseBackend string = 'adls'
 
-@description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
-@allowed(['loom-native', 'analysis-services', 'powerbi'])
+@description('Semantic model backend selector. Default: loom-native (calc groups + field parameters stored with the item, emitted in TMSL at provision time — NO Fabric/Power BI dependency). Alternatives (opt-in): aas (Azure Analysis Services, writes calc groups + field parameters to a live model over XMLA — Commercial/GCC only), fabric (Fabric updateDefinition), powerbi.')
+@allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
+
+@description('Azure Analysis Services server URI (asazure://{region}.asazure.windows.net/{server}) for the opt-in aas semantic backend. Empty = the AAS path is honest-gated; calc groups + field parameters still work on the loom-native default. Requires loomSemanticBackend=aas.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services database/model name. Required alongside loomAasServer for the aas backend.')
+param loomAasDatabase string = ''
+
+@description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
+param loomAasResourceGroup string = ''
 
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
@@ -1321,6 +1330,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // LOOM_DATAPRODUCTS_BACKEND=unified-catalog, rather than fabricated data.
           !empty(loomPurviewUnifiedAccount) ? [
             { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
+          ] : [],
+          // Azure Analysis Services — opt-in semantic backend for writing
+          // calculation groups + field parameters to a LIVE model over XMLA.
+          // Only emitted when wired; absence keeps the AAS path honest-gated
+          // while the loom-native default (Cosmos + TMSL) still works.
+          !empty(loomAasServer) ? [
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+          ] : [],
+          !empty(loomAasDatabase) ? [
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
+          ] : [],
+          !empty(loomAasResourceGroup) ? [
+            { name: 'LOOM_AAS_RG', value: loomAasResourceGroup }
           ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
