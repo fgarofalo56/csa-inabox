@@ -22,6 +22,7 @@ import {
   MessageBar, MessageBarBody, Spinner, Divider, Subtitle2,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle,
   DialogContent, DialogActions,
+  Badge, Checkbox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -31,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
+import { NetworkingPane } from '@/lib/panes/networking';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 
@@ -44,7 +46,7 @@ const useStyles = makeStyles({
   honest: { marginTop: 6, fontSize: 12, color: tokens.colorNeutralForeground3 },
 });
 
-type TabId = 'general' | 'permissions' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
 
 export function WorkspaceSettingsDrawer({ workspace }: Props) {
   const styles = useStyles();
@@ -73,6 +75,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} vertical>
             <Tab value="general">General</Tab>
             <Tab value="permissions">Permissions</Tab>
+            <Tab value="networking">Networking</Tab>
             <Tab value="git">Git integration</Tab>
             <Tab value="onelake">OneLake</Tab>
             <Tab value="encryption">Encryption</Tab>
@@ -82,6 +85,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
           <div style={{ marginTop: 16 }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
+            {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}
             {tab === 'git' && <GitSection workspaceId={workspace.id} />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
@@ -215,7 +219,15 @@ interface GitBinding {
   repoHost: string; repoPath: string; repoUrl: string;
   branch: string; directory?: string;
   status: string; connectedBy: string; connectedAt: string;
-  patHash?: string;
+  patSecretRef?: string;
+  lastSyncedSha?: string;
+}
+
+interface GitChange {
+  itemId?: string;
+  itemType: string;
+  displayName: string;
+  status: 'modified' | 'added' | 'removed';
 }
 
 function GitSection({ workspaceId }: { workspaceId: string }) {
@@ -257,7 +269,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
       }),
     });
     const j = await r.json();
-    if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); setBusy(false); return; }
+    if (!r.ok) { setError(j?.detail || j?.error || `HTTP ${r.status}`); setBusy(false); return; }
     setPat(''); setBusy(false); load();
   };
 
@@ -270,9 +282,11 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
     <div className={styles.section}>
       <MessageBar intent="info">
         <MessageBarBody>
-          Records the workspace's Git binding. Loom does not execute Git on
-          your behalf — you clone the repo, edit, and push with your own
-          tooling. PAT is hashed before storage; never sent anywhere.
+          Connect an Azure DevOps or GitHub repository, then commit and update
+          workspace items directly from Loom. Each item is serialized to a
+          canonical text form (TMSL <code>model.bim</code> for semantic models,
+          PBIR for reports, JSON for everything else). The PAT is stored in Key
+          Vault — never in Cosmos or returned to the browser.
         </MessageBarBody>
       </MessageBar>
       {binding === 'loading' && <Spinner size="tiny" label="Loading…" />}
@@ -287,9 +301,9 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
         <Input value={repoHost} onChange={(_, d) => setRepoHost(d.value)}
           placeholder="github.com / dev.azure.com" />
       </Field>
-      <Field label="Repository path" required>
+      <Field label={provider === 'ado' ? 'Repository path (org/project/_git/repo)' : 'Repository path (owner/repo)'} required>
         <Input value={repoPath} onChange={(_, d) => setRepoPath(d.value)}
-          placeholder="org/repo" />
+          placeholder={provider === 'ado' ? 'myorg/myproject/_git/myrepo' : 'owner/repo'} />
       </Field>
       <Field label="Branch">
         <Input value={branch} onChange={(_, d) => setBranch(d.value)} placeholder="main" />
@@ -298,8 +312,11 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
         <Input value={directory} onChange={(_, d) => setDirectory(d.value)}
           placeholder="fabric-items/" />
       </Field>
-      <Field label="PAT (optional; hashed, never stored in clear)">
-        <Input value={pat} onChange={(_, d) => setPat(d.value)} type="password" />
+      <Field label={provider === 'ado'
+        ? 'PAT (Code: Read & Write scope; stored in Key Vault)'
+        : 'PAT (repo scope; stored in Key Vault)'}>
+        <Input value={pat} onChange={(_, d) => setPat(d.value)} type="password"
+          placeholder={binding && binding !== 'loading' && binding.patSecretRef ? '•••••• (on file — leave blank to keep)' : ''} />
       </Field>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       <div className={styles.row}>
@@ -311,11 +328,181 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
           <Button appearance="subtle" onClick={disconnect}>Disconnect</Button>
         )}
       </div>
-      {binding && binding !== 'loading' && binding.patHash && (
-        <div className={styles.honest}>
-          PAT hash on file: <code>{binding.patHash}</code>
-        </div>
+
+      {binding && binding !== 'loading' && (
+        <>
+          <Divider />
+          <Subtitle2>Source control</Subtitle2>
+          <SourceControlPanel workspaceId={workspaceId} binding={binding} />
+        </>
       )}
+    </div>
+  );
+}
+
+// ------------------------- Source control panel -------------------------
+
+function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; binding: GitBinding }) {
+  const styles = useStyles();
+  const [status, setStatus] = useState<'idle' | 'loading'>('idle');
+  const [changed, setChanged] = useState<GitChange[] | null>(null);
+  const [headSha, setHeadSha] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [resolveTarget, setResolveTarget] = useState<GitChange | null>(null);
+
+  const fetchStatus = async () => {
+    setStatus('loading'); setNote(null);
+    try {
+      const r = await fetch(`/api/git-integration/status?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) {
+        setChanged(null);
+        setNote({ intent: 'warning', text: j?.detail || j?.error || `Status failed (HTTP ${r.status})` });
+        return;
+      }
+      setChanged(j.changed || []);
+      setHeadSha(j.headSha || null);
+      const sel: Record<string, boolean> = {};
+      for (const c of j.changed || []) if (c.itemId && c.status !== 'removed') sel[c.itemId] = true;
+      setSelected(sel);
+    } catch (e: any) {
+      setNote({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setStatus('idle');
+    }
+  };
+
+  useEffect(() => { fetchStatus(); }, [workspaceId]);
+
+  const selectedIds = Object.entries(selected).filter(([, v]) => v).map(([k]) => k);
+
+  const commit = async () => {
+    if (selectedIds.length === 0) { setNote({ intent: 'warning', text: 'Select at least one item to commit.' }); return; }
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch('/api/git-integration/commit', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, itemIds: selectedIds, message: message || 'Loom commit' }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) { setNote({ intent: 'error', text: j?.detail || j?.error || `Commit failed (HTTP ${r.status})` }); return; }
+      setNote({ intent: 'success', text: `Committed ${j.files} file(s) — ${String(j.commitSha).slice(0, 8)}` });
+      setMessage('');
+      await fetchStatus();
+    } finally { setBusy(false); }
+  };
+
+  const update = async () => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch('/api/git-integration/pull', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) { setNote({ intent: 'error', text: j?.detail || j?.error || `Update failed (HTTP ${r.status})` }); return; }
+      setNote({ intent: 'success', text: `Updated ${j.applied} item(s) from ${String(j.headSha || '').slice(0, 8)}` });
+      await fetchStatus();
+    } finally { setBusy(false); }
+  };
+
+  const resolve = async (target: GitChange, resolution: 'local' | 'remote') => {
+    if (!target.itemId) return;
+    setBusy(true); setNote(null); setResolveTarget(null);
+    try {
+      const r = await fetch('/api/git-integration/resolve', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, itemId: target.itemId, resolution }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) { setNote({ intent: 'error', text: j?.detail || j?.error || `Resolve failed (HTTP ${r.status})` }); return; }
+      setNote({
+        intent: 'success',
+        text: resolution === 'local'
+          ? `Kept local — committed ${String(j.commitSha || '').slice(0, 8)}`
+          : `Took from repo — applied to ${target.displayName}`,
+      });
+      await fetchStatus();
+    } finally { setBusy(false); }
+  };
+
+  const badge = (s: GitChange['status']) =>
+    s === 'added' ? <Badge color="success" appearance="tint">added</Badge>
+      : s === 'removed' ? <Badge color="danger" appearance="tint">removed</Badge>
+        : <Badge color="warning" appearance="tint">modified</Badge>;
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.honest}>
+        Repo: <code>{binding.repoHost}/{binding.repoPath}</code> · branch <code>{binding.branch}</code>
+        {binding.lastSyncedSha && <> · last sync <code>{binding.lastSyncedSha.slice(0, 8)}</code></>}
+        {headSha && <> · HEAD <code>{headSha.slice(0, 8)}</code></>}
+      </div>
+      <div className={styles.row}>
+        <Button appearance="secondary" onClick={fetchStatus} disabled={status === 'loading' || busy}>
+          {status === 'loading' ? 'Fetching…' : 'Fetch status'}
+        </Button>
+        <Button appearance="secondary" onClick={update} disabled={busy || status === 'loading'}>Update (pull)</Button>
+      </div>
+
+      {note && <MessageBar intent={note.intent}><MessageBarBody>{note.text}</MessageBarBody></MessageBar>}
+
+      {status !== 'loading' && changed && changed.length === 0 && (
+        <div className={styles.honest}>No changes — workspace matches the repo.</div>
+      )}
+
+      {changed && changed.length > 0 && (
+        <>
+          {changed.map((c, i) => (
+            <div key={(c.itemId || c.displayName) + i} className={styles.row} style={{ justifyContent: 'space-between' }}>
+              <div className={styles.row}>
+                {c.itemId && c.status !== 'removed' && (
+                  <Checkbox checked={!!selected[c.itemId]}
+                    onChange={(_, d) => setSelected(s => ({ ...s, [c.itemId!]: !!d.checked }))} />
+                )}
+                <span>{c.displayName}.{c.itemType}</span>
+                {badge(c.status)}
+              </div>
+              {c.status === 'modified' && c.itemId && (
+                <Button size="small" appearance="subtle" onClick={() => setResolveTarget(c)}>Resolve…</Button>
+              )}
+            </div>
+          ))}
+          <Field label="Commit message">
+            <Input value={message} onChange={(_, d) => setMessage(d.value)} placeholder="Update workspace items" />
+          </Field>
+          <div className={styles.row}>
+            <Button appearance="primary" onClick={commit} disabled={busy || selectedIds.length === 0}>
+              {busy ? 'Working…' : `Commit selected (${selectedIds.length})`}
+            </Button>
+          </div>
+        </>
+      )}
+
+      <Dialog open={!!resolveTarget} onOpenChange={(_, d) => { if (!d.open) setResolveTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Resolve conflict — {resolveTarget?.displayName}</DialogTitle>
+            <DialogContent>
+              This item differs between Loom and the repo. Choose which version wins:
+              <ul>
+                <li><strong>Keep local</strong> — commit your Loom version, overwriting the repo.</li>
+                <li><strong>Take from repo</strong> — overwrite the Loom item with the repo version.</li>
+              </ul>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => resolveTarget && resolve(resolveTarget, 'local')} disabled={busy}>Keep local</Button>
+              <Button appearance="primary" onClick={() => resolveTarget && resolve(resolveTarget, 'remote')} disabled={busy}>Take from repo</Button>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="subtle">Cancel</Button>
+              </DialogTrigger>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

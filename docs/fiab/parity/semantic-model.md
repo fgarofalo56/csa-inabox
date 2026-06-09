@@ -49,3 +49,65 @@ Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` -> `SemanticModelEdit
 - RLS role authoring is XMLA/Desktop only; disclosed via MessageBar. The surface still renders fully.
 
 Grade: A — model building (push dataset), relationships read, scheduled-refresh edit, take-over, and DAX validate are all real REST; imported-model XMLA writes honestly gated. Tests: lib/azure/__tests__/powerbi-client-parity.test.ts, app/api/items/__tests__/model-builder-routes.test.ts, app/api/items/__tests__/powerbi-parity-routes.test.ts.
+
+## Per-cloud notes (Power BI opt-in path)
+
+When `LOOM_BI_BACKEND=powerbi` is set, the Power BI REST (`/v1.0/myorg`) path applies and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset. The sovereign endpoint is resolved by `cloud-endpoints.ts`.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | Full coverage. List/tables/relationships/measures-validate/refresh/history/schedule/take-over/build-model all work. |
+| GCC | `api.powerbigov.us` | Datasets, refresh, history, scheduled refresh, take-over, and push-dataset build all work (pure Power BI REST). **Endorsement reads via Fabric Items REST may be unavailable** (Fabric APIs are not offered in GCC) — disclosed via the same honest 401/403 gate. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Full coverage; F-SKU + XMLA available, so imported-model writes are reachable when `LOOM_POWERBI_XMLA_ENDPOINT` is set. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Full coverage; F-SKU + XMLA available. |
+
+---
+
+## Azure-native backend — Azure Analysis Services (AAS)
+
+Per `.claude/rules/no-fabric-dependency.md` the **default** semantic-model
+backend is **Azure Analysis Services**, not Power BI. Power BI is opt-in
+(`LOOM_BI_BACKEND=powerbi`). When `NEXT_PUBLIC_LOOM_BI_BACKEND=aas` (bicep sets
+this whenever `aas.bicep` is deployed) `SemanticModelEditor` renders the
+`AasSemanticModelPanel`; the refresh routes dispatch to AAS by default
+(`app/api/items/semantic-model/_lib/bi-backend.ts`).
+
+Source UI: AAS server in the Azure portal + the async-refresh REST API —
+https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+
+Client: `apps/fiab-console/lib/azure/aas-client.ts`
+Endpoints: `cloud-endpoints.getAasSuffix()` / `aasScope()` (sovereign-aware).
+
+| # | Capability | Status | Backend per control |
+|---|---|---|---|
+| 1 | Database list + select | built | ARM `GET …/servers/{name}/databases` (api 2017-08-01) → `aas-databases` route |
+| 2 | Storage mode (Import / DirectQuery / Hybrid) | built | `properties.model.storageMode` from the same ARM call; Storage-mode tab badge |
+| 3 | Refresh now (real refresh id) | built | AAS REST `POST …/models/{db}/refreshes` → refresh id from the `Location` header → `[id]/refresh` route |
+| 4 | Refresh history (last 30 days) | built | AAS REST `GET …/models/{db}/refreshes` → `[id]/refreshes` route |
+| 5 | Scheduled refresh (enable, days, times, tz, notify) | built | persisted as the `loom-refresh-schedule` ARM tag on the server (PATCH/GET `…/servers/{name}`) → `[id]/refresh-schedule` route |
+| 6 | TMSL command (createOrReplace / alter / refresh) | built | XMLA `POST …/servers/{name}/xmla` (SOAP Execute) via `command(tmslJson)` |
+| 7 | Storage-mode change | honest-disclosure | a model operation — use the XMLA endpoint (SSMS / Tabular Editor) or the REST `createOrReplace` TMSL command; the Storage-mode tab discloses this. No empty tab |
+
+### Honest gates
+- When `LOOM_AAS_SERVER_NAME` / `LOOM_AAS_REGION` (etc.) are unset the
+  `aas-databases` route 503s with `{ ok:false, gate }` and the editor renders a
+  Fluent `intent="warning"` MessageBar naming the exact env vars + the bicep
+  module (`platform/fiab/bicep/modules/admin-plane/aas.bicep`). No Microsoft
+  Fabric / Power BI workspace is ever required.
+
+### Bicep + bootstrap sync
+- `aas.bicep` provisions an AAS Standard (S1) server, adds the Console UAMI as
+  server administrator (`app:{clientId}@{tenantId}`) for the refresh REST API,
+  grants it Reader for ARM reads, and wires diagnostics to the LAW.
+- `main.bicep` wires `LOOM_AAS_SERVER_NAME` / `LOOM_AAS_REGION` from the module
+  outputs and sets `NEXT_PUBLIC_LOOM_BI_BACKEND` / `LOOM_BI_BACKEND` to `aas`.
+
+### Per-cloud
+| | Commercial / GCC | GCC-High / IL5 | DoD |
+|--|--|--|--|
+| AAS data-plane suffix | `asazure.windows.net` | `asazure.usgovcloudapi.net` | gov suffix (override `LOOM_AAS_DATA_PLANE_SUFFIX`) |
+| AAS auth audience | `https://*.asazure.windows.net/.default` | `https://*.asazure.usgovcloudapi.net/.default` | derived from suffix |
+| ARM base | `management.azure.com` | `management.usgovcloudapi.net` | `management.azure.microsoft.scloud` |
+
+Tests: `lib/azure/__tests__/aas-endpoints.test.ts` (suffix + scope per cloud),
+`lib/azure/__tests__/bi-backend-selector.test.ts` (backend dispatch).

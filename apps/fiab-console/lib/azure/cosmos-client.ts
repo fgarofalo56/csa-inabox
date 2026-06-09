@@ -19,6 +19,11 @@ let _db: Database | null = null;
 let _workspaces: Container | null = null;
 let _items: Container | null = null;
 let _copilotSessions: Container | null = null;
+// Per-message Copilot feedback (thumbs up/down) — append-only audit log, one
+// row per rating, partitioned by /sessionId so every per-session feedback read
+// hits a single physical partition. NO defaultTtl: feedback is a permanent
+// audit record (unlike copilot-sessions, which auto-expire after 28 days).
+let _copilotFeedback: Container | null = null;
 let _appsCatalog: Container | null = null;
 let _workloadsCatalog: Container | null = null;
 let _userPrefs: Container | null = null;
@@ -38,6 +43,7 @@ let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
+let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
@@ -74,6 +80,14 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Scorecard rollup + status-rule config — one row per scorecard (id =
+// scorecardId), PK /scorecardId so every per-scorecard read is a single-
+// partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
+// overlay applied to live Fabric goals (loom: items carry their config inline
+// in state.content). Created lazily so a fresh environment needs no extra
+// ARM/Bicep step beyond the account+database (the Console UAMI already holds
+// Cosmos DB Built-in Data Contributor at account scope).
+let _scorecardConfig: Container | null = null;
 let _ensured = false;
 
 /**
@@ -142,8 +156,29 @@ async function ensure() {
   const { container: cs } = await database.containers.createIfNotExists({
     id: 'copilot-sessions',
     partitionKey: { paths: ['/sessionId'] },
+    defaultTtl: 2419200, // 28 days = 28 * 24 * 3600 — chat sessions auto-expire
   });
   _copilotSessions = cs;
+  // Idempotent TTL upgrade. createIfNotExists ignores `defaultTtl` for a
+  // PRE-EXISTING container, so environments whose copilot-sessions container
+  // was created before TTL was added would never expire. Read the current
+  // container def and, if TTL isn't 28 days, replace() it once. Best-effort:
+  // a failure here (e.g. transient throttle) never blocks the BFF.
+  try {
+    const csDef = await cs.read();
+    if (csDef.resource && (csDef.resource as any).defaultTtl !== 2419200) {
+      await cs.replace({ ...(csDef.resource as any), defaultTtl: 2419200 });
+    }
+  } catch {
+    /* TTL upgrade is best-effort */
+  }
+  // Per-message Copilot feedback (thumbs up/down). PK /sessionId. NO defaultTtl
+  // — feedback is a permanent audit record, unlike the sessions above.
+  const { container: cf } = await database.containers.createIfNotExists({
+    id: 'copilot-feedback',
+    partitionKey: { paths: ['/sessionId'] },
+  });
+  _copilotFeedback = cf;
 
   // Chunk 0 — UI foundation containers
   const mk = async (id: string, pk: string) =>
@@ -177,6 +212,13 @@ async function ensure() {
   // the lakehouse id so every Tables-tree lookup hits a single physical
   // partition. 'dbo' is synthetic (never stored) and always present.
   _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
+  // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
+  // outbound private-endpoint rule registry. One doc per workspace
+  // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
+  // single physical partition. The NSG rules + private endpoints themselves
+  // live in Azure (ARM); this container only records the Loom-side metadata so
+  // the pane can list/remove them. Created lazily — no extra ARM/Bicep step.
+  _networkingConfig = await mk('networking-config', '/workspaceId');
   // Copilot & Agents config — tenant-wide default Foundry account + model
   // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
   // and per-workspace data-agent config (PK /workspaceId) set by workspace
@@ -289,6 +331,11 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Scorecard rollup + status-rule config — one row per scorecard (PK
+  // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
+  // live Fabric goals; loom: bundle scorecards carry config inline in
+  // state.content. Single-partition point-read per scorecard.
+  _scorecardConfig = await mk('scorecard-config', '/scorecardId');
   _ensured = true;
 }
 
@@ -314,6 +361,8 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+/** Scorecard rollup + status-rule config — PK /scorecardId. */
+export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -326,6 +375,7 @@ export async function okrsContainer(): Promise<Container> { await ensure(); retu
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
+export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
@@ -345,6 +395,12 @@ export async function itemsContainer(): Promise<Container> {
 export async function copilotSessionsContainer(): Promise<Container> {
   await ensure();
   return _copilotSessions!;
+}
+
+/** Per-message Copilot feedback (thumbs up/down) — PK /sessionId, no TTL. */
+export async function copilotFeedbackContainer(): Promise<Container> {
+  await ensure();
+  return _copilotFeedback!;
 }
 
 export async function appsCatalogContainer(): Promise<Container> { await ensure(); return _appsCatalog!; }
@@ -377,7 +433,7 @@ export interface ContainerThroughputInfo {
 }
 
 const KNOWN_CONTAINER_IDS = [
-  'workspaces', 'items', 'copilot-sessions',
+  'workspaces', 'items', 'copilot-sessions', 'copilot-feedback',
   'apps-catalog', 'workloads-catalog', 'user-prefs',
   'tabs-state', 'notifications', 'audit-log', 'comments',
   'shares', 'folders', 'downloads', 'search-history',
@@ -394,6 +450,7 @@ const KNOWN_CONTAINER_IDS = [
   'attribute-groups', 'okrs',
   'access-request-workflow',
   'saved-queries',
+  'scorecard-config',
 ];
 
 /** List all Loom containers with their current throughput shape. */

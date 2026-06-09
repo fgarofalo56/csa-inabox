@@ -120,18 +120,106 @@ function buildTmsl(content: any, displayName: string, steps: string[]): string {
   const measures = Array.isArray(content?.measures) ? content.measures : [];
   const allRelationships = Array.isArray(content?.relationships) ? content.relationships : [];
   const relationships = validateRelationships(allRelationships, buildColumnIndex(tables), steps);
+  const calcGroups = Array.isArray(content?.calculationGroups) ? content.calculationGroups : [];
+  const fieldParams = Array.isArray(content?.fieldParameters) ? content.fieldParameters : [];
+
+  // A calculation-group table: TOM requires the calculationGroup object +
+  // mandatory Name (string)/Ordinal (int64, hidden) columns + a
+  // calculationGroup partition source. Calc groups only function when the model
+  // sets discourageImplicitMeasures, which we apply below.
+  // https://learn.microsoft.com/analysis-services/tabular-models/calculation-groups
+  const calcGroupTables = calcGroups.map((cg: any) => ({
+    name: cg.name,
+    calculationGroup: {
+      precedence: Number(cg.precedence) || 0,
+      calculationItems: (cg.items || []).map((ci: any) => ({
+        name: ci.name,
+        expression: ci.expression,
+        ...(ci.formatStringDefinition
+          ? { formatStringDefinition: { expression: ci.formatStringDefinition } }
+          : {}),
+        ...(typeof ci.ordinal === 'number' ? { ordinal: ci.ordinal } : {}),
+      })),
+    },
+    columns: [
+      { name: cg.name, dataType: 'string', sourceColumn: 'Name', sortByColumn: 'Ordinal', summarizeBy: 'none', annotations: [{ name: 'SummarizationSetBy', value: 'Automatic' }] },
+      { name: 'Ordinal', dataType: 'int64', isHidden: true, sourceColumn: 'Ordinal', summarizeBy: 'sum', annotations: [{ name: 'SummarizationSetBy', value: 'Automatic' }] },
+    ],
+    partitions: [{ name: 'Partition', mode: 'import', source: { type: 'calculationGroup' } }],
+  }));
+
+  // A field-parameter table: a DAX calculated table built with NAMEOF(). The
+  // three positional values map to the visible label, the hidden field
+  // reference, and the hidden sort order. A slicer over the label column swaps
+  // the field a visual shows.
+  // https://learn.microsoft.com/power-bi/create-reports/power-bi-field-parameters
+  const fieldParamTables = fieldParams.map((fp: any) => {
+    const rows = (fp.fields || [])
+      .map((f: any, i: number) => `\t("${String(f.displayName || '').replace(/"/g, '""')}", NAMEOF(${f.fieldRef}), ${typeof f.order === 'number' ? f.order : i})`)
+      .join(',\n');
+    return {
+      name: fp.name,
+      columns: [
+        { name: fp.name, dataType: 'string', sourceColumn: '[Value1]', summarizeBy: 'none' },
+        { name: 'Fields', dataType: 'string', sourceColumn: '[Value2]', summarizeBy: 'none', isHidden: true },
+        { name: 'Order', dataType: 'int64', sourceColumn: '[Value3]', summarizeBy: 'sum', isHidden: true, sortByColumn: 'Order' },
+      ],
+      partitions: [{ name: 'Partition', mode: 'import', source: { type: 'calculated', expression: `{\n${rows}\n}` } }],
+      annotations: [{ name: 'PBI_ResultType', value: 'Table' }],
+    };
+  });
+
+  if (calcGroupTables.length) steps.push(`Emitted ${calcGroupTables.length} calculation group(s) (discourageImplicitMeasures=true).`);
+  if (fieldParamTables.length) steps.push(`Emitted ${fieldParamTables.length} field parameter table(s).`);
+
+  // Per-table storage mode override (composite model). When a bundle/install
+  // carries content.tableModes (a map of tableName -> 'import'|'directQuery'|
+  // 'dual'), the table's default partition is emitted with that mode so one
+  // model can mix Import + DirectQuery + Dual. Absent → all-import (the prior
+  // behavior). Dual is a Premium/Fabric XMLA extension; this path is the Fabric
+  // opt-in branch so it is permitted here. The Loom-native default provisioner
+  // (provisionLoomNative) is unchanged and never requires this.
+  const tableModes: Record<string, string> =
+    content?.tableModes && typeof content.tableModes === 'object' ? content.tableModes : {};
+  const usesQueryMode = tables.some((t: any) => {
+    const m = tableModes[t?.name];
+    return m === 'directQuery' || m === 'dual';
+  });
+  if (Object.keys(tableModes).length) {
+    steps.push(
+      `Composite storage modes: ${tables.map((t: any) => `${t.name}=${tableModes[t.name] || 'import'}`).join(', ')}.`,
+    );
+  }
   return JSON.stringify({
     name: displayName,
     compatibilityLevel: 1567,
     model: {
       culture: 'en-US',
-      tables: tables.map((t: any) => ({
-        name: t.name,
-        columns: (t.columns || []).map((c: any) => ({ name: c.name, dataType: c.dataType, sourceColumn: c.name })),
-        measures: measures.filter((m: any) => m.table === t.name).map((m: any) => ({
-          name: m.name, expression: m.expression, ...(m.formatString ? { formatString: m.formatString } : {}),
-        })),
-      })),
+      // Required by the tabular engine for calculation groups to evaluate.
+      ...(calcGroupTables.length ? { discourageImplicitMeasures: true } : {}),
+      tables: [
+        ...tables.map((t: any) => {
+          const mode = tableModes[t.name] || 'import';
+          const partition =
+            mode === 'import'
+              ? { name: `${t.name}-import`, mode: 'import', source: { type: 'none' } }
+              : {
+                  name: `${t.name}-${mode}`,
+                  mode,
+                  source: { type: 'query', query: `SELECT * FROM [${t.name}]`, dataSource: 'sqlSource' },
+                };
+          return {
+          name: t.name,
+          columns: (t.columns || []).map((c: any) => ({ name: c.name, dataType: c.dataType, sourceColumn: c.name })),
+          measures: measures.filter((m: any) => m.table === t.name).map((m: any) => ({
+            name: m.name, expression: m.expression, ...(m.formatString ? { formatString: m.formatString } : {}),
+          })),
+          partitions: [partition],
+          };
+        }),
+        ...calcGroupTables,
+        ...fieldParamTables,
+      ],
       // Power BI / Tabular permits only ONE active relationship between any two
       // tables. Bundles must declare a valid active set (the SemanticModelContent
       // schema has no active/inactive flag, so each table-pair appears at most
@@ -146,6 +234,9 @@ function buildTmsl(content: any, displayName: string, steps: string[]): string {
         crossFilteringBehavior: 'oneDirection',
         ...(r.isActive === false ? { isActive: false } : {}),
       })),
+      // A DirectQuery/Dual partition needs a model-level data source to read
+      // from. Emit a default structured SQL source the partitions reference.
+      ...(usesQueryMode ? { dataSources: [{ name: 'sqlSource', type: 'structured', connectionString: '' }] } : {}),
     },
   }, null, 2);
 }
@@ -427,7 +518,24 @@ export const semanticModelProvisioner: Provisioner = async (input): Promise<Prov
   // Azure-native DEFAULT: Loom-native tabular model over the warehouse.
   if (backend === 'loom-native' || backend === 'analysis-services') {
     if (backend === 'analysis-services') {
-      steps.push('analysis-services backend not yet wired — using the Loom-native tabular model (equivalent, no extra infra).');
+      // The model is always materialized as a Loom-native tabular layer over the
+      // warehouse/lakehouse (live SQL — the data path). When an Azure Analysis
+      // Services server is deployed (aas.bicep → LOOM_AAS_XMLA_ENDPOINT), the
+      // Direct Lake shim (apps/fiab-direct-lake-shim) keeps that server's import
+      // partitions fresh on each Delta commit. Disclose the actual target so the
+      // receipt is honest rather than a silent fallback.
+      const aasServer = process.env.LOOM_AAS_SERVER_NAME;
+      const aasXmla = process.env.LOOM_AAS_XMLA_ENDPOINT;
+      if (aasServer && aasXmla) {
+        steps.push(`analysis-services backend: model materialized on the Loom-native tabular layer; Azure Analysis Services server "${aasServer}" (${aasXmla}) is wired for Direct Lake refresh via the shim.`);
+        // DirectQueryFallback tables read from the Synapse SQL pool via the DQ
+        // source connection string (LOOM_DQ_SOURCE_CONNECTION_STRING, secretRef).
+        steps.push(process.env.LOOM_DQ_SOURCE_CONNECTION_STRING
+          ? 'DirectQuery datasource configured for DirectQueryFallback tables.'
+          : 'DirectQuery datasource not configured (LOOM_DQ_SOURCE_CONNECTION_STRING unset) — import/Direct Lake tables only.');
+      } else {
+        steps.push('analysis-services backend selected but no AAS server is deployed (LOOM_AAS_XMLA_ENDPOINT unset) — using the equivalent Loom-native tabular model. Set aasEnabled=true (aas.bicep) to add Direct Lake refresh.');
+      }
     }
     steps.push('Provisioning semantic model on the Azure-native Loom-native backend.');
     return provisionLoomNative(input, steps);
