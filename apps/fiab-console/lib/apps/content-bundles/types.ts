@@ -89,9 +89,28 @@ export interface LakehouseContent {
 
 export interface SemanticModelContent {
   kind: 'semantic-model';
-  tables: { name: string; columns: { name: string; dataType: string }[] }[];
-  measures: { table: string; name: string; expression: string; formatString?: string }[];
+  tables: { name: string; columns: { name: string; dataType: string; description?: string }[] }[];
+  measures: { table: string; name: string; expression: string; formatString?: string; description?: string }[];
   relationships?: { from: string; to: string; cardinality: '1:1' | '1:many' | 'many:many' }[];
+  /**
+   * Calculation groups (TMSL calculationGroup tables). Each item swaps the
+   * aggregation of the visual's SELECTEDMEASURE() via a slicer. Emitted in
+   * TMSL at provision time; mirror of lib/azure/powerbi-client.ts TmslCalcGroup.
+   */
+  calculationGroups?: {
+    name: string;
+    precedence: number;
+    items: { name: string; expression: string; formatStringDefinition?: string; ordinal?: number }[];
+  }[];
+  /**
+   * Field parameters (NAMEOF-based calculated tables). A slicer over the
+   * parameter swaps which measure/column a visual shows. Mirror of
+   * lib/azure/powerbi-client.ts FieldParamDef.
+   */
+  fieldParameters?: {
+    name: string;
+    fields: { displayName: string; fieldRef: string; order: number }[];
+  }[];
 }
 
 export interface ReportContent {
@@ -114,9 +133,58 @@ export interface MirroredDatabaseContent {
   source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[] };
 }
 
+/**
+ * Scorecard rollup + status-rule model — Power BI / Fabric Metrics parity.
+ *
+ * Rollup ("subgoal rollup" in Fabric): a parent goal's value is aggregated
+ * from its child goals. SUM / AVERAGE / MIN / MAX. MIN is the "worst-child"
+ * aggregation used for compliance scorecards (parent reflects the weakest
+ * subgoal). Status rules are ordered per-goal conditions (value or % of
+ * target compared to a threshold → a status color), first match wins, with an
+ * "Otherwise" fallback. These are authoring-only in Power BI Web (not exposed
+ * by the preview Fabric Metrics REST), so Loom stores + applies them
+ * server-side in the BFF (Azure-native default — no Fabric dependency).
+ */
+export type RollupMethod = 'sum' | 'avg' | 'min' | 'max';
+export type StatusColor = 'on-track' | 'at-risk' | 'behind' | 'completed' | 'not-started';
+export type StatusOperator = '>=' | '<=' | '>' | '<' | '=';
+export type StatusMetricKind = 'value' | 'percent-of-target';
+
+export interface StatusRule {
+  operator: StatusOperator;
+  threshold: number;
+  metricKind: StatusMetricKind; // 'value' | 'percent-of-target'
+  status: StatusColor;
+}
+
+export interface ScorecardOkr {
+  id: string;
+  name: string;
+  description?: string;
+  metric: string;
+  target: number | string;
+  current?: number | string;
+  /** Child's pointer to its parent OKR id (defines the rollup hierarchy). */
+  parentId?: string;
+  /** Parent goal only — how child values aggregate. Ignored on leaves. */
+  rollupMethod?: RollupMethod;
+  /** Ordered status rules; first match wins. */
+  statusRules?: StatusRule[];
+  /** Fallback status when no rule fires. */
+  otherwiseStatus?: StatusColor;
+  /** Optional scorecard status band (onTrack / atRisk / behindGoal / …). */
+  status?: string;
+  /** Optional goal owner (display name or email). */
+  owner?: string;
+  /** Optional ISO due date. */
+  dueDate?: string;
+  /** Optional sub-goal ids (two-level hierarchy). */
+  subGoalIds?: string[];
+}
+
 export interface ScorecardContent {
   kind: 'scorecard';
-  okrs: { id: string; name: string; description?: string; metric: string; target: number | string; current?: number | string }[];
+  okrs: ScorecardOkr[];
 }
 
 export interface DataProductContent {

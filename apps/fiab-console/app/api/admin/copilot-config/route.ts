@@ -29,11 +29,11 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-/** Whitelist of persistable keys — never trust the client to send extras. */
+/** Whitelist of persistable STRING keys — never trust the client to send extras. */
 const KEYS: (keyof TenantCopilotConfig)[] = [
   'foundryAccount', 'foundryAccountRg', 'foundryProjectEndpoint', 'foundryProjectId',
   'aoaiEndpoint', 'copilotChatDeployment', 'helpAgentDeployment', 'embeddingDeployment',
-  'groundingSearchService', 'groundingSearchIndex',
+  'groundingSearchService', 'groundingSearchIndex', 'fabricCopilotWorkspaceId',
 ];
 
 function sanitize(input: any): TenantCopilotConfig {
@@ -45,6 +45,9 @@ function sanitize(input: any): TenantCopilotConfig {
       (out as any)[k] = t === '' ? undefined : t;
     }
   }
+  // Opt-in Fabric Copilot backend flag (boolean). Only `true` is persisted;
+  // anything else clears it so the Azure-native path stays the silent default.
+  out.fabricCopilotBackend = input?.fabricCopilotBackend === true ? true : undefined;
   return out;
 }
 

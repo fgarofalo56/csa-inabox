@@ -26,6 +26,12 @@ param lawSharedKey string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Console UAMI principal ID — granted "Azure Kubernetes Service Cluster Admin" at the AKS cluster scope (AKS path only) so the Console BFF can scale node pools via aks-arm-client.ts (Admin → Capacity & compute → Scale & manage). Empty skips the grant.')
+param consolePrincipalId string = ''
+
+@description('When true, skip all role grants (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
+param skipRoleGrants bool = false
+
 // =====================================================================
 // Container Apps Environment (Commercial / GCC)
 // =====================================================================
@@ -141,6 +147,24 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
       }
     }
     oidcIssuerProfile: { enabled: true }
+  }
+}
+
+// =====================================================================
+// RBAC — Console UAMI → Azure Kubernetes Service Cluster Admin (AKS path)
+// =====================================================================
+// Required for aks-arm-client.ts scaleAksAgentPool (PUT agentPools/{name}) —
+// the AKS branch of the Admin → Capacity & compute scale drawer. Only created
+// on the GCC-High / IL5 AKS path; Commercial / GCC run Container Apps and the
+// drawer's AKS section honest-gates instead. Role ID is cloud-agnostic.
+resource consoleAksAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (containerPlatform == 'aks' && !empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: aks
+  name: guid(aks!.id, consolePrincipalId, '0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8')
+  properties: {
+    // Azure Kubernetes Service Cluster Admin Role
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 

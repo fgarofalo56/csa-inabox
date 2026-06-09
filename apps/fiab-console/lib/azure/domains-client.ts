@@ -50,8 +50,28 @@ export interface LoomDomain {
   description?: string;
   color?: string;
   imageUrl?: string;
+  /** Image picker selection: "color::#0078d4" | "icon::finance" | "blob::<name>". */
+  imageKey?: string;
   owners?: string[];
   contributors?: string[];
+  /** Domain admins (UPNs / group names) — can change domain settings. */
+  admins?: string[];
+  /** Users/groups for default-domain auto-assign (Fabric parity). */
+  defaultDomainUsers?: string[];
+  /** Tenant-setting overrides delegated to the domain level. */
+  delegatedSettings?: {
+    defaultSensitivityLabelId?: string;
+    defaultSensitivityLabelName?: string;
+    defaultSensitivityLabelSource?: 'mip' | 'loom';
+    certificationEnabled?: boolean;
+    certificationUrl?: string;
+    certifiers?: string[];
+  };
+  /**
+   * Parent domain id when this is a subdomain. NOTE the field-name split: the
+   * governance store (this client) uses `parentDomainId`; the admin route's
+   * DomainItem uses `parentId`. Both mean the same thing in different stores.
+   */
   parentDomainId?: string;
   purviewCollectionId?: string;
   fabricDomainId?: string;
@@ -78,7 +98,11 @@ export interface DomainStore {
     tenantId: string,
     id: string,
     patch: Partial<
-      Pick<LoomDomain, 'name' | 'description' | 'color' | 'imageUrl' | 'owners' | 'contributors'>
+      Pick<
+        LoomDomain,
+        | 'name' | 'description' | 'color' | 'imageUrl' | 'imageKey' | 'owners'
+        | 'contributors' | 'admins' | 'defaultDomainUsers' | 'delegatedSettings'
+      >
     >,
     who: string,
   ): Promise<LoomDomain>;

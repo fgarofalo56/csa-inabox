@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Spinner, Button, Switch, Caption1, Subtitle2, Body1, Input, Badge,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, SpinButton, Field,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -19,7 +19,17 @@ import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular } fr
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
+import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
+import type { AppliesToConfig } from '@/lib/types/tenant-settings';
 
+interface NumericParamDef {
+  id: string;
+  label: string;
+  unit?: string;
+  min: number;
+  max: number;
+  default: number;
+}
 interface ToggleDef {
   id: string;
   label: string;
@@ -27,6 +37,8 @@ interface ToggleDef {
   default: boolean;
   learnUrl?: string;
   scope?: 'tenant' | 'capacity' | 'domain';
+  scopable?: boolean;
+  numericParam?: NumericParamDef;
 }
 interface ToggleGroup {
   id: string;
@@ -60,6 +72,10 @@ const useStyles = makeStyles({
   groupCount: { color: tokens.colorNeutralForeground3, fontSize: '12px', marginLeft: '8px' },
   diff: { color: tokens.colorPaletteYellowForeground2, fontSize: '12px' },
   learn: { display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '6px' },
+  numericBlock: {
+    marginTop: tokens.spacingVerticalS,
+    display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '260px',
+  },
 });
 
 export default function TenantSettingsPage() {
@@ -67,6 +83,11 @@ export default function TenantSettingsPage() {
   const [groups, setGroups] = useState<ToggleGroup[] | null>(null);
   const [settings, setSettings] = useState<Record<string, boolean> | null>(null);
   const [original, setOriginal] = useState<Record<string, boolean> | null>(null);
+  const [scopeConfig, setScopeConfig] = useState<Record<string, AppliesToConfig>>({});
+  const [originalScope, setOriginalScope] = useState<Record<string, AppliesToConfig>>({});
+  const [numericParams, setNumericParams] = useState<Record<string, number>>({});
+  const [originalNumeric, setOriginalNumeric] = useState<Record<string, number>>({});
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -92,7 +113,26 @@ export default function TenantSettingsPage() {
       setGroups(j.groups);
       setSettings({ ...j.settings });
       setOriginal({ ...j.settings });
+      setScopeConfig({ ...(j.scopeConfig ?? {}) });
+      setOriginalScope({ ...(j.scopeConfig ?? {}) });
+      setNumericParams({ ...(j.numericParams ?? {}) });
+      setOriginalNumeric({ ...(j.numericParams ?? {}) });
       setMeta({ updatedAt: j.updatedAt, updatedBy: j.updatedBy });
+      // Resolve display names for every stored scope group id (best-effort).
+      const allIds = Object.values(j.scopeConfig ?? {} as Record<string, AppliesToConfig>)
+        .flatMap((c) => (c as AppliesToConfig).groupIds ?? []);
+      const uniqueIds = [...new Set(allIds.filter(Boolean))];
+      if (uniqueIds.length > 0) {
+        try {
+          const gr = await fetch(`/api/admin/tenant-settings/groups?ids=${encodeURIComponent(uniqueIds.join(','))}`);
+          const gj = await gr.json();
+          if (gj.ok && Array.isArray(gj.groups)) {
+            const map: Record<string, string> = {};
+            for (const g of gj.groups) map[g.id] = g.displayName;
+            setGroupNames(map);
+          }
+        } catch { /* group-name resolution is best-effort; chips fall back to OID */ }
+      }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
     }
@@ -112,11 +152,20 @@ export default function TenantSettingsPage() {
     })();
   }, []);
 
+  const sortedIds = (c?: AppliesToConfig) => (c ? [...c.groupIds].sort().join(',') : '');
+
   const dirty = useMemo(() => {
     if (!settings || !original) return false;
     for (const k of Object.keys(settings)) if (settings[k] !== original[k]) return true;
+    const scopeKeys = new Set([...Object.keys(scopeConfig), ...Object.keys(originalScope)]);
+    for (const k of scopeKeys) {
+      const a = scopeConfig[k], b = originalScope[k];
+      if ((a?.mode ?? 'entire-org') !== (b?.mode ?? 'entire-org')) return true;
+      if (sortedIds(a) !== sortedIds(b)) return true;
+    }
+    for (const k of Object.keys(numericParams)) if (numericParams[k] !== originalNumeric[k]) return true;
     return false;
-  }, [settings, original]);
+  }, [settings, original, scopeConfig, originalScope, numericParams, originalNumeric]);
 
   dirtyRef.current = dirty;
 
@@ -133,19 +182,24 @@ export default function TenantSettingsPage() {
     try {
       const r = await fetch('/api/admin/tenant-settings', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ settings }),
+        body: JSON.stringify({ settings, scopeConfig, numericParams }),
       });
       const j = await r.json();
       if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); setStatusMsg(null); return; }
       setOriginal({ ...j.settings });
       setSettings({ ...j.settings });
+      setScopeConfig({ ...(j.scopeConfig ?? {}) });
+      setOriginalScope({ ...(j.scopeConfig ?? {}) });
+      setNumericParams({ ...(j.numericParams ?? {}) });
+      setOriginalNumeric({ ...(j.numericParams ?? {}) });
       setMeta({ updatedAt: j.updatedAt, updatedBy: meta.updatedBy });
-      setStatusMsg(`Saved ${j.changedCount} setting${j.changedCount === 1 ? '' : 's'} at ${new Date().toLocaleTimeString()}`);
+      const total = (j.changedCount ?? 0) + (j.scopeChangedCount ?? 0) + (j.numericChangedCount ?? 0);
+      setStatusMsg(`Saved ${total} change${total === 1 ? '' : 's'} at ${new Date().toLocaleTimeString()}`);
     } catch (e: any) {
       setSaveError(e?.message || String(e));
       setStatusMsg(null);
     } finally { setSaving(false); }
-  }, [settings, saving, meta.updatedBy]);
+  }, [settings, saving, scopeConfig, numericParams, meta.updatedBy]);
 
   // Ctrl+S / Cmd+S shortcut.
   useEffect(() => {
@@ -162,8 +216,10 @@ export default function TenantSettingsPage() {
   const discard = useCallback(() => {
     if (!original) return;
     setSettings({ ...original });
+    setScopeConfig({ ...originalScope });
+    setNumericParams({ ...originalNumeric });
     setStatusMsg('Discarded unsaved changes.');
-  }, [original]);
+  }, [original, originalScope, originalNumeric]);
 
   function flip(id: string, v: boolean) {
     setSettings((prev) => prev ? { ...prev, [id]: v } : prev);
@@ -328,12 +384,20 @@ export default function TenantSettingsPage() {
                   {g.toggles.map((t) => {
                     const v = settings?.[t.id] ?? t.default;
                     const changed = settings && original && settings[t.id] !== original[t.id];
+                    const sc = scopeConfig[t.id] ?? { mode: 'entire-org', groupIds: [] };
+                    const scopeChanged = t.scopable && (
+                      (sc.mode !== (originalScope[t.id]?.mode ?? 'entire-org')) ||
+                      (sortedIds(sc) !== sortedIds(originalScope[t.id]))
+                    );
+                    const numVal = t.numericParam ? (numericParams[t.numericParam.id] ?? t.numericParam.default) : 0;
+                    const numChanged = t.numericParam && numericParams[t.numericParam.id] !== originalNumeric[t.numericParam.id];
                     return (
                       <div key={t.id} className={s.toggleRow}>
                         <div className={s.toggleLabel}>
                           <div className={s.toggleName}>
                             {t.label}
                             {changed && <Badge appearance="outline" color="warning" size="small" style={{ marginLeft: 8 }}>changed</Badge>}
+                            {(scopeChanged || numChanged) && !changed && <Badge appearance="outline" color="warning" size="small" style={{ marginLeft: 8 }}>changed</Badge>}
                           </div>
                           <div className={s.toggleHelp}>
                             {t.help}
@@ -346,6 +410,34 @@ export default function TenantSettingsPage() {
                           <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: 11 }}>
                             {t.id}
                           </Caption1>
+                          {t.scopable && v && (
+                            <ToggleScopePicker
+                              config={sc}
+                              onChange={(next) => setScopeConfig((prev) => ({ ...prev, [t.id]: next }))}
+                              disabled={saving}
+                              resolvedGroupNames={groupNames}
+                            />
+                          )}
+                          {t.numericParam && v && (
+                            <div className={s.numericBlock}>
+                              <Field label={`${t.numericParam.label}${t.numericParam.unit ? ` (${t.numericParam.unit})` : ''}`}>
+                                <SpinButton
+                                  value={numVal}
+                                  min={t.numericParam.min}
+                                  max={t.numericParam.max}
+                                  disabled={saving}
+                                  onChange={(_e, d) => {
+                                    const np = t.numericParam!;
+                                    const raw = d.value ?? (d.displayValue != null ? parseInt(d.displayValue, 10) : undefined);
+                                    if (raw === undefined || Number.isNaN(raw)) return;
+                                    const clamped = Math.max(np.min, Math.min(np.max, Math.round(Number(raw))));
+                                    setNumericParams((prev) => ({ ...prev, [np.id]: clamped }));
+                                  }}
+                                  style={{ width: 140 }}
+                                />
+                              </Field>
+                            </div>
+                          )}
                         </div>
                         <Tooltip content={v ? 'Click to disable' : 'Click to enable'} relationship="label">
                           <Switch

@@ -48,6 +48,26 @@ export interface TenantCopilotConfig {
   groundingSearchService?: string;
   /** Optional AI Search index used for RAG grounding. */
   groundingSearchIndex?: string;
+  /**
+   * OPT-IN ONLY: route the cross-item Copilot through a real Fabric / Power BI
+   * Copilot capacity workspace. When true AND `fabricCopilotWorkspaceId` is set
+   * AND this is NOT a Gov boundary, the orchestrator validates the bound Fabric
+   * workspace against api.fabric.microsoft.com before the AOAI loop and enriches
+   * the system prompt with Fabric context. LLM inference still runs on Azure
+   * OpenAI (Fabric Copilot exposes no public programmatic invocation API).
+   *
+   * Default: undefined/false — the Azure-native AOAI path is ALWAYS the silent
+   * default. This flag is never surfaced as a requirement on the default path
+   * (per .claude/rules/no-fabric-dependency.md).
+   */
+  fabricCopilotBackend?: boolean;
+  /**
+   * Fabric workspace id to validate when `fabricCopilotBackend` is true. Must be
+   * on F2+ capacity with "Service principals can use Fabric APIs" enabled in the
+   * Fabric admin portal and the Console UAMI added as Member/Contributor. Unset =
+   * Azure-native path (no gate).
+   */
+  fabricCopilotWorkspaceId?: string;
 }
 
 export interface TenantCopilotConfigDoc extends TenantCopilotConfig {
@@ -98,4 +118,45 @@ export const RECOMMENDED_EMBED_MODELS = ['text-embedding-3-large', 'text-embeddi
 export function looksLikeEmbedding(modelName?: string, deploymentName?: string): boolean {
   const n = `${modelName || ''} ${deploymentName || ''}`.toLowerCase();
   return /embed|ada-002/.test(n);
+}
+
+/**
+ * Resolve the Fabric workspace id for the opt-in Copilot path. Resolution
+ * order: tenant config → `LOOM_COPILOT_FABRIC_WORKSPACE` env. Returns '' when
+ * nothing is set (→ Azure-native default).
+ */
+export function resolveCopilotFabricWorkspace(cfg: TenantCopilotConfig | null): string {
+  return (
+    cfg?.fabricCopilotWorkspaceId ||
+    process.env.LOOM_COPILOT_FABRIC_WORKSPACE ||
+    ''
+  ).trim();
+}
+
+/**
+ * True ONLY when ALL of the following hold — this is the single gate the
+ * orchestrator checks before reaching api.fabric.microsoft.com:
+ *
+ *   1. The opt-in flag is set: `cfg.fabricCopilotBackend === true`
+ *      OR `process.env.LOOM_COPILOT_BACKEND === 'fabric'`.
+ *   2. A Fabric workspace id resolves (config > env).
+ *   3. This is NOT a Gov boundary — Fabric/Power BI Copilot is not available in
+ *      sovereign clouds (GCC-High / IL5 / DoD) per Microsoft Learn, so the gov
+ *      path stays Azure-native silently even if the flag was set.
+ *
+ * When false the orchestrator proceeds on the Azure-native AOAI path with NO
+ * message and ZERO Fabric/Power BI calls (per no-fabric-dependency.md).
+ *
+ * `isGovCloud` is injected so this pure helper has no module-load Azure-SDK
+ * dependency; the orchestrator passes the real `cloud-endpoints.isGovCloud`.
+ */
+export function isFabricCopilotEnabled(
+  cfg: TenantCopilotConfig | null,
+  isGovCloud: () => boolean,
+): boolean {
+  const flagOn =
+    cfg?.fabricCopilotBackend === true ||
+    process.env.LOOM_COPILOT_BACKEND === 'fabric';
+  const wsId = resolveCopilotFabricWorkspace(cfg);
+  return flagOn && !!wsId && !isGovCloud();
 }

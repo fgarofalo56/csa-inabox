@@ -1352,18 +1352,22 @@ export async function deleteBusinessDomain(id: string): Promise<void> {
  */
 export async function updateBusinessDomain(
   id: string,
-  body: { name?: string; description?: string },
+  body: { name?: string; description?: string; parentId?: string },
 ): Promise<PurviewBusinessDomain> {
   purviewAccount();
   const colName = domainCollectionName(id);
-  const root = await rootCollectionName();
+  // Preserve the collection hierarchy: a subdomain's mirror keeps its parent
+  // collection (passed by the caller); a root domain re-asserts the account
+  // root collection. PUT /collections is create-or-update, so omitting the
+  // parent would otherwise re-parent the collection to root.
+  const parent = body.parentId || (await rootCollectionName());
   const res = await purviewFetch(`/collections/${encodeURIComponent(colName)}`, {
     method: 'PUT',
     apiVersion: ACCOUNT_API_VERSION,
     body: JSON.stringify({
       ...(body.name ? { friendlyName: body.name } : {}),
       ...(body.description !== undefined ? { description: body.description } : {}),
-      ...(root ? { parentCollection: { referenceName: root } } : {}),
+      ...(parent ? { parentCollection: { referenceName: parent } } : {}),
     }),
   });
   const j = await readJson<any>(res);
@@ -1436,6 +1440,110 @@ export async function queryDomainAuditLog(opts: {
   }
   const j = await readJson<{ value?: DomainAuditEvent[] }>(res);
   return j?.value || [];
+}
+
+// ============================================================
+// F19 — general-purpose audit-log query (Audit logs surface)
+// ============================================================
+
+export const PURVIEW_AUDIT_API_VERSION = '2023-10-01-preview';
+
+export interface PurviewAuditQueryOpts {
+  startTime?: string;     // ISO — API "startTime"
+  endTime?: string;       // ISO — API "endTime"
+  userId?: string;        // UPN filter — API "userId"
+  operationType?: string; // e.g. 'ClassificationAdded' — API "operationType"
+  guid?: string;          // asset GUID — API "guid"
+  keywords?: string;      // free-text — API "keywords"
+  pageSize?: number;      // default 200, max 1000
+  continuationToken?: string;
+}
+
+export interface PurviewAuditEvent {
+  id: string;
+  at: string;      // timestamp (ISO)
+  who: string;     // userId from the event
+  kind: string;    // operationType
+  itemId: string;  // guid / resourceId
+  category: string;
+  source: 'purview';
+  raw?: unknown;
+}
+
+export interface PurviewAuditPage {
+  events: PurviewAuditEvent[];
+  continuationToken?: string;
+  lastPage: boolean;
+}
+
+/**
+ * Query the Purview Data Map audit log (general-purpose; F19 Audit logs).
+ *
+ * POST {base}/datamap/api/audit/query?api-version=2023-10-01-preview
+ * Body params documented at https://learn.microsoft.com/purview/data-map-history
+ *
+ * Unlike `queryDomainAuditLog` (Asset category + domain filter), this exposes
+ * all the API filter params (time / userId / operationType / guid / keywords)
+ * and returns normalized rows for the audit grid.
+ *
+ * Requires the Loom UAMI to hold at minimum a "Data Reader" role on the root
+ * collection (classic Data Map metadata policy — NOT ARM RBAC). Same scope /
+ * token as every other purview-client function.
+ *
+ * Honest gates:
+ *   LOOM_PURVIEW_ACCOUNT unset → PurviewNotConfiguredError (501/503 + hint)
+ *   401/403 from the plane → PurviewError (role missing)
+ */
+export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<PurviewAuditPage> {
+  purviewAccount(); // throws PurviewNotConfiguredError when env var unset
+  const token = await credential.getToken(PURVIEW_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire Purview data-plane token');
+
+  const payload: Record<string, unknown> = {
+    sortBy: 'CreationTime',
+    sortOrder: 'Descending',
+    pageSize: Math.min(1000, Math.max(1, opts.pageSize ?? 200)),
+  };
+  if (opts.startTime)         payload.startTime         = opts.startTime;
+  if (opts.endTime)           payload.endTime           = opts.endTime;
+  if (opts.userId)            payload.userId            = opts.userId;
+  if (opts.operationType)     payload.operationType     = opts.operationType;
+  if (opts.guid)              payload.guid              = opts.guid;
+  if (opts.keywords)          payload.keywords          = opts.keywords;
+  if (opts.continuationToken) payload.continuationToken = opts.continuationToken;
+
+  const url = `${purviewBase()}/datamap/api/audit/query?api-version=${PURVIEW_AUDIT_API_VERSION}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const j = await readJson<any>(res);
+    throw new PurviewError(res.status, j, `Purview audit query failed: ${res.status}`);
+  }
+
+  const j = await readJson<{ value?: any[]; continuationToken?: string; lastPage?: boolean }>(res);
+  const events: PurviewAuditEvent[] = (j?.value || []).map((v: any): PurviewAuditEvent => ({
+    id:       v.id ?? String(v.timestamp ?? v.creationTime ?? Math.random()),
+    at:       v.timestamp ?? v.creationTime ?? '',
+    who:      v.userId ?? v.user ?? '',
+    kind:     v.operationType ?? v.operation ?? v.category ?? '',
+    itemId:   v.guid ?? v.resourceId ?? '',
+    category: v.category ?? '',
+    source:   'purview',
+    raw:      v,
+  }));
+
+  return {
+    events,
+    continuationToken: j?.continuationToken ?? undefined,
+    lastPage: j?.lastPage ?? true,
+  };
 }
 
 /**

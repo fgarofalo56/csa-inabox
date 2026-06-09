@@ -27,9 +27,11 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Save20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, Flow20Regular,
+  Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
+import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
 import { parseSharedQueries, type DataflowSink } from '@/lib/components/pipeline/dataflow/m-script';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -114,6 +116,8 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const [sink, setSink] = useState<DataflowSink | null>(null);
   const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<'authoring' | 'output' | 'script'>('authoring');
+  const [copilotOpen, setCopilotOpen] = useState(true);
+  const [activeQuery, setActiveQuery] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
@@ -249,8 +253,11 @@ export function DataflowGen2Editor({ item, id }: Props) {
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
         { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
       ]},
+      { label: 'Assist', actions: [
+        { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen((v) => !v) },
+      ]},
     ]},
-  ], [running, canRun, run, canCreate, saving, canSave, save, canDelete, del]);
+  ], [running, canRun, run, canCreate, saving, canSave, save, canDelete, del, copilotOpen]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -309,6 +316,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <Button appearance="outline" icon={<Save20Regular />} disabled={!canSave} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
             <Button appearance="primary" icon={<Play20Regular />} disabled={!canRun} onClick={run}>{running ? 'Running…' : 'Save & Run'}</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!dataflowId} onClick={del}>Delete</Button>
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen((v) => !v)}>{copilotOpen ? 'Copilot on' : 'Copilot'}</Button>
           </div>
 
           {config && !config.adfConfigured && config.backend !== 'fabric' && (
@@ -361,10 +369,20 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {tab === 'authoring' && (
             isM ? (
-              <PowerQueryHost
-                mScript={defText}
-                onChange={(v) => { setDefText(v); setDirty(true); }}
-              />
+              <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+                <PowerQueryHost
+                  mScript={defText}
+                  onChange={(v) => { setDefText(v); setDirty(true); }}
+                  onActiveQueryChange={setActiveQuery}
+                />
+                {copilotOpen && (
+                  <DataflowCopilotPane
+                    mScript={defText}
+                    activeQuery={activeQuery}
+                    onApply={(nextM) => { setDefText(nextM); setDirty(true); }}
+                  />
+                )}
+              </div>
             ) : (
               <MessageBar intent="info">
                 <MessageBarBody>
