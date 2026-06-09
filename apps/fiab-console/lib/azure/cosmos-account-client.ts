@@ -113,6 +113,17 @@ function accountBase(): string {
   return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;
 }
 
+/**
+ * ARM resource id for the configured Cosmos DB navigator account (no
+ * api-version / trailing path). Used by the metrics route to build the Azure
+ * Monitor `…/providers/microsoft.insights/metrics` URL without duplicating the
+ * env-var resolution. Throws when LOOM_SUBSCRIPTION_ID / LOOM_COSMOS_ACCOUNT_RG
+ * / LOOM_COSMOS_ACCOUNT are unset (callers gate with cosmosConfigGate first).
+ */
+export function cosmosAccountResourceId(): string {
+  return accountBase();
+}
+
 export class CosmosArmError extends Error {
   status: number;
   body: unknown;
