@@ -1,20 +1,21 @@
 /**
  * copilot-personas.ts — pure, side-effect-free definitions of the per-persona
- * suggested-prompt chips rendered above the Copilot composer.
+ * suggested-prompt chips rendered above the Copilot composer (CopilotPersona,
+ * CopilotContext, SuggestedPrompt, STATIC_PROMPTS, computeDynamicPrompts,
+ * getPersonaPrompts, extractSqlTableNames).
  *
  * Parity target: the starter / suggested prompts the Microsoft Fabric Copilot
  * chat pane shows before a session begins. In a Notebook the chips are
  * notebook-flavoured ("/explain", "Show schema"); in a Warehouse they are
- * T-SQL-flavoured ("Preview data", "Row counts"). Fabric grounds those
- * suggestions in the attached Lakehouse schema / Warehouse tables — so the
- * dynamic prompts here embed REAL symbols pulled from the live editor context
- * (attached lakehouse names, real table names from the SQL draft). No
- * placeholder `<your_table>` text — per no-vaporware.md.
+ * T-SQL-flavoured ("Preview data", "Row counts"). The dynamic prompts here
+ * embed REAL symbols pulled from the live editor context (attached lakehouse
+ * names, real table names from the SQL draft). No placeholder `<your_table>`
+ * text — per no-vaporware.md.
  *
  * This module imports no Azure SDK and touches no network — it is safe to use
- * client-side. Chip clicks flow through the existing `/api/copilot/orchestrate`
- * (global pane) or `/api/copilot/notebook-assist` (notebook pane) endpoints; no
- * new backend, env var, or RBAC grant is introduced.
+ * client-side. The server-only Pipeline Copilot registry lives in
+ * copilot-personas-pipeline.ts (it imports the ADF / Synapse data-plane
+ * clients) to keep this file out of the client bundle's server graph.
  */
 
 export type CopilotPersona =

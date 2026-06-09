@@ -803,6 +803,12 @@ export interface OrchestrateOptions {
   /** Tenant admin-selected Copilot config (account + chat deployment). When
    *  supplied it takes priority over env / discovery. */
   tenantConfig?: TenantCopilotConfig | null;
+  /** Per-surface persona registry (e.g. the Pipeline Copilot). When supplied,
+   *  the loop uses THIS tool set instead of the global cross-item registry and
+   *  skips the MCP shim (the persona is intentionally scoped). */
+  registryOverride?: LoomToolRegistry;
+  /** Per-surface system prompt (paired with registryOverride). */
+  systemPromptOverride?: string;
 }
 
 interface ChatMessage {
@@ -928,18 +934,22 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     return;
   }
 
-  const reg = getRegistry();
+  const reg = opts.registryOverride ?? getRegistry();
   // Register any connected external MCP tool servers (Build 2026 "Connect MCP
   // tools") so agent-loom can call them alongside the built-in Loom tools.
-  // Best-effort: a missing/unreachable MCP server never breaks the chat.
-  try {
-    const { buildMcpShim } = await import('./mcp-shim');
-    await buildMcpShim(reg, userOid);
-  } catch { /* MCP shim optional — continue with built-in tools */ }
+  // Best-effort: a missing/unreachable MCP server never breaks the chat. Skip
+  // entirely for a scoped persona registry (registryOverride) — those expose a
+  // deliberately tight tool set.
+  if (!opts.registryOverride) {
+    try {
+      const { buildMcpShim } = await import('./mcp-shim');
+      await buildMcpShim(reg, userOid);
+    } catch { /* MCP shim optional — continue with built-in tools */ }
+  }
   const tools = reg.toAoaiTools();
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: opts.systemPromptOverride ?? SYSTEM_PROMPT },
     { role: 'user', content: prompt },
   ];
 
