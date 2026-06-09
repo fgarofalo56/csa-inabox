@@ -137,4 +137,39 @@ describe('graph-identity-client', () => {
     expect(ids).toEqual(['g1', 's1', 'u1']);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it('getGroupsByIds POSTs to /directoryObjects/getByIds with types=["group"] and maps results', async () => {
+    process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [
+        { id: 'g1', displayName: 'Alpha Team', mail: 'alpha@contoso.com', '@odata.type': '#microsoft.graph.group' },
+      ],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const mod = await import('../graph-identity-client');
+    const results = await mod.getGroupsByIds(['g1', 'g2']);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://graph.microsoft.com/v1.0/directoryObjects/getByIds');
+    expect((init as any).method).toBe('POST');
+    const sentBody = JSON.parse((init as any).body);
+    expect(sentBody.types).toEqual(['group']);
+    expect(sentBody.ids).toEqual(['g1', 'g2']);
+    expect(results).toEqual([{ id: 'g1', type: 'group', displayName: 'Alpha Team', mail: 'alpha@contoso.com', description: undefined }]);
+  });
+
+  it('getGroupsByIds returns [] without calling Graph for empty input', async () => {
+    process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
+    const mod = await import('../graph-identity-client');
+    const results = await mod.getGroupsByIds([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it('getGroupsByIds throws GraphIdentityNotConfiguredError when env unset', async () => {
+    delete process.env.LOOM_IDENTITY_PICKER_ENABLED;
+    const mod = await import('../graph-identity-client');
+    await expect(mod.getGroupsByIds(['g1'])).rejects.toBeInstanceOf(mod.GraphIdentityNotConfiguredError);
+  });
 });

@@ -410,6 +410,47 @@ export async function getGroupTransitiveMembers(groupId: string, max = 200): Pro
   return out;
 }
 
+/**
+ * Bulk-resolve Entra group display names by object ID. Used at tenant-settings
+ * load time to turn the stored scope `groupIds` back into display names without
+ * N serial GET /groups/{id} calls.
+ *
+ * Backing call: POST /v1.0/directoryObjects/getByIds with types=['group'] —
+ * available in all national clouds. Security groups only (types filter), which
+ * matches Fabric's tenant-setting group restriction. Individual missing /
+ * inaccessible IDs are silently skipped (partial result), never an error.
+ */
+export async function getGroupsByIds(ids: string[]): Promise<IdentityHit[]> {
+  assertEnabled();
+  const unique = [...new Set((ids || []).filter(Boolean))].slice(0, 1000);
+  if (unique.length === 0) return [];
+  const endpoint = '/directoryObjects/getByIds';
+  const out: IdentityHit[] = [];
+  const seen = new Set<string>();
+  // getByIds accepts at most 1000 ids per call; chunk to be safe.
+  for (let i = 0; i < unique.length; i += 1000) {
+    const batch = unique.slice(i, i + 1000);
+    const res = await graphFetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: batch, types: ['group'] }),
+    });
+    const j = await readJson<{ value?: any[] }>(res, endpoint);
+    for (const p of j?.value || []) {
+      if (!p?.id || seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({
+        id: p.id,
+        type: 'group',
+        displayName: p.displayName || p.id,
+        mail: p.mail,
+        description: p.description,
+      });
+    }
+  }
+  return out;
+}
+
 // Test-only: expose internal helpers for unit tests.
 export const __testing = {
   notConfiguredHint,

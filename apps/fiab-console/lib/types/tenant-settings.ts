@@ -12,6 +12,22 @@
 
 export type ToggleScope = 'tenant' | 'capacity' | 'domain';
 
+/**
+ * Optional integer companion parameter for a toggle (e.g. a max-completions
+ * count or a CDC retention window). Rendered as a Fluent SpinButton clamped to
+ * [min, max]. Persisted in TenantSettingsDoc.numericParams keyed by `id`.
+ */
+export interface NumericParamDef {
+  /** Unique key, e.g. 'ai.inlineCodeComplete.maxCompletions'. */
+  id: string;
+  label: string;
+  /** Display suffix, e.g. 'rows', 'days'. */
+  unit?: string;
+  min: number;
+  max: number;
+  default: number;
+}
+
 export interface ToggleDef {
   id: string;
   label: string;
@@ -22,6 +38,59 @@ export interface ToggleDef {
   default: boolean;
   /** What scope this toggle applies to. */
   scope?: ToggleScope;
+  /**
+   * When true, the UI shows the per-toggle "Apply to" security-group scope
+   * picker (Entire org / Specific groups / Except groups), mirroring Fabric's
+   * tenant-setting group scoping. Persisted in TenantSettingsDoc.scopeConfig.
+   */
+  scopable?: boolean;
+  /** Optional integer companion parameter for this toggle. */
+  numericParam?: NumericParamDef;
+}
+
+/**
+ * Per-toggle "Apply to" scoping. Mirrors Fabric's tenant-setting model where a
+ * setting can be enabled for the entire org, only specific security groups, or
+ * the entire org except specific security groups. Security groups only (not
+ * M365 groups / distribution lists) — enforced by Graph types=['group'].
+ */
+export type AppliesToMode = 'entire-org' | 'specific-groups' | 'except-groups';
+
+export interface AppliesToConfig {
+  mode: AppliesToMode;
+  /** Entra security-group object IDs. Empty for 'entire-org'. */
+  groupIds: string[];
+  /**
+   * Cached display names, parallel-indexed to groupIds. Ephemeral UI cache —
+   * re-resolved from Graph on load and stripped from the audit record.
+   */
+  groupDisplayNames?: string[];
+}
+
+export const APPLIES_TO_MODES: AppliesToMode[] = ['entire-org', 'specific-groups', 'except-groups'];
+
+export function isAppliesToMode(v: unknown): v is AppliesToMode {
+  return typeof v === 'string' && (APPLIES_TO_MODES as string[]).includes(v);
+}
+
+/** Type guard for a persisted AppliesToConfig coming off the wire. */
+export function isValidAppliesTo(v: unknown): v is AppliesToConfig {
+  if (!v || typeof v !== 'object') return false;
+  const c = v as Record<string, unknown>;
+  if (!isAppliesToMode(c.mode)) return false;
+  if (!Array.isArray(c.groupIds)) return false;
+  return c.groupIds.every((g) => typeof g === 'string');
+}
+
+/** Order-insensitive equality on (mode, groupIds). Ignores cached display names. */
+export function appliesToEqual(a: AppliesToConfig | null | undefined, b: AppliesToConfig | null | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.mode !== b.mode) return false;
+  const sa = [...a.groupIds].sort();
+  const sb = [...b.groupIds].sort();
+  if (sa.length !== sb.length) return false;
+  return sa.every((x, i) => x === sb[i]);
 }
 
 export interface ToggleGroupDef {
@@ -44,8 +113,8 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     description: 'Storage layer that backs every Lakehouse + Warehouse + KQL DB in this tenant.',
     toggles: [
       { id: 'onelake.enabled', label: 'OneLake enabled', help: 'Master switch for the OneLake storage layer. Disabling this hides every Lakehouse and Warehouse from the UI.', default: true },
-      { id: 'onelake.crossWorkspaceShortcuts', label: 'Cross-workspace shortcuts', help: 'Allow users to create shortcuts that point at OneLake paths in workspaces they do not own.', default: true },
-      { id: 'onelake.externalShortcuts', label: 'External (ADLS/S3/GCS) shortcuts', help: 'Allow users to create shortcuts that point at external storage. Disable to keep all data in OneLake.', default: false },
+      { id: 'onelake.crossWorkspaceShortcuts', label: 'Cross-workspace shortcuts', help: 'Allow users to create shortcuts that point at OneLake paths in workspaces they do not own.', default: true, scopable: true },
+      { id: 'onelake.externalShortcuts', label: 'External (ADLS/S3/GCS) shortcuts', help: 'Allow users to create shortcuts that point at external storage. Disable to keep all data in OneLake.', default: false, scopable: true },
     ],
   },
   {
@@ -63,11 +132,11 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     label: 'AI & Copilot',
     description: 'Copilot pane, Data Agent, Foundry-backed Cross-Item Copilot.',
     toggles: [
-      { id: 'ai.copilotPane', label: 'Copilot pane', help: 'Show the right-rail Copilot pane (Ctrl+/). Backed by /api/copilot/orchestrate.', default: true },
-      { id: 'ai.dataAgent', label: 'Data Agent (assistants-on-data)', help: 'Allow per-tenant Data Agent. Requires AI Foundry deployment.', default: true },
+      { id: 'ai.copilotPane', label: 'Copilot pane', help: 'Show the right-rail Copilot pane (Ctrl+/). Backed by /api/copilot/orchestrate.', default: true, scopable: true },
+      { id: 'ai.dataAgent', label: 'Data Agent (assistants-on-data)', help: 'Allow per-tenant Data Agent. Requires AI Foundry deployment.', default: true, scopable: true },
       { id: 'ai.allowedDataSources', label: 'Data Agent allowed-sources', help: 'Restrict Data Agent to specific data sources. Configure under "Tools".', default: false },
       { id: 'ai.crossItemCopilot', label: 'Cross-item Copilot orchestrator', help: 'Lets Copilot call Loom tools across all surfaces with admin-defined guardrails.', default: true },
-      { id: 'ai.inlineCodeComplete', label: 'Inline code completion (ghost text)', help: 'AOAI-powered gray ghost-text suggestions in Monaco notebook code cells (Tab to accept). Unlike Fabric this needs no F2+/P capacity. Users can also toggle per-session via the cell toolbar sparkle button.', default: true },
+      { id: 'ai.inlineCodeComplete', label: 'Inline code completion (ghost text)', help: 'AOAI-powered gray ghost-text suggestions in Monaco notebook code cells (Tab to accept). Unlike Fabric this needs no F2+/P capacity. Users can also toggle per-session via the cell toolbar sparkle button.', default: true, scopable: true, numericParam: { id: 'ai.inlineCodeComplete.maxCompletions', label: 'Max completions per session', min: 1, max: 200, default: 20 } },
     ],
   },
   {
@@ -75,7 +144,7 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     label: 'Mirroring',
     description: 'Continuous replication from Azure SQL / Snowflake / Cosmos into OneLake.',
     toggles: [
-      { id: 'mirror.azureSql', label: 'Mirror Azure SQL', help: 'Allow users to set up Azure SQL Mirror jobs.', default: true },
+      { id: 'mirror.azureSql', label: 'Mirror Azure SQL', help: 'Allow users to set up Azure SQL Mirror jobs.', default: true, scopable: true, numericParam: { id: 'mirror.azureSql.retentionDays', label: 'CDC retention', unit: 'days', min: 1, max: 30, default: 7 } },
       { id: 'mirror.snowflake', label: 'Mirror Snowflake', help: 'Allow Snowflake Mirror jobs.', default: true },
       { id: 'mirror.cosmos', label: 'Mirror Cosmos DB', help: 'Allow Cosmos DB Mirror jobs.', default: false },
     ],
@@ -115,8 +184,8 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     label: 'Git integration',
     description: 'Workspace-level Git source control.',
     toggles: [
-      { id: 'git.azdoEnabled', label: 'Azure DevOps Git', help: 'Allow workspaces to bind to Azure DevOps repos.', default: true },
-      { id: 'git.githubEnabled', label: 'GitHub Git', help: 'Allow workspaces to bind to GitHub repos.', default: true },
+      { id: 'git.azdoEnabled', label: 'Azure DevOps Git', help: 'Allow workspaces to bind to Azure DevOps repos.', default: true, scopable: true },
+      { id: 'git.githubEnabled', label: 'GitHub Git', help: 'Allow workspaces to bind to GitHub repos.', default: true, scopable: true },
       { id: 'git.commitsRequirePR', label: 'Require PR for main', help: 'Block direct commits to the default branch.', default: false },
     ],
   },
@@ -134,7 +203,7 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     label: 'Information protection',
     description: 'Sensitivity labels + DLP.',
     toggles: [
-      { id: 'info.sensitivityLabels', label: 'Sensitivity labels', help: 'Surface Microsoft Purview Information Protection labels on items.', default: true },
+      { id: 'info.sensitivityLabels', label: 'Sensitivity labels', help: 'Surface Microsoft Purview Information Protection labels on items.', default: true, scopable: true },
       { id: 'info.requireLabel', label: 'Require label on new items', help: 'Block save of new items until a label is applied.', default: false },
       { id: 'info.dlpScanning', label: 'DLP scanning', help: 'Allow Purview DLP scans of OneLake.', default: false },
     ],
@@ -145,8 +214,8 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     description: 'Outbound data flows from Loom.',
     toggles: [
       { id: 'export.csv', label: 'Allow CSV export', help: 'Allow users to download query results / Lakehouse files as CSV.', default: true },
-      { id: 'export.publishToWeb', label: 'Publish to web', help: 'Allow reports to be published publicly. Highly recommend OFF for sensitive tenants.', default: false },
-      { id: 'export.shareWithExternal', label: 'Share with external users', help: 'Allow share-link to B2B guests.', default: false },
+      { id: 'export.publishToWeb', label: 'Publish to web', help: 'Allow reports to be published publicly. Highly recommend OFF for sensitive tenants.', default: false, scopable: true },
+      { id: 'export.shareWithExternal', label: 'Share with external users', help: 'Allow share-link to B2B guests.', default: false, scopable: true },
     ],
   },
   {
@@ -215,11 +284,65 @@ export function defaultSettings(): Record<string, boolean> {
   return out;
 }
 
+/**
+ * Build the default numeric-param doc for a new tenant — every toggle that
+ * declares a `numericParam` contributes its default. Key = NumericParamDef.id.
+ */
+export function numericDefaults(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const g of TENANT_SETTING_GROUPS) {
+    for (const t of g.toggles) {
+      if (t.numericParam) out[t.numericParam.id] = t.numericParam.default;
+    }
+  }
+  return out;
+}
+
+/** IDs of toggles that expose the "Apply to" security-group scope picker. */
+export function scopableToggleIds(): Set<string> {
+  const s = new Set<string>();
+  for (const g of TENANT_SETTING_GROUPS) {
+    for (const t of g.toggles) {
+      if (t.scopable) s.add(t.id);
+    }
+  }
+  return s;
+}
+
+/** IDs of every declared numeric companion param. */
+export function numericParamIds(): Set<string> {
+  const s = new Set<string>();
+  for (const g of TENANT_SETTING_GROUPS) {
+    for (const t of g.toggles) {
+      if (t.numericParam) s.add(t.numericParam.id);
+    }
+  }
+  return s;
+}
+
+/** Map a numericParam id back to its definition (for min/max clamping). */
+export function numericParamDefs(): Record<string, NumericParamDef> {
+  const out: Record<string, NumericParamDef> = {};
+  for (const g of TENANT_SETTING_GROUPS) {
+    for (const t of g.toggles) {
+      if (t.numericParam) out[t.numericParam.id] = t.numericParam;
+    }
+  }
+  return out;
+}
+
 export interface TenantSettingsDoc {
   /** id = tenantId (one doc per tenant). */
   id: string;
   tenantId: string;
   settings: Record<string, boolean>;
+  /**
+   * Per-toggle security-group scoping (F2). Key = ToggleDef.id. Only present
+   * for scopable toggles whose scope differs from the default 'entire-org'.
+   */
+  scopeConfig?: Record<string, AppliesToConfig>;
+  /** Numeric companion values (F2). Key = NumericParamDef.id. */
+  numericParams?: Record<string, number>;
   /** Audit metadata. */
   updatedAt: string;
   updatedBy: string;
