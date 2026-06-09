@@ -53,6 +53,44 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
       // calls) is no longer scanned. Acceptable for an authenticated analytics BFF.
       requestBodyCheck: 'Disabled'
     }
+    // ── Custom rules (evaluated BEFORE managed rules) ────────────────────────
+    // F12 Git integration: the console's BFF exposes session-gated admin routes
+    // under `/api/admin/workspaces/{id}/git/**` (connect / sync / status / meta).
+    // Front Door's Microsoft_DefaultRuleSet has a `.git`-exposure rule that 403s
+    // any request whose URL path carries the `git` segment — which would block
+    // the real ADO/GitHub commit flow. A narrow Allow custom rule, matched on the
+    // request URI carrying BOTH `/api/admin/workspaces/` AND `/git`, short-circuits
+    // managed-rule evaluation for exactly that admin path family (and nothing
+    // else). These routes are Entra-session-gated in the app, body inspection is
+    // already disabled (above), and URL/header/cookie + Bot Manager protection
+    // still apply to every other path — so this is scoped, not a blanket bypass.
+    customRules: {
+      rules: [
+        {
+          name: 'AllowAdminWorkspaceGitApi'
+          priority: 100
+          enabledState: 'Enabled'
+          ruleType: 'MatchRule'
+          action: 'Allow'
+          matchConditions: [
+            {
+              matchVariable: 'RequestUri'
+              operator: 'Contains'
+              negateCondition: false
+              transforms: ['Lowercase']
+              matchValue: ['/api/admin/workspaces/']
+            }
+            {
+              matchVariable: 'RequestUri'
+              operator: 'Contains'
+              negateCondition: false
+              transforms: ['Lowercase']
+              matchValue: ['/git']
+            }
+          ]
+        }
+      ]
+    }
     managedRules: {
       managedRuleSets: [
         {

@@ -1,4 +1,4 @@
-# warehouse-copilot — parity with Fabric Warehouse Copilot (NL→SQL + Explain)
+# warehouse-copilot — parity with Fabric Warehouse Copilot (NL→SQL + Explain + Fix + Optimize + Quick actions)
 
 Source UI: https://learn.microsoft.com/fabric/data-warehouse/copilot
             https://learn.microsoft.com/fabric/data-warehouse/copilot-chat-pane
@@ -42,6 +42,8 @@ Backend:
 | 6 | Run the result | Generated SQL executes against the live warehouse and returns rows |
 | 7 | Dialect awareness | T-SQL for Warehouse/SQL pool; engine-appropriate SQL elsewhere |
 | 8 | Graceful unconfigured state | Clear message when Copilot/AOAI is not available |
+| 9 | Optimize / improve query | Copilot suggests a better-performing query grounded in the execution plan |
+| 10 | Quick actions / suggested prompts | One-click prompt chips for common questions |
 
 ## Loom coverage
 
@@ -55,10 +57,18 @@ Backend:
 | 6 | Run the generated SQL → real rows | built ✅ | existing `/query` route (`executeQuery` / `executeStatement`) |
 | 7 | Dialect label per engine (T-SQL / Spark SQL) | built ✅ | `dialectFor(engine)` system prompt + UI copy |
 | 8 | Honest no_aoai config gate | honest-gate ⚠️ | 503 `code:'no_aoai'` + hint naming `LOOM_AOAI_ENDPOINT`/`LOOM_AOAI_DEPLOYMENT` |
+| 9 | Optimize (real EXPLAIN-grounded) | built ✅ | "Optimize" button + ribbon; route `mode:'optimize'` → `EXPLAIN WITH_RECOMMENDATIONS` (`explainQuery`) → `summarizeExplainXml` → AOAI cites the plan |
+| 10 | Quick actions menu | built ✅ | `WAREHOUSE_PERSONA.quickActions` (8) in `copilot-personas.ts`; "Quick actions" menu in `WarehouseCopilotActions` / `SqlCopilotEditor` |
 
 Zero ❌. Code-completion-as-you-type (Fabric "inline code completion") is a
-distinct surface tracked separately; the three primary Copilot actions
-(generate / explain / fix) — the acceptance surface — are all built.
+distinct surface tracked separately; the primary Copilot actions (generate /
+explain / fix / optimize) plus quick actions — the acceptance surface — are all
+built. The Warehouse Copilot bridge lives in
+`apps/fiab-console/lib/editors/warehouse-editor.tsx` (`useWarehouseCopilot` hook
++ `WarehouseCopilotActions` / `WarehouseCopilotPanels`), wired into
+`WarehouseEditor`. Optimize is Dedicated-pool only (real `EXPLAIN
+WITH_RECOMMENDATIONS`); Serverless / Databricks get an honest 400 naming their
+own optimization surface.
 
 ## Backend per control
 
@@ -67,6 +77,8 @@ distinct surface tracked separately; the three primary Copilot actions
 | Ask Copilot → Generate | `POST /api/items/<engine>/<id>/assist` `{mode:'generate', prompt}` → AOAI `chat/completions` (temperature 0.2, reasoning-model retry) grounded in live schema |
 | Explain | `POST …/assist` `{mode:'explain', sql}` → AOAI prose |
 | Fix | `POST …/assist` `{mode:'fix', sql, errorText}` → AOAI corrected SQL |
+| Optimize | `POST …/assist` `{mode:'optimize', sql}` → `EXPLAIN WITH_RECOMMENDATIONS <sql>` on the Dedicated pool (`explainQuery`, TDS) → plan XML → `summarizeExplainXml` → AOAI suggestions citing BroadcastMove/ShuffleMove steps; response includes `planXml` |
+| Quick action | sets the prompt + fires `{mode:'generate'}` in one click |
 | Apply → Run | existing `POST /api/items/<engine>/<id>/query` → Synapse TDS (`executeQuery`) / Databricks SQL (`executeStatement`) |
 | Schema grounding | Synapse: `executeQuery(dedicated|serverlessTarget, sys.columns …)`; Databricks: `executeStatement(<catalog>.information_schema.columns …)` (soft-fail, never blocks) |
 
@@ -85,5 +97,11 @@ distinct surface tracked separately; the three primary Copilot actions
 Dedicated pool, click **Ask Copilot**, type *"top 10 customers by revenue last
 quarter"*, **Generate** → a `SELECT TOP 10 … FROM …` over the real schema,
 **Apply** → **Run** → real rows. **Explain** on the result → grounded prose.
+**Optimize** → real `EXPLAIN WITH_RECOMMENDATIONS` plan summary → AOAI suggestions
+citing the actual data-movement steps. **Quick actions** menu → one-click
+"Top 10 customers by revenue" etc.
 Route test: `app/api/items/[type]/[id]/assist/__tests__/route.test.ts`
 (validation gates, fence-stripping, schema grounding, reasoning-model retry).
+Unit tests: `lib/azure/__tests__/copilot-personas.test.ts` (6) +
+`lib/copilot/__tests__/sql-tools.test.ts` (5, incl. `summarizeExplainXml`
+data-movement parsing) — 11 green; `tsc --noEmit` clean.

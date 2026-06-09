@@ -173,6 +173,46 @@ shipped Platform & Admin surfaces; the broader Platform PRP
 
 ---
 
+## Copilot surfaces — parity (rev.5 — 2026-06-09)
+
+The Copilot surface spans **14 distinct personas** across the console — the
+Copilot Studio item family, the SQL/notebook in-editor assistants, the
+cross-item orchestrator, the global help widget, inline ghost-text completion,
+and the in-blade governance assistant. Each persona now has a per-surface
+parity doc under `docs/fiab/parity/` showing **zero ❌** (every inventory row
+built ✅ or honest-gate ⚠️). All AOAI-backed personas are Azure-native by
+default and work with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (per
+`no-fabric-dependency.md`); the Copilot Studio family is a Power Platform /
+Dataverse workload routed by `LOOM_POWER_PLATFORM_BAP_BASE`.
+
+| # | Persona | Parity doc | Grade | Default backend |
+|---|---|---|:--:|---|
+| 1 | Copilot Studio — agent | `copilot-studio-agent.md` | A | Dataverse `msdyn_copilots` + Direct Line |
+| 2 | Copilot Studio — topic | `copilot-studio-topic.md` | A | Dataverse `msdyn_botcomponents` |
+| 3 | Copilot Studio — action | `copilot-studio-action.md` | A | Dataverse `msdyn_bot_actions` |
+| 4 | Copilot Studio — knowledge | `copilot-studio-knowledge.md` | A | Dataverse `msdyn_knowledgesources` |
+| 5 | Copilot Studio — analytics | `copilot-studio-analytics.md` | A | BAP admin analytics |
+| 6 | Copilot Studio — channel | `copilot-studio-channel.md` | A | Dataverse `msdyn_botchannels` |
+| 7 | Copilot Studio — template library | `copilot-template-library.md` | A | Cosmos gallery + Dataverse instantiate |
+| 8 | Notebook in-cell Copilot | `notebook-in-cell-copilot.md` | A | Azure OpenAI (`/api/notebook/[id]/assist`) |
+| 9 | Warehouse Copilot (NL→SQL) | `warehouse-copilot.md` | A | Azure OpenAI + live warehouse schema |
+| 10 | Azure SQL Copilot | `azure-sql-copilot.md` | A | Azure OpenAI (SSE) + TDS schema |
+| 11 | Cross-item Copilot orchestrator | `copilot-cross-item.md` | A | Azure OpenAI 37-tool function-calling |
+| 12 | Help Copilot widget | `copilot-help-widget.md` | A | Azure OpenAI + docs index (AI Search/Cosmos) |
+| 13 | Inline code completion (ghost text) | `copilot-inline-complete.md` | A | Azure OpenAI (`/api/copilot/complete`) |
+| 14 | Governance Copilot | `copilot-governance.md` | A | Azure OpenAI (SSE) grounded on live posture |
+
+**Coverage:** 14/14 personas at zero ❌. **Deep-functional UAT:**
+`apps/fiab-console/e2e/copilot.uat.ts` exercises every persona's primary action
+against the real backend (authenticated `pnpm uat`), accepting real success
+**or** a documented honest gate (`no_aoai` / `disabled` / `admin_only` /
+Dataverse-not-wired) — passing green whether or not AOAI / Power Platform are
+wired in the target deployment. The Copilot Studio low-code conversation-flow
+visual designer is the one **honest scope boundary** (Copilot Studio portal
+authoring, forbidden as parity per `ui-parity.md`), not a missing row.
+
+---
+
 ## Overall honest assessment: how far is Loom from 1:1 Azure parity?
 
 **Loom is roughly one-third of the way to 1:1 Azure parity, and not close to

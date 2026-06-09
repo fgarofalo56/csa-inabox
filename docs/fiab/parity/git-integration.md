@@ -1,75 +1,90 @@
-# git-integration — parity with Fabric Git integration (SCM binding)
+# git-integration — parity with Fabric Git integration
 
-Source UI: Fabric **Workspace settings → Git integration**
-Reference: <https://learn.microsoft.com/fabric/cicd/git-integration/intro-to-git-integration>
-Run date: 2026-06-09
+Source UI: https://learn.microsoft.com/fabric/cicd/git-integration/intro-to-git-integration
+Folder convention: https://learn.microsoft.com/rest/api/fabric/articles/item-management/definitions
 
-Loom surfaces:
+Loom executes real Git on the user's behalf (no "use your own tooling" stub).
+Each workspace item is serialized to a canonical text form under a Fabric-style
+item folder `<directory>/<displayName>.<ItemType>/`, then committed / pulled
+against **Azure DevOps Repos (REST 7.1)** or **GitHub (REST v3)**. No real
+Microsoft Fabric or Power BI workspace is required — this works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
-- BFF: `app/api/workspaces/[id]/scm/route.ts` (GET/POST/DELETE)
-- Store: Cosmos `workspace-git` container (PK `/workspaceId`)
+## Azure/Fabric feature inventory → Loom coverage
 
-> **Route naming:** the route is `/scm` (not `/git`) because Azure Front Door's
-> OWASP managed ruleset 403s a POST whose path contains the segment `git`. This
-> is documented in the route file header.
-
-The SCM binding is **Loom-native** state in Cosmos. There is **no dependency on
-real Microsoft Fabric** — connecting a workspace to GitHub / Azure DevOps records
-intent and the binding works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
-
-## Fabric/Azure feature inventory (grounded in Learn)
-
-1. Connect a workspace to a GitHub or Azure DevOps repo + branch + directory
-2. Authenticate with a token / OAuth
-3. View the current connection
-4. Disconnect
-5. Commit workspace items to the repo / update workspace from the repo
-
-## Loom coverage
-
-| Capability | Status | Backend |
+| Fabric Git capability | Loom coverage | Backend |
 |---|---|---|
-| Connect workspace to GitHub / Azure DevOps repo | ✅ Built | `POST …/scm` body `{provider, repoUrl, branch, directory?, pat?}` → Cosmos `workspace-git` |
-| Read current SCM binding | ✅ Built | `GET …/scm` → Cosmos read |
-| Disconnect SCM binding | ✅ Built | `DELETE …/scm` → Cosmos delete |
-| PAT hashed (never stored plaintext) | ✅ Built | `crypto.createHash('sha256')` — only the hash is persisted |
-| Provider validation (`github` / `ado`) | ✅ Built | `PROVIDERS` const validated in route |
-| Branch + directory scoping | ✅ Built | stored on the binding |
-| Sync items to/from repo (actual Git ops) | ⚠️ Honest gate | Route header discloses: Loom records the binding intent and exports items to a deterministic JSON shape; executing Git on the user's behalf lands when the Functions/CA job ships in v3.4. The connect/read/disconnect surface is fully functional. |
+| Connect repository (GitHub / Azure DevOps) | ✅ `workspace-settings-drawer.tsx` GitSection → `POST /api/workspaces/[id]/scm` | Cosmos `workspace-git` + KV (PAT) |
+| Branch selection | ✅ branch field in connect form; used by every REST call | ADO/GitHub refs |
+| Source-control status (changed items list) | ✅ `GET /api/git-integration/status` → SourceControlPanel list with added/modified/removed badges | `getStatus` (list + per-file diff) |
+| Commit (push selected items) | ✅ checkboxes + commit message + `Commit selected` → `POST /api/git-integration/commit` | ADO Pushes 7.1 / GitHub Git Data API (blobs→tree→commit→ref) |
+| Update (pull from remote) | ✅ `Update (pull)` → `POST /api/git-integration/pull` (applies to Cosmos `state.content`) | ADO Items 7.1 / GitHub Trees+Contents |
+| Resolve conflicts (keep local / take from repo) | ✅ per-row `Resolve…` dialog → `POST /api/git-integration/resolve` | commit (local) or pull (remote) for the one item |
+| Canonical item serialization | ✅ `serializeLoomItem` | — |
+| · semantic-model → `model.bim` (TMSL) + `definition.pbism` | ✅ `buildTmslFromContent` (round-trips via `parseTmslToContent`) | — |
+| · report → `definition.pbir` + `definition/report.json` | ✅ | — |
+| · scorecard → `scorecard.json` | ✅ | — |
+| · all other items → `<itemType>.json` | ✅ | — |
+| Receipt: commit SHA + URL + applied diff | ✅ commit returns `{commitSha,url,at,files}`; pull returns `{headSha,applied,diff}` | — |
 
-Zero ❌ rows. The Git execution leg is an honest ⚠️ gate (disclosed in the route
-header + in-product), not a dead control — the binding management is fully built.
+Zero ❌, zero stub banners. The only non-functional state is the honest gate
+table below.
 
-## Backend per control
+## Honest gates
 
-- **Connect** — `POST` validates the provider, hashes any PAT with SHA-256 (the
-  raw token is never written to Cosmos or returned), and upserts the binding into
-  `workspace-git`.
-- **Read** — `GET` returns the binding without the hash.
-- **Disconnect** — `DELETE` removes the binding doc.
-- **Git execution** — deferred to a Functions/Container-App job (v3.4); the
-  binding is the recorded intent + deterministic item-export shape.
+| Condition | code | HTTP | Copy |
+|---|---|---|---|
+| No repo connected | `no_repo_bound` | 424 | Connect one in workspace Settings → Git integration. |
+| Key Vault not configured | `no_kv` | 503 | Set LOOM_KEY_VAULT_URI and grant the Console identity Key Vault Secrets Officer. |
+| Key Vault write/read forbidden | `kv_forbidden` | 403 | Grant the Console identity Key Vault Secrets Officer on the vault. |
+| No PAT in Key Vault | `no_pat` | 424 | Re-connect the repository and supply a PAT. |
+| Provider rejected PAT | `git_auth` | 401 | Supply a PAT with ADO "Code (Read & Write)" / GitHub "repo" scope. |
+| Remote branch moved since last sync | `git_conflict` | 409 | Pull (Update) first, then commit. |
 
 ## Per-cloud notes
 
-| Cloud | Behaviour |
-|---|---|
-| Commercial / GCC | Identical; GitHub.com + Azure DevOps Services reachable |
-| GCC-High / IL5 | Binding stored identically; repo host must be reachable from the boundary (GitHub Enterprise / Azure DevOps in-boundary). The Front-Door `/scm` workaround applies on all Front-Door-fronted boundaries. |
+| Surface | Commercial | GCC | GCC-High | DoD / IL5 |
+|---|---|---|---|---|
+| ADO provider | dev.azure.com | dev.azure.com (ADO Services SaaS; no GCC-only instance) | `LOOM_ADO_HOST` (on-prem ADO Server) | `LOOM_ADO_HOST` (on-prem ADO Server) |
+| GitHub provider | api.github.com | api.github.com | api.github.com (or `LOOM_GITHUB_HOST` for GHES) | `LOOM_GITHUB_HOST` (GHES on-prem) |
+| PAT storage | KV `vault.azure.net` | KV `vault.azure.net` | KV `vault.usgovcloudapi.net` | KV `vault.usgovcloudapi.net` |
 
-## Bicep sync
+> Grounding: Microsoft Learn states Azure DevOps Services isn't available in
+> GCC — "you can use on-premises Azure DevOps or public Azure DevOps services."
+> `LOOM_ADO_HOST` covers every sovereign case without hard-coding a nonexistent
+> gov endpoint.
 
-- No new resource — `workspace-git` Cosmos container via existing init.
-- No new env var or role grant for the binding surface. The future Git-execution
-  job will add its own Function + secret wiring when it lands.
+## Backend per control
 
-## Verification
+- Connect / disconnect → Cosmos `workspace-git` upsert/delete (`/api/workspaces/[id]/scm`)
+- PAT storage → Key Vault `putKeyVaultSecret` / `deleteKeyVaultSecret` (kv-secrets-client.ts)
+- Commit → `commitItems` → ADO Pushes 7.1 or GitHub blobs→tree→commit→ref
+- Pull → `pullItemFiles` → ADO/GitHub item content read → deserialize → Cosmos `items` replace
+- Status → `getStatus` → list repo files + per-file content compare (no writes)
+- lastSyncedSha → persisted back to `workspace-git` after each commit/pull
 
-- Default path works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
-- Live walk: in a workspace, connect a GitHub repo + branch (real POST →
-  Cosmos), confirm the GET returns the binding without any token, confirm the PAT
-  is stored only as a SHA-256 hash, then disconnect (DELETE). Confirm the
-  Git-sync MessageBar honestly states execution is deferred.
+## Bicep / env sync
 
-Grade: **B+** — binding lifecycle fully built on real Cosmos with hashed
-secrets; Git execution is the single honest deferred gate.
+`platform/fiab/bicep/modules/admin-plane/main.bicep`:
+- params `loomAdoHost`, `loomGitHubHost`, `loomGitPatKvPrefix`
+- env `LOOM_ADO_HOST`, `LOOM_GITHUB_HOST`, `LOOM_GIT_PAT_KV_PREFIX`
+- No new role assignment — Console UAMI already holds Key Vault Secrets Officer
+  on the admin-plane vault (`LOOM_KEY_VAULT_URI`).
+- No new Cosmos container — `workspace-git` (PK `/workspaceId`) already exists.
+
+## Verification (receipt)
+
+Connect a real ADO/GitHub repo → select a semantic model → Commit:
+
+```json
+{ "ok": true, "commitSha": "<sha>", "url": "https://github.com/<owner>/<repo>/commit/<sha>", "at": "<ISO>", "files": 2 }
+```
+
+`GET <url>` shows `…/model.bim` with the TMSL of the model. Then edit the file
+in the repo and click Update (pull):
+
+```json
+{ "ok": true, "headSha": "<sha>", "applied": 1, "diff": { "added": 0, "modified": 1, "removed": 0 } }
+```
+
+The Loom item's `state.content` now matches the repo (parsed back from TMSL).

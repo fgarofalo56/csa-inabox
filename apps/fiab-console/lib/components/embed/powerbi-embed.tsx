@@ -48,9 +48,27 @@ export interface PowerBIEmbedFrameProps {
    * `report.reload()` (refresh visuals), `report.switchMode(...)`.
    */
   onEmbedded?: (embed: any) => void;
+  /**
+   * Optional Power BI theme JSON applied at embed load time (parity with the
+   * Power BI service "View → Themes" picker). Runtime changes go through
+   * `report.applyTheme({ themeJson })` on the embed handle; this prop seeds the
+   * initial render so the report opens already themed.
+   */
+  theme?: object;
+  /**
+   * Optional pane-visibility overrides merged into the embed settings. Lets the
+   * caller surface the native Power BI bookmarks / selection (Selection) panes
+   * inside the iframe for one-for-one parity with the service viewer.
+   */
+  paneOverrides?: {
+    bookmarks?: { visible?: boolean; expanded?: boolean };
+    selection?: { visible?: boolean; expanded?: boolean };
+    visualizations?: { visible?: boolean; expanded?: boolean };
+    fields?: { visible?: boolean; expanded?: boolean };
+  };
 }
 
-export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit, onEmbedded }: PowerBIEmbedFrameProps) {
+export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit, onEmbedded, theme, paneOverrides }: PowerBIEmbedFrameProps) {
   const [models, setModels] = useState<any>(null);
   // Load `models` lazily client-side so we can map permissions/tokenType enums.
   useEffect(() => {
@@ -81,10 +99,15 @@ export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height
     permissions: edit ? models.Permissions.All : models.Permissions.Read,
     viewMode: edit && embedType === 'report' ? models.ViewMode.Edit : models.ViewMode.View,
     pageName,
+    ...(theme ? { theme: { themeJson: theme } } : {}),
     settings: {
       panes: {
         filters: { expanded: false, visible: true },
         pageNavigation: { visible: embedType === 'report' },
+        ...(paneOverrides?.bookmarks ? { bookmarks: paneOverrides.bookmarks } : {}),
+        ...(paneOverrides?.selection ? { selection: paneOverrides.selection } : {}),
+        ...(paneOverrides?.visualizations ? { visualizations: paneOverrides.visualizations } : {}),
+        ...(paneOverrides?.fields ? { fields: paneOverrides.fields } : {}),
       },
       bars: { statusBar: { visible: true } },
       background: models.BackgroundType.Transparent,

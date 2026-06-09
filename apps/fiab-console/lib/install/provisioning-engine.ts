@@ -50,8 +50,10 @@ import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
- * here are Cosmos-only (no Phase-2 backend side-effect). */
-const PROVISIONERS: Record<string, Provisioner> = {
+ * here are Cosmos-only (no Phase-2 backend side-effect). Exported so the
+ * deployment-pipeline selective-deploy route can re-run the same real
+ * provisioner per item when promoting content between stages. */
+export const PROVISIONERS: Record<string, Provisioner> = {
   'notebook': notebookProvisioner,
   'lakehouse': lakehouseProvisioner,
   'warehouse': warehouseProvisioner,
@@ -131,7 +133,11 @@ export function resolveTarget(mode: DeploymentMode, overrides?: Partial<Provisio
     dashboardBackend: (process.env.LOOM_DASHBOARD_BACKEND as ProvisionTarget['dashboardBackend']) || 'adx',
     mirrorBackend: (process.env.LOOM_MIRROR_BACKEND as ProvisionTarget['mirrorBackend']) || 'adf-cdc',
     lakehouseBackend: (process.env.LOOM_LAKEHOUSE_BACKEND as ProvisionTarget['lakehouseBackend']) || 'adls',
-    semanticBackend: (process.env.LOOM_SEMANTIC_BACKEND as ProvisionTarget['semanticBackend']) || 'loom-native',
+    // Semantic-model backend. LOOM_SEMANTIC_BACKEND is the explicit override;
+    // LOOM_BI_BACKEND (the BI-stack-wide selector set by admin-plane/main.bicep)
+    // is the fallback so flipping the whole BI stack to analysis-services also
+    // routes the semantic-model provisioner there. Defaults to loom-native.
+    semanticBackend: (process.env.LOOM_SEMANTIC_BACKEND || process.env.LOOM_BI_BACKEND) as ProvisionTarget['semanticBackend'] || 'loom-native',
     eventhubsNamespace: process.env.LOOM_EVENTHUB_NAMESPACE,
   };
   return { ...base, ...(overrides || {}) };

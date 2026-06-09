@@ -73,6 +73,30 @@ param embedModelSkuName string = 'Standard'
 @minValue(1)
 param embedModelCapacity int = 10
 
+// --- Inline-completion model deployment (optional) -------------------------
+// Ghost-text inline completion (POST /api/copilot/complete) can run on a
+// dedicated low-latency / cheaper model so it does not consume the chat
+// deployment's TPM quota. When completionDeploymentName is empty NO deployment
+// is created and the Console route falls back to the chat deployment
+// (LOOM_AOAI_DEPLOYMENT). Leave empty in boundaries where the model is not
+// available (e.g. some Azure Government regions) — ghost text still works via
+// the chat deployment fallback.
+@description('Inline-completion deployment name (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment. Set to a faster/cheaper model slot (e.g. gpt-4o-mini) to keep ghost-text latency low without consuming chat quota.')
+param completionDeploymentName string = ''
+
+@description('Completion model name (only used when completionDeploymentName is set).')
+param completionModelName string = 'gpt-4o-mini'
+
+@description('Completion model version.')
+param completionModelVersion string = '2024-07-18'
+
+@description('Completion deployment SKU.')
+param completionModelSkuName string = 'GlobalStandard'
+
+@description('Completion deployment capacity (thousands of TPM).')
+@minValue(1)
+param completionModelCapacity int = 10
+
 // --- RBAC -------------------------------------------------------------------
 @description('Console UAMI principal (object) id — granted Azure AI Developer + Cognitive Services User + Cognitive Services OpenAI User on this account. Empty skips the grants.')
 param consolePrincipalId string = ''
@@ -135,6 +159,15 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-previ
 // =====================================================================
 // Model deployments. Embedding depends on chat so the two serialize
 // (CognitiveServices rejects concurrent deployment writes on one account).
+//
+// The 'chat' deployment backs ALL Loom Copilot surfaces from one model:
+//   - the cross-item Copilot orchestrator (/api/copilot/orchestrate)
+//   - the Notebook chat drawer (/api/copilot/notebook-assist)
+//   - the per-cell in-cell Copilot (/api/notebook/[id]/assist) — /explain,
+//     /fix, /comments, /optimize, and free-form refactor. No extra deployment,
+//     env var, or RBAC is required for the in-cell surface beyond what this
+//     module already wires into admin-plane/main.bicep (LOOM_AOAI_ENDPOINT +
+//     LOOM_AOAI_DEPLOYMENT) and the role assignments granted below.
 // =====================================================================
 resource chatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: account
@@ -167,6 +200,28 @@ resource embedDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
       format: 'OpenAI'
       name: embedModelName
       version: embedModelVersion
+    }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
+  }
+}
+
+// Optional dedicated inline-completion (ghost text) deployment. Serializes
+// after embed so the three deployments do not write the account concurrently
+// (CognitiveServices rejects concurrent deployment writes on one account).
+resource completionDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (!empty(completionDeploymentName)) {
+  parent: account
+  name: !empty(completionDeploymentName) ? completionDeploymentName : 'placeholder-unused'
+  dependsOn: [ embedDeployment ]
+  sku: {
+    name: completionModelSkuName
+    capacity: completionModelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: completionModelName
+      version: completionModelVersion
     }
     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
     raiPolicyName: 'Microsoft.DefaultV2'
@@ -240,4 +295,6 @@ output projectNameOut string = project.name
 output chatDeployment string = chatDeployment.name
 @description('LOOM_AOAI_EMBED_DEPLOYMENT')
 output embedDeployment string = embedDeployment.name
+@description('LOOM_AOAI_COMPLETION_DEPLOYMENT — empty when no dedicated inline-completion slot is deployed; the Console route then falls back to the chat deployment for ghost text.')
+output completionDeployment string = !empty(completionDeploymentName) ? completionDeploymentName : ''
 output accountPrincipalId string = account.identity.principalId

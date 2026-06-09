@@ -20,7 +20,7 @@
  * Run compiles into an ADF WranglingDataFlow.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Body1, Body1Strong, Button, Input, Tab, TabList,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle, Badge,
@@ -81,9 +81,12 @@ export interface PowerQueryHostProps {
   /** Emit the next M script on any edit. */
   onChange: (nextM: string) => void;
   readOnly?: boolean;
+  /** Notified whenever the active query changes (so a docked Copilot pane can
+   *  target the same query the user is editing). Fires on mount + selection. */
+  onActiveQueryChange?: (name: string) => void;
 }
 
-export function PowerQueryHost({ mScript, onChange, readOnly = false }: PowerQueryHostProps) {
+export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQueryChange }: PowerQueryHostProps) {
   const s = useStyles();
   const queries = useMemo(() => parseSharedQueries(mScript), [mScript]);
   const [activeQuery, setActiveQuery] = useState<string>(queries[0]?.name || '');
@@ -93,6 +96,11 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false }: PowerQue
 
   const current = queries.find((q) => q.name === activeQuery) || queries[0];
   const parsed = useMemo(() => (current ? parseLetBody(current.body) : { steps: [], result: '' }), [current]);
+
+  // Report the resolved active query name up to a docked Copilot pane.
+  const currentName = current?.name || '';
+  useEffect(() => { onActiveQueryChange?.(currentName); }, [currentName, onActiveQueryChange]);
+
   const steps = parsed.steps;
   const safeStepIdx = Math.min(activeStepIdx, Math.max(0, steps.length - 1));
   const activeStep = steps[safeStepIdx];
