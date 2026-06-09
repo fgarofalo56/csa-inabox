@@ -10350,8 +10350,197 @@ function ReportLikeEditor({
   );
 }
 
+// ── Loom-native report renderer (Azure Analysis Services, default backend) ──
+//
+// no-fabric-dependency.md: the Report editor's DEFAULT path renders visuals by
+// querying the bound AAS tabular model with DAX (POST /query) — NO Power BI /
+// Fabric workspace required. Power BI embed is strictly opt-in via
+// NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (see ReportEditor below).
+type LoomVisualDef = { type: string; title?: string; field?: string; config?: any };
+type LoomReportPage = { name: string; displayName?: string; order?: number; visuals?: LoomVisualDef[] };
+type LoomReportDetail = {
+  report: { id: string; name: string; reportType?: string };
+  aasServer: string | null;
+  aasDatabase: string | null;
+  pages: LoomReportPage[];
+};
+type VisualState = { rows: Array<Record<string, unknown>>; loading: boolean; err: string | null };
+
+/** Render a single visual's AAS query result (card = big value, else table). */
+function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualState }) {
+  if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
+  if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
+  const rows = state.rows;
+  if (visual.type === 'card' && rows.length >= 1) {
+    const val = Object.values(rows[0])[0];
+    return (
+      <div>
+        <Caption1>{visual.title || '(untitled)'}</Caption1>
+        <div style={{ fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold }}>
+          {val == null ? '—' : String(val)}
+        </div>
+      </div>
+    );
+  }
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
+      {visual.type !== 'table' && visual.type !== 'card' && (
+        <MessageBar intent="info" style={{ margin: '4px 0' }}>
+          <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
+        </MessageBar>
+      )}
+      {rows.length === 0 ? <Caption1>No rows returned.</Caption1> : (
+        <Table size="small">
+          <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+          <TableBody>
+            {rows.slice(0, 100).map((row, ri) => (
+              <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{row[c] == null ? '—' : String(row[c])}</TableCell>)}</TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+/** Config-only visual preview shown when no AAS model is bound yet. */
+function LoomVisualDefinition({ visual }: { visual: LoomVisualDef }) {
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled visual)'}</strong></Caption1>
+      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        type: {visual.type} · field: {visual.field || '—'}
+      </Caption1>
+    </div>
+  );
+}
+
+function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [detail, setDetail] = useState<LoomReportDetail | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activePage, setActivePage] = useState(0);
+  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true); setDetailErr(null); setVisualRows({});
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.ok) {
+        setDetail({ report: j.report, aasServer: j.aasServer ?? null, aasDatabase: j.aasDatabase ?? null, pages: j.pages || [] });
+        setActivePage(0);
+      } else setDetailErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  const bound = !!(detail?.aasServer && detail?.aasDatabase);
+  const pages = useMemo(() => detail?.pages || [], [detail]);
+  const page = pages[activePage];
+
+  const runVisual = useCallback(async (key: string, visual: LoomVisualDef) => {
+    if (!visual.field) { setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: 'visual has no field binding' } })); return; }
+    setVisualRows((p) => ({ ...p, [key]: { rows: p[key]?.rows || [], loading: true, err: null } }));
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: { type: visual.type, field: visual.field } }),
+      });
+      const j = await r.json();
+      if (j.ok) setVisualRows((p) => ({ ...p, [key]: { rows: j.rows || [], loading: false, err: null } }));
+      else setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+    } catch (e: any) {
+      setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: e?.message || String(e) } }));
+    }
+  }, [id]);
+
+  // When the bound page changes, fire a DAX query per visual (real AAS rows).
+  useEffect(() => {
+    if (!bound || !page) return;
+    (page.visuals || []).forEach((v, i) => { runVisual(`${activePage}:${i}`, v); });
+  }, [bound, activePage, page, runVisual]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Refresh', onClick: loadDetail, title: 'reload the report definition and re-run all visual queries' },
+      ]},
+      { label: 'View', actions: pages.map((p, i) => ({
+        label: p.displayName || p.name, onClick: () => setActivePage(i), title: 'show this report page',
+      })) },
+    ]},
+  ], [loadDetail, pages]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Pages ({pages.length})</Subtitle2>
+          {pages.length === 0 && !loading && <Caption1>No pages defined.</Caption1>}
+          <Tree aria-label="Report pages">
+            {pages.map((p, i) => (
+              <TreeItem key={p.name || i} itemType="leaf" value={String(i)} onClick={() => setActivePage(i)}>
+                <TreeItemLayout>{activePage === i ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Report · Loom-native (Azure Analysis Services)</Badge>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadDetail}>Refresh</Button>
+          </div>
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {loading && <Spinner label="Loading report…" />}
+          {!bound && detail && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Bind an Azure Analysis Services model</MessageBarTitle>
+                This report renders visuals by querying a bound AAS tabular model with DAX — no Power BI workspace required.
+                Set <strong>state.aasServer</strong> (XMLA URI, e.g. <code>asazure://eastus2.asazure.windows.net/my-server</code>)
+                and <strong>state.aasDatabase</strong> on this item, or configure <strong>LOOM_AAS_SERVER</strong> + <strong>LOOM_AAS_DATABASE</strong>
+                {' '}(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detail && page && (
+            <div className={s.card}>
+              <Subtitle2 style={{ marginBottom: 8 }}>{page.displayName || page.name}</Subtitle2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+                {(page.visuals || []).map((v, i) => (
+                  <div key={i} className={s.card}>
+                    {bound
+                      ? <LoomVisual visual={v} state={visualRows[`${activePage}:${i}`]} />
+                      : <LoomVisualDefinition visual={v} />}
+                  </div>
+                ))}
+                {(page.visuals || []).length === 0 && <Caption1>This page has no visuals.</Caption1>}
+              </div>
+            </div>
+          )}
+          {detail && pages.length === 0 && !loading && <Caption1>This report has no pages defined.</Caption1>}
+        </div>
+      }
+    />
+  );
+}
+
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  // no-fabric-dependency.md: Loom-native AAS renderer is the DEFAULT. Power BI
+  // embed is opt-in only via NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi.
+  const biBackend = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase();
+  if (biBackend === 'powerbi') {
+    return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  }
+  return <LoomNativeReportEditor item={item} id={id} />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;

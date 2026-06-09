@@ -2,10 +2,50 @@
 
 Source UI: Power BI service report viewer — https://learn.microsoft.com/power-bi/consumer/end-user-reading-view ·
 REST: https://learn.microsoft.com/rest/api/power-bi/reports
-Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` → `ReportLikeEditor` (`ReportEditor`)
+Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` → `ReportEditor`
 Embed: `apps/fiab-console/lib/components/embed/powerbi-embed.tsx`
 
-## Power BI feature inventory
+## Backend selection (no-fabric-dependency.md)
+
+The Report editor has **two backends**, selected by `NEXT_PUBLIC_LOOM_BI_BACKEND`
+(server-side `LOOM_BI_BACKEND`):
+
+| Backend | Selector | Renderer | Dependency |
+|---|---|---|---|
+| **Loom-native (DEFAULT)** | unset / `''` | `LoomNativeReportEditor` — queries the bound Azure Analysis Services tabular model with DAX (`POST /api/items/report/[id]/query`) and renders rows | **NONE** — no Power BI / Fabric workspace. AAS only. |
+| Power BI (opt-in) | `powerbi` | `ReportLikeEditor` — live Power BI embed | Console UAMI registered in a Power BI workspace |
+
+The default path renders real rows from AAS with `LOOM_BI_BACKEND` **unset** and
+**no** Power BI / Fabric workspace bound. `api.powerbi.com` is never reached on
+the default path (grep gate clean).
+
+## Loom-native renderer feature coverage (DEFAULT path — AAS)
+
+| # | Capability | Status | Notes |
+|---|---|---|---|
+| 1 | Report definition load | built | `GET /api/items/report/[id]` → `{ report, aasServer, aasDatabase, pages }` from Cosmos state.content (no workspaceId needed) |
+| 2 | Page navigation | built | Pages panel (left tree) + Home → View ribbon page picker; `setActivePage(i)` |
+| 3 | Visual render (card) | built | `card` visual → single DAX `ROW("Value", <field>)` → big-number tile |
+| 4 | Visual render (table/chart) | built | `table`/`bar`/`line`/`pie` → DAX `TOPN(100, …)` → Fluent `Table`; chart types show an honest "renders as table; charting lib in follow-up" MessageBar |
+| 5 | Refresh | built | Home → Refresh re-loads the definition and re-runs every visual's DAX query |
+| 6 | Honest infra gate | built | When no AAS binding resolves, a `MessageBar intent="warning"` names `state.aasServer` + `state.aasDatabase` / `LOOM_AAS_SERVER` + `LOOM_AAS_DATABASE`; the full page/visual surface still renders (config-only preview) |
+
+### Backend per control (Loom-native)
+- Definition → `GET /api/items/report/[id]` → `loadModelItem` / `loadContentBackedItem` (Cosmos) + `reportPagesFromContent`.
+- Visual rows → `POST /api/items/report/[id]/query` → `executeAasQuery` (AAS data-plane `.../models/{db}/query`, DAX `EVALUATE`).
+- Auth → Console UAMI, AAD scope `https://*.asazure.windows.net` (literal `*`; gov: `asazure.usgovcloudapi.net`). UAMI must be an AAS **server admin**.
+
+### Honest gates (Loom-native)
+- No AAS binding → 412 `code:'unbound'` from the query route + warning MessageBar in the editor (the only non-functional state).
+- UAMI not a server admin → AAS 401/403 surfaces verbatim per visual.
+
+Grade: A — default path queries the real AAS data-plane with DAX; pure helpers
+(DAX synth, row-flatten, binding resolve) covered by `lib/azure/__tests__/aas-client.test.ts`
++ cloud split in `cloud-matrix.test.ts`.
+
+---
+
+## Power BI embed feature inventory (OPT-IN path — `LOOM_BI_BACKEND=powerbi`)
 
 | # | Capability | Where in Power BI |
 |---|---|---|
