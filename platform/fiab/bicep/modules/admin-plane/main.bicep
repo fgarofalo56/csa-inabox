@@ -1778,12 +1778,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           boundary == 'GCC-High' || boundary == 'IL5' ? [
             { name: 'LOOM_MIP_GRAPH_BASE', value: 'https://graph.microsoft.us' }
           ] : [],
-          // Custom domain-image gallery storage (optional, honest-gated). The
+          // Custom domain-image gallery storage (honest-gated). The
           // /admin/domains Image tab lists image blobs here; preset swatches +
-          // icons work regardless. No Fabric/OneLake dependency.
+          // icons work regardless. Precedence: an explicit operator param wins;
+          // otherwise fall back to the catalog module's auto-provisioned ADLS
+          // (DFS) container URL so the custom-image gallery is wired with NO
+          // manual step whenever Purview/catalog storage is deployed. Stays
+          // unset (honest "not configured" gate) only when neither is present.
+          // No Fabric/OneLake dependency.
           !empty(loomDomainImageStorage) ? [
             { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: loomDomainImageStorage }
-          ] : [],
+          ] : (!empty(catalog.outputs.domainImagesDfsContainerUrl) ? [
+            { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: catalog.outputs.domainImagesDfsContainerUrl }
+          ] : []),
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],

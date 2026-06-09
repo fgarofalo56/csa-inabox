@@ -55,7 +55,7 @@ sources are honest-gated; the full UI renders and saves without either.
 | General — domain admins edit description only (name disabled) | ✅ Built | PATCH role check (`isTenantAdmin`) |
 | Image tab — color swatches (16) | ✅ Built | `imageKey="color::#hex"` → PATCH |
 | Image tab — preset department icons (12) | ✅ Built | `imageKey="icon::<key>"` → PATCH |
-| Image tab — custom Blob/ADLS image gallery | ✅ Built (⚠️ honest gate) | `GET /api/admin/domains/images` (ADLS data plane); gate names `LOOM_DOMAIN_IMAGE_STORAGE` + Storage Blob Data Reader |
+| Image tab — custom Blob/ADLS image gallery | ✅ Built (⚠️ honest gate) | `GET /api/admin/domains/images` (ADLS data plane); auto-wired from `catalog.bicep` `domainImagesDfsContainerUrl` when Purview/catalog storage is deployed, else gate names `LOOM_DOMAIN_IMAGE_STORAGE` + Storage Blob Data Reader |
 | Admins tab — people picker (TagGroup + add) | ✅ Built | `PATCH → admins[]` |
 | Admins tab — Fabric-admin-only enforcement | ✅ Built | PATCH rejects name/admins from domain admins (403) |
 | Contributors tab — scope selector + specific users | ✅ Built | `PATCH → contributors.{scope,users}` |
@@ -64,11 +64,13 @@ sources are honest-gated; the full UI renders and saves without either.
 | Delegated — MIP not-configured gate | ✅ Honest gate | MessageBar → `LOOM_MIP_ENABLED` + Graph AppRole; Loom-native label fallback offered |
 | Delegated — Loom-native label fallback source | ✅ Built | `GET /api/admin/sensitivity-labels` (Cosmos) |
 | Delegated — certification (override / enable / URL / certifiers) | ✅ Built | `PATCH → delegatedSettings.certification*` |
-| New subdomain (general settings only, inherits parent admins) | ✅ Built | `POST` with `parentId`; pane hides non-general tabs |
+| New subdomain (general settings only, inherits parent admins) | ✅ Built | `POST` with `parentId`; pane hides non-general tabs; Purview mirror creates a **child collection** under the parent's collection |
 | Assign workspaces (multi-select) | ✅ Built | `POST /api/admin/domains/assign-workspaces` |
 | Assign workspaces — override warning when already assigned | ✅ Built | `overrideRequired` + `affected[]` → warn → re-POST `allowOverride` |
 | Domain roles (tenant admin vs domain admin) enforced | ✅ Built | `isTenantAdmin()` + `admins[]` membership in PATCH |
-| Purview business-domain / collection mirror on create | ✅ Built (existing) | `purview-client.ts` createBusinessDomain (honest-gated) |
+| Purview collection mirror on **create** | ✅ Built | `createBusinessDomain` (PUT `/collections/{ref}`); root or child collection per `parentId` (honest-gated) |
+| Purview collection mirror on **edit** (name/description) | ✅ Built | `updateBusinessDomain` (idempotent PUT `/collections/{ref}`, re-asserts parent) — fired by PATCH, best-effort |
+| Purview collection mirror on **delete** | ✅ Built | `deleteBusinessDomain` (DELETE `/collections/{ref}`), best-effort |
 | Read-only governance catalog view | ✅ Built | `/governance/domains` over `GET /api/admin/domains` |
 
 Zero ❌ rows. The two ⚠️ honest gates (custom Blob images, MIP labels) each
@@ -96,23 +98,35 @@ swatches/icons; Loom-native labels), per `no-vaporware.md` and
 
 | Cloud | Default label (MIP) | Image gallery | Cosmos store | Purview mirror |
 |---|---|---|---|---|
-| Commercial | Full when `LOOM_MIP_ENABLED=true` (graph.microsoft.com) | Presets always; blobs when `LOOM_DOMAIN_IMAGE_STORAGE` set | Always | Best-effort |
-| GCC | Same Graph endpoint as Commercial | Same | Always | Best-effort |
-| GCC-High | `LOOM_MIP_GRAPH_BASE=https://graph.microsoft.us` (wired in bicep for GCC-High/IL5) | Presets always; blobs require a GovCloud `*.dfs.core.usgovcloudapi.net` container | Always | Purview `.purview.azure.us` |
-| IL5 | graph.microsoft.us; labels need FedRAMP-approved policies in-tenant | Presets always; blob container must stay inside the IL5 boundary | Always | Purview `.purview.azure.us` |
+| Commercial | Full when `LOOM_MIP_ENABLED=true` (graph.microsoft.com) | Presets always; blobs auto-wired from catalog storage or `LOOM_DOMAIN_IMAGE_STORAGE` | Always | create/update/delete `.purview.azure.com/collections`; UAMI needs Collection Admin (best-effort) |
+| GCC | Same Graph endpoint as Commercial | Same | Always | Same `.purview.azure.com` host (best-effort) |
+| GCC-High | `LOOM_MIP_GRAPH_BASE=https://graph.microsoft.us` (wired in bicep for GCC-High/IL5) | Presets always; blobs use a GovCloud `*.dfs.core.usgovcloudapi.net` container (auto-wired) | Always | `.purview.azure.us/collections` (best-effort) |
+| IL5 | graph.microsoft.us; labels need FedRAMP-approved policies in-tenant | Presets always; blob container stays inside the IL5 boundary (`usgovcloudapi.net`) | Always | `.purview.azure.us/collections` (best-effort) |
 
 ## Bicep sync
 
 - New param `loomDomainImageStorage` (default `''`) +
   `LOOM_DOMAIN_IMAGE_STORAGE` env entry in
-  `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`. **Precedence:** the
+  operator param wins; otherwise it falls back to `catalog.bicep`'s
+  auto-provisioned ADLS (DFS) container URL (`domainImagesDfsContainerUrl`), so
+  the custom-image gallery is wired with no manual step whenever Purview/catalog
+  storage is deployed. Stays unset (honest gate) only when neither is present.
+- New `catalog.bicep` outputs: `domainImagesDfsContainerUrl` (the `.dfs.` host +
+  `domain-images` container the images route lists against) and
+  `consolePurviewCollectionAdminGrant` (post-deploy reminder).
+- **Purview Collection Admin** (data-plane metadata-policy role, NOT ARM RBAC) is
+  required on the root collection for the create/update/delete collection mirror.
+  Granted post-deploy by `csa-loom-post-deploy-bootstrap.yml`
+  (`ROLE=collection-administrator` in the grant loop) via
+  `scripts/csa-loom/grant-purview-datamap-role.sh`.
 - New `LOOM_MIP_GRAPH_BASE=https://graph.microsoft.us` env entry for
   `boundary == 'GCC-High' || 'IL5'` (already-supported override in
   `mip-graph-client.ts`).
-- No new Azure resources: domains use the existing `tenant-settings` Cosmos
-  container; workspaces use the existing `workspaces` container. The optional
-  custom-image storage account and its Storage Blob Data Reader grant are
-  operator-supplied and surfaced as an honest in-UI gate.
+- No new Azure resources beyond the existing `catalog.bicep` domain-image
+  Storage account + its Storage Blob Data Reader grant: domains use the existing
+  `tenant-settings` Cosmos container; workspaces use the existing `workspaces`
+  container.
 
 ## Verification
 
