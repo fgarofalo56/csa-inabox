@@ -57,6 +57,10 @@ import * as powerbi from './powerbi-client';
 import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
+// KQL Copilot tools (schema + execute — richer grounding than the bare adx_*
+// tools below). Safe despite the kql-tools → orchestrator import cycle:
+// LoomToolRegistry is only referenced at call time inside buildKqlToolRegistry.
+import { buildKqlToolRegistry } from '@/lib/copilot/kql-tools';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 import type { AuditReport } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
@@ -510,6 +514,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     parameters: obj({ database: S_STRING }, ['database']),
     handler: async ({ database }) => kusto.listTables(database),
   });
+
+  // -------- KQL Copilot tools (kql_get_schema + kql_execute grounding) --------
+  // Register the four kql_* tools so the cross-item Copilot can call
+  // kql_get_schema then kql_execute without the user leaving the chat. These
+  // sit alongside the legacy adx_* tools (kept for backward compat with
+  // sessions that reference them by name).
+  for (const t of buildKqlToolRegistry().list()) r.register(t);
 
   // -------- ADF --------
   r.register({
