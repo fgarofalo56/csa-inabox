@@ -391,8 +391,8 @@ param aasSkuName string = 'D1'
 @description('AAS server administrator identifiers (UPNs / `app:<clientId>@<tenantId>` SPNs). The Console UAMI must be included so its MI can call the XMLA write / refresh REST APIs. Empty = the editor honestly gates the live-engine write; the Loom-native Cosmos path still works.')
 param aasServerAdminMembers array = []
 
-module aas 'aas.bicep' = if (enableAas) {
-  name: 'dlz-aas'
+module aasRlsOls 'aas.bicep' = if (enableAas) {
+  name: 'dlz-aas-rls-ols'
   params: {
     name: toLower(take('aas${domainName}${uniqueString(resourceGroup().id)}', 63))
     location: location

@@ -80,7 +80,7 @@ param aasSku string = ''
 @description('AAS server administrator identifiers — UPNs and/or service principals (`app:<clientId>@<tenantId>`). The Loom Console UAMI must be included so its MI can invoke the XMLA write / async-refresh REST APIs. AAS admin is a server property, not an Azure RBAC role. Empty (and no consoleUamiAppId) = the editor honestly gates the live-engine write; the Loom-native Cosmos path still works.')
 param serverAdminMembers array = []
 
-@description('Loom Console UAMI application/client id. When non-empty, stamped into asAdministrators as `app:<consoleUamiAppId>@${subscription().tenantId}` and merged with serverAdminMembers.')
+@description('Loom Console UAMI application/client id. When non-empty, stamped into asAdministrators as `app:<consoleUamiAppId>@<tenantId>` (tenant id resolved at deploy time) and merged with serverAdminMembers.')
 param consoleUamiAppId string = ''
 
 // ---- Role grant (datamart-migration caller) --------------------------------
