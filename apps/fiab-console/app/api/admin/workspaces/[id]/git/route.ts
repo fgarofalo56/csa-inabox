@@ -13,7 +13,7 @@
  *
  * NOTE on the path: this lives under '/api/admin/.../git/*'. Front Door's default
  * OWASP ruleset 403s the 'git' path segment, so front-door.bicep adds a narrow
- * custom Allow rule scoped to '/api/admin/workspaces/**/git'.
+ * custom Allow rule scoped to the git subpath under /api/admin/workspaces.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
