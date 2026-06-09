@@ -24,7 +24,13 @@ import {
   ArrowSync20Regular, Play20Regular, Copy16Regular, Key20Regular,
   PeopleTeam20Regular, CloudArrowUp20Regular, Clock20Regular, DataTrending20Regular,
 } from '@fluentui/react-icons';
-import { MERGE_SCHEDULE_OPTIONS, type MergeSchedule } from '@/lib/azure/mirror-engine';
+import type { MergeSchedule } from '@/lib/azure/mirror-engine';
+
+// Fixed allowlist (no free-form config). Mirrors the canonical
+// MERGE_SCHEDULE_OPTIONS in mirror-engine.ts but is declared locally so this
+// client component never imports the server-only engine module (which pulls in
+// pg/mssql Node built-ins that cannot be bundled for the browser).
+const MERGE_SCHEDULE_OPTIONS: readonly MergeSchedule[] = ['on-demand', '15min', '1h', '4h', 'daily'];
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM },
