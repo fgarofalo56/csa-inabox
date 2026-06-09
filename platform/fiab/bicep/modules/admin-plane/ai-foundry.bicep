@@ -261,6 +261,10 @@ resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
 // AI Functions surface (sentiment/classify/translate/summarize/extract) needs
 // to call the gpt-4o deployment. Granted explicitly (least-privilege) alongside
 // Contributor, which the model-deploy/quota flows use.
+// Also enables: Copilot chat, help-agent, the data-agent test chat, and the
+// data-agent Config Copilot persona (agent-config-copilot — example-query +
+// field-description generation grounded on a source's real schema). No new role
+// or resource is required for the Config Copilot; it reuses this AOAI grant.
 resource aiServicesOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: aiServices
   name: guid(aiServices.id, consolePrincipalId, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
