@@ -518,7 +518,24 @@ export const semanticModelProvisioner: Provisioner = async (input): Promise<Prov
   // Azure-native DEFAULT: Loom-native tabular model over the warehouse.
   if (backend === 'loom-native' || backend === 'analysis-services') {
     if (backend === 'analysis-services') {
-      steps.push('analysis-services backend not yet wired — using the Loom-native tabular model (equivalent, no extra infra).');
+      // The model is always materialized as a Loom-native tabular layer over the
+      // warehouse/lakehouse (live SQL — the data path). When an Azure Analysis
+      // Services server is deployed (aas.bicep → LOOM_AAS_XMLA_ENDPOINT), the
+      // Direct Lake shim (apps/fiab-direct-lake-shim) keeps that server's import
+      // partitions fresh on each Delta commit. Disclose the actual target so the
+      // receipt is honest rather than a silent fallback.
+      const aasServer = process.env.LOOM_AAS_SERVER_NAME;
+      const aasXmla = process.env.LOOM_AAS_XMLA_ENDPOINT;
+      if (aasServer && aasXmla) {
+        steps.push(`analysis-services backend: model materialized on the Loom-native tabular layer; Azure Analysis Services server "${aasServer}" (${aasXmla}) is wired for Direct Lake refresh via the shim.`);
+        // DirectQueryFallback tables read from the Synapse SQL pool via the DQ
+        // source connection string (LOOM_DQ_SOURCE_CONNECTION_STRING, secretRef).
+        steps.push(process.env.LOOM_DQ_SOURCE_CONNECTION_STRING
+          ? 'DirectQuery datasource configured for DirectQueryFallback tables.'
+          : 'DirectQuery datasource not configured (LOOM_DQ_SOURCE_CONNECTION_STRING unset) — import/Direct Lake tables only.');
+      } else {
+        steps.push('analysis-services backend selected but no AAS server is deployed (LOOM_AAS_XMLA_ENDPOINT unset) — using the equivalent Loom-native tabular model. Set aasEnabled=true (aas.bicep) to add Direct Lake refresh.');
+      }
     }
     steps.push('Provisioning semantic model on the Azure-native Loom-native backend.');
     return provisionLoomNative(input, steps);
