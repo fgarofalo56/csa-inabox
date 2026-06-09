@@ -870,28 +870,6 @@ export function aasServerBase(server: string): string {
 // Reference: https://learn.microsoft.com/azure/analysis-services/analysis-services-connect
 
 /**
- * OAuth 2.0 `.default` scope for an Azure Analysis Services XMLA token, derived
- * from the AAS server URI in `LOOM_AAS_SERVER` (so the audience matches the
- * specific server's regional host, e.g. `https://eastus.asazure.windows.net/.default`).
- * Throws in Gov clouds (AAS unavailable) and when the server URI cannot be parsed.
- *
- * `LOOM_AAS_SERVER` accepts either form:
- *   - AAS server URI:  asazure://eastus.asazure.windows.net/myserver
- *   - HTTPS XMLA URL:  https://eastus.asazure.windows.net/servers/myserver/models/m/xmla
- */
-export function aasScope(server: string): string {
-  if (isGovCloud()) {
-    throw new Error(
-      'Azure Analysis Services is not available in Azure Government clouds (GCC-High / IL5 / DoD). ' +
-        'Use LOOM_SEMANTIC_BACKEND=loom-native (the default).',
-    );
-  }
-  const m = /asazure:\/\/([^/]+)\//.exec(server) || /https:\/\/([^/]+)\//.exec(server);
-  if (!m) throw new Error(`Cannot parse AAS server URI "${server}" — expected asazure://<region>.asazure.windows.net/<server>.`);
-  return `https://${m[1]}/.default`;
-}
-
-/**
  * Construct the AAS XMLA POST endpoint URL from `LOOM_AAS_SERVER`.
  *   - `https://…` form: returned as-is (with `/xmla` appended if absent).
  *   - `asazure://<host>/<server>` form: expanded to
