@@ -1955,6 +1955,9 @@ export function NotebookEditor({ item, id }: Props) {
           activeCellId={activeCellId}
           attachedSources={attachedSources}
           defaultLang={defaultLang}
+          notebookName={(notebooks || []).find((n) => n.id === notebookId)?.displayName || notebookId}
+          sessionReceipt={sessionReceipt}
+          sessionConfig={sessionCfg}
           onApplyCells={applyCells}
         />
         </div>

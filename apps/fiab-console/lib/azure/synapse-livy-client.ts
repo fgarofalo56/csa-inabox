@@ -54,12 +54,13 @@ function ws(): string {
 }
 
 function devBase(): string {
-  // Sovereign-cloud aware (matches synapse-dev-client.devBase): prefer the
-  // explicit LOOM_SYNAPSE_DEV_SUFFIX (e.g. `azuresynapse.us` for GCC-High /
-  // DoD IL5), otherwise the public `azuresynapse.net` host. Without this the
-  // Livy data-plane calls hit the wrong host in Gov and fail silently.
+  // Sovereign-cloud aware (parity with synapse-dev-client.ts::devBase). Prefer
+  // the explicit LOOM_SYNAPSE_DEV_SUFFIX (e.g. `azuresynapse.us` for GCC-High /
+  // DoD) so Livy calls hit the right dev endpoint; default to the Commercial
+  // host. Without this the perf/telemetry reads 404 in Gov and the persona
+  // silently falls back (best-effort), but parity demands the real endpoint.
   const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX;
-  if (suffix) return `https://${ws()}.dev.${suffix}`;
+  if (suffix) return `https://${ws()}.dev.${suffix.replace(/^\.+|\/+$/g, '')}`;
   return `https://${ws()}.dev.azuresynapse.net`;
 }
 
@@ -280,6 +281,43 @@ export async function getLastLivyError(
   const norm = normalizeLivyOutput(last.output);
   if (!norm || norm.status !== 'error') return null;
   return { ename: norm.ename, evalue: norm.evalue, traceback: norm.traceback };
+}
+
+/**
+ * Fetch the last N statements of a live Livy session for the Notebook Copilot
+ * /perf context. The persona embeds the normalized `textPlain` of these (which
+ * carries Synapse's stage/row-count progress text + any skew warnings) into the
+ * chat so the model can reason over REAL last-run telemetry rather than guess.
+ *
+ * Best-effort: returns [] (never throws to the caller) when the session has no
+ * statements yet or the API is unreachable — the rest of the persona works
+ * without telemetry. The default Spark-pool resolver mirrors mirror-engine.ts.
+ */
+export function defaultSparkPool(): string {
+  return (
+    process.env.LOOM_SYNAPSE_SPARK_POOL ||
+    process.env.LOOM_SPARK_POOL ||
+    process.env.LOOM_DEFAULT_SPARK_POOL ||
+    'loompool'
+  );
+}
+
+export async function getRecentStatements(
+  poolName: string,
+  sessionId: number,
+  limit = 5,
+): Promise<LivyStatement[]> {
+  try {
+    const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements`);
+    const j = await jsonOrThrow<{ total_statements?: number; statements?: LivyStatement[] }>(
+      r,
+      `getRecentStatements(${poolName}/${sessionId})`,
+    );
+    const stmts = Array.isArray(j.statements) ? j.statements : [];
+    return stmts.slice(-Math.max(1, limit));
+  } catch {
+    return [];
+  }
 }
 
 // ============================================================

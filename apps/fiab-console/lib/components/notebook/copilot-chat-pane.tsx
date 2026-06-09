@@ -53,6 +53,12 @@ export interface CopilotChatPaneProps {
   activeCellId: string | null;
   attachedSources: AttachedSource[];
   defaultLang: NotebookCellLang;
+  /** Notebook display name — grounds the persona system prompt. */
+  notebookName?: string;
+  /** Livy session-create receipt (id, numExecutors, …) — for /perf telemetry. */
+  sessionReceipt?: Record<string, unknown> | null;
+  /** User session sizing (numExecutors, executorMemoryGb, timeoutMinutes) — for /perf. */
+  sessionConfig?: Record<string, unknown>;
   /** Apply parsed code blocks back into the notebook, starting at the active
    *  cell and walking backwards for multi-block answers. */
   onApplyCells?: (updated: { source: string }[]) => void;
@@ -63,7 +69,15 @@ const SLASH_COMMANDS: { cmd: string; label: string; help: string }[] = [
   { cmd: '/explain', label: '/explain', help: 'Explain what the current cell does' },
   { cmd: '/comments', label: '/comments', help: 'Add inline comments to the current cell' },
   { cmd: '/optimize', label: '/optimize', help: 'Rewrite the current cell for performance' },
+  { cmd: '/summarize', label: '/summarize', help: 'Summarize this notebook — every cell' },
+  { cmd: '/generate', label: '/generate', help: '/generate <task> — runnable PySpark on the real schema' },
+  { cmd: '/refactor', label: '/refactor', help: 'Refactor across cells — apply via diff' },
+  { cmd: '/profile', label: '/profile', help: '/profile <table> — real lakehouse table stats' },
+  { cmd: '/perf', label: '/perf', help: 'Tuning insights from the last run' },
 ];
+
+/** The full slash-command allowlist (mirrors copilot-personas NOTEBOOK_SLASH_COMMANDS). */
+const KNOWN_COMMANDS = ['fix', 'explain', 'comments', 'optimize', 'summarize', 'generate', 'refactor', 'profile', 'perf'];
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -153,7 +167,8 @@ function segments(text: string): { type: 'text' | 'code'; value: string }[] {
 }
 
 export function CopilotChatPane({
-  open, onOpenChange, notebookId, workspaceId, cells, activeCellId, attachedSources, defaultLang, onApplyCells,
+  open, onOpenChange, notebookId, workspaceId, cells, activeCellId, attachedSources, defaultLang,
+  notebookName, sessionReceipt, sessionConfig, onApplyCells,
 }: CopilotChatPaneProps) {
   const s = useStyles();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -226,13 +241,16 @@ export function CopilotChatPane({
       const text = rawText.trim();
       if (!text || streaming) return;
 
-      // Parse a leading slash command into {command, errorText}.
+      // Parse a leading slash command into {command, freeText}.
       const m = text.match(/^\/(\w+)\b\s*(.*)$/s);
       const command = m ? m[1].toLowerCase() : 'explain';
-      const known = ['fix', 'explain', 'comments', 'optimize'];
-      const cmd = known.includes(command) ? command : 'explain';
+      const cmd = KNOWN_COMMANDS.includes(command) ? command : 'explain';
+      const freeText = (m?.[2] || '').trim();
 
-      const ctx = contextCells();
+      // For persona commands we send the WHOLE notebook (summarize/refactor need
+      // every cell); single-cell commands send the current cell + prior 5.
+      const personaCmd = ['summarize', 'generate', 'refactor', 'profile', 'perf'].includes(cmd);
+      const ctx = personaCmd ? cells : contextCells();
       if (ctx.length === 0) {
         setError('Add a cell to the notebook before asking Copilot.');
         return;
@@ -245,7 +263,17 @@ export function CopilotChatPane({
             ? [activeCell.output.ename, activeCell.output.evalue, ...(activeCell.output.traceback || [])]
                 .filter(Boolean)
                 .join('\n')
-            : (m?.[2] || '')
+            : freeText
+          : '';
+
+      // `/profile <table>` — the first token after the command is the table name.
+      const profileTable = cmd === 'profile' ? freeText.split(/\s+/)[0] || '' : '';
+      // `/perf` — attach the most recent cell output text as last-run telemetry.
+      const lastOutput =
+        cmd === 'perf'
+          ? (activeCell.output?.textPlain ||
+              [...cells].reverse().find((c) => c.output?.textPlain)?.output?.textPlain ||
+              '')
           : '';
 
       setError(null);
@@ -269,9 +297,15 @@ export function CopilotChatPane({
             activeCellId: active,
             lang: activeCell.lang || defaultLang,
             errorText,
+            text: freeText,
             attachedSources,
             notebookId,
             workspaceId,
+            notebookName,
+            sessionReceipt: sessionReceipt || undefined,
+            sessionConfig,
+            lastOutput,
+            profileTable,
           }),
           signal: ac.signal,
         });
@@ -337,7 +371,8 @@ export function CopilotChatPane({
         abortRef.current = null;
       }
     },
-    [streaming, contextCells, activeCellId, defaultLang, attachedSources, notebookId, workspaceId],
+    [streaming, contextCells, cells, activeCellId, defaultLang, attachedSources, notebookId, workspaceId,
+     notebookName, sessionReceipt, sessionConfig],
   );
 
   const onKeyDown = useCallback(
@@ -425,8 +460,9 @@ export function CopilotChatPane({
           <div className={s.history}>
             {messages.length === 0 && !streaming && (
               <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
-                Ask about the current cell, or use a slash command: <code>/fix</code>, <code>/explain</code>,{' '}
-                <code>/comments</code>, <code>/optimize</code>.
+                Ask about a cell, or run a slash command: <code>/summarize</code>, <code>/generate</code>,{' '}
+                <code>/refactor</code>, <code>/profile</code>, <code>/perf</code>, <code>/fix</code>,{' '}
+                <code>/explain</code>, <code>/comments</code>, <code>/optimize</code>.
               </Body1>
             )}
 
@@ -507,7 +543,7 @@ export function CopilotChatPane({
               value={input}
               onChange={(_, d) => { setInput(d.value); setSlashIdx(0); }}
               onKeyDown={onKeyDown}
-              placeholder="/fix · /explain · /comments · /optimize — or ask anything"
+              placeholder="/summarize · /generate · /profile · /perf · /refactor — or ask anything"
               disabled={streaming}
               contentAfter={
                 streaming ? (
