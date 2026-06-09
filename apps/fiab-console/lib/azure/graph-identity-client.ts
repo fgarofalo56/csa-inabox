@@ -451,6 +451,125 @@ export async function getGroupsByIds(ids: string[]): Promise<IdentityHit[]> {
   return out;
 }
 
+// ----------------------------------------------------------------------------
+// Users + licenses (F17 — Users & licenses admin surface)
+// ----------------------------------------------------------------------------
+//
+// These two functions back the /admin/users grid + license roll-up. Unlike the
+// identity-picker search functions above (gated on LOOM_IDENTITY_PICKER_ENABLED),
+// they are gated on LOOM_GRAPH_USERS_ENABLED — the same flag the existing
+// /api/admin/users enrichment uses — so the admin page lights up license data
+// the moment Directory.Read.All + User.Read.All land on the Console UAMI, with
+// no separate identity-picker opt-in. Both swallow errors and return empty
+// results when Graph is not configured / not reachable, so the Cosmos-primary
+// path in the route always still renders.
+
+export interface GraphUserWithLicenses {
+  id: string;
+  userPrincipalName: string;
+  displayName?: string;
+  department?: string;
+  accountEnabled?: boolean;
+  /** Raw assignedLicenses from Graph — each skuId joins to subscribedSkus.skuId. */
+  assignedLicenses: Array<{ skuId: string; disabledPlans: string[] }>;
+}
+
+export interface TenantSubscribedSku {
+  skuId: string;
+  skuPartNumber: string;
+  consumedUnits: number;
+  prepaidUnits: { enabled: number; suspended: number; warning: number };
+  /** 'Enabled' | 'LockedOut' | 'Warning' | 'Suspended' | 'Deleted' | … */
+  capabilityStatus: string;
+}
+
+/**
+ * Fetch all tenant subscribed SKUs (license plans) — one call per page load.
+ *
+ * Backing call:
+ *   GET /v1.0/subscribedSkus
+ *     ?$select=skuId,skuPartNumber,consumedUnits,prepaidUnits,capabilityStatus
+ * Permission: Directory.Read.All (already granted by grant-uami-graph-roles.sh;
+ *   LicenseAssignment.Read.All is the least-privileged alternative — Directory
+ *   .Read.All is a superset that also covers this read).
+ * Available in: Commercial, GCC, GCC-High (L4), DoD (L5) — all national clouds.
+ * Gated: LOOM_GRAPH_USERS_ENABLED=true (NOT LOOM_IDENTITY_PICKER_ENABLED).
+ * Returns [] and swallows errors when Graph is not configured / not reachable.
+ */
+export async function fetchSubscribedSkus(): Promise<TenantSubscribedSku[]> {
+  if (process.env.LOOM_GRAPH_USERS_ENABLED !== 'true') return [];
+  try {
+    const endpoint =
+      '/subscribedSkus?$select=skuId,skuPartNumber,consumedUnits,prepaidUnits,capabilityStatus';
+    const res = await graphFetch(endpoint);
+    const j = await readJson<{ value?: any[] }>(res, endpoint);
+    return (j?.value || []).map((sku): TenantSubscribedSku => ({
+      skuId: sku.skuId,
+      skuPartNumber: sku.skuPartNumber,
+      consumedUnits: sku.consumedUnits ?? 0,
+      prepaidUnits: {
+        enabled: sku.prepaidUnits?.enabled ?? 0,
+        suspended: sku.prepaidUnits?.suspended ?? 0,
+        warning: sku.prepaidUnits?.warning ?? 0,
+      },
+      capabilityStatus: sku.capabilityStatus ?? 'Unknown',
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Batch-fetch Entra user records for a given list of UPNs, including
+ * assignedLicenses, accountEnabled, and the objectId needed for M365 admin
+ * deep-links and workspace-roles joins.
+ *
+ * Uses 15-UPN-per-filter chunking (Graph $filter OR-chain limit). Returns a Map
+ * keyed by lowercase UPN.
+ *
+ * Backing call:
+ *   GET /v1.0/users
+ *     ?$select=id,userPrincipalName,displayName,department,accountEnabled,assignedLicenses
+ *     &$filter=userPrincipalName eq '…' or …&$count=true
+ * Permission: User.Read.All (already granted).
+ * ConsistencyLevel: eventual — sent by graphFetch on every call (required for
+ *   $count=true + $filter on directory properties).
+ * Gated: LOOM_GRAPH_USERS_ENABLED=true.
+ */
+export async function listUsersWithLicenses(
+  upns: string[],
+): Promise<Map<string, GraphUserWithLicenses>> {
+  const out = new Map<string, GraphUserWithLicenses>();
+  if (!upns.length || process.env.LOOM_GRAPH_USERS_ENABLED !== 'true') return out;
+  try {
+    for (let i = 0; i < upns.length; i += 15) {
+      const slice = upns.slice(i, i + 15);
+      const filter = slice
+        .map((u) => `userPrincipalName eq '${u.replace(/'/g, "''")}'`)
+        .join(' or ');
+      const endpoint =
+        `/users?$select=id,userPrincipalName,displayName,department,accountEnabled,assignedLicenses` +
+        `&$filter=${encodeURIComponent(filter)}&$count=true`;
+      const res = await graphFetch(endpoint);
+      const j = await readJson<{ value?: any[] }>(res, endpoint);
+      for (const u of j?.value || []) {
+        if (!u.userPrincipalName) continue;
+        out.set(u.userPrincipalName.toLowerCase(), {
+          id: u.id,
+          userPrincipalName: u.userPrincipalName,
+          displayName: u.displayName,
+          department: u.department,
+          accountEnabled: u.accountEnabled,
+          assignedLicenses: u.assignedLicenses || [],
+        });
+      }
+    }
+  } catch {
+    /* Graph optional — return whatever accumulated */
+  }
+  return out;
+}
+
 // Test-only: expose internal helpers for unit tests.
 export const __testing = {
   notConfiguredHint,
