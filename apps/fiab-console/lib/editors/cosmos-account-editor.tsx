@@ -37,6 +37,7 @@ import {
   Search16Regular, Code16Regular, MathFormula20Regular, Flow20Regular,
   Organization20Regular,
   Table20Regular,
+  DataHistogram20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -48,6 +49,7 @@ import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
+import { CosmosMetrics } from './components/cosmos-metrics';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -100,6 +102,7 @@ function tabIcon(kind: CosmosAction) {
     case 'home': return <Home16Regular />;
     case 'items': return <DocumentBulletList16Regular />;
     case 'settings': return <Settings20Regular />;
+    case 'metrics': return <DataHistogram20Regular />;
     case 'newSqlQuery': return <Search16Regular />;
     case 'graph': return <Organization20Regular />;
     case 'storedProcedure':
@@ -160,6 +163,14 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
         defaultTtl: sel.defaultTtl, throughput: sel.throughput,
       };
+    } else if (a === 'metrics') {
+      // Container-scoped (or account-level) Azure Monitor RU/storage/429 charts.
+      const scope = sel.container ? `${sel.db}|${sel.container}` : (sel.db || 'account');
+      tab = {
+        key: `metrics:${scope}`, kind: 'metrics',
+        title: sel.container ? `${sel.container} · Metrics` : 'Metrics', closable: true,
+        db: sel.db, container: sel.container,
+      };
     } else if (a === 'newSqlQuery') {
       // A standalone query tab against a chosen db/container (or db only).
       const n = Date.now().toString(36);
@@ -214,6 +225,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'New Container', icon: <Table20Regular />, onClick: () => { void openContainerWizard(); } },
         { label: 'New SQL Query', icon: <Search16Regular />, onClick: () => openTab({ action: 'newSqlQuery' }) },
         { label: 'Graph explorer', icon: <Organization20Regular />, onClick: () => openTab({ action: 'graph' }) },
+        { label: 'Metrics', icon: <DataHistogram20Regular />, onClick: () => openTab({ action: 'metrics' }) },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refresh },
       ]},
     ]},
@@ -315,6 +327,15 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
 
             {active.kind === 'settings' && !active.container && (
               <CosmosConnectPanel id={id} />
+            )}
+
+            {active.kind === 'metrics' && (
+              <CosmosMetrics
+                key={active.key}
+                id={id}
+                db={active.db}
+                container={active.container}
+              />
             )}
 
             {(active.kind === 'storedProcedure' || active.kind === 'newStoredProcedure'

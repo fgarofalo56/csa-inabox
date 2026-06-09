@@ -309,6 +309,15 @@ export interface FetchMetricsOpts {
   interval?: string;
   /** Average | Total | Count | Minimum | Maximum. Defaults to Average. */
   aggregation?: string;
+  /**
+   * OData $filter for metric-dimension scoping, e.g.
+   *   "DatabaseName eq 'db1' and CollectionName eq 'c1'"
+   * Used by the Cosmos metrics surface to scope TotalRequestUnits / DataUsage /
+   * TotalRequests to one database/container, and to isolate StatusCode '429'.
+   * When the response splits into multiple dimensioned timeseries we sum them
+   * per timestamp so the chart still gets one series per metric.
+   */
+  filter?: string;
 }
 
 /**
@@ -333,19 +342,35 @@ export async function fetchMetrics(opts: FetchMetricsOpts): Promise<MetricResult
     timespan,
     interval,
   });
-  const j = await armGet(`${opts.resourceId}/providers/microsoft.insights/metrics?${qs.toString()}`);
+  const base = `${opts.resourceId}/providers/microsoft.insights/metrics?${qs.toString()}`;
+  // Dimension scoping (e.g. one Cosmos database/container, or StatusCode '429').
+  const url = opts.filter ? `${base}&$filter=${encodeURIComponent(opts.filter)}` : base;
+  const j = await armGet(url);
   const results: MetricResult[] = [];
+  const aggKey = aggregation.toLowerCase();
   for (const m of j?.value || []) {
-    const series = m?.timeseries?.[0]?.data || [];
-    const aggKey = aggregation.toLowerCase();
+    const seriesList: any[] = m?.timeseries || [];
+    // A dimension filter can split the metric into several timeseries (one per
+    // dimension combination). Merge them by summing each timestamp's value so
+    // the chart gets a single series per metric regardless of dimensions.
+    const merged = new Map<string, number | null>();
+    const order: string[] = [];
+    for (const ts of seriesList) {
+      for (const d of ts?.data || []) {
+        const t = d.timeStamp as string;
+        const v = typeof d[aggKey] === 'number' ? (d[aggKey] as number) : null;
+        if (!merged.has(t)) { merged.set(t, v); order.push(t); }
+        else if (v != null) {
+          const prev = merged.get(t);
+          merged.set(t, (prev == null ? 0 : prev) + v);
+        }
+      }
+    }
     results.push({
       name: m?.name?.value || m?.name || '',
       unit: m?.unit || '',
       aggregation,
-      points: series.map((d: any) => ({
-        timeStamp: d.timeStamp,
-        value: typeof d[aggKey] === 'number' ? d[aggKey] : null,
-      })),
+      points: order.map((t) => ({ timeStamp: t, value: merged.get(t) ?? null })),
     });
   }
   return results;
@@ -670,9 +695,11 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
     { metric: 'Replicas', aggregation: 'Maximum', label: 'Replicas' },
   ],
   'microsoft.documentdb/databaseaccounts': [
-    { metric: 'TotalRequestUnits', aggregation: 'Total', label: 'Request Units' },
+    { metric: 'TotalRequestUnits', aggregation: 'Total', label: 'Request Units consumed' },
+    { metric: 'ProvisionedThroughput', aggregation: 'Maximum', label: 'Provisioned throughput (RU/s)' },
+    { metric: 'DataUsage', aggregation: 'Total', label: 'Data storage (bytes)' },
     { metric: 'TotalRequests', aggregation: 'Count', label: 'Requests' },
-    { metric: 'ServerSideLatency', aggregation: 'Average', label: 'Server latency (ms)' },
+    { metric: 'ServerSideLatencyDirect', aggregation: 'Average', label: 'Server latency direct (ms)' },
   ],
   'microsoft.search/searchservices': [
     { metric: 'SearchLatency', aggregation: 'Average', label: 'Search latency (s)' },
