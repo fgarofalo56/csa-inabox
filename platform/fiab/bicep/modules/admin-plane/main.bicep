@@ -569,6 +569,9 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations surface renders but shows an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -1450,6 +1453,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           loomPowerBiAdminLabels ? [
             { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
+          ] : [],
+          // XMLA endpoint for semantic-model authoring that needs the XMLA write
+          // surface (Automatic aggregations). Azure-native default = Azure
+          // Analysis Services; Premium/Fabric XMLA is opt-in by URL. Empty →
+          // the Aggregations tab renders but honest-gates (no Fabric dependency).
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
           // Identity Picker (Entra user/group/SPN search + transitive nested
           // groups) — gated on the Console UAMI's Graph User.Read.All +
