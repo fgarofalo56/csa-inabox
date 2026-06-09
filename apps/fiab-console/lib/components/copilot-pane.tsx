@@ -14,13 +14,45 @@ import {
   makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
 } from '@fluentui/react-components';
 import { Send24Regular, Sparkle24Regular, Dismiss20Regular } from '@fluentui/react-icons';
+import { LoomDataTable, type LoomColumn } from './ui/loom-data-table';
+
+/**
+ * Render a tabular_* tool result ({ columns, rows }) as a real LoomDataTable
+ * (T7) so a notebook / DAX Copilot answer shows the model's measures, tables,
+ * or DAX values as a sortable/filterable grid — not a raw JSON blob.
+ */
+function TabularResult({ result }: { result: unknown }): JSX.Element | null {
+  const r = result as { columns?: unknown; rows?: unknown } | null;
+  const columns = Array.isArray(r?.columns) ? (r!.columns as string[]) : null;
+  const rawRows = Array.isArray(r?.rows) ? (r!.rows as Record<string, unknown>[]) : null;
+  if (!columns || !rawRows || columns.length === 0) return null;
+  // Inject a stable per-row id (results can contain duplicate rows).
+  const rows = rawRows.map((row, i) => ({ ...row, __rid: String(i) }));
+  const cols: LoomColumn<Record<string, unknown>>[] = columns.map((c) => ({
+    key: c,
+    label: c,
+    render: (row) => String(row[c] ?? ''),
+  }));
+  return (
+    <div style={{ marginTop: 6, maxHeight: 320, overflow: 'auto' }}>
+      <LoomDataTable<Record<string, unknown>>
+        columns={cols}
+        rows={rows}
+        getRowId={(row) => String(row.__rid)}
+        noFilters
+        ariaLabel="Tabular result"
+        empty="No rows."
+      />
+    </div>
+  );
+}
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
 type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; callId: string }
-  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
   | { kind: 'error'; error: string };
 
@@ -218,6 +250,7 @@ export function CopilotPane() {
                   <div key={j} className={s.stepRow}>
                     {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
                     {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                    {!step.error && step.name.startsWith('tabular_') && <TabularResult result={step.result} />}
                   </div>
                 );
               }

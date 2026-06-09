@@ -3,9 +3,10 @@
  *
  * Calls the AOAI deployment hanging off the Foundry hub (auto-discovered
  * via foundry-client.listConnections() with override LOOM_AOAI_ENDPOINT /
- * LOOM_AOAI_DEPLOYMENT). Exposes 25+ tools spanning every wired Loom
+ * LOOM_AOAI_DEPLOYMENT). Exposes 29+ tools spanning every wired Loom
  * service: Synapse SQL, Lakehouse/ADLS, Databricks, APIM, ADX, ADF,
- * Power BI, Fabric, Foundry, Cosmos, Workspaces.
+ * Power BI, Fabric, Foundry, Cosmos, Workspaces, Tabular (semantic-model
+ * read — Semantic Link parity, no Power BI on the default path).
  *
  * Auth: ChainedTokenCredential(ManagedIdentityCredential({clientId:
  * LOOM_UAMI_CLIENT_ID}), DefaultAzureCredential) → cognitiveservices
@@ -43,6 +44,7 @@ import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
+import { buildTabularReadTools } from '@/lib/copilot/tabular-read-tool';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -655,6 +657,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     parameters: obj({ fixId: S_STRING }, ['fixId']),
     handler: async ({ fixId }) => applyFix(String(fixId)),
   });
+
+  // -------- Tabular model reading (Semantic Link parity, no Power BI) --------
+  // Four tools: tabular_list_models / tabular_list_tables / tabular_list_measures
+  // / tabular_eval_dax. Default backend is loom-native (Cosmos metadata +
+  // Synapse SQL); AAS XMLA only when LOOM_SEMANTIC_BACKEND=analysis-services +
+  // LOOM_AAS_SERVER. The Power BI REST host is NEVER called on the default path.
+  for (const t of buildTabularReadTools()) r.register(t);
 
   return r;
 }
