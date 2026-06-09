@@ -65,6 +65,8 @@ let _dataProductJobs: Container | null = null;
 let _accessRequests: Container | null = null;
 let _attributeGroups: Container | null = null;
 let _okrs: Container | null = null;
+let _scorecardGoals: Container | null = null;
+let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
@@ -299,6 +301,20 @@ async function ensure() {
   // item id so the editor's OKR list hits a single physical partition. The F10
   // linked-resources route is the live consumer (PK /dataProductId).
   _okrs              = await mk('okrs',                '/dataProductId');
+  // Scorecard extended goal metadata (F — Scorecard goals + connected metrics)
+  // — status / owner / dueDate / connected-DAX-metric binding / sub-goals that
+  // the Fabric Scorecards REST surface doesn't expose as first-class fields.
+  // One row per (scorecard, goal), PK /scorecardId so the editor's per-scorecard
+  // goal-merge load hits a single physical partition. Azure-native: the goal's
+  // live value is pulled from a Power BI / AAS semantic model via executeQueries
+  // (see aas-client.ts) — no real Fabric scorecard required. Created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  _scorecardGoals    = await mk('scorecard-goals',     '/scorecardId');
+  // Scorecard check-in history — one append-only row per manual/automated
+  // check-in (value + status + note + date). PK /goalId so every per-goal
+  // history query is a single-partition read. Records check-ins even for
+  // bundle-template scorecards that aren't yet live in Fabric.
+  _scorecardCheckins = await mk('scorecard-checkins',  '/goalId');
   // Item-level permissions & sharing (F6) — one row per (item, principal),
   // partitioned by the item id so every per-item permission lookup hits a
   // single physical partition. The Azure-native default mirrors each grant to
@@ -409,6 +425,51 @@ export async function dataProductJobsContainer(): Promise<Container> { await ens
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
 export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
+/** Status of a scorecard goal — mirrors Fabric/Power BI scorecard status bands. */
+export type ScorecardGoalStatus =
+  | 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
+
+/** Binding from a scorecard goal to a live DAX measure in a PBI/AAS model. */
+export interface ScorecardConnectedMetric {
+  workspaceId: string;
+  datasetId: string;
+  daxExpression: string;
+  /** ISO timestamp of the last successful live pull. */
+  lastRefreshed?: string;
+  /** Last value pulled from the model. */
+  lastValue?: number;
+}
+
+/** Extended per-goal metadata that the Fabric Scorecards REST surface lacks. */
+export interface ScorecardGoalRecord {
+  id: string;            // `${scorecardId}:${goalId}`
+  scorecardId: string;   // partition key
+  goalId: string;        // Fabric goal GUID or bundle OKR id
+  status?: ScorecardGoalStatus;
+  owner?: string;        // display name or email
+  dueDate?: string;      // ISO date
+  connectedMetric?: ScorecardConnectedMetric;
+  subGoalIds?: string[];
+  updatedAt: string;
+  updatedBy: string;     // session OID
+}
+
+/** A single scorecard goal check-in (manual or metric-driven). */
+export interface ScorecardCheckIn {
+  id: string;            // UUID
+  goalId: string;        // partition key
+  scorecardId: string;
+  value: number;
+  status?: ScorecardGoalStatus;
+  note?: string;
+  checkInDate?: string;  // ISO date the value is for (defaults to today)
+  source?: 'manual' | 'metric';
+  recordedAt: string;    // ISO timestamp, server-side
+  recordedBy: string;    // session OID
+}
+
+export async function scorecardGoalsContainer(): Promise<Container> { await ensure(); return _scorecardGoals!; }
+export async function scorecardCheckinsContainer(): Promise<Container> { await ensure(); return _scorecardCheckins!; }
 
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
@@ -487,6 +548,7 @@ const KNOWN_CONTAINER_IDS = [
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
+  'scorecard-goals', 'scorecard-checkins',
   'access-request-workflow',
   'saved-queries',
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
