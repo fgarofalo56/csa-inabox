@@ -339,6 +339,96 @@ export async function runNotebook(
 }
 
 // ============================================================
+// Long-running operation polling (async 202 follow-up)
+//
+// Every Fabric LRO (create/run notebook, run pipeline, refresh dataflow,
+// deploy stage, git commit/update, mirroring start/stop) returns a 202 with a
+// `Location` header that this client surfaces as `{ _accepted, location }`. The
+// caller polls that Location URL to drive the operation to a terminal state
+// (Succeeded / Failed). Without a poll the model only ever sees the receipt,
+// never the result — so this closes the async gap honestly.
+//
+// Docs: https://learn.microsoft.com/rest/api/fabric/articles/long-running-operation
+//   GET {operationUrl}          → { status, percentComplete, error }
+//   GET {operationUrl}/result   → the operation's result payload (when Succeeded)
+// ============================================================
+
+export interface FabricOperationState {
+  status?: 'NotStarted' | 'Running' | 'Succeeded' | 'Failed' | string;
+  percentComplete?: number;
+  createdTimeUtc?: string;
+  lastUpdatedTimeUtc?: string;
+  error?: { errorCode?: string; message?: string } | null;
+  /** Retry-After hint (seconds) when Fabric returns one. */
+  retryAfter?: number;
+  /** The operation's result payload, fetched when the operation has Succeeded. */
+  result?: unknown;
+}
+
+/**
+ * Resolve a `Location` header value (or a bare operation id) into a fully
+ * qualified Fabric operations URL. Fabric returns an absolute URL in the
+ * Location header (`https://api.fabric.microsoft.com/v1/operations/{guid}`),
+ * but we accept a relative `/operations/{guid}` path or a bare guid too so
+ * callers can pass whatever they captured.
+ */
+function operationUrl(locationOrId: string): string {
+  const v = (locationOrId || '').trim();
+  if (!v) throw new FabricError('operation location/id is required', 400);
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith('/')) return `${FABRIC_BASE.replace(/\/v1$/, '')}${v.startsWith('/v1') ? v : `/v1${v}`}`;
+  return `${FABRIC_BASE}/operations/${encodeURIComponent(v)}`;
+}
+
+/**
+ * GET a Fabric long-running-operation status by its Location URL (or operation
+ * id). When the operation has Succeeded this also fetches the `/result`
+ * sub-resource so the model gets the real payload, not just "Succeeded". A
+ * still-running operation returns `status:'Running'` (+ `retryAfter`) so the
+ * caller can poll again. Real Fabric REST — no mocks.
+ */
+export async function getOperationState(locationOrId: string): Promise<FabricOperationState> {
+  const url = operationUrl(locationOrId);
+  const token = await getToken();
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.errorCode ? `${json.errorCode}: ${json.message || ''}` : json?.message || text || `poll operation failed`).toString();
+    throw new FabricError(msg, res.status, json || text, url, fabricHint(res.status));
+  }
+  const retryAfterHeader = res.headers.get('retry-after');
+  const state: FabricOperationState = {
+    status: json?.status,
+    percentComplete: json?.percentComplete,
+    createdTimeUtc: json?.createdTimeUtc,
+    lastUpdatedTimeUtc: json?.lastUpdatedTimeUtc,
+    error: json?.error ?? null,
+    retryAfter: retryAfterHeader ? Number(retryAfterHeader) : undefined,
+  };
+  if (state.status === 'Succeeded') {
+    // Fetch the result payload (best-effort — some operations have no result body).
+    try {
+      const rRes = await fetch(`${url.replace(/\/result$/, '')}/result`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (rRes.ok) {
+        const rText = await rRes.text();
+        try { state.result = rText ? JSON.parse(rText) : undefined; } catch { state.result = rText || undefined; }
+      }
+    } catch { /* result is optional — status already reflects success */ }
+  }
+  return state;
+}
+
+// ============================================================
 // Data Pipeline (Fabric)
 // ============================================================
 

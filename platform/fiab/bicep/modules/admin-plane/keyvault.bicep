@@ -18,6 +18,9 @@ param adminEntraGroupId string
 @description('Console UAMI principalId — granted Key Vault Secrets Officer so Loom Connections can write source-credential secrets. Empty skips the grant.')
 param consolePrincipalId string = ''
 
+@description('Grant the Console UAMI "Key Vault Crypto Service Encryption User" so it can list keys and act as the storage account encryption identity for Customer-Managed Keys (F14). Off by default.')
+param consolePrincipalNeedsCmkRole bool = false
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -82,6 +85,22 @@ resource consoleKvSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-0
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Console UAMI gets "Key Vault Crypto Service Encryption User" (F14 Customer-
+// Managed Keys). This single role both lets the BFF list keys/versions
+// (keys/read) for the bind wizard AND lets the backing storage account use the
+// key as its encryption identity (wrap/unwrap). Role:
+// e147488a-f6f5-4113-8e2d-b22465e65bf6 — built-in, global GUID (all clouds).
+resource consoleKvCmkRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && consolePrincipalNeedsCmkRole && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, consolePrincipalId, 'e147488a-f6f5-4113-8e2d-b22465e65bf6')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'e147488a-f6f5-4113-8e2d-b22465e65bf6')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'Console UAMI: list keys + act as storage CMK encryption identity (F14 Customer-Managed Keys).'
   }
 }
 

@@ -16,6 +16,7 @@ import {
   getBlobSuffix,
   getOpenAiSuffix,
   getPbiGovHost,
+  aasSuffix,
 } from '../cloud-endpoints';
 
 const ORIG_LOOM = process.env.LOOM_CLOUD;
@@ -128,6 +129,12 @@ const TABLE: Record<string, Record<(typeof CLOUDS)[number], string>> = {
     'GCC-High': 'asazure.usgovcloudapi.net',
     DoD: 'asazure.usgovcloudapi.net',
   },
+  aasSuffix: {
+    Commercial: 'asazure.windows.net',
+    GCC: 'asazure.windows.net',
+    'GCC-High': 'asazure.usgovcloudapi.net',
+    DoD: 'asazure.usgovcloudapi.net',
+  },
   getLogAnalyticsHost: {
     Commercial: 'https://api.loganalytics.azure.com',
     GCC: 'https://api.loganalytics.azure.com',
@@ -176,6 +183,7 @@ const FNS: Record<string, () => string> = {
   getSqlSuffix,
   synapseSqlSuffix,
   getAasSuffix,
+  aasSuffix,
   getLogAnalyticsHost,
   getBlobSuffix,
   getOpenAiSuffix,
@@ -193,6 +201,17 @@ describe('cloud-endpoints getters — all 4 clouds via LOOM_CLOUD', () => {
       });
     });
   }
+});
+
+describe('AAS data-plane helpers — suffix', () => {
+  it('returns the Commercial suffix', () => {
+    withCloud('Commercial');
+    expect(aasSuffix()).toBe('asazure.windows.net');
+  });
+  it('returns the gov suffix for GCC-High', () => {
+    withCloud('GCC-High');
+    expect(aasSuffix()).toBe('asazure.usgovcloudapi.net');
+  });
 });
 
 describe('legacy AZURE_CLOUD signal still resolves (back-compat)', () => {

@@ -51,6 +51,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'eventstream':          reg(() => import('./phase3-editors'),           'EventstreamEditor'),
   'activator':            reg(() => import('./phase3-editors'),           'ActivatorEditor'),
   'warehouse':            reg(() => import('./phase3-editors'),           'WarehouseEditor'),
+  // Datamart (DEPRECATED) — migration-only surface (Synapse Serverless + AAS). No create path.
+  'datamart':             reg(() => import('./phase3-editors'),           'DatamartEditor'),
   'semantic-model':       reg(() => import('./phase3-editors'),           'SemanticModelEditor'),
   'report':               reg(() => import('./phase3-editors'),           'ReportEditor'),
   'dashboard':            reg(() => import('./phase3-editors'),           'DashboardEditor'),
