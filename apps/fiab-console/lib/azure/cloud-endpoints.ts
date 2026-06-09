@@ -688,6 +688,23 @@ export function pbiXmlaScope(): string {
     : 'https://analysis.windows.net/powerbi/api/.default';
 }
 
+// (AAS data-plane suffix + scope live in the existing "Azure Analysis Services
+// (AAS) data plane — Loom-native report renderer" section below as aasSuffix()
+// + aasScope(). PR #976 layered a `getAasSuffix()` alias for new call sites —
+// kept here as a delegating alias so we have ONE source of truth per suffix.)
+
+/**
+ * AAS data-plane hostname suffix — alias of aasSuffix() with an
+ * LOOM_AAS_DATA_PLANE_SUFFIX override for sovereign clouds the matrix doesn't
+ * enumerate (e.g. air-gapped DoD). Kept for the env-pinned aas-server-client
+ * added by PR #976.
+ */
+export function getAasSuffix(): string {
+  const override = process.env.LOOM_AAS_DATA_PLANE_SUFFIX;
+  if (override) return override.replace(/^\./, '').replace(/\/+$/, '');
+  return aasSuffix();
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
