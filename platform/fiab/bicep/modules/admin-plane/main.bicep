@@ -581,6 +581,23 @@ param loomGovernPbiReportId string = ''
 @description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
 param loomGrafanaDashboardUid string = ''
 
+@description('F21 Usage page (/admin/usage) "Open analytics" embedded report kind. "powerbi" (Commercial/GCC) or "grafana" (GCC-High/IL5). Empty = the native Fluent charts + Log Analytics telemetry only (no embed). Power BI is Fabric-family and strictly opt-in (no-fabric-dependency.md).')
+@allowed([
+  ''
+  'powerbi'
+  'grafana'
+])
+param loomUsageReportKind string = ''
+
+@description('Power BI workspace id holding the usage report (when loomUsageReportKind=powerbi).')
+param loomUsagePbiWorkspaceId string = ''
+
+@description('Power BI report id to embed in the Usage "Open analytics" panel (when loomUsageReportKind=powerbi).')
+param loomUsagePbiReportId string = ''
+
+@description('Managed Grafana dashboard UID for the Usage "Open analytics" panel (when loomUsageReportKind=grafana). Endpoint is shared with loomGrafanaDashboardUid via the deployed Grafana when managedGrafanaEnabled.')
+param loomGrafanaUsageDashboardUid string = ''
+
 @description('ADLS Gen2 / Blob container URL for custom domain images (optional). When set, the /admin/domains Image tab shows a gallery of image blobs in this container alongside the always-available preset color swatches + icon tiles. Format: https://<account>.dfs.core.windows.net/<container>[/<prefix>]. Grant the Console UAMI Storage Blob Data Reader on the container. When empty, only preset swatches and icons are offered (honest gate — no Fabric/OneLake dependency).')
 param loomDomainImageStorage string = ''
 
@@ -1786,6 +1803,27 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : (loomReportKind == 'grafana' && !empty(loomGrafanaDashboardUid) ? [
             { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
           ] : []),
+          // F21 Usage page (/admin/usage) "Open analytics" embed — per-cloud,
+          // strictly opt-in (the native Fluent charts + Log Analytics telemetry
+          // are the always-on default). Power BI is Fabric-family → opt-in only
+          // (no-fabric-dependency.md). Gov renders Managed Grafana, never an
+          // EmptyState upsell.
+          !empty(loomUsageReportKind) ? [
+            { name: 'LOOM_USAGE_REPORT_KIND', value: loomUsageReportKind }
+          ] : [],
+          (loomUsageReportKind == 'powerbi' && !empty(loomUsagePbiWorkspaceId) && !empty(loomUsagePbiReportId)) ? [
+            { name: 'LOOM_USAGE_PBI_WORKSPACE_ID', value: loomUsagePbiWorkspaceId }
+            { name: 'LOOM_USAGE_PBI_REPORT_ID', value: loomUsagePbiReportId }
+          ] : [],
+          (loomUsageReportKind == 'grafana' && !empty(loomGrafanaUsageDashboardUid)) ? [
+            { name: 'LOOM_GRAFANA_USAGE_DASHBOARD_UID', value: loomGrafanaUsageDashboardUid }
+          ] : [],
+          // Ensure LOOM_GRAFANA_ENDPOINT is wired for the Usage grafana embed
+          // even when the Govern report doesn't also use grafana (avoid a
+          // duplicate env name when both do).
+          (loomUsageReportKind == 'grafana' && managedGrafanaEnabled && loomReportKind != 'grafana') ? [
+            { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
+          ] : [],
           // F6 item-level permissions: the Fabric /share mirror is strictly
           // opt-in and additive — the Azure-native backing (Cosmos
           // item-permissions + ADLS POSIX ACL + Storage data-plane RBAC) is
