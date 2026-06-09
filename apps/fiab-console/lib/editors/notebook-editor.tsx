@@ -38,6 +38,7 @@ import {
   DEFAULT_SESSION_CONFIG, type SessionConfig,
 } from '@/lib/components/notebook/session-config-dialog';
 import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
+import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
@@ -273,6 +274,16 @@ export function NotebookEditor({ item, id }: Props) {
     );
     return `Attached data sources:\n${lines.join('\n')}`;
   }, [attachedSources]);
+
+  // Feed the global Copilot pane notebook-persona context so its suggested
+  // prompts reference the real attached lakehouses + active language.
+  useEffect(() => {
+    setCopilotContext({
+      persona: 'notebook',
+      attachedSourceNames: attachedSources.map((a) => a.displayName),
+      defaultLang,
+    });
+  }, [attachedSources, defaultLang]);
 
   // Auto-pick the first runnable compute for the active workspace type. Also
   // clears a selection that no longer matches after the user flips the toggle

@@ -1091,6 +1091,82 @@ def feedback(req: func.HttpRequest) -> func.HttpResponse:
     return _json_response({"ok": True, "stored": stored}, headers)
 
 
+# ── Loom Console Feedback Endpoint ────────────────────────────────────────
+# Called by the Loom Console BFF (PATCH /api/copilot/sessions/[id] →
+# mirrorToFunctionFeedback) so thumbs feedback from the in-console copilot pane
+# lands in the SAME feedback pipeline as the docs-site widget. Auth: Azure
+# Functions host-level key (x-functions-key header / ?code=). No origin check —
+# the caller is the trusted BFF, not a browser — and no per-IP rate limiting,
+# since the BFF is a single server-side caller.
+
+
+@app.route(route="loom/feedback", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.FUNCTION)
+def loom_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    """Accept thumbs up/down from the Loom Console copilot pane (BFF-keyed)."""
+    headers = _cors_headers(req)
+
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=204, headers=headers)
+
+    try:
+        body = req.get_json()
+    except ValueError:
+        return _error_response("Invalid request format.", 400, headers)
+    if not isinstance(body, dict):
+        return _error_response("Invalid request format.", 400, headers)
+
+    rating = (body.get("rating") or "").strip().lower()
+    if rating not in ("up", "down"):
+        return _error_response("rating must be 'up' or 'down'.", 400, headers)
+
+    session_id = _safe_id(body.get("session_id"), "sess")
+    conversation_id = _safe_id(body.get("conversation_id") or body.get("session_id"), "conv")
+
+    improvement = (body.get("improvement") or "").strip()
+    if not isinstance(improvement, str):
+        improvement = ""
+    improvement = improvement[:MAX_FEEDBACK_TEXT_LENGTH]
+    improvement_redacted = (
+        redaction.redact(improvement, max_length=MAX_FEEDBACK_TEXT_LENGTH) if improvement else ""
+    )
+    actor = str(body.get("actor_hashed") or "loom-bff")[:64]
+
+    telemetry.track_event(
+        "chat.feedback",
+        {
+            "actor": actor,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "source": "loom-console",
+            "rating": rating,
+            "has_improvement": bool(improvement_redacted),
+        },
+    )
+
+    stored = storage.write_feedback(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        actor=actor,
+        rating=rating,
+        improvement=improvement_redacted,
+        source="loom-console",
+    )
+
+    # Mirror qualitative thumbs-down to the backlog drain, same as the widget.
+    if rating == "down" and improvement_redacted:
+        storage.write_backlog(
+            kind="bug",
+            title=f"Loom Console thumbs-down: {improvement_redacted[:80]}",
+            description=improvement_redacted,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            actor=actor,
+            source="loom-console-feedback",
+        )
+
+    return _json_response({"ok": True, "stored": stored}, headers)
+
+
 # ── Backlog Endpoint ──────────────────────────────────────────────────────
 
 
