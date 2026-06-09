@@ -106,6 +106,9 @@ param aiFoundryEnabled bool = false
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
+@description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
+param loomAoaiCompletionDeployment string = ''
+
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
 
@@ -898,6 +901,9 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     skipRoleGrants: skipRoleGrants
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Optional dedicated ghost-text deployment. Empty => no extra deployment;
+    // the Console route falls back to the chat deployment for inline completion.
+    completionDeploymentName: loomAoaiCompletionDeployment
   }
 }
 
@@ -1858,6 +1864,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            // Inline code completion (ghost text) deployment. Explicit
+            // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
+            // output (empty unless a dedicated slot was deployed). When empty the
+            // /api/copilot/complete route falls back to LOOM_AOAI_DEPLOYMENT.
+            { name: 'LOOM_AOAI_COMPLETION_DEPLOYMENT', value: !empty(loomAoaiCompletionDeployment) ? loomAoaiCompletionDeployment : (agentFoundryEnabled ? agentFoundry!.outputs.completionDeployment : '') }
             // SQL editor Copilot (Fix / Explain / NL→T-SQL + inline ghost text).
             // Explicit loomAzureOpenAiEndpoint wins; otherwise reuse the Foundry
             // Agent Service AOAI endpoint. When both are empty the copilot route
