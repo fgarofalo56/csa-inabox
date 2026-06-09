@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
+import { NetworkingPane } from '@/lib/panes/networking';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 
 interface Props { workspace: Workspace; }
@@ -43,7 +44,7 @@ const useStyles = makeStyles({
   honest: { marginTop: 6, fontSize: 12, color: tokens.colorNeutralForeground3 },
 });
 
-type TabId = 'general' | 'permissions' | 'git' | 'onelake' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'sensitivity' | 'danger';
 
 export function WorkspaceSettingsDrawer({ workspace }: Props) {
   const styles = useStyles();
@@ -72,6 +73,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} vertical>
             <Tab value="general">General</Tab>
             <Tab value="permissions">Permissions</Tab>
+            <Tab value="networking">Networking</Tab>
             <Tab value="git">Git integration</Tab>
             <Tab value="onelake">OneLake</Tab>
             <Tab value="sensitivity">Sensitivity</Tab>
@@ -80,6 +82,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
           <div style={{ marginTop: 16 }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
+            {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}
             {tab === 'git' && <GitSection workspaceId={workspace.id} />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'sensitivity' && <DeferredSection

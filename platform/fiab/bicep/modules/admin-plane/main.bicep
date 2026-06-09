@@ -630,6 +630,10 @@ module network 'network.bicep' = {
     containerPlatform: containerPlatform
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // F15 — grant the Console UAMI Network Contributor on this RG so the
+    // Advanced-networking pane can write NSG rules + create private endpoints.
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -1012,6 +1016,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // F15 Advanced networking — the workspace networking pane writes NSG
+            // security rules (IP firewall + trusted instances) + private
+            // endpoints (inbound protection + outbound rules) over ARM on the hub
+            // VNet's RG. LOOM_NETWORKING_RG aliases LOOM_ADMIN_RG (the hub VNet
+            // lives in the admin RG). The UAMI is granted Network Contributor on
+            // this RG by network.bicep. Azure-native — no Microsoft Fabric.
+            { name: 'LOOM_NETWORKING_RG', value: resourceGroup().name }
+            { name: 'LOOM_HUB_VNET_NAME', value: network.outputs.hubVnetName }
+            { name: 'LOOM_PE_SUBNET_ID', value: network.outputs.privateEndpointsSubnetId }
+            { name: 'LOOM_NSG_NAME', value: network.outputs.nsgPrivateEndpointsName }
             // Deployment region — used as the `location` for on-demand ARM PUTs
             // that require it (e.g. the Gov warehouse-create path that provisions
             // a Synapse Dedicated SQL pool via createDedicatedSqlPool). Read by

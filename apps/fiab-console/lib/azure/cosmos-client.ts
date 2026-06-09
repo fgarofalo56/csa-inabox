@@ -38,6 +38,7 @@ let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
+let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
@@ -177,6 +178,13 @@ async function ensure() {
   // the lakehouse id so every Tables-tree lookup hits a single physical
   // partition. 'dbo' is synthetic (never stored) and always present.
   _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
+  // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
+  // outbound private-endpoint rule registry. One doc per workspace
+  // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
+  // single physical partition. The NSG rules + private endpoints themselves
+  // live in Azure (ARM); this container only records the Loom-side metadata so
+  // the pane can list/remove them. Created lazily — no extra ARM/Bicep step.
+  _networkingConfig = await mk('networking-config', '/workspaceId');
   // Copilot & Agents config — tenant-wide default Foundry account + model
   // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
   // and per-workspace data-agent config (PK /workspaceId) set by workspace
@@ -326,6 +334,7 @@ export async function okrsContainer(): Promise<Container> { await ensure(); retu
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
+export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
