@@ -660,6 +660,35 @@ export function xmlaEndpointFromWorkspace(workspaceId: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services + Power BI XMLA (Analysis-Services tabular engine)
+// ---------------------------------------------------------------------------
+//
+// The RLS/OLS Security tab authors model roles (row filters + object
+// permissions) through the Analysis-Services XMLA protocol — either against an
+// Azure Analysis Services server (`asazure://…`) or a Power BI Premium / Fabric
+// capacity XMLA endpoint (`powerbi://…`). Both are Azure-native tabular engines
+// reached over XMLA-over-HTTP; neither requires a Fabric workspace on the
+// default path (the AAS path needs no Fabric/Power BI tenant at all). The
+// Power BI XMLA scope helper below keeps the sovereign-cloud split out of the
+// RLS/OLS aas-roles client. (aasSuffix() / aasScope() — the AAS host suffix +
+// REST scope — are defined once, further down, and reused here.)
+
+/**
+ * AAD `.default` token scope for the Power BI XMLA endpoint (the tabular-engine
+ * audience, distinct from the Power BI REST `analysis.windows.net/powerbi/api`
+ * scope only by sovereign host).
+ *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
+ *   GCC-High / IL5   : https://analysis.usgovcloudapi.net/powerbi/api/.default
+ * Source: the Gov scope already used by the Direct-Lake replacement path and
+ * the Commercial scope in powerbi-client.ts.
+ */
+export function pbiXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

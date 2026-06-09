@@ -606,7 +606,7 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
-@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations surface renders but shows an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
+@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
 param loomPowerbiXmlaEndpoint string = ''
 
 @description('Azure Analysis Services server URI (asazure://{region}.asazure.windows.net/{server}) for the opt-in aas semantic backend. Empty = the AAS path is honest-gated; calc groups + field parameters still work on the loom-native default. Requires loomSemanticBackend=aas.')
@@ -618,11 +618,14 @@ param loomAasDatabase string = ''
 @description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
 param loomAasResourceGroup string = ''
 
-@description('Deploy an Azure Analysis Services server to host a COMPOSITE (mixed Import / DirectQuery / Dual) tabular model. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on only to opt into a standalone composite-model host.')
+@description('Deploy an Azure Analysis Services server. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on to opt into a standalone composite-model host AND/OR the RLS/OLS Security tab backend; both use the same AAS server over XMLA. When false, the Security + Aggregations tabs show an honest config-gate and the opt-in Power BI XMLA path (loomPowerbiXmlaEndpoint) still works.')
 param aasEnabled bool = false
 
-@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). S0/S1/S2/S4 = Standard (prod).')
-@allowed(['D1', 'B1', 'S0', 'S1', 'S2', 'S4'])
+@description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
+param aasSpnClientId string = ''
+
+@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). B/S = Basic/Standard (prod).')
+@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
 param aasSku string = 'D1'
 
 @description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
@@ -843,7 +846,10 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
     skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
     aasDatabase: 'LoomComposite'
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
-    aasAdminUpn: 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
+    // RLS/OLS Security tab: when an operator supplies a dedicated SPN it becomes
+    // the AAS data-plane admin (LOOM_AAS_CLIENT_ID authors roles over XMLA).
+    // Otherwise the Console UAMI is the sole admin (composite-model path).
+    aasAdminUpn: !empty(aasSpnClientId) ? 'app:${aasSpnClientId}@${tenant().tenantId}' : 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
     skipRoleGrants: skipRoleGrants
     tags: complianceTags
   }
@@ -1447,6 +1453,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Surfaced to the Govern owner-view refresh BFF, never to the browser.
           !empty(loomPostureFunctionUrl) ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
+          ] : [],
+          // Analysis Services — RLS/OLS Security tab backend (Azure-native).
+          // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
+          // AAS module. LOOM_AAS_CLIENT_ID is the SPN appId (not secret). The
+          // SPN secret is wired separately as the KV secretRef 'loom-aas-client-secret'
+          // → LOOM_AAS_CLIENT_SECRET (operator step, see v3-tenant-bootstrap.md).
+          aasEnabled ? [
+            { name: 'LOOM_AAS_SERVER', value: aas.outputs.aasServerFullName }
+            { name: 'LOOM_AAS_TENANT_ID', value: tenant().tenantId }
+            { name: 'LOOM_AAS_CLIENT_ID', value: aasSpnClientId }
+          ] : [],
+          // Opt-in Power BI Premium / Fabric capacity XMLA endpoint (alternative
+          // Security-tab backend). Only emitted when set; absence falls through
+          // to AAS / the honest config-gate.
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
