@@ -3,9 +3,19 @@
  *
  * Calls the AOAI deployment hanging off the Foundry hub (auto-discovered
  * via foundry-client.listConnections() with override LOOM_AOAI_ENDPOINT /
- * LOOM_AOAI_DEPLOYMENT). Exposes 25+ tools spanning every wired Loom
+ * LOOM_AOAI_DEPLOYMENT). Exposes 38 built-in tools spanning every wired Loom
  * service: Synapse SQL, Lakehouse/ADLS, Databricks, APIM, ADX, ADF,
- * Power BI, Fabric, Foundry, Cosmos, Workspaces.
+ * Power BI, Fabric, Foundry, Activator, Cosmos, Workspaces — plus any
+ * runtime-connected MCP shim tools. (Keep this count in sync with
+ * buildDefaultRegistry(); /api/copilot/status reports the live number.)
+ *
+ * Sovereign clouds: the Fabric / Power BI / Activator tools hit
+ * api.fabric.microsoft.com / api.powerbi.com, which have NO GCC-High / IL5 /
+ * DoD endpoint (Fabric) or a separate sovereign host (Power BI →
+ * api.powerbigov.us). In those boundaries those tools throw an honest gate
+ * (assertFabricFamilyAvailable) naming the Azure-native equivalent instead of
+ * silently calling a Commercial host. Every other tool is sovereign-aware via
+ * cloud-endpoints.
  *
  * Auth: ChainedTokenCredential(ManagedIdentityCredential({clientId:
  * LOOM_UAMI_CLIENT_ID}), DefaultAzureCredential) → cognitiveservices
@@ -23,7 +33,13 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
-import { cogScope, getOpenAiSuffix, isGovCloud, detectLoomCloud } from './cloud-endpoints';
+import {
+  cogScope,
+  getOpenAiSuffix,
+  isGovCloud,
+  detectLoomCloud,
+  assertFabricFamilyAvailable,
+} from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -32,6 +48,7 @@ import {
 } from './synapse-sql-client';
 import * as synapseDev from './synapse-dev-client';
 import * as synapsePool from './synapse-pool-arm';
+import { registerWarehouseTools } from '../copilot/sql-tools';
 import * as databricks from './databricks-client';
 import * as apim from './apim-client';
 import * as adf from './adf-client';
@@ -41,12 +58,17 @@ import * as powerbi from './powerbi-client';
 import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
+// KQL Copilot tools (schema + execute — richer grounding than the bare adx_*
+// tools below). Safe despite the kql-tools → orchestrator import cycle:
+// LoomToolRegistry is only referenced at call time inside buildKqlToolRegistry.
+import { buildKqlToolRegistry } from '@/lib/copilot/kql-tools';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 import type { AuditReport } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
+import { registerDaxTools } from '@/lib/copilot/dax-tools';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -278,11 +300,20 @@ export class LoomToolRegistry {
 
   list(): ToolDef[] { return Array.from(this.tools.values()); }
 
+  /** Tools whose name starts with any of the given prefixes (empty = all). Used
+   *  to scope a persona to a subset of the registry (e.g. ['dax_','loom_']). */
+  filterByPrefixes(prefixes?: string[]): ToolDef[] {
+    if (!prefixes || prefixes.length === 0) return this.list();
+    return this.list().filter((t) => prefixes.some((p) => t.name.startsWith(p)));
+  }
+
   get(name: string): ToolDef | undefined { return this.tools.get(name); }
 
-  /** OpenAI-compatible tools array for the AOAI chat-completions call. */
-  toAoaiTools(): unknown[] {
-    return this.list().map((t) => ({
+  /** OpenAI-compatible tools array for the AOAI chat-completions call. When
+   *  `prefixes` is supplied, only tools matching a prefix are advertised
+   *  (persona scoping); execution still resolves against the full registry. */
+  toAoaiTools(prefixes?: string[]): unknown[] {
+    return this.filterByPrefixes(prefixes).map((t) => ({
       type: 'function',
       function: {
         name: t.name,
@@ -495,6 +526,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     handler: async ({ database }) => kusto.listTables(database),
   });
 
+  // -------- KQL Copilot tools (kql_get_schema + kql_execute grounding) --------
+  // Register the four kql_* tools so the cross-item Copilot can call
+  // kql_get_schema then kql_execute without the user leaving the chat. These
+  // sit alongside the legacy adx_* tools (kept for backward compat with
+  // sessions that reference them by name).
+  for (const t of buildKqlToolRegistry().list()) r.register(t);
+
   // -------- ADF --------
   r.register({
     name: 'adf_run_pipeline',
@@ -517,14 +555,14 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Power BI',
     description: 'List Power BI workspaces visible to the Loom UAMI.',
     parameters: obj({}),
-    handler: async () => powerbi.listWorkspaces(),
+    handler: async () => { assertFabricFamilyAvailable('powerbi'); return powerbi.listWorkspaces(); },
   });
   r.register({
     name: 'powerbi_list_reports',
     service: 'Power BI',
     description: 'List reports in a Power BI workspace.',
     parameters: obj({ workspaceId: S_STRING }, ['workspaceId']),
-    handler: async ({ workspaceId }) => powerbi.listReports(workspaceId),
+    handler: async ({ workspaceId }) => { assertFabricFamilyAvailable('powerbi'); return powerbi.listReports(workspaceId); },
   });
   r.register({
     name: 'powerbi_refresh_dataset',
@@ -534,8 +572,10 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       { workspaceId: S_STRING, datasetId: S_STRING, notifyOption: S_STRING },
       ['workspaceId', 'datasetId'],
     ),
-    handler: async ({ workspaceId, datasetId, notifyOption }) =>
-      powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' }),
+    handler: async ({ workspaceId, datasetId, notifyOption }) => {
+      assertFabricFamilyAvailable('powerbi');
+      return powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' });
+    },
   });
 
   // -------- Fabric --------
@@ -544,7 +584,7 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Fabric',
     description: 'List Microsoft Fabric workspaces.',
     parameters: obj({}),
-    handler: async () => fabric.listFabricWorkspaces(),
+    handler: async () => { assertFabricFamilyAvailable('fabric'); return fabric.listFabricWorkspaces(); },
   });
   r.register({
     name: 'fabric_create_notebook',
@@ -554,8 +594,9 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       { workspaceId: S_STRING, displayName: S_STRING, description: S_STRING, code: S_STRING },
       ['workspaceId', 'displayName', 'code'],
     ),
-    handler: async ({ workspaceId, displayName, description, code }) =>
-      fabric.createNotebook(workspaceId, {
+    handler: async ({ workspaceId, displayName, description, code }) => {
+      assertFabricFamilyAvailable('fabric');
+      return fabric.createNotebook(workspaceId, {
         displayName,
         description: description || '',
         definition: {
@@ -564,14 +605,26 @@ export function buildDefaultRegistry(): LoomToolRegistry {
             { path: 'notebook-content.py', payload: Buffer.from(code, 'utf-8').toString('base64'), payloadType: 'InlineBase64' },
           ],
         },
-      }),
+      });
+    },
   });
   r.register({
     name: 'fabric_run_notebook',
     service: 'Fabric',
-    description: 'Submit a Fabric notebook run.',
+    description: 'Submit a Fabric notebook run. Returns { _accepted, location } — the run is async; poll with fabric_poll_job using the returned location to get the terminal status.',
     parameters: obj({ workspaceId: S_STRING, notebookId: S_STRING }, ['workspaceId', 'notebookId']),
-    handler: async ({ workspaceId, notebookId }) => fabric.runNotebook(workspaceId, notebookId),
+    handler: async ({ workspaceId, notebookId }) => { assertFabricFamilyAvailable('fabric'); return fabric.runNotebook(workspaceId, notebookId); },
+  });
+  r.register({
+    name: 'fabric_poll_job',
+    service: 'Fabric',
+    description:
+      'Poll a Fabric long-running operation by its location URL (the `location` returned by ' +
+      'fabric_create_notebook / fabric_run_notebook and other async Fabric tools, or a bare operation id). ' +
+      'Returns { status: NotStarted|Running|Succeeded|Failed, percentComplete, error, result }. ' +
+      'Call repeatedly (respecting retryAfter) until status is Succeeded or Failed to close the async loop.',
+    parameters: obj({ location: S_STRING }, ['location']),
+    handler: async ({ location }) => { assertFabricFamilyAvailable('fabric'); return fabric.getOperationState(String(location)); },
   });
 
   // -------- Foundry --------
@@ -589,15 +642,17 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Activator',
     description: 'List Activator (Reflex) items in a Fabric workspace.',
     parameters: obj({ workspaceId: S_STRING }, ['workspaceId']),
-    handler: async ({ workspaceId }) => activator.listActivators(workspaceId),
+    handler: async ({ workspaceId }) => { assertFabricFamilyAvailable('activator'); return activator.listActivators(workspaceId); },
   });
   r.register({
     name: 'activator_trigger_rule',
     service: 'Activator',
     description: 'Manually trigger an Activator rule.',
     parameters: obj({ workspaceId: S_STRING, activatorId: S_STRING, ruleId: S_STRING }, ['workspaceId', 'activatorId', 'ruleId']),
-    handler: async ({ workspaceId, activatorId, ruleId }) =>
-      activator.triggerRule(workspaceId, activatorId, ruleId),
+    handler: async ({ workspaceId, activatorId, ruleId }) => {
+      assertFabricFamilyAvailable('activator');
+      return activator.triggerRule(workspaceId, activatorId, ruleId);
+    },
   });
 
   // -------- Workspace / item meta (Loom Cosmos) --------
@@ -778,10 +833,124 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   // model sees per turn. No Fabric dependency — see activator-tools.ts.
   for (const t of buildActivatorTools()) r.register(t);
 
+  // -------- SQL slash-command tools (explain / fix / comments / optimize) --------
+  // The cross-item Copilot exposure of the Loom slash commands: when the user
+  // says "explain this query" / "fix this" / "comment this" / "make this faster"
+  // the model can call these directly. Each grounds in the live warehouse schema
+  // and calls the SAME AOAI deployment the chat loop uses (no Fabric Copilot).
+  // See lib/copilot/slash-commands.ts + lib/azure/copilot-personas.ts.
+  r.register({
+    name: 'sql_explain',
+    service: 'SQL Copilot',
+    description:
+      'Explain a T-SQL or Spark SQL query in plain language, grounded in the live warehouse schema. Use when the user asks what a query does. Returns { explanation }.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const explanation = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL assistant for CSA Loom. Explain what the following ${dialect} query does ` +
+            `in 3-5 concise sentences, referencing the actual tables, columns, filters, joins and ` +
+            `aggregations and the business intent. Plain prose, no code fences.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { explanation: explanation.trim() };
+    },
+  });
+  r.register({
+    name: 'sql_fix',
+    service: 'SQL Copilot',
+    description:
+      'Fix a T-SQL or Spark SQL query that produced an error, using the real error text. Returns { sql } with the corrected query.',
+    parameters: obj({ sql: S_STRING, errorText: S_STRING, engine: S_STRING, db: S_STRING }, ['sql', 'errorText']),
+    handler: async ({ sql, errorText, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL debugger for CSA Loom. Fix the following ${dialect} query that produced an ` +
+            `error. Return ONLY the corrected, runnable ${dialect} — no fences, no explanation.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`\n\nError:\n${String(errorText || '')}` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+  r.register({
+    name: 'sql_comments',
+    service: 'SQL Copilot',
+    description:
+      'Add inline comments to a T-SQL or Spark SQL query, preserving the exact table/column names and logic. Returns { sql } with the commented query.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL documentation assistant for CSA Loom. Return the SAME ${dialect} query, ` +
+            `unchanged in logic, with a concise inline comment (-- syntax) above every non-trivial ` +
+            `clause. Preserve the EXACT table/column names. Return ONLY the commented SQL — no fences.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+  r.register({
+    name: 'sql_optimize',
+    service: 'SQL Copilot',
+    description:
+      'Rewrite a T-SQL or Spark SQL query for better performance with engine-specific hints (Synapse OPTION()/columnstore, Databricks AQE/Z-ordering/broadcast). Pass explainPlan when a real query plan is available. Returns { sql } with the optimized query.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING, explainPlan: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db, explainPlan }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const planSection = String(explainPlan || '').trim()
+        ? `\n\nActual query plan (target these operators):\n${String(explainPlan).slice(0, 4000)}`
+        : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL performance engineer for CSA Loom. Rewrite the ${dialect} query to run ` +
+            `faster, keeping the result set identical and preserving exact table/column names. ` +
+            `For T-SQL/Synapse: sargable predicates, JOIN order, OPTION() hints, columnstore-friendly ` +
+            `projections, no scalar UDFs/cursors. For Spark SQL/Databricks: AQE, predicate/projection ` +
+            `pushdown, Delta Z-ordering/partition pruning, broadcast-join hints, no collect()/Python UDFs. ` +
+            `Return ONLY the rewritten SQL — no fences, no commentary.` +
+            schemaSection +
+            planSection,
+        },
+        { role: 'user', content: `${dialect} query to optimize:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+  // -------- Warehouse Copilot (schema read / EXPLAIN plan / run) --------
+  registerWarehouseTools(r);
+  // -------- DAX Copilot (Loom-native tabular layer; no Power BI) --------
+  // NL2DAX, explain, optimize, auto-describe over item.state.model. Evaluates
+  // via Synapse SQL — zero api.powerbi.com on this path. Surfaced on the `dax`
+  // persona (toolPrefixes ['dax_','loom_']).
+  registerDaxTools(r);
+
   return r;
 }
-
-// ---------- Orchestrator ----------
 
 export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -827,6 +996,13 @@ export interface OrchestrateOptions {
   /** Per-surface context injected as an extra system message (e.g. the
    *  activator id + existing rule names the user is working with). */
   personaContext?: Record<string, unknown> | null;
+  /** Persona system-prompt override. Replaces the default SYSTEM_PROMPT — used
+   *  by focused surfaces (e.g. the DAX Copilot) to narrow the assistant. */
+  personaSystemPrompt?: string;
+  /** Persona tool allowlist (name prefixes). When set, only matching tools are
+   *  advertised to the model — execution still resolves against the full
+   *  registry. e.g. ['dax_','loom_'] for the DAX persona. */
+  toolPrefixes?: string[];
 }
 
 interface ChatMessage {
@@ -889,6 +1065,90 @@ async function callAoai(
   return res.json();
 }
 
+/**
+ * Plain single-shot AOAI completion (NO tools) — the engine behind the
+ * SQL slash-command tools (sql_explain / sql_fix / sql_comments / sql_optimize).
+ * Resolves the AOAI target the same way the orchestrator does, gets an AAD
+ * bearer (cognitiveservices scope), and retries once without temperature for
+ * reasoning-model deployments. Returns the assistant message text.
+ */
+async function aoaiCompleteText(
+  messages: { role: 'system' | 'user'; content: string }[],
+): Promise<string> {
+  const target = await resolveAoaiTarget();
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+  const token = await aoaiToken();
+  const send = (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(
+        withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
+      ),
+    });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) res = await send(false);
+    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const j = await res.json();
+  return String(j?.choices?.[0]?.message?.content ?? '');
+}
+
+/** Strip stray ```lang fences a model may add despite ONLY-SQL instructions. */
+function stripSqlFences(raw: string): string {
+  return raw
+    .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+}
+
+/** Human dialect label for the SQL slash-command tools' prompts. */
+function dialectForToolEngine(engine?: string): string {
+  const e = String(engine || '').toLowerCase();
+  if (e.includes('databricks') || e.includes('spark')) return 'Spark SQL (Databricks)';
+  if (e.includes('serverless')) return 'T-SQL (Synapse Serverless)';
+  return 'T-SQL';
+}
+
+// Best-effort schema grounding for the SQL slash-command tools — one DMV
+// round-trip returns the columns of every user table (soft-fail to '' on a
+// paused pool / cold warehouse / no grant so the tool still answers).
+const TOOL_SCHEMA_SQL = `SELECT TOP 400 s.name + '.' + t.name AS table_name, c.name AS column_name, tp.name AS type_name
+FROM sys.columns c
+JOIN sys.tables t ON t.object_id = c.object_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.types tp ON tp.user_type_id = c.user_type_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name, c.column_id`;
+
+async function toolSqlSchemaContext(engine?: string, db?: string): Promise<string> {
+  const e = String(engine || '').toLowerCase();
+  try {
+    if (e.includes('databricks') || e.includes('spark')) return '';
+    const serverless = e.includes('serverless');
+    const target = serverless ? serverlessTarget(db || 'master') : dedicatedTarget();
+    const res = await synapseExecute(target, TOOL_SCHEMA_SQL, 20_000);
+    if (!res.rows.length) return '';
+    const byTable = new Map<string, string[]>();
+    for (const row of res.rows) {
+      const [table, col, type] = row as [string, string, string];
+      const cols = byTable.get(table) || [];
+      cols.push(`${col} ${type}`);
+      byTable.set(table, cols);
+    }
+    const str = [...byTable.entries()].map(([t, cols]) => `${t}(${cols.join(', ')})`).join('\n');
+    return str.length > 6000 ? `${str.slice(0, 6000)}\n…(schema truncated)` : str;
+  } catch {
+    return '';
+  }
+}
+
 let _registry: LoomToolRegistry | null = null;
 export function getRegistry(): LoomToolRegistry {
   if (!_registry) _registry = buildDefaultRegistry();
@@ -931,8 +1191,94 @@ export async function persistStep(sessionId: string, userOid: string, step: Orch
   }
 }
 
+// ── App Insights usage telemetry (write path) ────────────────────────────────
+// Emits one `copilot.usage` custom event per completed orchestration carrying
+// the REAL prompt/completion token counts from the AOAI `usage` field. Parses
+// APPLICATIONINSIGHTS_CONNECTION_STRING directly and POSTs the App Insights
+// track envelope to its ingestion endpoint — no SDK dependency for one call.
+//
+// The connection string already contains the correct sovereign ingestion host
+// (Bicep provisions the right regional App Insights per boundary), so this
+// write path is cloud-agnostic. When the connection string is unset (App
+// Insights not configured) the helper no-ops — honest gate, never throws.
+//
+// Connection-string format:
+//   InstrumentationKey=<guid>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;...
+function _parseAiConnStr(s: string): { iKey: string; endpoint: string } | null {
+  const kv: Record<string, string> = {};
+  for (const seg of s.split(';')) {
+    const eq = seg.indexOf('=');
+    if (eq > 0) kv[seg.slice(0, eq).trim().toLowerCase()] = seg.slice(eq + 1).trim();
+  }
+  const iKey = kv['instrumentationkey'];
+  const endpoint = (kv['ingestionendpoint'] || '').replace(/\/+$/, '');
+  return iKey && endpoint ? { iKey, endpoint } : null;
+}
+
+/**
+ * Fire-and-forget App Insights receipt for a completed Copilot turn. `persona`
+ * identifies the Copilot surface (e.g. `cross-item`, `notebook`) so the admin
+ * panel can break token consumption out per persona. Never awaited on the hot
+ * path; never throws.
+ */
+export async function emitCopilotUsage(
+  usage: OrchestratorUsage,
+  model: string,
+  sessionId: string,
+  userOid: string,
+  persona: string,
+): Promise<void> {
+  const connStr = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+  if (!connStr) return; // honest gate — App Insights unconfigured → no-op
+  const ai = _parseAiConnStr(connStr);
+  if (!ai) return;
+  // Don't emit empty receipts (e.g. AOAI resolution failed before any call).
+  if (usage.totalTokens <= 0 && usage.aoaiCalls <= 0) return;
+  try {
+    const { createHash } = await import('crypto');
+    const userHash = createHash('sha256').update(String(userOid)).digest('hex').slice(0, 16);
+    await fetch(`${ai.endpoint}/v2/track`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Microsoft.ApplicationInsights.Event',
+        time: new Date().toISOString(),
+        iKey: ai.iKey,
+        tags: {
+          'ai.cloud.role': 'loom-console',
+          'ai.cloud.roleInstance': 'copilot-orchestrator',
+        },
+        data: {
+          baseType: 'EventData',
+          baseData: {
+            ver: 2,
+            name: 'copilot.usage',
+            properties: {
+              persona,
+              model,
+              prompt_tokens: String(usage.promptTokens),
+              completion_tokens: String(usage.completionTokens),
+              total_tokens: String(usage.totalTokens),
+              aoai_calls: String(usage.aoaiCalls),
+              tool_calls: String(usage.toolCalls),
+              user_oid_hash: userHash,
+              session_id: sessionId,
+              boundary: process.env.CSA_LOOM_BOUNDARY || 'Commercial',
+            },
+          },
+        },
+      }),
+    });
+  } catch {
+    // Telemetry must never break the orchestrator stream.
+  }
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
+  // Copilot surface tag for per-persona usage metering (string, defaults to
+  // `cross-item`). Distinct from the resolved CopilotPersonaDef below.
+  const personaTag = opts.persona || 'cross-item';
   const maxIter = opts.maxIterations ?? 10;
   // Identity passed to every tool handler so build-assist tools create/configure
   // items OWNED by this user (not the broken tenantId:'default' shells).
@@ -978,12 +1324,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       .filter((t) => allow.has(t.name))
       .map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
   } else {
-    tools = reg.toAoaiTools();
+    tools = reg.toAoaiTools(opts.toolPrefixes);
   }
 
   const systemPrompt = persona?.systemPrompt || SYSTEM_PROMPT;
   const messages: ChatMessage[] = [
-    { role: 'system', content: opts.systemPromptOverride ?? systemPrompt },
+    { role: 'system', content: opts.systemPromptOverride ?? opts.personaSystemPrompt ?? systemPrompt },
   ];
   // Inject per-surface context (e.g. the activator id + existing rule names) as
   // a second system message so the model grounds its draft in the live editor.
@@ -1038,6 +1384,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
+      // Fire-and-forget App Insights receipt — real token counts, never awaited.
+      emitCopilotUsage(usage, target.deployment, sessionId, userOid, personaTag).catch(() => {});
       return;
     }
     usage.toolCalls += toolCalls.length;
@@ -1146,6 +1494,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   };
   await persistStep(sessionId, userOid, maxedStep);
   yield maxedStep;
+  // Fire-and-forget App Insights receipt — real token counts, never awaited.
+  emitCopilotUsage(usage, target.deployment, sessionId, userOid, personaTag).catch(() => {});
 }
 
 // ---------- Session helpers ----------

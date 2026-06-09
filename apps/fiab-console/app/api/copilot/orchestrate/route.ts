@@ -32,7 +32,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'prompt is required' }, { status: 400 });
   }
   const sessionId = body.sessionId || `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const persona = typeof body.persona === 'string' ? body.persona : null;
+  // Copilot surface tag for per-persona usage metering (App Insights). Defaults
+  // to the cross-item orchestrator; resolvePersona() narrows the tool set when
+  // the tag matches a registered persona, otherwise the full cross-item Copilot
+  // is used. personaContext is injected as extra editor context.
+  const persona = (body.persona || 'cross-item').slice(0, 64);
   const personaContext = body.personaContext && typeof body.personaContext === 'object' ? body.personaContext : null;
 
   // Tenant admin-selected Copilot config (account + chat deployment). Falls

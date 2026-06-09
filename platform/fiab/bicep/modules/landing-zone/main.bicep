@@ -541,6 +541,10 @@ output synapseEndpoint string = synapse.outputs.synapseServerlessSqlEndpoint
 output synapseSqlEndpoint string = synapse.outputs.synapseSqlEndpoint
 output synapseWorkspaceName string = synapse.outputs.synapseWorkspaceName
 output synapseDedicatedPoolName string = synapse.outputs.dedicatedPoolName
+// Spark identities for the notebook AI-functions grant (orchestrator wires
+// these into admin-plane/aoai-spark-rbac.bicep so PySpark cells can call AOAI).
+output synapseManagedIdentityPrincipalId string = synapse.outputs.synapseManagedIdentityPrincipalId
+output databricksAccessConnectorPrincipalId string = databricks.outputs.accessConnectorPrincipalId
 output storageAccountName string = storage.outputs.storageAccountName
 output dlzResourceGroupName string = resourceGroup().name
 output adxDatabaseUrl string = adxEnabled ? adx!.outputs.databaseUri : ''

@@ -526,6 +526,26 @@ module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
   }
 }
 
+// F16 (Notebook AI functions) — grant the DLZ Spark identities (Synapse
+// workspace MSI + Databricks Access Connector MSI) Cognitive Services OpenAI
+// User on the admin-plane AOAI account, so ai.summarize / classify / extract /
+// translate / sentiment in a PySpark/pandas notebook cell can call AOAI. The
+// AOAI account lives in the Admin Plane RG (deployed before the DLZ), so the
+// grant is made here (orchestrator) at admin-plane scope, fed the Spark
+// identities from the DLZ outputs. The module no-ops (its role assignments are
+// guarded on !empty(aiServicesAccountName)) when admin-plane used an existing
+// external AOAI account — the operator grants the role manually then.
+module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (deploymentMode == 'single-sub') {
+  name: 'dlz-single-aoai-spark-rbac'
+  scope: adminPlaneRg
+  params: {
+    aiServicesAccountName: adminPlane.outputs.aiServicesAccountName
+    synapseWorkspacePrincipalId: singleDlz!.outputs.synapseManagedIdentityPrincipalId
+    databricksAccessConnectorPrincipalId: singleDlz!.outputs.databricksAccessConnectorPrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Multi-sub: per-DLZ in separate subs
 
 // NOTE: caller is responsible for creating the per-DLZ RGs in the

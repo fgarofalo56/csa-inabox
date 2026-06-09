@@ -36,6 +36,7 @@ import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
 import { CopilotDiff, type ProposedChange } from '@/lib/components/copilot-diff';
+import { isSlashMenuOpen } from '@/lib/copilot/slash-commands';
 
 interface AttachedSource {
   kind: 'lakehouse' | 'warehouse' | 'kql-database';
@@ -191,7 +192,7 @@ export function CopilotChatPane({
   const abortRef = useRef<AbortController | null>(null);
   const historyEndRef = useRef<HTMLDivElement | null>(null);
 
-  const slashOpen = input.startsWith('/') && !input.includes(' ');
+  const slashOpen = isSlashMenuOpen(input);
   const slashMatches = useMemo(
     () => (slashOpen ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase())) : []),
     [slashOpen, input],

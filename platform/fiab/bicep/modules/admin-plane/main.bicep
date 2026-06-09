@@ -2306,6 +2306,12 @@ output adxClusterPrincipalId string = (adxEnabled && empty(existingAdxClusterNam
 output uamiMirroringId string = identity.outputs.uamiMirroringId
 output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 
+// AOAI (AIServices) account name the notebook AI-functions library calls for
+// inference. Only emitted when THIS deployment created the account (Foundry hub
+// path) so the orchestrator can grant the Spark identities the OpenAI User role
+// in this RG; empty for the existing/external-account path (operator grants it).
+output aiServicesAccountName string = (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : ''
+
 // Pass-through for DLZs
 output privateDnsZoneIds object = network.outputs.privateDnsZoneIds
 output lawId string = monitoring.outputs.lawId
