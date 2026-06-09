@@ -873,6 +873,10 @@ module containerPlatformModule 'container-platform.bicep' = {
     lawCustomerId: monitoring.outputs.lawCustomerId
     lawSharedKey: monitoring.outputs.lawSharedKey
     complianceTags: complianceTags
+    // Scale & manage drawer → AKS node-pool scaling needs the Console UAMI to
+    // hold "Azure Kubernetes Service Cluster Admin" on the cluster (AKS path).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -1395,6 +1399,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            // Capacity & compute → Scale & manage drawer → AKS node-pool scaling.
+            // Only populated on the AKS container platform (GCC-High / IL5); on
+            // Commercial / GCC these are empty and the drawer's AKS section
+            // honest-gates (503). LOOM_AKS_RG defaults to this admin RG (where the
+            // AKS cluster lives) — aks-arm-client.ts reads both + LOOM_SUBSCRIPTION_ID.
+            { name: 'LOOM_AKS_CLUSTER_NAME', value: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksName : '' }
+            { name: 'LOOM_AKS_RG', value: containerPlatform == 'aks' ? resourceGroup().name : '' }
             // Azure-native Activator (lib/azure/activator-monitor.ts) creates
             // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
             // to THIS admin RG — the same RG where monitoring.bicep grants the

@@ -936,6 +936,18 @@ module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.b
   }
 }
 
+// Console UAMI → Cost Management Reader at subscription scope, so the
+// /admin/capacity cost column (F5) + the /monitor Cost tab read live
+// Microsoft.CostManagement spend per resource and the Loom-wide rollup.
+module consoleCostReaderRbac 'modules/admin-plane/cost-management-reader-rbac.bicep' = {
+  name: 'console-cost-management-reader'
+  scope: subscription()
+  params: {
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // =====================================================================
 // RTI hub cross-subscription discovery — Reader at SUBSCRIPTION scope.
 //
