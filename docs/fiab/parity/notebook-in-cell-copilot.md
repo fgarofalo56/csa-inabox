@@ -44,4 +44,16 @@ Honest gate: when AOAI is not configured the assist route returns `503 {code:'no
 ## Bicep / bootstrap
 No new infra. Reuses `LOOM_AOAI_ENDPOINT` / `LOOM_AOAI_DEPLOYMENT` / `LOOM_AOAI_AUDIENCE` already emitted by `admin-plane/main.bicep` when `agentFoundryEnabled=true`. `platform/fiab/bicep/modules/ai/foundry-project.bicep` documents that its `chat` deployment also backs this in-cell surface; the three existing role assignments on the Foundry account cover the AOAI scope.
 
+## Per-cloud notes
+
+The in-cell Copilot is Azure OpenAI only (no Fabric capacity / Power BI Copilot
+license), so its sovereign routing is the same AOAI-audience switch the rest of
+the AOAI-backed Copilot family uses.
+
+| Concern | Commercial / GCC | GCC-High / IL5 / DoD |
+| --- | --- | --- |
+| AOAI bearer audience (`LOOM_AOAI_AUDIENCE`) | `https://cognitiveservices.azure.com` | `https://cognitiveservices.azure.us` (stamped `.us` by bicep when the storage suffix is non-commercial) |
+| AOAI endpoint | `*.openai.azure.com` | `*.openai.azure.us` |
+| Fabric capacity / Power BI Copilot license | not required | not required — the sovereign advantage |
+
 Grade: **A (all inventory rows built + real AOAI backend + live-Livy `/fix`; unit-tested via `notebook-tools.test.ts` + `copilot-commands.test.ts` + `synapse-livy-client.test.ts` + `code-cell-copilot.test.tsx`).**
