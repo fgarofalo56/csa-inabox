@@ -569,6 +569,31 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+// ---------------------------------------------------------------------
+// Azure Analysis Services — RLS/OLS Security tab backend (semantic model)
+//
+// Deploys an AAS server whose XMLA endpoint the Security tab uses to author
+// model roles (row filters + object permissions) and run test-as-role probes.
+// Azure-native default — no Fabric workspace required. AAS cannot use a managed
+// identity as admin, so a dedicated SPN (aasSpnClientId) is the server admin and
+// the Console wires LOOM_AAS_CLIENT_ID / LOOM_AAS_CLIENT_SECRET as KV secret
+// refs out-of-band. When aasEnabled=false the Security tab shows an honest gate
+// and the opt-in Power BI XMLA path (loomPowerbiXmlaEndpoint) still works.
+// ---------------------------------------------------------------------
+
+@description('Deploy an Azure Analysis Services server for the RLS/OLS Security tab (analysis-services semantic backend). Default false — the Security tab shows an honest config-gate until set.')
+param aasEnabled bool = false
+
+@description('Service-principal client id (appId) that becomes the AAS server admin. REQUIRED when aasEnabled=true (a managed identity cannot be an AAS admin). Store its secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
+param aasSpnClientId string = ''
+
+@description('AAS SKU. Default D1 (Developer; suspends to $0 when idle).')
+@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+param aasSku string = 'D1'
+
+@description('Opt-in Power BI Premium / Fabric capacity XMLA endpoint for the Security tab (alternative to AAS). e.g. powerbi://api.powerbi.com/v1.0/myorg/<Workspace>. Requires XMLA Read-Write enabled on the capacity and the Console UAMI a Member on the workspace. Empty = use AAS / honest gate.')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -865,6 +890,24 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
     ehNamespaceName: loomEventHubNamespace
     ehNamespaceRg: !empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg
+  }
+}
+
+// Azure Analysis Services — semantic-model RLS/OLS Security tab backend.
+// Server name must be globally unique within the region; derive from the
+// deployment location. Admin = aasSpnClientId (SPN; UAMI not allowed). Console
+// UAMI gets ARM Reader for management-plane discovery.
+module aas 'analysis-services.bicep' = if (aasEnabled) {
+  name: 'aas'
+  params: {
+    location: location
+    serverName: toLower(replace('aasloom${location}', '-', ''))
+    sku: aasSku
+    tenantId: tenant().tenantId
+    aasSpnClientId: aasSpnClientId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
   }
 }
 
@@ -1332,6 +1375,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Surfaced to the Govern owner-view refresh BFF, never to the browser.
           !empty(loomPostureFunctionUrl) ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
+          ] : [],
+          // Analysis Services — RLS/OLS Security tab backend (Azure-native).
+          // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
+          // AAS module. LOOM_AAS_CLIENT_ID is the SPN appId (not secret). The
+          // SPN secret is wired separately as the KV secretRef 'loom-aas-client-secret'
+          // → LOOM_AAS_CLIENT_SECRET (operator step, see v3-tenant-bootstrap.md).
+          aasEnabled ? [
+            { name: 'LOOM_AAS_SERVER', value: aas.outputs.aasServerFullName }
+            { name: 'LOOM_AAS_TENANT_ID', value: tenant().tenantId }
+            { name: 'LOOM_AAS_CLIENT_ID', value: aasSpnClientId }
+          ] : [],
+          // Opt-in Power BI Premium / Fabric capacity XMLA endpoint (alternative
+          // Security-tab backend). Only emitted when set; absence falls through
+          // to AAS / the honest config-gate.
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }

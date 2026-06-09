@@ -61,6 +61,7 @@ import {
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -9072,6 +9073,297 @@ interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
 
+// ---- Security (RLS/OLS) tab shared types + presentational component --------
+type SmSecColPerm = { name: string; metadataPermission: 'read' | 'none' };
+type SmSecTablePerm = {
+  name: string;
+  filterExpression?: string;
+  metadataPermission?: 'read' | 'none';
+  columnPermissions?: SmSecColPerm[];
+};
+type SmSecRole = {
+  name: string;
+  modelPermission: 'read';
+  tablePermissions: SmSecTablePerm[];
+  members?: Array<{ memberName: string }>;
+};
+
+interface SecurityTabProps {
+  s: Record<string, string>;
+  tables: TableLite[];
+  roles: SmSecRole[] | null;
+  busy: boolean;
+  saving: boolean;
+  err: string | null;
+  gate: { missing: string; detail: string } | null;
+  saveMsg: { ok: boolean; text: string } | null;
+  selectedRole: string;
+  olsTable: string;
+  testUpn: string;
+  testQuery: string;
+  testBusy: boolean;
+  testResult: { rows: Array<Record<string, unknown>>; rowCount: number } | null;
+  testErr: string | null;
+  onReload: () => void;
+  onAddRole: () => void;
+  onDeleteRole: (name: string) => void;
+  onRenameRole: (oldName: string, newName: string) => void;
+  onSelectRole: (name: string) => void;
+  onSetFilter: (roleName: string, table: string, expr: string) => void;
+  onSetTableOls: (roleName: string, table: string, perm: 'read' | 'none') => void;
+  onSetColumnOls: (roleName: string, table: string, column: string, perm: 'read' | 'none') => void;
+  onSetMembers: (roleName: string, members: string[]) => void;
+  onChangeOlsTable: (table: string) => void;
+  onSave: () => void;
+  onTestUpn: (v: string) => void;
+  onTestQuery: (v: string) => void;
+  onRunTest: () => void;
+}
+
+/**
+ * SemanticModelSecurityTab — the RLS + OLS authoring surface, one-for-one with
+ * Power BI's "Manage roles" experience (Tabular model security): a roles grid,
+ * per-role row-filter DAX editor, an OLS table/column visibility matrix, role
+ * membership, and a Test-as-role probe (the receipt). All writes go through the
+ * Analysis-Services XMLA TMSL endpoint via the parent's BFF callbacks.
+ */
+function SemanticModelSecurityTab(props: SecurityTabProps) {
+  const {
+    s, tables, roles, busy, saving, err, gate, saveMsg, selectedRole, olsTable,
+    testUpn, testQuery, testBusy, testResult, testErr,
+    onReload, onAddRole, onDeleteRole, onRenameRole, onSelectRole,
+    onSetFilter, onSetTableOls, onSetColumnOls, onSetMembers, onChangeOlsTable,
+    onSave, onTestUpn, onTestQuery, onRunTest,
+  } = props;
+
+  const role = (roles || []).find((r) => r.name === selectedRole) || null;
+  const tablePerm = (table: string): SmSecTablePerm | undefined =>
+    role?.tablePermissions.find((tp) => tp.name === table);
+  const olsTableObj = tables.find((t) => t.name === olsTable);
+  const filterValidation = (expr?: string) =>
+    expr && expr.trim() ? validateRlsDax(expr) : { ok: true as const };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Configure an Analysis-Services tabular engine to author roles</MessageBarTitle>
+            {gate.detail} <em>(missing: <code>{gate.missing}</code>)</em>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+      {/* Section 1 — Roles grid */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Subtitle2>Model roles</Subtitle2>
+          <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={onReload} disabled={busy}>{busy ? 'Loading…' : 'Reload'}</Button>
+          <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={onAddRole} disabled={!!gate}>Add role</Button>
+          <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !!gate || !roles || roles.length === 0} style={{ marginLeft: 'auto' }}>{saving ? 'Saving…' : 'Save roles (TMSL)'}</Button>
+        </div>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Each role applies a row filter (RLS) and/or hides tables &amp; columns (OLS). Saving deploys the full role set to the model via XMLA <code>createOrReplace</code>.
+        </Caption1>
+        {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'} style={{ marginTop: 6 }}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
+        <div className={s.tableWrap} style={{ marginTop: 8 }}>
+          <Table aria-label="Roles" size="small">
+            <TableHeader><TableRow>
+              <TableHeaderCell>Role</TableHeaderCell>
+              <TableHeaderCell>Members</TableHeaderCell>
+              <TableHeaderCell>Row filters</TableHeaderCell>
+              <TableHeaderCell>Hidden objects (OLS)</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(roles || []).length === 0 && (
+                <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{busy ? 'Loading roles…' : 'No roles yet. Add one to define RLS filters and OLS permissions.'}</Caption1></TableCell></TableRow>
+              )}
+              {(roles || []).map((r) => {
+                const filters = r.tablePermissions.filter((tp) => tp.filterExpression && tp.filterExpression.trim()).length;
+                const hidden = r.tablePermissions.filter((tp) => tp.metadataPermission === 'none').length
+                  + r.tablePermissions.reduce((n, tp) => n + (tp.columnPermissions || []).filter((c) => c.metadataPermission === 'none').length, 0);
+                return (
+                  <TableRow key={r.name} style={r.name === selectedRole ? { background: tokens.colorNeutralBackground1Selected } : undefined}>
+                    <TableCell>{r.name}</TableCell>
+                    <TableCell className={s.cell}>{(r.members || []).map((m) => m.memberName).join(', ') || '—'}</TableCell>
+                    <TableCell>{filters || 0}</TableCell>
+                    <TableCell>{hidden || 0}</TableCell>
+                    <TableCell>
+                      <Button size="small" appearance="outline" icon={<Eye20Regular />} onClick={() => onSelectRole(r.name)}>Edit</Button>
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => onDeleteRole(r.name)} aria-label={`Delete role ${r.name}`} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+
+      {/* Sections 2 + 3 — per-role RLS DAX + OLS matrix */}
+      {role && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Subtitle2>Editing role:</Subtitle2>
+            <Input value={role.name} onChange={(_, d) => onRenameRole(role.name, d.value)} style={{ maxWidth: 240 }} aria-label="Role name" />
+          </div>
+
+          <Field label="Members (Entra UPN or group object id, comma-separated)">
+            <Input
+              value={(role.members || []).map((m) => m.memberName).join(', ')}
+              onChange={(_, d) => onSetMembers(role.name, d.value.split(',').map((x) => x.trim()).filter(Boolean))}
+              placeholder="alice@contoso.com, group-object-id"
+            />
+          </Field>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: -8 }}>
+            Service principals cannot be added as role members (Power BI/AAS restriction) — use real users or Entra security groups.
+          </Caption1>
+
+          {/* Section 2 — Row-level security (DAX filter) */}
+          <div>
+            <Subtitle2>Row-level security (DAX filter)</Subtitle2>
+            <div className={s.tableWrap} style={{ marginTop: 8 }}>
+              <Table aria-label="Row filters" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Table</TableHeaderCell>
+                  <TableHeaderCell>Filter DAX (boolean; empty = full access)</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {tables.map((t) => {
+                    const tp = tablePerm(t.name);
+                    const v = filterValidation(tp?.filterExpression);
+                    return (
+                      <TableRow key={t.name}>
+                        <TableCell style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{t.name}</TableCell>
+                        <TableCell>
+                          <Textarea
+                            value={tp?.filterExpression || ''}
+                            onChange={(_, d) => onSetFilter(role.name, t.name, d.value)}
+                            placeholder={`[Region] = "East"   —or—   USERPRINCIPALNAME() = '${t.name}'[UserEmail]`}
+                            resize="vertical"
+                            style={{ width: '100%', minHeight: 44, fontFamily: 'monospace' }}
+                          />
+                          {!v.ok && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{v.error}</Caption1>}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          {/* Section 3 — Object-level security matrix */}
+          <div>
+            <Subtitle2>Object-level security (table &amp; column visibility)</Subtitle2>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Hide a whole table or specific columns from this role. A table set to <strong>None</strong> hides all of its columns (column rows below are disabled).
+            </Caption1>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {tables.map((t) => {
+                const tp = tablePerm(t.name);
+                const tableHidden = tp?.metadataPermission === 'none';
+                return (
+                  <div key={t.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, padding: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Label weight="semibold" style={{ minWidth: 160 }}>{t.name}</Label>
+                      <Field label="Table" orientation="horizontal">
+                        <Select
+                          value={tableHidden ? 'none' : 'read'}
+                          onChange={(_, d) => onSetTableOls(role.name, t.name, d.value as 'read' | 'none')}
+                          aria-label={`Table ${t.name} permission`}
+                        >
+                          <option value="read">Read</option>
+                          <option value="none">None (hidden)</option>
+                        </Select>
+                      </Field>
+                    </div>
+                    {(t.columns || []).length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, opacity: tableHidden ? 0.4 : 1 }}>
+                        {(t.columns || []).map((c) => {
+                          const cp = (tp?.columnPermissions || []).find((x) => x.name === c.name);
+                          return (
+                            <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <Caption1>{c.name}</Caption1>
+                              <Select
+                                value={cp?.metadataPermission === 'none' ? 'none' : 'read'}
+                                disabled={tableHidden}
+                                onChange={(_, d) => onSetColumnOls(role.name, t.name, c.name, d.value as 'read' | 'none')}
+                                aria-label={`Column ${t.name}.${c.name} permission`}
+                                style={{ minWidth: 90 }}
+                              >
+                                <option value="read">Read</option>
+                                <option value="none">None</option>
+                              </Select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section 4 — Test as role (receipt) */}
+      <div style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+        <Subtitle2>Test as role</Subtitle2>
+        <MessageBar intent="info" style={{ marginTop: 6 }}>
+          <MessageBarBody>
+            Runs a DAX query impersonating a role via the XMLA <code>EffectiveUserName</code> + <code>Roles</code> connection properties. The named user must exist in the tenant and hold Read access on the model. The result table is your receipt: a restricted role returns only filtered rows, and OLS-hidden columns are absent from the output.
+          </MessageBarBody>
+        </MessageBar>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 720 }}>
+          <Field label="Effective user (Entra UPN to impersonate)">
+            <Input value={testUpn} onChange={(_, d) => onTestUpn(d.value)} placeholder="alice@contoso.com" />
+          </Field>
+          <Field label="Role">
+            <Select value={selectedRole} onChange={(_, d) => onSelectRole(d.value)} aria-label="Role to test">
+              <option value="">Select a role…</option>
+              {(roles || []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="DAX query">
+            <Textarea value={testQuery} onChange={(_, d) => onTestQuery(d.value)} resize="vertical" style={{ minHeight: 60, fontFamily: 'monospace' }} />
+          </Field>
+          <div>
+            <Button appearance="primary" icon={<Play20Regular />} onClick={onRunTest} disabled={testBusy || !!gate || !selectedRole || !testUpn.trim() || !testQuery.trim()}>{testBusy ? 'Running…' : 'Run test'}</Button>
+          </div>
+          {testErr && <MessageBar intent="error"><MessageBarBody>{testErr}</MessageBarBody></MessageBar>}
+          {testResult && (
+            <div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{testResult.rowCount} row(s) returned as role <strong>{selectedRole}</strong>.</Caption1>
+              <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                <Table aria-label="Test-as-role result" size="small">
+                  <TableHeader><TableRow>
+                    {Object.keys(testResult.rows[0] || {}).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
+                    {testResult.rows.length === 0 && <TableHeaderCell>result</TableHeaderCell>}
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {testResult.rows.length === 0 && (
+                      <TableRow><TableCell><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rows visible to this role (filter excludes all rows).</Caption1></TableCell></TableRow>
+                    )}
+                    {testResult.rows.slice(0, 50).map((row, i) => (
+                      <TableRow key={i}>
+                        {Object.keys(testResult.rows[0] || {}).map((k) => <TableCell key={k} className={s.cell}>{String((row as any)[k] ?? '')}</TableCell>)}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
@@ -9087,7 +9379,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'security' | 'access' | 'governance' | 'embed'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9129,6 +9421,94 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // --- Security tab (RLS row filters + OLS object permissions) -------------
+  // Authors model roles through the Analysis-Services XMLA endpoint (Azure
+  // Analysis Services by default, or an opt-in Power BI Premium / Fabric
+  // capacity). GET/PUT /api/items/semantic-model/[id]/roles; POST ?action=test
+  // runs a test-as-role DAX probe (the receipt). See aas-client.ts.
+  type SecColPerm = { name: string; metadataPermission: 'read' | 'none' };
+  type SecTablePerm = {
+    name: string;
+    filterExpression?: string;
+    metadataPermission?: 'read' | 'none';
+    columnPermissions?: SecColPerm[];
+  };
+  type SecRole = {
+    name: string;
+    modelPermission: 'read';
+    tablePermissions: SecTablePerm[];
+    members?: Array<{ memberName: string }>;
+  };
+  const [secRoles, setSecRoles] = useState<SecRole[] | null>(null);
+  const [secErr, setSecErr] = useState<string | null>(null);
+  const [secGate, setSecGate] = useState<{ missing: string; detail: string } | null>(null);
+  const [secBusy, setSecBusy] = useState(false);
+  const [secSaving, setSecSaving] = useState(false);
+  const [secSaveMsg, setSecSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [secSelectedRole, setSecSelectedRole] = useState<string>('');
+  const [secOlsTable, setSecOlsTable] = useState<string>('');
+  const [testRoleUpn, setTestRoleUpn] = useState('');
+  const [testQuery, setTestQuery] = useState('EVALUATE TOPN(10, Sales)');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<{ rows: Array<Record<string, unknown>>; rowCount: number } | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+
+  const loadRoles = useCallback(async (dsId: string, wsId: string) => {
+    setSecBusy(true); setSecErr(null); setSecGate(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/roles?workspaceId=${encodeURIComponent(wsId)}&catalog=${encodeURIComponent(dsId)}`);
+      const j = await r.json();
+      if (r.status === 501 && j.gate) { setSecGate(j.gate); setSecRoles([]); return; }
+      if (!j.ok) { setSecErr(j.error || `HTTP ${r.status}`); setSecRoles([]); return; }
+      setSecRoles(Array.isArray(j.roles) ? j.roles : []);
+    } catch (e: any) { setSecErr(e?.message || String(e)); setSecRoles([]); }
+    finally { setSecBusy(false); }
+  }, []);
+
+  const saveRoles = useCallback(async () => {
+    if (!datasetId || !secRoles) return;
+    // Client-side DAX validation before the round-trip.
+    for (const role of secRoles) {
+      for (const tp of role.tablePermissions) {
+        if (tp.filterExpression && tp.filterExpression.trim()) {
+          const v = validateRlsDax(tp.filterExpression);
+          if (!v.ok) { setSecSaveMsg({ ok: false, text: `Role "${role.name}" / ${tp.name}: ${v.error}` }); return; }
+        }
+      }
+    }
+    setSecSaving(true); setSecSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roles: secRoles }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSecSaveMsg({ ok: false, text: j.error || j.gate?.detail || `HTTP ${r.status}` }); return; }
+      setSecSaveMsg({ ok: true, text: `Saved ${j.roleCount} role(s) to the model via XMLA TMSL.` });
+    } catch (e: any) { setSecSaveMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSecSaving(false); }
+  }, [datasetId, workspaceId, secRoles]);
+
+  const runTestRole = useCallback(async () => {
+    if (!datasetId || !secSelectedRole || !testRoleUpn.trim() || !testQuery.trim()) return;
+    setTestBusy(true); setTestErr(null); setTestResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roleName: secSelectedRole, effectiveUserName: testRoleUpn.trim(), daxQuery: testQuery }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestErr(j.error || j.gate?.detail || `HTTP ${r.status}`); return; }
+      setTestResult({ rows: j.rows || [], rowCount: j.rowCount ?? (j.rows?.length || 0) });
+    } catch (e: any) { setTestErr(e?.message || String(e)); }
+    finally { setTestBusy(false); }
+  }, [datasetId, workspaceId, secSelectedRole, testRoleUpn, testQuery]);
+
+  // Mutate a single role in place (immutable update for setSecRoles).
+  const updateRole = useCallback((roleName: string, mut: (r: SecRole) => SecRole) => {
+    setSecRoles((prev) => (prev || []).map((r) => (r.name === roleName ? mut(r) : r)));
+  }, []);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9173,6 +9553,23 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   useEffect(() => {
     if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
   }, [workspaceId, datasetId, loadDetail, loadRefreshes]);
+
+  // Lazy-load roles the first time the Security tab is opened for a dataset.
+  useEffect(() => {
+    if (tab === 'security' && datasetId && secRoles === null && !secBusy) {
+      loadRoles(datasetId, workspaceId);
+    }
+  }, [tab, datasetId, workspaceId, secRoles, secBusy, loadRoles]);
+  // Reset role state when the selected dataset changes.
+  useEffect(() => { setSecRoles(null); setSecSelectedRole(''); setSecSaveMsg(null); setTestResult(null); }, [datasetId]);
+  // Default the test query / OLS table to the first model table once known.
+  useEffect(() => {
+    const first = detail?.tables?.[0]?.name;
+    if (first) {
+      setTestQuery((q) => (q.includes('Sales') && !((detail?.tables || []).some((t) => t.name === 'Sales')) ? `EVALUATE TOPN(10, '${first}')` : q));
+      setSecOlsTable((t) => t || first);
+    }
+  }, [detail?.tables]);
 
   const refreshNow = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
@@ -9385,6 +9782,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
+                  <Tab value="security">Security (RLS/OLS)</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
                   {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
@@ -9646,20 +10044,76 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 20 }}>Row-level security (RLS) roles</Subtitle2>
-                    <MessageBar intent="warning" style={{ marginTop: 6 }}>
-                      <MessageBarBody>
-                        <MessageBarTitle>RLS role authoring is XMLA / Desktop only</MessageBarTitle>
-                        The Power BI REST API does not expose create/edit of RLS roles or their DAX filters — roles are defined
-                        through the <strong>XMLA endpoint</strong> (Premium / Fabric capacity; set <code>LOOM_POWERBI_XMLA_ENDPOINT</code>
-                        and use Tabular Editor / a TMSL deploy) or <strong>Power BI Desktop</strong>. Member assignment to existing
-                        roles is done in the service. Use <strong>Open in Power BI</strong> above to manage RLS.
-                        {detail?.dataset?.isEffectiveIdentityRolesRequired
-                          ? ' This dataset requires effective-identity roles for embedding.'
-                          : ''}
-                      </MessageBarBody>
-                    </MessageBar>
+                    <Subtitle2 style={{ marginTop: 20 }}>Row-level &amp; object-level security</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      RLS role filters and OLS table/column permissions are authored on the dedicated <strong>Security (RLS/OLS)</strong> tab, which deploys real TMSL roles through the Analysis-Services XMLA endpoint and includes a Test-as-role probe.
+                    </Caption1>
                   </>
+                )}
+                {tab === 'security' && datasetId && (
+                  <SemanticModelSecurityTab
+                    s={s}
+                    tables={detail?.tables || []}
+                    roles={secRoles}
+                    busy={secBusy}
+                    saving={secSaving}
+                    err={secErr}
+                    gate={secGate}
+                    saveMsg={secSaveMsg}
+                    selectedRole={secSelectedRole}
+                    olsTable={secOlsTable}
+                    testUpn={testRoleUpn}
+                    testQuery={testQuery}
+                    testBusy={testBusy}
+                    testResult={testResult}
+                    testErr={testErr}
+                    onReload={() => loadRoles(datasetId, workspaceId)}
+                    onAddRole={() => {
+                      const base = 'NewRole';
+                      const existing = new Set((secRoles || []).map((r) => r.name));
+                      let name = base; let i = 1;
+                      while (existing.has(name)) { name = `${base}${i++}`; }
+                      setSecRoles([...(secRoles || []), { name, modelPermission: 'read', tablePermissions: [], members: [] }]);
+                      setSecSelectedRole(name);
+                    }}
+                    onDeleteRole={(name) => {
+                      setSecRoles((secRoles || []).filter((r) => r.name !== name));
+                      if (secSelectedRole === name) setSecSelectedRole('');
+                    }}
+                    onRenameRole={(oldName, newName) => updateRole(oldName, (r) => ({ ...r, name: newName }))}
+                    onSelectRole={setSecSelectedRole}
+                    onSetFilter={(roleName, table, expr) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      const idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx >= 0) tps[idx] = { ...tps[idx], filterExpression: expr };
+                      else tps.push({ name: table, filterExpression: expr, metadataPermission: 'read' });
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetTableOls={(roleName, table, perm) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      const idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx >= 0) tps[idx] = { ...tps[idx], metadataPermission: perm };
+                      else tps.push({ name: table, metadataPermission: perm });
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetColumnOls={(roleName, table, column, perm) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      let idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx < 0) { tps.push({ name: table, metadataPermission: 'read', columnPermissions: [] }); idx = tps.length - 1; }
+                      const cols = [...(tps[idx].columnPermissions || [])];
+                      const cidx = cols.findIndex((c) => c.name === column);
+                      if (cidx >= 0) cols[cidx] = { name: column, metadataPermission: perm };
+                      else cols.push({ name: column, metadataPermission: perm });
+                      tps[idx] = { ...tps[idx], columnPermissions: cols };
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetMembers={(roleName, members) => updateRole(roleName, (r) => ({ ...r, members: members.map((m) => ({ memberName: m })) }))}
+                    onChangeOlsTable={setSecOlsTable}
+                    onSave={saveRoles}
+                    onTestUpn={setTestRoleUpn}
+                    onTestQuery={setTestQuery}
+                    onRunTest={runTestRole}
+                  />
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

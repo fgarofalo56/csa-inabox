@@ -591,6 +591,58 @@ export function getPbiGovHost(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services + Power BI XMLA (Analysis-Services tabular engine)
+// ---------------------------------------------------------------------------
+//
+// The RLS/OLS Security tab authors model roles (row filters + object
+// permissions) through the Analysis-Services XMLA protocol — either against an
+// Azure Analysis Services server (`asazure://…`) or a Power BI Premium / Fabric
+// capacity XMLA endpoint (`powerbi://…`). Both are Azure-native tabular engines
+// reached over XMLA-over-HTTP; neither requires a Fabric workspace on the
+// default path (the AAS path needs no Fabric/Power BI tenant at all). The two
+// suffix/scope helpers below keep the sovereign-cloud split out of aas-client.
+
+/**
+ * Azure Analysis Services data-plane hostname suffix (no leading dot, no region
+ * prefix). The AAS server connection string is `asazure://<region>.<suffix>/<srv>`
+ * and the XMLA HTTP endpoint is `https://<region>.<suffix>/xmla`.
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5   : asazure.usgovcloudapi.net
+ * Verified against the Azure Government endpoint parity matrix (AAS is NOT
+ * available in the DoD boundary — aas-client gates that separately).
+ */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * AAD `.default` token scope for the Power BI XMLA endpoint (the tabular-engine
+ * audience, distinct from the Power BI REST `analysis.windows.net/powerbi/api`
+ * scope only by sovereign host).
+ *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
+ *   GCC-High / IL5   : https://analysis.usgovcloudapi.net/powerbi/api/.default
+ * Source: the Gov scope already used by the Direct-Lake replacement path and
+ * the Commercial scope in powerbi-client.ts.
+ */
+export function pbiXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+/**
+ * AAD `.default` token scope for an Azure Analysis Services server. The AAS
+ * resource audience is the region-specific data-plane host
+ * (`https://<region>.<aasSuffix()>/.default`). When the region cannot be
+ * derived (no `LOOM_AAS_SERVER`), falls back to the suffix root which AAS also
+ * accepts for token issuance.
+ */
+export function aasScope(region?: string): string {
+  const host = region ? `${region}.${aasSuffix()}` : aasSuffix();
+  return `https://${host}/.default`;
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

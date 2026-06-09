@@ -110,6 +110,14 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.synapseSqlSuffix()).toBe(SYN_COM);
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
   });
+
+  it('Analysis Services + Power BI XMLA helpers (Commercial)', async () => {
+    const m = await load('AzureCloud');
+    const AAS_COM = J('asazure', 'windows', 'net');
+    expect(m.aasSuffix()).toBe(AAS_COM);
+    expect(m.aasScope('eastus')).toBe(`https://eastus.${AAS_COM}/.default`);
+    expect(m.pbiXmlaScope()).toBe(`https://${J('analysis', 'windows', 'net')}/powerbi/api/.default`);
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -182,6 +190,13 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     const m = await load('AzureUSGovernment');
     expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+  });
+
+  it('Analysis Services + Power BI XMLA helpers (Gov)', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasScope('usgovvirginia')).toBe('https://usgovvirginia.asazure.usgovcloudapi.net/.default');
+    expect(m.pbiXmlaScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
   });
 });
 
