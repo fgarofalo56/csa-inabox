@@ -121,6 +121,15 @@ param labelPropagationEnabled bool = true
 @description('NCRONTAB schedule for the label-propagation timer (6-field). Default every 15 minutes.')
 param labelPropagationCron string = '0 */15 * * * *'
 
+@description('Deploy the report-subscriptions timer Function + delivery Logic App (scheduled Power BI report export → email). Default off — opt-in because it requires an Office 365 mailbox connection authorized post-deploy.')
+param reportSubscriptionsEnabled bool = false
+
+@description('NCRONTAB schedule (6-field) for the report-subscriptions timer tick. Default every 15 minutes so per-subscription schedules fire close to their intended time.')
+param reportSubscriptionsCron string = '0 */15 * * * *'
+
+@description('Delivery Logic App workflow name for report subscriptions. Deployed by integration/report-subscription-logicapp.bicep into the admin-plane RG; the Console + Function target it via LOOM_SUBSCRIPTION_LOGIC_APP_NAME. Empty (or reportSubscriptionsEnabled=false) → the subscriptions UI shows an honest delivery gate.')
+param loomSubscriptionLogicAppName string = 'logic-loom-report-subs-${location}'
+
 @description('SQL server FQDN the DAB preview runtime targets (e.g. <srv>.database.windows.net). Required when dabRuntimeEnabled.')
 param dabSqlServerFqdn string = ''
 
@@ -1392,6 +1401,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // bicep module + env var (no Fabric / Power Automate dependency).
             { name: 'LOOM_APPROVAL_LOGIC_APP_NAME', value: loomApprovalLogicAppName }
             { name: 'LOOM_APPROVAL_LOGIC_APP_RG', value: !empty(loomApprovalLogicAppRg) ? loomApprovalLogicAppRg : loomDlzRg }
+            // Report subscriptions (scheduled report export + email). The
+            // Function name is non-empty only when reportSubscriptionsEnabled —
+            // the subscriptions BFF surfaces an honest delivery gate to the
+            // editor until BOTH the timer Function and the delivery Logic App
+            // are deployed. No Fabric / Power Automate dependency.
+            { name: 'LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', value: reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : '' }
+            { name: 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME', value: reportSubscriptionsEnabled ? loomSubscriptionLogicAppName : '' }
             // Copy Job (F14) — watermark control table address. When the server
             // is unset, incremental copy surfaces an honest-gate MessageBar and
             // full copy still works; see data/copy-job-control.bicep.
@@ -2234,6 +2250,47 @@ module labelPropagation 'label-propagation-function.bicep' = if (labelPropagatio
   }
 }
 
+// Report-subscriptions delivery Logic App (Consumption + O365 Send email V2
+// with attachment) — Azure-native parity with Fabric/Power BI report
+// subscription email delivery. Deployed alongside the timer Function in the
+// admin-plane RG. Opt-in (reportSubscriptionsEnabled) because it requires an
+// O365 mailbox connection authorized post-deploy. No Fabric / Power Automate.
+module reportSubscriptionLogicApp '../integration/report-subscription-logicapp.bicep' = if (reportSubscriptionsEnabled) {
+  name: 'report-subscription-logicapp'
+  params: {
+    location: location
+    workflowName: loomSubscriptionLogicAppName
+    // The Console UAMI is granted Logic App Contributor here so the BFF can
+    // surface delivery status. The timer Function's MI is granted the same role
+    // in post-deploy bootstrap (its principalId is an output of the Function
+    // module below, not resolvable before this module deploys).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    complianceTags: complianceTags
+  }
+}
+
+// Report-subscriptions timer Function — scheduled Power BI export → ADLS
+// archive → email delivery via the Logic App above. No-op without a Cosmos
+// account. The Function identity is granted Cosmos DB Built-in Data Contributor
+// + Storage Blob Data Contributor + Logic App Contributor in post-deploy
+// bootstrap (grant-navigator-rbac.sh) using the principalId output below.
+module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSubscriptionsEnabled) {
+  name: 'report-subscriptions-function'
+  params: {
+    location: location
+    loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
+    loomCosmosDatabase: 'loom'
+    reportSubscriptionsCron: reportSubscriptionsCron
+    adlsAccount: loomStorageAccount
+    loomSubscriptionId: subscription().subscriptionId
+    subscriptionLogicAppName: loomSubscriptionLogicAppName
+    subscriptionLogicAppRg: resourceGroup().name
+    loomDlzRg: loomDlzRg
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
 // =====================================================================
 // User access patterns (Bastion is always-on via network.bicep).
 // Each module is flag-gated so operators can pick the right path
@@ -2518,3 +2575,10 @@ output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationT
 // Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
 output labelPropagationFunctionName string = labelPropagationEnabled ? labelPropagation.outputs.siteName : ''
 output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropagation.outputs.principalId : ''
+
+// report-subscriptions timer Function. principalId is granted Cosmos DB
+// Built-in Data Contributor + Storage Blob Data Contributor + Logic App
+// Contributor (on the delivery workflow) in post-deploy bootstrap.
+output reportSubscriptionsFunctionName string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : ''
+output reportSubscriptionsPrincipalId string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.principalId : ''
+output reportSubscriptionLogicAppName string = reportSubscriptionsEnabled ? reportSubscriptionLogicApp.outputs.workflowName : ''
