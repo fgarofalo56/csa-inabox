@@ -67,6 +67,7 @@ const SEED: Msg[] = [
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
 const EVT_CONTEXT = 'csaloom:copilot-context';
+const EVT_PERSONA = 'csaloom:copilot-persona';
 
 export function openCopilot() {
   window.dispatchEvent(new Event(EVT_OPEN));
@@ -81,6 +82,26 @@ export function toggleCopilot() {
  */
 export function setCopilotContext(ctx: CopilotContext) {
   window.dispatchEvent(new CustomEvent<CopilotContext>(EVT_CONTEXT, { detail: ctx }));
+}
+
+/** Detail payload for the persona-open event. */
+export interface CopilotPersonaDetail {
+  /** Persona id, e.g. 'activator'. */
+  persona: string;
+  /** Per-surface context injected as a system message (activator id, rule names…). */
+  personaContext?: Record<string, unknown>;
+  /** Pre-fill the composer with this prompt (the user can edit before sending). */
+  prefillPrompt?: string;
+}
+
+/**
+ * Open the Copilot pane bound to a specific persona (e.g. the Activator
+ * Copilot). The next message the user sends carries `persona` +
+ * `personaContext` to /api/copilot/orchestrate, which narrows the system
+ * prompt + tool set to that persona.
+ */
+export function openCopilotWithPersona(detail: CopilotPersonaDetail) {
+  window.dispatchEvent(new CustomEvent(EVT_PERSONA, { detail }));
 }
 
 const useStyles = makeStyles({
@@ -149,6 +170,10 @@ export function CopilotPane() {
   const sessionRef = useRef<string | null>(null);
   const msgIndexRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Active persona binding (set by the EVT_PERSONA event from an editor's
+  // "Copilot" button). Carried on every orchestrate request while set.
+  const personaRef = useRef<string | null>(null);
+  const personaContextRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     const o = () => setOpen(true);
@@ -157,17 +182,30 @@ export function CopilotPane() {
       const detail = (e as CustomEvent<CopilotContext>).detail;
       if (detail) setCopilotCtx(detail);
     };
+    const p = (e: Event) => {
+      const detail = (e as CustomEvent<CopilotPersonaDetail>).detail;
+      if (!detail) return;
+      personaRef.current = detail.persona || null;
+      personaContextRef.current = detail.personaContext || null;
+      if (detail.persona) {
+        setMsgs((m) => [...m, { who: 'system', text: `Switched to ${detail.persona === 'activator' ? 'Activator' : detail.persona} Copilot.` }]);
+      }
+      if (detail.prefillPrompt) setDraft(detail.prefillPrompt);
+      setOpen(true);
+    };
     const k = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); t(); }
     };
     window.addEventListener(EVT_OPEN, o);
     window.addEventListener(EVT_TOGGLE, t);
     window.addEventListener(EVT_CONTEXT, onCtx);
+    window.addEventListener(EVT_PERSONA, p as EventListener);
     window.addEventListener('keydown', k);
     return () => {
       window.removeEventListener(EVT_OPEN, o);
       window.removeEventListener(EVT_TOGGLE, t);
       window.removeEventListener(EVT_CONTEXT, onCtx);
+      window.removeEventListener(EVT_PERSONA, p as EventListener);
       window.removeEventListener('keydown', k);
     };
   }, []);
@@ -188,7 +226,12 @@ export function CopilotPane() {
       const res = await fetch('/api/copilot/orchestrate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: text, sessionId: sessionRef.current ?? undefined }),
+        body: JSON.stringify({
+          prompt: text,
+          sessionId: sessionRef.current ?? undefined,
+          persona: personaRef.current ?? undefined,
+          personaContext: personaContextRef.current ?? undefined,
+        }),
       });
 
       if (res.status === 503) {

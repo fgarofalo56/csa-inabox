@@ -16,7 +16,17 @@
  * client-side. The server-only Pipeline Copilot registry lives in
  * copilot-personas-pipeline.ts (it imports the ADF / Synapse data-plane
  * clients) to keep this file out of the client bundle's server graph.
+ *
+ * It also hosts the (client-safe, type-only) Copilot PERSONA registry —
+ * CopilotPersonaDef + resolvePersona() + ACTIVATOR_PERSONA — that narrows the
+ * cross-item Copilot to a specific surface (e.g. the Activator editor) with a
+ * tighter system prompt and a curated `allowedTools` subset. Personas add no
+ * new backend; the activator persona drives the real Azure Monitor
+ * scheduled-query-alert tools registered in the main LoomToolRegistry (see
+ * lib/copilot/activator-tools.ts) — no Microsoft Fabric dependency.
  */
+
+import type { ToolDef } from './copilot-orchestrator';
 
 export type CopilotPersona =
   | 'notebook'
@@ -253,4 +263,70 @@ export function extractSqlTableNames(sql: string): string[] {
     if (seen.size >= 5) break;
   }
   return [...seen];
+}
+
+export interface CopilotPersonaDef {
+  /** Stable id matched against the `persona` field in the orchestrate body. */
+  id: string;
+  name: string;
+  /** Replaces the default SYSTEM_PROMPT for this persona's AOAI calls. */
+  systemPrompt: string;
+  /**
+   * Names of tools from the main LoomToolRegistry to INCLUDE. When omitted the
+   * full registry is exposed (default Copilot behaviour). Unknown names are
+   * ignored. Persona-local `extraTools` are always appended.
+   */
+  allowedTools?: string[];
+  /** Additional persona-local tools beyond the main registry. */
+  extraTools?: ToolDef[];
+}
+
+export const ACTIVATOR_PERSONA_ID = 'activator';
+
+// System prompt drives the strict two-phase "author + suggest, then confirm,
+// then create" flow. The model NEVER provisions a real Azure Monitor alert
+// rule speculatively — activator_create_rule is only called after the user
+// approves the draft (no-vaporware: a created rule is a REAL ARM resource).
+export const ACTIVATOR_COPILOT_SYSTEM_PROMPT = `You are the CSA Loom Activator Copilot — a specialist assistant for authoring Azure Monitor scheduled-query alert rules inside the CSA Loom Activator (Reflex) editor.
+
+CSA Loom is its OWN product running on Azure. The DEFAULT Activator backend is Azure Monitor (Microsoft.Insights/scheduledQueryRules over a Log Analytics workspace) — no Microsoft Fabric workspace is ever required.
+
+Your workflow for EVERY "alert when…" request is STRICTLY:
+1. Call activator_author_rule to turn the natural-language description into a structured draft: the source Log Analytics table, an optional filter (whereClause), the metric expression (summarizeExpr, e.g. count()), the metric column name, the comparison operator, and sensible severity / evaluationFrequency / windowSize.
+2. Call activator_suggest_threshold with the sourceTable, whereClause, summarizeExpr and binMinutes from step 1. It runs a REAL KQL query against the Log Analytics workspace and returns p50/p95/p99 of the historical per-window distribution. Propose threshold = the suggestedThreshold it returns (p95 by default) UNLESS the user named an explicit number.
+3. Present the complete draft to the user for review: the table, the metric, the operator + threshold (and that it is the p95 of the last N days of real data), severity, evaluationFrequency, windowSize, and the notification action. Do NOT call activator_create_rule until the user explicitly approves ("create it", "yes", "confirm", "go ahead").
+4. On approval: call activator_create_rule with confirm=true. It provisions a REAL scheduledQueryRule via ARM and returns the resource id + an Azure Portal deep-link. Surface both so the user can verify the rule is live. A rule that is NOT visible in Azure is a failure — never claim success without the returned ruleId.
+
+Other rules:
+- If a tool reports Monitor is not configured (e.g. LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_LOG_ANALYTICS_WORKSPACE_ID / LOOM_ALERT_RG unset), relay that honest gate verbatim — name the exact env var to set. Never fabricate a rule.
+- If the historical query returns no windows (new/empty table), say so plainly and propose a conservative starting threshold, flagging it as an estimate to tune later.
+- Use activator_list_rules to check for a duplicate rule name before creating.
+- Use activator_describe_history to report the real fired/resolved history of existing rules.
+- Use loom_self_audit when the user asks "is Monitor configured?".`;
+
+export const ACTIVATOR_PERSONA: CopilotPersonaDef = {
+  id: ACTIVATOR_PERSONA_ID,
+  name: 'Activator Copilot',
+  systemPrompt: ACTIVATOR_COPILOT_SYSTEM_PROMPT,
+  // Restrict to the activator-specific tools + a small set of cross-cutting
+  // tools. The model doesn't need Databricks / ADLS / APIM / Power BI here.
+  allowedTools: [
+    'activator_author_rule',
+    'activator_suggest_threshold',
+    'activator_create_rule',
+    'activator_list_rules',
+    'activator_describe_history',
+    'loom_self_audit',
+  ],
+};
+
+/** Registry of all Copilot personas, keyed by id. */
+export const COPILOT_PERSONAS: Record<string, CopilotPersonaDef> = {
+  [ACTIVATOR_PERSONA.id]: ACTIVATOR_PERSONA,
+};
+
+/** Look up a persona by id (case-insensitive). Returns null when unknown. */
+export function resolvePersona(id?: string | null): CopilotPersonaDef | null {
+  if (!id) return null;
+  return COPILOT_PERSONAS[String(id).trim().toLowerCase()] ?? null;
 }
