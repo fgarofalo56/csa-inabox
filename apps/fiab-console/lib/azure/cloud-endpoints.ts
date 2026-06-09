@@ -223,6 +223,54 @@ export function graphDlpPolicyApiAvailable(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Fabric-family availability (Power BI / Fabric / Activator)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sovereign availability gate for the Fabric-family surfaces that hit
+ * api.powerbi.com / api.fabric.microsoft.com (the cross-item Copilot's
+ * Power BI / Fabric / Activator tools, and any other caller).
+ *
+ * Commercial + GCC are reachable — GCC runs on the worldwide Power BI / Fabric
+ * tenant. In GCC-High / IL5 / DoD:
+ *   - Microsoft Fabric has NO sovereign endpoint (there is no Gov Fabric).
+ *   - Activator (Reflex) is a Fabric item — same story.
+ *   - Power BI DOES have a sovereign host (api.powerbigov.us) but the clients
+ *     default to the Commercial host; calling it cross-boundary fails / leaks.
+ *     Allow Power BI only when the operator has wired `LOOM_POWERBI_BASE` to
+ *     the sovereign host.
+ *
+ * Returns when the surface is reachable; THROWS an honest Error (naming the
+ * Azure-native CSA Loom equivalent) when it is gated. Mirrors the same
+ * Commercial-vs-Gov pattern as `graphDlpPolicyApiAvailable()` above, but throws
+ * (rather than returning a boolean) so callers can surface the precise
+ * remediation verbatim instead of silently hitting a Commercial host that 401s.
+ * Pure — depends only on `detectLoomCloud()` + env, so it is unit-testable
+ * without the credential / Azure-SDK chain.
+ */
+export function assertFabricFamilyAvailable(kind: 'fabric' | 'powerbi' | 'activator'): void {
+  const cloud = detectLoomCloud();
+  if (cloud !== 'GCC-High' && cloud !== 'DoD') return; // Commercial + GCC: reachable.
+  if (kind === 'powerbi') {
+    if (process.env.LOOM_POWERBI_BASE) return; // operator wired the sovereign host.
+    throw new Error(
+      `Power BI REST is not reachable on the default Commercial host in ${cloud}. ` +
+        'Set LOOM_POWERBI_BASE to the sovereign Power BI host ' +
+        '(https://api.powerbigov.us/v1.0/myorg) and ensure the workspace lives in ' +
+        'the Government Power BI tenant. The Azure-native CSA Loom equivalents ' +
+        '(semantic-model / report over Synapse + ADLS) work without Power BI.',
+    );
+  }
+  throw new Error(
+    `Microsoft Fabric / Activator APIs have no ${cloud} (GCC-High/IL5/DoD) endpoint. ` +
+      'Use the Azure-native CSA Loom equivalents instead: Synapse + ADLS lakehouse, ' +
+      'Azure Data Explorer (adx_*) for KQL, Event Hubs eventstream, and Azure Monitor ' +
+      'scheduled-query alerts for Activator. These Fabric-family surfaces are ' +
+      'Commercial/GCC-only and are intentionally gated in sovereign clouds.',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Key Vault (data plane)
 // ---------------------------------------------------------------------------
 

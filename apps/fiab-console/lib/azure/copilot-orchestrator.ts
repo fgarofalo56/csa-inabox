@@ -3,9 +3,19 @@
  *
  * Calls the AOAI deployment hanging off the Foundry hub (auto-discovered
  * via foundry-client.listConnections() with override LOOM_AOAI_ENDPOINT /
- * LOOM_AOAI_DEPLOYMENT). Exposes 25+ tools spanning every wired Loom
+ * LOOM_AOAI_DEPLOYMENT). Exposes 38 built-in tools spanning every wired Loom
  * service: Synapse SQL, Lakehouse/ADLS, Databricks, APIM, ADX, ADF,
- * Power BI, Fabric, Foundry, Cosmos, Workspaces.
+ * Power BI, Fabric, Foundry, Activator, Cosmos, Workspaces — plus any
+ * runtime-connected MCP shim tools. (Keep this count in sync with
+ * buildDefaultRegistry(); /api/copilot/status reports the live number.)
+ *
+ * Sovereign clouds: the Fabric / Power BI / Activator tools hit
+ * api.fabric.microsoft.com / api.powerbi.com, which have NO GCC-High / IL5 /
+ * DoD endpoint (Fabric) or a separate sovereign host (Power BI →
+ * api.powerbigov.us). In those boundaries those tools throw an honest gate
+ * (assertFabricFamilyAvailable) naming the Azure-native equivalent instead of
+ * silently calling a Commercial host. Every other tool is sovereign-aware via
+ * cloud-endpoints.
  *
  * Auth: ChainedTokenCredential(ManagedIdentityCredential({clientId:
  * LOOM_UAMI_CLIENT_ID}), DefaultAzureCredential) → cognitiveservices
@@ -23,7 +33,13 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
-import { cogScope, getOpenAiSuffix, isGovCloud, detectLoomCloud } from './cloud-endpoints';
+import {
+  cogScope,
+  getOpenAiSuffix,
+  isGovCloud,
+  detectLoomCloud,
+  assertFabricFamilyAvailable,
+} from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -517,14 +533,14 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Power BI',
     description: 'List Power BI workspaces visible to the Loom UAMI.',
     parameters: obj({}),
-    handler: async () => powerbi.listWorkspaces(),
+    handler: async () => { assertFabricFamilyAvailable('powerbi'); return powerbi.listWorkspaces(); },
   });
   r.register({
     name: 'powerbi_list_reports',
     service: 'Power BI',
     description: 'List reports in a Power BI workspace.',
     parameters: obj({ workspaceId: S_STRING }, ['workspaceId']),
-    handler: async ({ workspaceId }) => powerbi.listReports(workspaceId),
+    handler: async ({ workspaceId }) => { assertFabricFamilyAvailable('powerbi'); return powerbi.listReports(workspaceId); },
   });
   r.register({
     name: 'powerbi_refresh_dataset',
@@ -534,8 +550,10 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       { workspaceId: S_STRING, datasetId: S_STRING, notifyOption: S_STRING },
       ['workspaceId', 'datasetId'],
     ),
-    handler: async ({ workspaceId, datasetId, notifyOption }) =>
-      powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' }),
+    handler: async ({ workspaceId, datasetId, notifyOption }) => {
+      assertFabricFamilyAvailable('powerbi');
+      return powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' });
+    },
   });
 
   // -------- Fabric --------
@@ -544,7 +562,7 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Fabric',
     description: 'List Microsoft Fabric workspaces.',
     parameters: obj({}),
-    handler: async () => fabric.listFabricWorkspaces(),
+    handler: async () => { assertFabricFamilyAvailable('fabric'); return fabric.listFabricWorkspaces(); },
   });
   r.register({
     name: 'fabric_create_notebook',
@@ -554,8 +572,9 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       { workspaceId: S_STRING, displayName: S_STRING, description: S_STRING, code: S_STRING },
       ['workspaceId', 'displayName', 'code'],
     ),
-    handler: async ({ workspaceId, displayName, description, code }) =>
-      fabric.createNotebook(workspaceId, {
+    handler: async ({ workspaceId, displayName, description, code }) => {
+      assertFabricFamilyAvailable('fabric');
+      return fabric.createNotebook(workspaceId, {
         displayName,
         description: description || '',
         definition: {
@@ -564,14 +583,26 @@ export function buildDefaultRegistry(): LoomToolRegistry {
             { path: 'notebook-content.py', payload: Buffer.from(code, 'utf-8').toString('base64'), payloadType: 'InlineBase64' },
           ],
         },
-      }),
+      });
+    },
   });
   r.register({
     name: 'fabric_run_notebook',
     service: 'Fabric',
-    description: 'Submit a Fabric notebook run.',
+    description: 'Submit a Fabric notebook run. Returns { _accepted, location } — the run is async; poll with fabric_poll_job using the returned location to get the terminal status.',
     parameters: obj({ workspaceId: S_STRING, notebookId: S_STRING }, ['workspaceId', 'notebookId']),
-    handler: async ({ workspaceId, notebookId }) => fabric.runNotebook(workspaceId, notebookId),
+    handler: async ({ workspaceId, notebookId }) => { assertFabricFamilyAvailable('fabric'); return fabric.runNotebook(workspaceId, notebookId); },
+  });
+  r.register({
+    name: 'fabric_poll_job',
+    service: 'Fabric',
+    description:
+      'Poll a Fabric long-running operation by its location URL (the `location` returned by ' +
+      'fabric_create_notebook / fabric_run_notebook and other async Fabric tools, or a bare operation id). ' +
+      'Returns { status: NotStarted|Running|Succeeded|Failed, percentComplete, error, result }. ' +
+      'Call repeatedly (respecting retryAfter) until status is Succeeded or Failed to close the async loop.',
+    parameters: obj({ location: S_STRING }, ['location']),
+    handler: async ({ location }) => { assertFabricFamilyAvailable('fabric'); return fabric.getOperationState(String(location)); },
   });
 
   // -------- Foundry --------
@@ -589,15 +620,17 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Activator',
     description: 'List Activator (Reflex) items in a Fabric workspace.',
     parameters: obj({ workspaceId: S_STRING }, ['workspaceId']),
-    handler: async ({ workspaceId }) => activator.listActivators(workspaceId),
+    handler: async ({ workspaceId }) => { assertFabricFamilyAvailable('activator'); return activator.listActivators(workspaceId); },
   });
   r.register({
     name: 'activator_trigger_rule',
     service: 'Activator',
     description: 'Manually trigger an Activator rule.',
     parameters: obj({ workspaceId: S_STRING, activatorId: S_STRING, ruleId: S_STRING }, ['workspaceId', 'activatorId', 'ruleId']),
-    handler: async ({ workspaceId, activatorId, ruleId }) =>
-      activator.triggerRule(workspaceId, activatorId, ruleId),
+    handler: async ({ workspaceId, activatorId, ruleId }) => {
+      assertFabricFamilyAvailable('activator');
+      return activator.triggerRule(workspaceId, activatorId, ruleId);
+    },
   });
 
   // -------- Workspace / item meta (Loom Cosmos) --------
