@@ -911,6 +911,43 @@ az ad app permission admin-consent --id <loom console app registration appId>
 not the console identity. The chosen mode persists in Cosmos
 (`item.state.accessMode`) and survives reload.
 
+
+## Open mirroring (push Parquet → managed Delta) — producer onboarding
+
+The "Open mirroring" source on a Mirrored Database is a **push** model: an
+external producer writes Parquet into the DLZ **`landing`** ADLS Gen2 container
+at `<mirrorId>/<table>/*.parquet`, and Loom merges it into a managed Delta table
+under `bronze/mirrors/<workspaceId>/<mirrorId>/Tables/<table>` via a **Synapse
+Spark Livy batch** (`runOpenMirrorMerge`). No Microsoft Fabric.
+
+**Already provisioned by bicep — no extra admin step for Loom itself:**
+
+- The `landing` container is created in `landing-zone/storage.bicep` and surfaced
+  to the console as `LOOM_LANDING_URL` (admin-plane `apps[].env`).
+- The Console UAMI already holds **Storage Blob Data Contributor** on the DLZ
+  storage account (it lists the landing zone, uploads the merge script to
+  `bronze/scripts/open-mirror-merge.py`, and the Spark job writes Delta).
+- The merge job runs on the Spark pool named by `LOOM_OPEN_MIRROR_POOL`
+  (optional override) → falls back to `LOOM_SYNAPSE_SPARK_POOL` → `LOOM_SPARK_POOL`
+  → `loompool`. `LOOM_SYNAPSE_WORKSPACE` must be set (it already is for the
+  notebook / Spark editors).
+
+**One grant for the EXTERNAL producer** (its own SP / UAMI object id — not known
+to bicep at deploy time). Use the **RBAC** path shown in the editor's "Producer
+credentials → RBAC" tab:
+
+```bash
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee "<producer-principal-object-id>" \
+  --scope "/subscriptions/<sub>/resourceGroups/<dlz-rg>/providers/Microsoft.Storage/storageAccounts/<account>/blobServices/default/containers/landing"
+```
+
+**SAS alternative (optional).** To hand the producer a user-delegation SAS instead
+of RBAC, grant the **Console UAMI** the `Storage Blob Delegator` role on the DLZ
+storage account (it is not part of the default grant set). The editor's "Producer
+credentials → SAS" tab surfaces this as an honest gate with the exact command.
+
 ## Item-level Share — per-database Azure RBAC (Access control / IAM) {#sql-database-share-rbac}
 
 The **Share** tab in the SQL database editor mirrors the Azure portal *Access
