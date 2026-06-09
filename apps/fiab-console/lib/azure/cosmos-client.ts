@@ -117,6 +117,14 @@ let _reportDeliveryLog: Container | null = null;
 // single physical partition. Distinct from the tenant-scoped 'connections'
 // container (generic data-source connections with Key Vault secrets).
 let _azureConnections: Container | null = null;
+// Task flows (F11) — visual step-sequence canvases per workspace. One row per
+// task flow, partitioned by /workspaceId so the workspace's flow list + every
+// per-flow save hits a single physical partition. Steps carry @xyflow/react
+// canvas positions and optional refs to real WorkspaceItem ids; edges are the
+// directed links between steps. Loom-native (no Fabric dependency). Created
+// lazily so a fresh environment needs no extra ARM/Bicep step beyond the
+// account+database.
+let _taskFlows: Container | null = null;
 let _ensured = false;
 
 /**
@@ -464,6 +472,12 @@ async function ensure() {
   // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
   // account+database.
   _azureConnections = await mk('azure-connections', '/workspaceId');
+  // Task flows (F11) — visual step-sequence canvases. One row per task flow,
+  // PK /workspaceId so the workspace's flow list + every save hits a single
+  // physical partition. Created lazily; no ARM/Bicep pre-step beyond the
+  // account+database (the Console UAMI already holds Cosmos DB Built-in Data
+  // Contributor at account scope).
+  _taskFlows = await mk('task-flows', '/workspaceId');
   _ensured = true;
 }
 
@@ -506,6 +520,8 @@ export async function reportSubscriptionsContainer(): Promise<Container> { await
 export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
 /** F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings (PK /workspaceId). */
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
+/** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
+export async function taskFlowsContainer(): Promise<Container> { await ensure(); return _taskFlows!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -643,6 +659,7 @@ const KNOWN_CONTAINER_IDS = [
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
   'azure-connections',
+  'task-flows',
 ];
 
 /** List all Loom containers with their current throughput shape. */
