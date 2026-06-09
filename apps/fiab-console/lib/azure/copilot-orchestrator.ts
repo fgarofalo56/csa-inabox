@@ -42,6 +42,10 @@ import {
 } from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
+  isFabricCopilotEnabled,
+  resolveCopilotFabricWorkspace,
+} from '../types/copilot-config';
+import {
   executeQuery as synapseExecute,
   dedicatedTarget,
   serverlessTarget,
@@ -1342,6 +1346,54 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   messages.push({ role: 'user', content: prompt });
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
+
+  // ── Fabric / Power BI Copilot opt-in branch ───────────────────────────────
+  // ONLY entered when LOOM_COPILOT_BACKEND=fabric (or cfg.fabricCopilotBackend)
+  // AND a Fabric workspace id resolves AND this is NOT a Gov boundary. The
+  // Azure-native AOAI path below is the SILENT DEFAULT — when this block is
+  // skipped NOTHING is emitted and NO Fabric/Power BI host is contacted. This
+  // is the ONLY place the orchestrator reaches api.fabric.microsoft.com at the
+  // system level (per .claude/rules/no-fabric-dependency.md).
+  if (isFabricCopilotEnabled(opts.tenantConfig ?? null, isGovCloud)) {
+    const fabricWsId = resolveCopilotFabricWorkspace(opts.tenantConfig ?? null);
+    try {
+      // Real api.fabric.microsoft.com call — validates the bound workspace is
+      // reachable and the Console UAMI has the required role.
+      const workspaces = await fabric.listFabricWorkspaces();
+      const ws = workspaces.find((w) => w.id === fabricWsId || w.displayName === fabricWsId);
+      const wsLabel = ws ? `${ws.displayName} (${ws.id})` : fabricWsId;
+      await persistStep(sessionId, userOid, {
+        kind: 'thought',
+        content:
+          `Fabric Copilot opt-in active: validated workspace ${wsLabel} via api.fabric.microsoft.com. ` +
+          `LLM inference runs on Azure OpenAI (Fabric Copilot exposes no public programmatic invocation API). ` +
+          `Fabric tools (fabric_list_workspaces, fabric_create_notebook, fabric_run_notebook) are preferred for items in this workspace.`,
+      });
+      // Enrich the system prompt with Fabric workspace context so the model
+      // prefers Fabric-native operations for items in the bound workspace.
+      messages[0] = {
+        role: 'system',
+        content:
+          SYSTEM_PROMPT +
+          `\n\nFABRIC CAPACITY OPT-IN: A Microsoft Fabric workspace is bound for this session: ${wsLabel}. ` +
+          `When the user's request maps to a Fabric item (notebook, pipeline, lakehouse) in this workspace, prefer the ` +
+          `fabric_* tools and operate against this workspace id (${ws?.id || fabricWsId}).`,
+      };
+    } catch (e: any) {
+      // Honest fall-through: surface the precise remediation, then continue on
+      // the Azure-native AOAI path (do NOT abort the chat).
+      await persistStep(sessionId, userOid, {
+        kind: 'error',
+        error:
+          `Fabric Copilot opt-in: workspace ${fabricWsId} is not reachable via api.fabric.microsoft.com — ` +
+          `verify (1) the Console UAMI has Member/Contributor on the workspace, ` +
+          `(2) "Service principals can use Fabric APIs" is enabled in the Fabric admin portal, ` +
+          `(3) the workspace is on F2+ / P1+ capacity. Continuing on the Azure-native Copilot path. ` +
+          `(${e instanceof fabric.FabricError ? `${e.status} ${e.message}` : e?.message || e})`,
+      });
+    }
+  }
+  // ── END opt-in branch — Azure-native AOAI loop follows (default path) ──────
 
   // Accumulate token/context usage across every AOAI round-trip in the loop so
   // the final step can report total cost (parity with the data-agent chat).
