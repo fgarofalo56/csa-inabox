@@ -569,6 +569,12 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services data-plane address for DAX tile / semantic execution when loomSemanticBackend=analysis-services. Form: <region>.<aasSuffix>/<serverName> e.g. westus2.asazure.windows.net/myserver (Gov: <region>.asazure.usgovcloudapi.net/<server>). Leave empty to keep the AAS gate active — the dashboard tile-query route then returns an honest gate naming this env var. One-time bootstrap: add the Console UAMI as an AAS server admin (az ams server admin add).')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name for DAX execution. Must match the model deployed on loomAasServer.')
+param loomAasModel string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -1297,6 +1303,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            // Azure Analysis Services DAX backend (dashboard Q&A / pinned-DAX
+            // tiles) — Azure-native, used when LOOM_SEMANTIC_BACKEND=analysis-services.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no

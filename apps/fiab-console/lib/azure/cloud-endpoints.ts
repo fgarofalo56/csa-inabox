@@ -384,6 +384,33 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (data plane — XMLA endpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * AAS data-plane hostname suffix (no leading dot, no region/server prefix).
+ *   Commercial / GCC     : asazure.windows.net
+ *   GCC-High / IL5 / DoD : asazure.usgovcloudapi.net
+ *
+ * GCC runs in the Commercial `AzureCloud` ARM environment, so its AAS server is
+ * a Commercial `asazure.windows.net` server. GCC-High / IL5 / DoD use the gov
+ * suffix. Grounded in the Azure PowerShell environment constant
+ * `AzureEnvironmentConstants.USGovernmentAnalysisServicesEndpointSuffix`
+ * (`asazure.usgovcloudapi.net`) and the AAS async-refresh REST docs whose sync
+ * endpoint pattern is `https://<region>.asazure.windows.net/servers/<server>/…`
+ * for Commercial. See:
+ *   https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+ */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/** AAD token scope for the AAS data-plane (XMLA + management REST). */
+export function aasScope(): string {
+  return `https://*.${aasSuffix()}/.default`;
+}
+
+// ---------------------------------------------------------------------------
 // Azure Cosmos DB (data plane — documents endpoint)
 // ---------------------------------------------------------------------------
 

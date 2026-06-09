@@ -74,6 +74,7 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+let _pbiDashboardOverlays: Container | null = null;
 let _ensured = false;
 
 /**
@@ -289,6 +290,13 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Loom-native overlay for Power BI / AAS dashboards: pinned-DAX tiles, Q&A
+  // (Copilot→DAX) tiles, streaming (ADX/KQL) tiles, and the grid layout. Stored
+  // separately from the Power BI REST tile list so the PBI ACL never gates the
+  // Loom layout, and so the Azure-native streaming tiles persist with NO Power
+  // BI / Fabric workspace bound. Partitioned by /itemId → one physical
+  // partition per dashboard. Created lazily; no extra ARM/Bicep step.
+  _pbiDashboardOverlays = await mk('pbi-dashboard-overlays', '/itemId');
   _ensured = true;
 }
 
@@ -314,6 +322,7 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+export async function pbiDashboardOverlaysContainer(): Promise<Container> { await ensure(); return _pbiDashboardOverlays!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -394,6 +403,7 @@ const KNOWN_CONTAINER_IDS = [
   'attribute-groups', 'okrs',
   'access-request-workflow',
   'saved-queries',
+  'pbi-dashboard-overlays',
 ];
 
 /** List all Loom containers with their current throughput shape. */
