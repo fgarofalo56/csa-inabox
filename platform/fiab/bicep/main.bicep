@@ -75,6 +75,9 @@ param loomDlpEnabled bool = false
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false
 
+@description('HTTPS XMLA endpoint for semantic-model authoring surfaces that need the XMLA write surface (Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint is an opt-in alternative selected by URL. Empty = the Aggregations surface honest-gates (no Fabric dependency).')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
 param loomIdentityPickerEnabled bool = false
 
@@ -145,6 +148,9 @@ param aiFoundryEnabled bool = false
 
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
+
+@description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable.')
+param loomAoaiCompletionDeployment string = ''
 
 @description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
 param loomAmlRg string = ''
@@ -309,6 +315,9 @@ param loomAmlRegion string = ''
 @description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT — Fix / Explain / NL→T-SQL + inline ghost text). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true; empty + Foundry off → the SQL Copilot pane shows an honest gate naming this var + the Cognitive Services OpenAI User role.')
 param loomAzureOpenAiEndpoint string = ''
 
+@description('Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION) for the Copilot / data-agent orchestrators. Default 2024-10-21; advance for o-series reasoning models. The data-plane host is derived per sovereign boundary from environment(), so this value is cloud-invariant.')
+param loomAoaiApiVersion string = '2024-10-21'
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -392,6 +401,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     agentFoundryEnabled: agentFoundryEnabled
+    loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
@@ -428,6 +438,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
+    loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
     loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
@@ -443,6 +454,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlRegion: loomAmlRegion
     // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
     loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
+    loomAoaiApiVersion: loomAoaiApiVersion
   }
 }
 
@@ -484,6 +496,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
@@ -509,6 +522,26 @@ module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
   params: {
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     storageAccountName: singleDlz!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// F16 (Notebook AI functions) — grant the DLZ Spark identities (Synapse
+// workspace MSI + Databricks Access Connector MSI) Cognitive Services OpenAI
+// User on the admin-plane AOAI account, so ai.summarize / classify / extract /
+// translate / sentiment in a PySpark/pandas notebook cell can call AOAI. The
+// AOAI account lives in the Admin Plane RG (deployed before the DLZ), so the
+// grant is made here (orchestrator) at admin-plane scope, fed the Spark
+// identities from the DLZ outputs. The module no-ops (its role assignments are
+// guarded on !empty(aiServicesAccountName)) when admin-plane used an existing
+// external AOAI account — the operator grants the role manually then.
+module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (deploymentMode == 'single-sub') {
+  name: 'dlz-single-aoai-spark-rbac'
+  scope: adminPlaneRg
+  params: {
+    aiServicesAccountName: adminPlane.outputs.aiServicesAccountName
+    synapseWorkspacePrincipalId: singleDlz!.outputs.synapseManagedIdentityPrincipalId
+    databricksAccessConnectorPrincipalId: singleDlz!.outputs.databricksAccessConnectorPrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -539,6 +572,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint

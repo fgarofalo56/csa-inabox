@@ -73,6 +73,12 @@ export interface FabricItemType {
   preview?: boolean;
   /** True when no Fabric REST API exists (Scorecard, Dataflow Gen1) */
   noRestApi?: boolean;
+  /**
+   * True when the item type is deprecated and NO create path should be shown.
+   * The New item dialog filters these out; the editor surfaces a deprecated
+   * MessageBar + a migration action instead of an authoring surface.
+   */
+  deprecated?: boolean;
   /** Learn / Getting started popup content. Required for every type. */
   learnContent?: LearnContent;
 }
@@ -447,6 +453,33 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-warehouse/data-warehousing"
+    } },
+
+  // Data Warehouse — DEPRECATED datamart (migration-only; no create path).
+  { slug: 'datamart', displayName: 'Datamart (deprecated)', restType: 'Datamart', category: 'Data Warehouse',
+    noRestApi: true, deprecated: true,
+    description: 'DEPRECATED — Power BI datamarts are replaced by a Synapse Serverless database + Azure Analysis Services semantic model. No new datamarts can be created; existing ones can be migrated.',
+    learnContent: {
+      "overview": "Power BI datamarts are deprecated. The Loom replacement is a Synapse Serverless user database (always-on OPENROWSET / external-table analytics) plus an Azure Analysis Services tabular model (Import or DirectQuery over Synapse) — no Fabric or Power BI Premium capacity required. The Migrate action provisions both automatically and stamps a migration receipt on the original item.",
+      "steps": [
+        {
+          "title": "Review datamart definition",
+          "body": "Open the deprecated datamart to see its name and the deprecation banner. No authoring surface is offered — datamarts are migration-only."
+        },
+        {
+          "title": "Migrate",
+          "body": "Click Migrate. Loom runs CREATE DATABASE on the Synapse Serverless endpoint and PUTs an Azure Analysis Services server, then records the new database name + AAS connection URI on the item."
+        },
+        {
+          "title": "Deploy the tabular model",
+          "body": "Use SSDT or SSMS against the AAS XMLA endpoint (connection URI in the receipt) to deploy the semantic model to the provisioned server."
+        },
+        {
+          "title": "Reconnect reports",
+          "body": "Point Power BI / Loom reports at the new AAS server or the Synapse Serverless SQL endpoint instead of the datamart."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/power-bi/transform-model/datamarts/datamarts-overview"
     } },
 
   // Databases

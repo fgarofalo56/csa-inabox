@@ -35,3 +35,14 @@ Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` -> `ReportLikeEditor`
 - In-place embed + format export require the pbi-paginated SDK which is not wired; the warning MessageBar discloses this and routes the user to Power BI Web. This is an honest gate, not a stub — the rest of the surface is live REST.
 
 Grade: A (with two disclosed honest-gates for the pbi-paginated-SDK-only capabilities; zero dead buttons, zero fake data).
+
+## Per-cloud notes
+
+List, detail, and dataset refresh use Power BI REST; the sovereign host is resolved by `cloud-endpoints.ts`. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | List + metadata + dataset-backed refresh work; in-place embed/format-export honest-gated to the pbi-paginated SDK. |
+| GCC | `api.powerbigov.us` | Same coverage as Commercial; the pbi-paginated-SDK honest-gate is unchanged. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Same coverage. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Same coverage. |

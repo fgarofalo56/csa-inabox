@@ -82,6 +82,7 @@ export type MonacoLanguage =
   | 'typescript'
   | 'yaml'
   | 'markdown'
+  | 'dax'           // Data Analysis Expressions (Power BI / Analysis Services)
   | 'plaintext';
 
 export interface MonacoTextareaProps {
@@ -128,6 +129,7 @@ function mapLanguage(lang?: MonacoLanguage): string {
     case 'javascript': return 'javascript';
     case 'typescript': return 'typescript';
     case 'markdown': return 'markdown';
+    case 'dax': return 'dax';
     default: return 'plaintext';
   }
 }
@@ -177,6 +179,87 @@ function registerKustoLanguageOnce(monaco: any) {
     ],
   });
   kustoRegistered = true;
+}
+
+let daxRegistered = false;
+function registerDaxLanguageOnce(monaco: any) {
+  if (daxRegistered) return;
+  if (monaco.languages.getLanguages().some((l: any) => l.id === 'dax')) {
+    daxRegistered = true;
+    return;
+  }
+  monaco.languages.register({ id: 'dax', extensions: ['.dax'] });
+  monaco.languages.setMonarchTokensProvider('dax', {
+    defaultToken: '',
+    ignoreCase: true,
+    keywords: [
+      // Aggregation
+      'SUM', 'SUMX', 'AVERAGE', 'AVERAGEX', 'MIN', 'MINX', 'MAX', 'MAXX',
+      'COUNT', 'COUNTA', 'COUNTX', 'COUNTROWS', 'DISTINCTCOUNT', 'DISTINCTCOUNTNOBLANK',
+      // Filter & context
+      'CALCULATE', 'CALCULATETABLE', 'FILTER', 'ALL', 'ALLEXCEPT', 'ALLNOBLANKROW',
+      'ALLSELECTED', 'KEEPFILTERS', 'REMOVEFILTERS', 'USERELATIONSHIP', 'EARLIER', 'EARLIEST',
+      // Table functions
+      'ADDCOLUMNS', 'SELECTCOLUMNS', 'SUMMARIZE', 'SUMMARIZECOLUMNS',
+      'GROUPBY', 'CROSSJOIN', 'UNION', 'INTERSECT', 'EXCEPT',
+      'TOPN', 'SAMPLE', 'GENERATE', 'GENERATEALL', 'ROW', 'DATATABLE',
+      'DISTINCT', 'VALUES', 'HASONEVALUE', 'HASONEFILTER', 'SELECTEDVALUE', 'ISINSCOPE',
+      // Date/time intelligence
+      'TOTALYTD', 'TOTALQTD', 'TOTALMTD',
+      'DATESYTD', 'DATESQTD', 'DATESMTD',
+      'SAMEPERIODLASTYEAR', 'PARALLELPERIOD', 'DATEADD', 'DATESBETWEEN', 'DATESINPERIOD',
+      'STARTOFYEAR', 'ENDOFYEAR', 'STARTOFQUARTER', 'ENDOFQUARTER',
+      'STARTOFMONTH', 'ENDOFMONTH', 'FIRSTDATE', 'LASTDATE',
+      'PREVIOUSYEAR', 'PREVIOUSQUARTER', 'PREVIOUSMONTH', 'PREVIOUSDAY',
+      'NEXTYEAR', 'NEXTQUARTER', 'NEXTMONTH', 'NEXTDAY',
+      'CALENDAR', 'CALENDARAUTO', 'YEAR', 'MONTH', 'DAY', 'DATE', 'TODAY', 'NOW',
+      // Logical
+      'IF', 'IFERROR', 'IFBLANK', 'SWITCH', 'AND', 'OR', 'NOT', 'ISBLANK', 'ISERROR',
+      'TRUE', 'FALSE', 'BLANK', 'COALESCE',
+      // Text
+      'CONCATENATE', 'CONCATENATEX', 'LEFT', 'RIGHT', 'MID', 'LEN', 'TRIM',
+      'UPPER', 'LOWER', 'SUBSTITUTE', 'REPLACE', 'SEARCH', 'FIND', 'FORMAT', 'UNICHAR',
+      // Math
+      'ABS', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'INT', 'MOD', 'POWER', 'SQRT',
+      'DIVIDE', 'QUOTIENT', 'CEILING', 'FLOOR', 'TRUNC',
+      // Lookup / relationship
+      'RELATED', 'RELATEDTABLE', 'LOOKUPVALUE', 'CONTAINS', 'CONTAINSROW',
+      // Variables / control flow
+      'VAR', 'RETURN', 'DEFINE', 'MEASURE', 'EVALUATE', 'ORDER', 'BY', 'START', 'AT', 'ASC', 'DESC',
+    ],
+    operators: ['=', '<>', '<', '>', '<=', '>=', '+', '-', '*', '/', '&', '&&', '||', '!'],
+    tokenizer: {
+      root: [
+        [/--.*$/, 'comment'],
+        [/\/\/.*$/, 'comment'],
+        [/\/\*/, 'comment', '@comment'],
+        [/"[^"]*"/, 'string'],
+        [/'[^']*'/, 'string'],            // 'Table Name' quoted identifiers
+        [/\b\d+(\.\d+)?\b/, 'number'],
+        [/\[[^\]]*\]/, 'variable.name'],  // [Column] and [Measure] references
+        [/[a-zA-Z_][\w.]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
+        [/[=<>!+\-*/&|]+/, 'operator'],
+      ],
+      comment: [
+        [/[^/*]+/, 'comment'],
+        [/\*\//, 'comment', '@pop'],
+        [/[/*]/, 'comment'],
+      ],
+    },
+  });
+  monaco.languages.setLanguageConfiguration('dax', {
+    comments: { lineComment: '//', blockComment: ['/*', '*/'] },
+    brackets: [['(', ')'], ['[', ']'], ['{', '}']],
+    autoClosingPairs: [
+      { open: '(', close: ')' },
+      { open: '[', close: ']' },
+      { open: '{', close: '}' },
+      { open: "'", close: "'" },
+      { open: '"', close: '"' },
+    ],
+    wordPattern: /[a-zA-Z_][\w.]*/,
+  });
+  daxRegistered = true;
 }
 
 let darkThemeDefined = false;
@@ -247,6 +330,7 @@ export function MonacoTextarea({
     monacoRef.current = monaco;
     defineLoomThemeOnce(monaco);
     if (monacoLang === 'kusto') registerKustoLanguageOnce(monaco);
+    if (monacoLang === 'dax') registerDaxLanguageOnce(monaco);
     monaco.editor.setTheme(detectTheme());
     onReady?.(editor, monaco);
   }, [monacoLang, onReady]);

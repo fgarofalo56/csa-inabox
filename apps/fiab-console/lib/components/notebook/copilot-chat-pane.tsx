@@ -33,6 +33,10 @@ import {
   Checkmark16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { CopilotChips } from '@/lib/components/copilot-chips';
+import type { CopilotContext } from '@/lib/azure/copilot-personas';
+import { CopilotDiff, type ProposedChange } from '@/lib/components/copilot-diff';
+import { isSlashMenuOpen } from '@/lib/copilot/slash-commands';
 
 interface AttachedSource {
   kind: 'lakehouse' | 'warehouse' | 'kql-database';
@@ -50,6 +54,12 @@ export interface CopilotChatPaneProps {
   activeCellId: string | null;
   attachedSources: AttachedSource[];
   defaultLang: NotebookCellLang;
+  /** Notebook display name — grounds the persona system prompt. */
+  notebookName?: string;
+  /** Livy session-create receipt (id, numExecutors, …) — for /perf telemetry. */
+  sessionReceipt?: Record<string, unknown> | null;
+  /** User session sizing (numExecutors, executorMemoryGb, timeoutMinutes) — for /perf. */
+  sessionConfig?: Record<string, unknown>;
   /** Apply parsed code blocks back into the notebook, starting at the active
    *  cell and walking backwards for multi-block answers. */
   onApplyCells?: (updated: { source: string }[]) => void;
@@ -60,7 +70,15 @@ const SLASH_COMMANDS: { cmd: string; label: string; help: string }[] = [
   { cmd: '/explain', label: '/explain', help: 'Explain what the current cell does' },
   { cmd: '/comments', label: '/comments', help: 'Add inline comments to the current cell' },
   { cmd: '/optimize', label: '/optimize', help: 'Rewrite the current cell for performance' },
+  { cmd: '/summarize', label: '/summarize', help: 'Summarize this notebook — every cell' },
+  { cmd: '/generate', label: '/generate', help: '/generate <task> — runnable PySpark on the real schema' },
+  { cmd: '/refactor', label: '/refactor', help: 'Refactor across cells — apply via diff' },
+  { cmd: '/profile', label: '/profile', help: '/profile <table> — real lakehouse table stats' },
+  { cmd: '/perf', label: '/perf', help: 'Tuning insights from the last run' },
 ];
+
+/** The full slash-command allowlist (mirrors copilot-personas NOTEBOOK_SLASH_COMMANDS). */
+const KNOWN_COMMANDS = ['fix', 'explain', 'comments', 'optimize', 'summarize', 'generate', 'refactor', 'profile', 'perf'];
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -150,7 +168,8 @@ function segments(text: string): { type: 'text' | 'code'; value: string }[] {
 }
 
 export function CopilotChatPane({
-  open, onOpenChange, notebookId, workspaceId, cells, activeCellId, attachedSources, defaultLang, onApplyCells,
+  open, onOpenChange, notebookId, workspaceId, cells, activeCellId, attachedSources, defaultLang,
+  notebookName, sessionReceipt, sessionConfig, onApplyCells,
 }: CopilotChatPaneProps) {
   const s = useStyles();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -162,6 +181,9 @@ export function CopilotChatPane({
   const [slashIdx, setSlashIdx] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  // Pending Apply: holds the proposed change + the full block set so Keep can
+  // apply ALL blocks while the diff shows the active cell's before/after.
+  const [pendingApply, setPendingApply] = useState<{ change: ProposedChange; blocks: string[] } | null>(null);
   const sessionIdRef = useRef<string>(
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? `nbcopilot-${crypto.randomUUID()}`
@@ -170,10 +192,21 @@ export function CopilotChatPane({
   const abortRef = useRef<AbortController | null>(null);
   const historyEndRef = useRef<HTMLDivElement | null>(null);
 
-  const slashOpen = input.startsWith('/') && !input.includes(' ');
+  const slashOpen = isSlashMenuOpen(input);
   const slashMatches = useMemo(
     () => (slashOpen ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase())) : []),
     [slashOpen, input],
+  );
+
+  // Persona context for the suggested-prompt chips: notebook-flavoured prompts
+  // grounded in the real attached lakehouse names + active language.
+  const chipCtx: CopilotContext = useMemo(
+    () => ({
+      persona: 'notebook',
+      attachedSourceNames: attachedSources.map((src) => src.displayName),
+      defaultLang,
+    }),
+    [attachedSources, defaultLang],
   );
 
   useEffect(() => {
@@ -209,13 +242,16 @@ export function CopilotChatPane({
       const text = rawText.trim();
       if (!text || streaming) return;
 
-      // Parse a leading slash command into {command, errorText}.
+      // Parse a leading slash command into {command, freeText}.
       const m = text.match(/^\/(\w+)\b\s*(.*)$/s);
       const command = m ? m[1].toLowerCase() : 'explain';
-      const known = ['fix', 'explain', 'comments', 'optimize'];
-      const cmd = known.includes(command) ? command : 'explain';
+      const cmd = KNOWN_COMMANDS.includes(command) ? command : 'explain';
+      const freeText = (m?.[2] || '').trim();
 
-      const ctx = contextCells();
+      // For persona commands we send the WHOLE notebook (summarize/refactor need
+      // every cell); single-cell commands send the current cell + prior 5.
+      const personaCmd = ['summarize', 'generate', 'refactor', 'profile', 'perf'].includes(cmd);
+      const ctx = personaCmd ? cells : contextCells();
       if (ctx.length === 0) {
         setError('Add a cell to the notebook before asking Copilot.');
         return;
@@ -228,7 +264,17 @@ export function CopilotChatPane({
             ? [activeCell.output.ename, activeCell.output.evalue, ...(activeCell.output.traceback || [])]
                 .filter(Boolean)
                 .join('\n')
-            : (m?.[2] || '')
+            : freeText
+          : '';
+
+      // `/profile <table>` — the first token after the command is the table name.
+      const profileTable = cmd === 'profile' ? freeText.split(/\s+/)[0] || '' : '';
+      // `/perf` — attach the most recent cell output text as last-run telemetry.
+      const lastOutput =
+        cmd === 'perf'
+          ? (activeCell.output?.textPlain ||
+              [...cells].reverse().find((c) => c.output?.textPlain)?.output?.textPlain ||
+              '')
           : '';
 
       setError(null);
@@ -252,9 +298,15 @@ export function CopilotChatPane({
             activeCellId: active,
             lang: activeCell.lang || defaultLang,
             errorText,
+            text: freeText,
             attachedSources,
             notebookId,
             workspaceId,
+            notebookName,
+            sessionReceipt: sessionReceipt || undefined,
+            sessionConfig,
+            lastOutput,
+            profileTable,
           }),
           signal: ac.signal,
         });
@@ -320,7 +372,8 @@ export function CopilotChatPane({
         abortRef.current = null;
       }
     },
-    [streaming, contextCells, activeCellId, defaultLang, attachedSources, notebookId, workspaceId],
+    [streaming, contextCells, cells, activeCellId, defaultLang, attachedSources, notebookId, workspaceId,
+     notebookName, sessionReceipt, sessionConfig],
   );
 
   const onKeyDown = useCallback(
@@ -343,13 +396,47 @@ export function CopilotChatPane({
     [slashOpen, slashMatches, slashIdx, input, send],
   );
 
-  const applyBlocks = useCallback(
+  // Clicking "Apply to notebook" no longer mutates immediately — it opens the
+  // Keep/Undo diff modal showing the ACTIVE cell's real before/after. The cell
+  // is mutated ONLY on Keep. applyCells maps the last block onto the active
+  // cell (walking backwards for multi-block answers), so the diff's `after` is
+  // the block that lands on the active cell.
+  const openApplyDiff = useCallback(
     (blocks: string[]) => {
       if (!onApplyCells || blocks.length === 0) return;
-      onApplyCells(blocks.map((source) => ({ source })));
+      const idx = activeCellId ? cells.findIndex((c) => c.id === activeCellId) : -1;
+      let targetCell = idx >= 0 ? cells[idx] : undefined;
+      if (!targetCell) {
+        for (let i = cells.length - 1; i >= 0; i--) {
+          if (cells[i].type === 'code') { targetCell = cells[i]; break; }
+        }
+      }
+      if (!targetCell) targetCell = cells[cells.length - 1];
+      const before = targetCell?.source ?? '';
+      const after = blocks[blocks.length - 1];
+      const lang = (targetCell?.lang || defaultLang) as string;
+      setPendingApply({
+        blocks,
+        change: {
+          target: targetCell ? `notebook-cell:${targetCell.id}` : 'notebook-cell',
+          before,
+          after,
+          lang,
+          summary: blocks.length > 1
+            ? `${blocks.length} cells will be applied; the diff below shows the active cell.`
+            : undefined,
+        },
+      });
     },
-    [onApplyCells],
+    [onApplyCells, cells, activeCellId, defaultLang],
   );
+
+  // Keep: commit ALL proposed blocks via the notebook's applyCells callback.
+  const keepApply = useCallback(() => {
+    if (!pendingApply || !onApplyCells) { setPendingApply(null); return; }
+    onApplyCells(pendingApply.blocks.map((source) => ({ source })));
+    setPendingApply(null);
+  }, [pendingApply, onApplyCells]);
 
   return (
     <InlineDrawer open={open} position="end" separator className={s.drawer}>
@@ -374,8 +461,9 @@ export function CopilotChatPane({
           <div className={s.history}>
             {messages.length === 0 && !streaming && (
               <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
-                Ask about the current cell, or use a slash command: <code>/fix</code>, <code>/explain</code>,{' '}
-                <code>/comments</code>, <code>/optimize</code>.
+                Ask about a cell, or run a slash command: <code>/summarize</code>, <code>/generate</code>,{' '}
+                <code>/refactor</code>, <code>/profile</code>, <code>/perf</code>, <code>/fix</code>,{' '}
+                <code>/explain</code>, <code>/comments</code>, <code>/optimize</code>.
               </Body1>
             )}
 
@@ -393,8 +481,8 @@ export function CopilotChatPane({
                   )}
                   {onApplyCells && msg.codeBlocks && msg.codeBlocks.length > 0 && (
                     <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => applyBlocks(msg.codeBlocks!)}>
-                        {msg.codeBlocks.length > 1 ? `Apply ${msg.codeBlocks.length} cells to notebook` : 'Apply to notebook'}
+                      <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => openApplyDiff(msg.codeBlocks!)}>
+                        {msg.codeBlocks.length > 1 ? `Review ${msg.codeBlocks.length} cells` : 'Review & apply'}
                       </Button>
                       {msg.codeBlocks.length > 1 && (
                         <Badge appearance="outline" color="brand" size="small">diff · {msg.codeBlocks.length} blocks</Badge>
@@ -432,6 +520,9 @@ export function CopilotChatPane({
           )}
 
           <div className={s.inputRow}>
+            {messages.length === 0 && !streaming && (
+              <CopilotChips ctx={chipCtx} busy={streaming} onSelect={(prompt) => void send(prompt)} />
+            )}
             {slashOpen && slashMatches.length > 0 && (
               <div className={s.slashMenu} role="listbox" aria-label="Slash commands">
                 {slashMatches.map((c, i) => (
@@ -453,7 +544,7 @@ export function CopilotChatPane({
               value={input}
               onChange={(_, d) => { setInput(d.value); setSlashIdx(0); }}
               onKeyDown={onKeyDown}
-              placeholder="/fix · /explain · /comments · /optimize — or ask anything"
+              placeholder="/summarize · /generate · /profile · /perf · /refactor — or ask anything"
               disabled={streaming}
               contentAfter={
                 streaming ? (
@@ -493,6 +584,11 @@ export function CopilotChatPane({
           )}
         </div>
       </DrawerBody>
+      <CopilotDiff
+        change={pendingApply?.change ?? null}
+        onKeep={keepApply}
+        onUndo={() => setPendingApply(null)}
+      />
     </InlineDrawer>
   );
 }

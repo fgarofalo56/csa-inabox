@@ -104,6 +104,21 @@ each is disclosed precisely rather than faked.
 
 ---
 
+## Per-cloud notes
+
+Fabric Deployment Pipelines REST is a **Fabric** surface (`api.fabric.microsoft.com`), so it is unavailable where Fabric is not offered. The **ARM/bicep infra-deployments tab** is pure Azure Resource Manager and works in every cloud. Per `no-fabric-dependency.md`, the page renders fully with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset — the Fabric tab shows the honest 401/403 SP gate and the infra tab carries the operator's own bicep rollout history.
+
+| Cloud | Fabric Deployment Pipelines (rows 1–16, G1–G7) | Infra ARM deployments (rows 11–13) |
+|---|---|---|
+| Commercial | ✅ Fabric REST at `api.fabric.microsoft.com` | ✅ ARM `management.azure.com` |
+| GCC | ❌ **Fabric is not available in GCC** — the Fabric tab shows the honest infra-gate MessageBar, not a dead surface | ✅ ARM `management.usgovcloudapi.net` |
+| GCC-High / IL4 | ✅ Fabric REST at `api.fabric.high.azure.us` (Fabric available) | ✅ ARM `management.usgovcloudapi.net` |
+| DoD / IL5 | ✅ Fabric REST (Fabric available) | ✅ ARM `management.usgovcloudapi.net` |
+
+The GCC Fabric absence is structural (not timing-fixable). The existing 401/403 honest-gate already covers it; this table names the boundary explicitly so the gate reads as expected behavior in GCC rather than a defect.
+
+---
+
 ## Backend per control
 
 | Control | Backend |
