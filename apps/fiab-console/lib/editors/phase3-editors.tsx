@@ -10875,6 +10875,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     onTestQuery={setTestQuery}
                     onRunTest={runTestRole}
                   />
+                )}
                 {tab === 'direct-lake' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820 }}>
                     <div>
