@@ -22,6 +22,8 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { CopilotResult } from '@/lib/components/copilot-result';
+import { tagResult } from '@/lib/components/copilot-result-tagger';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -180,10 +182,24 @@ function StepCard({ step }: { step: Step }) {
       </div>
     );
   }
+  // tool_result success → typed renderer (DataGrid / chart / Monaco / markdown /
+  // change-set) instead of the old raw JSON.stringify dump. The error path keeps
+  // its readable text below.
+  if (step.kind === 'tool_result' && !step.error && step.result != null) {
+    return (
+      <div className={s.step}>
+        <div className={s.stepHeader}>
+          <Badge appearance="filled" color="success">tool_result</Badge>
+          <Caption1><strong>{step.name}</strong> · {step.durationMs}ms</Caption1>
+        </div>
+        <CopilotResult result={tagResult(step.result, step.name)} toolName={step.name} />
+      </div>
+    );
+  }
   let body = '';
   if (step.kind === 'thought') body = step.content;
   else if (step.kind === 'tool_call') body = JSON.stringify(step.args, null, 2);
-  else if (step.kind === 'tool_result') body = step.error ? `ERROR: ${step.error}` : JSON.stringify(step.result, null, 2);
+  else if (step.kind === 'tool_result') body = step.error ? `ERROR: ${step.error}` : '';
 
   return (
     <div className={s.step}>

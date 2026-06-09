@@ -23,6 +23,8 @@ import {
   ThumbLike20Regular, ThumbDislike20Regular,
   History20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
+import { CopilotResult } from '@/lib/components/copilot-result';
+import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
 
@@ -31,7 +33,7 @@ interface CopilotUsage { promptTokens: number; completionTokens: number; totalTo
 type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; callId: string }
-  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
   | { kind: 'error'; error: string };
 
@@ -376,9 +378,14 @@ export function CopilotPane() {
                 }
                 if (step.kind === 'tool_result') {
                   return (
-                    <div key={j} className={s.stepRow}>
-                      {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
-                      {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                    <div key={j}>
+                      <div className={s.stepRow}>
+                        {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                        {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                      </div>
+                      {!step.error && step.result != null && (
+                        <CopilotResult result={tagResult(step.result, step.name)} toolName={step.name} />
+                      )}
                     </div>
                   );
                 }
