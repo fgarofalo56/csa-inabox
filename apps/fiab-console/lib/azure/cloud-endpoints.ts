@@ -780,10 +780,8 @@ export function getKustoSuffix(): string {
 // real subdomain (e.g. https://eastus2.asazure.windows.net) FAILS auth.
 // Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
 
-/** AAS XMLA/REST hostname suffix for the active cloud (no leading dot). */
-export function aasSuffix(): string {
-  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
-}
+// aasSuffix() is declared once above (with LOOM_AAS_HOST_SUFFIX override
+// support) — re-using that single source of truth here.
 
 /**
  * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
