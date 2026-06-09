@@ -4,18 +4,41 @@
  *   - User databases (created via CREATE DATABASE on Serverless)
  *   - ADLS containers known to Loom (bronze/silver/gold/landing) — for OPENROWSET
  *   - Sample queries
+ *
+ * ?database=<db>&table=<schema.table> → { ok, columns } (INFORMATION_SCHEMA.COLUMNS
+ * in the selected database) for editor IntelliSense.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { serverlessTarget, serverlessEndpoint, executeQuery } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  const tableParam = req.nextUrl.searchParams.get('table') || '';
+  const dbParam = req.nextUrl.searchParams.get('database') || 'master';
+
+  // Column-completion request → INFORMATION_SCHEMA.COLUMNS in the selected DB.
+  if (tableParam) {
+    const [schemaName, tableName] = tableParam.includes('.') ? tableParam.split('.', 2) : ['dbo', tableParam];
+    try {
+      const cols = await executeQuery(
+        serverlessTarget(dbParam),
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
+           AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+         ORDER BY ORDINAL_POSITION`,
+      );
+      return NextResponse.json({ ok: true, columns: cols.rows.map((r) => String(r[0])) });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  }
 
   let databases: string[] = [];
   try {

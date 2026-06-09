@@ -145,6 +145,35 @@ export function stripArmBase(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Data Factory Studio (browser deep-links)
+// ---------------------------------------------------------------------------
+
+/**
+ * Azure Data Factory Studio browser base URL (no trailing slash). Sovereign
+ * cloud aware: Commercial + GCC run on the global ADF Studio
+ * (https://adf.azure.com); GCC-High / IL5 / DoD run on the Azure Government
+ * ADF Studio (https://adf.azure.us). Grounded in the Azure Government
+ * endpoint mapping for Data Factory (Learn: azure-government/compare-azure-government-global-azure).
+ *
+ * Used to build "Get data" deep-links — `{adfStudioBase()}/copyDataTool?factory=…`,
+ * `/authoring/pipeline/{name}?factory=…`, `/authoring/dataflow/{name}?factory=…`.
+ */
+export function adfStudioBase(): string {
+  return isGovCloud() ? 'https://adf.azure.us' : 'https://adf.azure.com';
+}
+
+/**
+ * Bare ARM resource ID of a Data Factory (NO management host prefix) —
+ * `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.DataFactory/factories/{name}`.
+ * This is the value ADF Studio expects as its `factory=` deep-link query
+ * parameter (URL-encode before appending). Pure string builder — no Azure SDK
+ * dependency — so it is unit-testable without the credential chain.
+ */
+export function adfFactoryDeepLinkId(subscriptionId: string, resourceGroup: string, factoryName: string): string {
+  return `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DataFactory/factories/${factoryName}`;
+}
+
+// ---------------------------------------------------------------------------
 // Microsoft Graph (national-cloud aware)
 // ---------------------------------------------------------------------------
 //
@@ -285,6 +314,29 @@ export function dfsUrl(account: string): string {
   return `https://${account}.${dfsSuffix()}`;
 }
 
+/**
+ * Convert a landed snapshot's https dfs URL into the abfss form Spark reads:
+ *   https://ACCT.dfs.core.windows.net/CONTAINER/PATH
+ *     → abfss://CONTAINER@ACCT.dfs.core.windows.net/PATH
+ *
+ * Sovereign-cloud aware: the dfs suffix comes from `dfsSuffix()` so a Gov URL
+ * (`*.dfs.core.usgovcloudapi.net`) is converted too — a hard-coded
+ * `.dfs.core.windows.net` regex would silently pass Gov URLs through unchanged
+ * and break Spark `abfss://` reads in GCC-High / IL5. Returns the input
+ * unchanged if it isn't a dfs https URL for the active cloud. Lives here (the
+ * pure endpoint module) rather than in the mssql-importing mirror-engine so it
+ * is unit-testable without the SQL/identity native dependency chain.
+ */
+export function httpsToAbfss(httpsUrl: string): string {
+  const suffix = dfsSuffix().replace(/\./g, '\\.');
+  const m = (httpsUrl || '').match(
+    new RegExp(`^https://([^.]+)\\.${suffix}/([^/]+)/(.*)$`, 'i'),
+  );
+  if (!m) return httpsUrl;
+  const [, account, container, path] = m;
+  return `abfss://${container}@${account}.${dfsSuffix()}/${path}`;
+}
+
 // ---------------------------------------------------------------------------
 // Azure AI Search (data plane)
 // ---------------------------------------------------------------------------
@@ -356,6 +408,31 @@ export function cosmosSuffix(): string {
 /** Build the Cosmos data-plane endpoint URL for a given account name. */
 export function cosmosEndpointFromName(accountName: string): string {
   return `https://${accountName}.${cosmosSuffix()}:443/`;
+}
+
+/**
+ * Cosmos DB **Gremlin (Apache TinkerPop) API** data-plane hostname suffix
+ * (no leading dot, no account prefix).
+ *   Commercial / GCC : gremlin.cosmos.azure.com
+ *   GCC-High / IL5 / DoD : gremlin.cosmos.azure.us
+ *
+ * The Gremlin endpoint is a DISTINCT host from the NoSQL `documents.azure.*`
+ * document endpoint — a Gremlin client connects over the `gremlin.cosmos.*`
+ * WebSocket host (verified against Microsoft Learn
+ * https://learn.microsoft.com/azure/cosmos-db/gremlin and the Azure-Government
+ * parity matrix). Hard-coding the Commercial `.azure.com` suffix silently
+ * fails Gremlin auth + traversal in Gov, so every Gremlin endpoint URL builds
+ * from this helper. GCC runs on the Commercial Azure environment, so its
+ * Gremlin account is a `.azure.com` account — same as Commercial — which is
+ * exactly what `isGovCloud()` (false for GCC) yields.
+ */
+export function gremlinSuffix(): string {
+  return isGovCloud() ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com';
+}
+
+/** Build the Cosmos Gremlin WebSocket endpoint URL for a given account name. */
+export function gremlinEndpointFromName(accountName: string): string {
+  return `wss://${accountName}.${gremlinSuffix()}:443/`;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +549,21 @@ export function getSqlSuffix(): string {
  */
 export function synapseSqlSuffix(): string {
   return isGovCloud() ? 'sql.azuresynapse.usgovcloudapi.net' : 'sql.azuresynapse.net';
+}
+
+/**
+ * Wildcard pattern for the JDBC `hostNameInCertificate` property when an
+ * external client connects to Synapse SQL (Dedicated or Serverless). Mirrors
+ * the `synapseSqlSuffix()` Commercial/Gov split so the JDBC URL the console's
+ * Connection details panel surfaces is valid on every sovereign boundary —
+ * without it the Microsoft JDBC driver can reject the TLS cert because the
+ * `*-ondemand` / pool FQDN does not match the leaf certificate subject.
+ *   Commercial / GCC : *.sql.azuresynapse.net
+ *   GCC-High / IL5   : *.sql.azuresynapse.usgovcloudapi.net
+ *   DoD              : *.sql.azuresynapse.usgovcloudapi.net
+ */
+export function synapseSqlJdbcHostCert(): string {
+  return `*.${synapseSqlSuffix()}`;
 }
 
 /** Log Analytics query-API host (full URL with scheme). */

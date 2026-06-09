@@ -106,6 +106,7 @@ export type CosmosAction =
   | 'items'
   | 'settings'
   | 'newSqlQuery'
+  | 'graph'
   | 'newStoredProcedure'
   | 'newUdf'
   | 'newTrigger'
