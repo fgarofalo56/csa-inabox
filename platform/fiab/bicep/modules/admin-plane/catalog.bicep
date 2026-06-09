@@ -181,6 +181,17 @@ output consolePurviewRoleGrant string = purviewEnabled && !empty(consolePrincipa
   ? 'Post-deploy: ROLE=data-reader CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
   : ''
 
+// F19 Audit logs: the Purview Data Map /datamap/api/audit/query endpoint
+// (api-version 2023-10-01-preview) is on the same data-plane scope as the F5
+// MIP-label lookup above. The Console UAMI needs at minimum "Data Reader" on the
+// root collection to read audit history; "Data Curator" / "Data Source
+// Administrator" (granted by the same script) are supersets and also sufficient.
+// No additional ARM role assignment is needed — classic Data Map roles are
+// collection metadata-policy and the bootstrap workflow performs the grant.
+output consolePurviewAuditNote string = purviewEnabled && !empty(consolePrincipalId)
+  ? 'F19 audit read: Loom UAMI needs "Data Reader" (minimum) on the root collection for /datamap/api/audit/query. Granted by grant-purview-datamap-role.sh (ROLE=data-reader). When LOOM_PURVIEW_ACCOUNT is unset the audit grid falls back to Cosmos + Log Analytics sources and renders an honest gate.'
+  : ''
+
 // F4 domain-image gallery storage — consumed by main.bicep → LOOM_DOMAIN_IMAGES_URL.
 output domainImagesStorageId string = purviewEnabled ? domainImagesStorage.id : ''
 output domainImagesEndpoint string = purviewEnabled

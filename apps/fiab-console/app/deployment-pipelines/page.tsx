@@ -5,7 +5,7 @@ export default function DeploymentPipelinesPage() {
   return (
     <PageShell
       title="Deployment pipelines"
-      subtitle="Promote Fabric content across Development → Test → Production using real Fabric deployment pipelines, and review the platform's own ARM / bicep rollouts. Every action calls the live Fabric REST (deploymentPipelines) or Azure ARM (Microsoft.Resources/deployments)."
+      subtitle="Promote content across Development → Test → Production. Loom-native pipelines bind each stage to a Loom workspace and run a content-level compare + selective re-provision with per-stage data-source / parameter rules — no Microsoft Fabric required. The Fabric, Git, and ARM tabs cover the Fabric REST deployment pipelines, Git integration, and the platform's own bicep rollouts."
     >
       <DeploymentPipelinesPane />
     </PageShell>

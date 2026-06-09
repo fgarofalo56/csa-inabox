@@ -15,8 +15,13 @@ namespace CsaLoom.DirectLakeShim.Tom;
 public class TomRefreshClient
 {
     private readonly ILogger<TomRefreshClient> _log;
+    private readonly IConfiguration _config;
 
-    public TomRefreshClient(ILogger<TomRefreshClient> log) => _log = log;
+    public TomRefreshClient(ILogger<TomRefreshClient> log, IConfiguration config)
+    {
+        _log = log;
+        _config = config;
+    }
 
     /// <summary>
     /// Refresh a single partition of a single table. Returns the
@@ -96,14 +101,26 @@ public class TomRefreshClient
     /// <summary>
     /// Connect via XMLA using DefaultAzureCredential.
     /// Connection string format: "DataSource=powerbi://api.powerbi.com/v1.0/myorg/{workspace};User ID=app:{appid}@{tenant};..."
+    /// The per-model XmlaEndpoint (stored in Cosmos) wins; when it is empty the
+    /// deployment-wide LOOM_AAS_XMLA_ENDPOINT (the AAS server provisioned by
+    /// aas.bicep, asazure://&lt;region&gt;.asazure.windows.net/&lt;server&gt;) is the
+    /// fallback so a model registered without an explicit endpoint still refreshes.
     /// </summary>
-    private static Server ConnectServer(SemanticModelConfig model)
+    private Server ConnectServer(SemanticModelConfig model)
     {
+        var endpoint = !string.IsNullOrWhiteSpace(model.XmlaEndpoint)
+            ? model.XmlaEndpoint
+            : _config["LOOM_AAS_XMLA_ENDPOINT"];
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException(
+                $"No XMLA endpoint for model '{model.Id}': set per-model XmlaEndpoint or LOOM_AAS_XMLA_ENDPOINT.");
+        }
         var server = new Server();
         // Production uses the OAuth bearer hooked into DefaultAzureCredential
         // via Server.Connect overload taking AccessToken. For brevity we use
         // the XMLA endpoint URL which already encodes the workspace.
-        server.Connect(model.XmlaEndpoint);
+        server.Connect(endpoint);
         return server;
     }
 }

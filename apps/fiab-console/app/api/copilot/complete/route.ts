@@ -33,10 +33,9 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import {
-  resolveAoaiTarget,
-  NoAoaiDeploymentError,
-} from '@/lib/azure/copilot-orchestrator';
+import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { resolveCompletionTarget } from '@/lib/copilot/inline-complete';
+import { cogScope } from '@/lib/azure/cloud-endpoints';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -59,7 +58,9 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  // cogScope() picks the correct cognitiveservices audience per sovereign
+  // boundary (Commercial/GCC = .azure.com; GCC-High/IL5 = .azure.us).
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }
@@ -129,17 +130,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Resolve AOAI target — same resolution order as the cross-item Copilot.
+  // Resolve AOAI target — same resolution order as the cross-item Copilot, but
+  // layered with LOOM_AOAI_COMPLETION_DEPLOYMENT so ghost text can use a
+  // dedicated low-latency / cheaper deployment. Falls back silently to the chat
+  // deployment when that env var is unset (honest gate — never a canned string).
   let target;
   try {
-    target = await resolveAoaiTarget();
+    target = await resolveCompletionTarget();
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
         ? e.message
         : 'AOAI not configured: set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT ' +
           '(deploy the AI Foundry project — platform/fiab/bicep/modules/ai/foundry-project.bicep, ' +
-          'agentFoundryEnabled=true — which wires them into admin-plane/main.bicep).';
+          'agentFoundryEnabled=true — which wires them into admin-plane/main.bicep). ' +
+          'Optionally set LOOM_AOAI_COMPLETION_DEPLOYMENT to a dedicated fast/cheap ' +
+          'deployment (e.g. gpt-4o-mini) for lower ghost-text latency.';
     return NextResponse.json(
       { ok: false, code: 'no_aoai', error: e?.message || String(e), hint },
       { status: 503 },
@@ -194,7 +200,15 @@ export async function POST(req: NextRequest) {
     const j = await res.json();
     const raw: string = j?.choices?.[0]?.message?.content ?? '';
     const completion = cleanInlineCompletion(raw, prefix);
-    return NextResponse.json({ ok: true, completion });
+    // Surface real AOAI token usage + the deployment that served the request so
+    // the network call is verifiable end-to-end (per no-vaporware.md). `usage`
+    // comes straight from AOAI — it is never synthesized.
+    return NextResponse.json({
+      ok: true,
+      completion,
+      deployment: target.deployment,
+      usage: j?.usage ?? null,
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

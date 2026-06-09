@@ -37,3 +37,19 @@ Zero ❌.
 - Test chat → `POST .../[id]/directline-token` → `getDirectLineToken` (Bot Framework Direct Line token-generate);
   the browser then drives `directline.botframework.com/v3/directline` (start conversation, post activity, poll).
   Requires `LOOM_COPILOT_DIRECTLINE_SECRET[_<agentId>]`; absent → honest 424 MessageBar with the exact env var.
+
+## Per-cloud notes
+
+Copilot Studio is a **Power Platform** workload, so its sovereign routing is
+Power-Platform/Dataverse-specific (not the AOAI routing the rest of the Copilot
+family uses). `lib/azure/copilot-studio-client.ts` reads the BAP host and Direct
+Line token URL from env so the same code targets each cloud.
+
+| Concern | Commercial / GCC | GCC-High | IL5 / DoD |
+| --- | --- | --- | --- |
+| BAP base (`LOOM_POWER_PLATFORM_BAP_BASE`) | `api.bap.microsoft.com` (default) | `api.bap.microsoft.us` (set the env var) | Power Platform unavailable — honest ⚠️ gate |
+| BAP token scope (`BAP_SCOPE`) | `api.bap.microsoft.com/.default` | currently hardcoded to `.com`; GCC-High needs `api.bap.microsoft.us/.default` (known follow-up — surfaced as an honest gate if the token is rejected) | N/A |
+| Dataverse host | `*.crm.dynamics.com` / `*.crm9.dynamics.com` (GCC) | `*.crm.microsoftdynamics.us` | N/A |
+| Dataverse auth (client-secret SP) | `LOOM_DATAVERSE_CLIENT_ID` / `_SECRET` / `_TENANT_ID` (re-uses the MSAL SP) | same vars; US-cloud audience | N/A |
+| Direct Line token URL (`LOOM_DIRECTLINE_TOKEN_URL`) | `directline.botframework.com` (default) | override for GCC-High | not available — Test chat shows the honest 424 gate |
+| Copilot Studio availability | GA | GA with limits | not available — render `MessageBar intent="error"` |
