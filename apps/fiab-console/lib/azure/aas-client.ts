@@ -2581,3 +2581,80 @@ export async function evaluateDaxScalar(metric: ConnectedMetric): Promise<number
     throw new AasError((e as Error)?.message || String(e), 502, undefined, undefined, 'dax_exec_failed');
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard-tile DAX backend (PR #997) — pure-Azure executor used by
+// /api/items/dashboard/[id]/tile-query. Re-uses the module-level `credential`
+// + `aasScope()` for AAD; delegates pure helpers to ./aas-xmla so they stay
+// unit-testable without @azure/identity.
+// ---------------------------------------------------------------------------
+
+import {
+  AAS_MAX_ROWS as TILE_AAS_MAX_ROWS,
+  type AasXmlaTabularResult,
+  aasXmlaGate,
+  resolveAasXmlaTarget,
+  buildAasXmlaUrl as buildTileXmlaUrl,
+  buildExecuteEnvelope as buildTileDaxEnvelope,
+  decodeXmlEntities as decodeTileXmlEntities,
+  parseRowset as parseTileRowset,
+} from './aas-xmla';
+
+/**
+ * Resolve the configured AAS server address + model. Throws an `AasError` (503)
+ * with a precise remediation hint when `LOOM_AAS_SERVER` / `LOOM_AAS_MODEL`
+ * are unset (per no-vaporware.md — surface the env var, never silently fall
+ * through). Delegates to `aas-xmla.resolveAasXmlaTarget`.
+ */
+export function resolveAasTarget(): { server: string; model: string } {
+  return resolveAasXmlaTarget();
+}
+
+/**
+ * Execute a DAX query (an `EVALUATE` statement) against the AAS tabular model
+ * over the XMLA HTTP endpoint and return tabular columns + rows. Real SOAP
+ * round-trip — no mock data (per no-vaporware.md). Pure-Azure host
+ * (`*.asazure.windows.net` / `*.asazure.usgovcloudapi.net`) — never a Fabric
+ * host (per no-fabric-dependency.md).
+ */
+export async function executeDax(
+  server: string,
+  model: string,
+  dax: string,
+): Promise<AasXmlaTabularResult> {
+  const started = Date.now();
+  const url = buildTileXmlaUrl(server);
+  const tok = await credential.getToken(aasScope());
+  if (!tok?.token) throw new AasError('Failed to acquire AAS token', 401);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'text/xml; charset=utf-8',
+      soapaction: '"urn:schemas-microsoft-com:xml-analysis:Execute"',
+    },
+    body: buildTileDaxEnvelope(model, dax),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = text.slice(0, 600);
+    const m = /<faultstring>([\s\S]*?)<\/faultstring>/i.exec(text);
+    if (m) detail = decodeTileXmlEntities(m[1]);
+    throw new AasError(`AAS XMLA ${res.status}: ${detail}`, res.status, text.slice(0, 600));
+  }
+  const { columns, rows } = parseTileRowset(text);
+  const truncated = rows.length > TILE_AAS_MAX_ROWS;
+  return {
+    columns,
+    rows: truncated ? rows.slice(0, TILE_AAS_MAX_ROWS) : rows,
+    rowCount: rows.length,
+    executionMs: Date.now() - started,
+    truncated,
+  };
+}
+
+// Re-export the pure-helper gate for callers that want a non-throwing variant
+// (tile-query route's lazy fall-through). Name kept stable for compatibility
+// with the dashboard-tiles PR.
+export { aasXmlaGate as aasDashboardTileGate };

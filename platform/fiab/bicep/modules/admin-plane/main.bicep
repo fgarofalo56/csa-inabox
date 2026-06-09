@@ -650,6 +650,12 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services data-plane address for DAX tile / semantic execution when loomSemanticBackend=analysis-services. Form: <region>.<aasSuffix>/<serverName> e.g. westus2.asazure.windows.net/myserver (Gov: <region>.asazure.usgovcloudapi.net/<server>). Leave empty to keep the AAS gate active — the dashboard tile-query route then returns an honest gate naming this env var. One-time bootstrap: add the Console UAMI as an AAS server admin (az ams server admin add).')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name for DAX execution. Must match the model deployed on loomAasServer.')
+param loomAasModel string = ''
+
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
 
@@ -1551,9 +1557,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            // Azure Analysis Services DirectQuery source binder (semantic-model)
-            // — empty server honest-gates the DirectQuery source tab; no Fabric
-            // / Power BI dependency on the default path.
+            // Azure Analysis Services DAX backend (dashboard Q&A / pinned-DAX
+            // tiles + DirectQuery source binder for semantic-model) — Azure-native,
+            // active when LOOM_SEMANTIC_BACKEND=analysis-services. Empty server
+            // honest-gates the DirectQuery source tab and the dashboard tile-query
+            // route; no Fabric / Power BI dependency on the default path.
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_REGION', value: empty(loomAasServer) ? '' : loomAasRegion }
             { name: 'LOOM_AAS_MODEL', value: empty(loomAasServer) ? '' : loomAasModel }
