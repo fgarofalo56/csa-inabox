@@ -337,7 +337,33 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
 }
 
 // =====================================================================
-// 9. Azure Data Factory — backs the data-pipeline / dataset / trigger editors
+// 8b. Azure Analysis Services — OPTIONAL XMLA write path for the
+//     semantic-model "Model view" (relationships + hierarchies).
+//
+//     Per no-fabric-dependency.md the semantic model works fully without
+//     this (Loom-native Cosmos backend is the default). AAS is the
+//     azure-native, no-Fabric option for pushing relationship/hierarchy
+//     TMSL to a live tabular engine; opt in with enableAas=true and wire
+//     the xmlaEndpoint output into LOOM_AAS_XMLA_ENDPOINT.
+// =====================================================================
+
+@description('Provision an Azure Analysis Services server (opt-in). Backs the optional XMLA write path of the Loom semantic-model Model view. Default OFF — the Loom-native Cosmos backend works without it.')
+param enableAas bool = false
+
+@description('Analysis Services SKU. D1 = Developer (cheapest); S0/S1 = Standard query pools.')
+param aasSkuName string = 'D1'
+
+module aas 'aas.bicep' = if (enableAas) {
+  name: 'dlz-aas'
+  params: {
+    name: toLower(take('aas${domainName}${uniqueString(resourceGroup().id)}', 63))
+    location: location
+    skuName: aasSkuName
+    complianceTags: complianceTags
+  }
+}
+
+
 //
 //    Per the 2026-05-27 no-cuts-sweep policy override, ADF is now wired
 //    into the DLZ orchestrator by default. Operators that don't run ADF
@@ -495,3 +521,7 @@ output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty
 output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
 output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
 output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+
+// CSA Loom semantic-model Model view — optional Azure Analysis Services XMLA endpoint
+output aasXmlaEndpoint string = enableAas ? aas!.outputs.xmlaEndpoint : ''
+output aasServerName string = enableAas ? aas!.outputs.serverName : ''

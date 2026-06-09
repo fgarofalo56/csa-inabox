@@ -354,6 +354,12 @@ param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+@description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
+param loomAasXmlaEndpoint string = ''
+
+@description('Semantic-model write backend selector. Set to \'fabric\' to OPT INTO the Fabric REST write path (per no-fabric-dependency.md, strictly opt-in). Any other value keeps the azure-native default (Cosmos + optional AAS XMLA).')
+param loomSemanticModelBackend string = ''
+
 @description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
 param loomDatabricksSqlWarehouseId string = ''
 
@@ -1481,6 +1487,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           [
             { name: 'LOOM_CLOUD_BOUNDARY', value: boundary }
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
+            // Semantic-model Model view — OPTIONAL Azure Analysis Services XMLA
+            // write endpoint (azure-native, no Fabric). Empty by default: the
+            // Loom-native Cosmos backend works without it. Set to the DLZ
+            // aas.bicep `xmlaEndpoint` output to enable XMLA writes.
+            { name: 'LOOM_AAS_XMLA_ENDPOINT', value: loomAasXmlaEndpoint }
+            // Semantic-model backend selector. 'fabric' opts INTO the Fabric REST
+            // write path (per no-fabric-dependency.md, strictly opt-in); any other
+            // value keeps the azure-native default.
+            { name: 'LOOM_SEMANTIC_MODEL_BACKEND', value: loomSemanticModelBackend }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
             // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
             // (Fabric is not IL5-authorized). Unset → Azure-native only.
