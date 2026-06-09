@@ -2278,7 +2278,7 @@ export async function readModel(database?: string): Promise<ColEditorModelTable[
 // shorter names (aasConfigGate, command).
 // ===========================================================================
 
-import { aasServerBase as dqAasServerBase } from './cloud-endpoints';
+import { aasSuffix as dqAasSuffix } from './cloud-endpoints';
 
 /** The four Azure-native DirectQuery source families the binder supports. */
 export type DqSourceType = 'synapse-serverless' | 'synapse-dedicated' | 'azure-sql' | 'adx';
@@ -2317,7 +2317,7 @@ export function dqSourceConfigGate(): { missing: string; detail: string } | null
 function dqServerBase(): string {
   const server = process.env.LOOM_AAS_SERVER!;
   const region = process.env.LOOM_AAS_REGION!;
-  return dqAasServerBase(region, server);
+  return `https://${region}.${dqAasSuffix()}/servers/${server}`;
 }
 
 function dqModelBase(): string {

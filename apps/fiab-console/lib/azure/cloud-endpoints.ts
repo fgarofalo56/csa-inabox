@@ -388,39 +388,12 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 // model backend. AAS is the Azure-native managed tabular engine; it is NOT
 // Microsoft Fabric / Power BI (no-fabric-dependency.md), so binding a
 // DirectQuery source through AAS requires no Fabric capacity or workspace.
+//
+// NOTE: The canonical aasSuffix() / aasScope() helpers live further down in
+// this file (with LOOM_AAS_HOST_SUFFIX override + the literal `*` subdomain
+// audience). The DirectQuery binder (aas-client.ts) builds its server-base
+// URL inline via `aasSuffix()` to avoid signature collisions.
 // ---------------------------------------------------------------------------
-
-/**
- * AAS server hostname suffix (no leading dot, no region prefix).
- *   Commercial / GCC : asazure.windows.net
- *   GCC-High / IL5   : asazure.usgovcloudapi.net
- *   DoD              : asazure.usgovcloudapi.net
- * Mirrors the kusto/blob gov split (isGovCloud() === true for GCC-High + DoD).
- * Grounded in the Azure Government service-endpoint parity list:
- *   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
- */
-export function aasSuffix(): string {
-  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
-}
-
-/**
- * AAD token scope for the Azure Analysis Services data-plane.
- * The audience is the bare server suffix with `/.default` — cloud-correct:
- * a Commercial token for asazure.windows.net cannot reach the Gov AAS host
- * and vice-versa.
- */
-export function aasScope(): string {
-  return `https://${aasSuffix()}/.default`;
-}
-
-/**
- * AAS REST data-plane base URL for a server in a given region, e.g.
- *   aasServerBase('eastus2', 'myserver') →
- *     'https://eastus2.asazure.windows.net/servers/myserver'
- */
-export function aasServerBase(region: string, serverName: string): string {
-  return `https://${region}.${aasSuffix()}/servers/${serverName}`;
-}
 
 // ---------------------------------------------------------------------------
 // Azure Cosmos DB (data plane — documents endpoint)

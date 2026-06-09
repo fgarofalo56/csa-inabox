@@ -16,8 +16,6 @@ import {
   getOpenAiSuffix,
   getPbiGovHost,
   aasSuffix,
-  aasScope,
-  aasServerBase,
 } from '../cloud-endpoints';
 
 const ORIG_LOOM = process.env.LOOM_CLOUD;
@@ -197,16 +195,14 @@ describe('cloud-endpoints getters — all 4 clouds via LOOM_CLOUD', () => {
   }
 });
 
-describe('AAS data-plane helpers — scope + server base URL', () => {
-  it('builds the Commercial scope + server base', () => {
+describe('AAS data-plane helpers — suffix', () => {
+  it('returns the Commercial suffix', () => {
     withCloud('Commercial');
-    expect(aasScope()).toBe('https://asazure.windows.net/.default');
-    expect(aasServerBase('eastus2', 'loom-aas')).toBe('https://eastus2.asazure.windows.net/servers/loom-aas');
+    expect(aasSuffix()).toBe('asazure.windows.net');
   });
-  it('builds the gov scope + server base for GCC-High', () => {
+  it('returns the gov suffix for GCC-High', () => {
     withCloud('GCC-High');
-    expect(aasScope()).toBe('https://asazure.usgovcloudapi.net/.default');
-    expect(aasServerBase('usgovvirginia', 'loom-aas')).toBe('https://usgovvirginia.asazure.usgovcloudapi.net/servers/loom-aas');
+    expect(aasSuffix()).toBe('asazure.usgovcloudapi.net');
   });
 });
 
