@@ -610,6 +610,12 @@ param loomPowerBiAdminLabels bool = false
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar. Enabling this ALSO unlocks per-toggle security-group scoping ("Apply to": Entire org / Specific groups / Except groups) on /admin/tenant-settings (F2) — the same Group.Read.All grant covers the group search + bulk getByIds display-name resolution; no extra param/env/role is needed. When false, F2 numeric params still save; the scope picker shows the same honest gate.')
 param loomIdentityPickerEnabled bool = false
 
+@description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt.')
+param loomWorkspaceM365LinkEnabled bool = false
+
+@description('Resource-group name prefix for dedicated per-workspace backing resource groups created from the workspace create wizard (Advanced → "Provision a dedicated resource group"). The wizard appends a short workspace id. The Console UAMI needs Contributor at subscription scope to create them.')
+param loomWorkspaceRgPrefix string = 'rg-loom-ws-'
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -1878,6 +1884,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomIdentityPickerEnabled ? [
             { name: 'LOOM_IDENTITY_PICKER_ENABLED', value: 'true' }
           ] : [],
+          // Workspace ↔ Microsoft 365 group linking (workspace settings → "Teams
+          // and SharePoint" tab). When enabled the Console can CREATE an M365
+          // group for a workspace (needs the Group.ReadWrite.All Graph grant
+          // documented by identity-graph-rbac.bicep). Linking an existing group
+          // needs only Group.Read.All. When false the tab gates honestly.
+          loomWorkspaceM365LinkEnabled ? [
+            { name: 'LOOM_WORKSPACE_M365_LINK', value: 'true' }
+          ] : [],
+          // Dedicated per-workspace backing resource-group name prefix used by
+          // the workspace create wizard (Advanced → provision a dedicated RG).
+          // The Console UAMI needs Contributor at subscription scope to create
+          // them; otherwise the wizard records an honest backingRgProvision error.
+          [
+            { name: 'LOOM_WORKSPACE_RG_PREFIX', value: loomWorkspaceRgPrefix }
+          ],
           // Sovereign Microsoft Graph endpoint. Commercial/GCC use the global
           // host; GCC-High uses graph.microsoft.us; IL5/DoD uses
           // dod-graph.microsoft.us. The identity-picker client derives BOTH the
@@ -2378,6 +2399,7 @@ module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEna
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     boundary: boundary
     skipRoleGrants: skipRoleGrants
+    workspaceM365LinkEnabled: loomWorkspaceM365LinkEnabled
   }
 }
 
