@@ -484,6 +484,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
@@ -539,6 +540,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
