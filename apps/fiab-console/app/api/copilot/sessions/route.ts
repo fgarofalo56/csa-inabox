@@ -35,6 +35,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { buildCellFixMessages, parseCellFixResponse } from '@/lib/copilot/notebook-tools';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,15 +48,6 @@ const credential = uamiClientId
       new DefaultAzureCredential(),
     )
   : new DefaultAzureCredential();
-
-const LANG_LABEL: Record<string, string> = {
-  pyspark: 'PySpark (Python)',
-  spark: 'Spark (Scala)',
-  sparksql: 'Spark SQL',
-  sparkr: 'SparkR (R)',
-  python: 'Python',
-  tsql: 'T-SQL',
-};
 
 export async function GET() {
   const session = getSession();
@@ -80,6 +72,11 @@ interface CellFixBody {
     evalue?: string;
     traceback?: string[] | string;
   };
+  // Optional execution details (never required for the fix path) — surfaced to
+  // the model so it can reason about run number, latency, and timing.
+  executionCount?: number;
+  durationMs?: number;
+  executedAtUtc?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -158,22 +155,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 
-  const langName = LANG_LABEL[lang] || lang;
-  const messages = [
-    {
-      role: 'system' as const,
-      content:
-        `You are a Spark notebook debugger for the CSA Loom platform. Fix the following ${langName} cell ` +
-        `that produced an error. Return ONLY the corrected, runnable code for the cell — no markdown fences, ` +
-        `no explanation, no leading language tag.`,
+  const messages = buildCellFixMessages({
+    cellSource,
+    lang,
+    errorContext: { ename, evalue, traceback },
+    executionDetails: {
+      executionCount: typeof body?.executionCount === 'number' ? body.executionCount : undefined,
+      durationMs: typeof body?.durationMs === 'number' ? body.durationMs : undefined,
+      executedAtUtc: typeof body?.executedAtUtc === 'string' ? body.executedAtUtc : undefined,
+      // Pool name comes from the server env (not the client) — Synapse Spark pool.
+      sessionPool: process.env.LOOM_SYNAPSE_SPARK_POOL || undefined,
     },
-    {
-      role: 'user' as const,
-      content: `Cell source:\n\`\`\`\n${cellSource}\n\`\`\`\n\nError:\n${errorText}`,
-    },
-  ];
+  });
 
   let proposedCode = '';
+  let summary = '';
+  let rootCause = '';
   try {
     const apiVersion = process.env.LOOM_AOAI_API_VERSION || target.apiVersion || '2024-10-21';
     const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
@@ -216,11 +213,12 @@ export async function POST(req: NextRequest) {
     }
     const j = await res.json();
     const raw: string = j?.choices?.[0]?.message?.content ?? '';
-    // Strip any stray ```lang fences the model may add despite instructions.
-    proposedCode = raw
-      .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')
-      .replace(/\n?```\s*$/, '')
-      .trim();
+    // Parse the structured { summary, rootCause, proposedCode } reply (with an
+    // honest fence-stripping fallback when the model doesn't emit clean JSON).
+    const fix = parseCellFixResponse(raw);
+    proposedCode = fix.proposedCode;
+    summary = fix.summary;
+    rootCause = fix.rootCause;
     if (!proposedCode) {
       return NextResponse.json(
         { ok: false, error: 'AOAI returned an empty fix' },
@@ -251,9 +249,12 @@ export async function POST(req: NextRequest) {
       lang,
       cellSource,
       errorContext: { ename, evalue, traceback },
+      summary,
+      rootCause,
       proposedCode,
       steps: [
         { kind: 'thought', content: `${promptLabel}\n\nError:\n${errorText}` },
+        ...(summary ? [{ kind: 'thought', content: `Summary: ${summary}${rootCause ? `\nRoot cause: ${rootCause}` : ''}` }] : []),
         { kind: 'final', content: proposedCode },
       ],
       createdAt: now,
@@ -263,5 +264,5 @@ export async function POST(req: NextRequest) {
     /* persistence is best-effort — never block the fix */
   }
 
-  return NextResponse.json({ ok: true, sessionId, proposedCode });
+  return NextResponse.json({ ok: true, sessionId, proposedCode, summary, rootCause });
 }

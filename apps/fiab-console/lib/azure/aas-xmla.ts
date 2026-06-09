@@ -3,6 +3,13 @@
  * imports, so this module is unit-testable in a plain Node environment. The
  * credentialed executor lives in `aas-client.ts` (which imports these).
  *
+ * NOTE: `AasError` is shared with `aas-client.ts` (re-exported here) so callers
+ * see a single error class regardless of which module raised it. The other
+ * helpers (`buildExecuteEnvelope`, `parseRowset`) intentionally have the same
+ * names as TMSL-shaped helpers in `aas-client.ts` but live in a separate module
+ * — consumers import the DAX/rowset flavour from `./aas-xmla` and the TMSL
+ * flavour from `./aas-client`.
+ *
  * Docs:
  *   - XMLA Execute (DAX via the EVALUATE statement):
  *     https://learn.microsoft.com/openspecs/sql_server_protocols/ms-xmla
@@ -10,20 +17,14 @@
  *     https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-connect
  */
 
+import { AasError } from './aas-client';
+
+export { AasError };
+
 export const AAS_MAX_ROWS = 5_000;
 
-export class AasError extends Error {
-  status: number;
-  body?: unknown;
-  constructor(message: string, status = 502, body?: unknown) {
-    super(message);
-    this.name = 'AasError';
-    this.status = status;
-    this.body = body;
-  }
-}
-
-export interface AasQueryResult {
+/** Tabular-shaped XMLA rowset returned by `parseRowset` (DAX EVALUATE). */
+export interface AasXmlaTabularResult {
   columns: string[];
   rows: unknown[][];
   rowCount: number;
@@ -38,7 +39,7 @@ export interface AasQueryResult {
  * the tabular model (database) name. Returns `{ missing }` when not configured,
  * else `null`.
  */
-export function aasConfigGate(): { missing: string; hint: string } | null {
+export function aasXmlaGate(): { missing: string; hint: string } | null {
   const server = process.env.LOOM_AAS_SERVER?.trim();
   const model = process.env.LOOM_AAS_MODEL?.trim();
   if (!server) {
@@ -61,8 +62,8 @@ export function aasConfigGate(): { missing: string; hint: string } | null {
 }
 
 /** Resolve the configured server address + model, throwing the gate as an error. */
-export function resolveAasTarget(): { server: string; model: string } {
-  const gate = aasConfigGate();
+export function resolveAasXmlaTarget(): { server: string; model: string } {
+  const gate = aasXmlaGate();
   if (gate) throw new AasError(`AAS not configured: ${gate.missing}. ${gate.hint}`, 503, gate);
   return {
     server: process.env.LOOM_AAS_SERVER!.trim(),
