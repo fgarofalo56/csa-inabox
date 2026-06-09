@@ -1,134 +1,189 @@
 /**
- * aas-tmsl — the network-free core of the Azure Analysis Services XMLA client:
- * config readers, SOAP/XMLA envelope construction, fault + tabular-row parsing,
- * and the TMSL measure command builder. This module deliberately imports NO
- * `@azure/identity` (or any credential / fetch surface) so it is fully unit
- * testable and so the editor's pure logic carries no auth dependency.
+ * aas-tmsl — PURE TMSL (Tabular Model Scripting Language) builders for the Loom
+ * semantic-model "Model view" (relationships + drill hierarchies).
  *
- * `aas-client.ts` re-exports this surface and adds the credential + the actual
- * XMLA POST. See aas-client.ts for the endpoint / audience documentation.
+ * Zero runtime imports: these functions are pure JSON serializers so they are
+ * trivially unit-testable and carry no @azure/identity / network weight. The
+ * I/O write surfaces (XMLA / Fabric REST) live in aas-client.ts, which
+ * re-exports everything here.
+ *
+ * TMSL refs:
+ *   relationship object  — https://learn.microsoft.com/analysis-services/tmsl/relationships-object-tmsl
+ *   hierarchy object     — https://learn.microsoft.com/analysis-services/tmsl/hierarchies-object-tmsl
+ *   createOrReplace      — https://learn.microsoft.com/analysis-services/tmsl/createorreplace-command-tmsl
+ *   alter command        — https://learn.microsoft.com/analysis-services/tmsl/alter-command-tmsl
  */
 
-import { aasServerBase } from './cloud-endpoints';
+export type TmslCardinality = 'none' | 'one' | 'many';
+export type TmslCrossFilter = 'oneDirection' | 'bothDirections' | 'automatic';
 
-export class AasError extends Error {
-  status: number;
-  body?: unknown;
-  constructor(message: string, status: number, body?: unknown) {
-    super(message);
-    this.name = 'AasError';
-    this.status = status;
-    this.body = body;
-  }
+export interface TmslRelationship {
+  name: string;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  fromCardinality: TmslCardinality;
+  toCardinality: TmslCardinality;
+  crossFilteringBehavior: TmslCrossFilter;
+  isActive: boolean;
 }
 
-/** Canonical HTTPS server base from LOOM_AAS_SERVER (read lazily so env can vary). */
-export function serverBase(): string {
-  return aasServerBase(process.env.LOOM_AAS_SERVER || '');
+export interface TmslHierarchyLevel {
+  ordinal: number;
+  /** Display name — can differ from the source column. */
+  name: string;
+  /** Must reference a column that exists in the parent table. */
+  column: string;
 }
 
-/** XMLA POST target — `LOOM_AAS_XMLA_URL` override, else the server base URL. */
-export function xmlaUrl(): string {
-  return (process.env.LOOM_AAS_XMLA_URL || serverBase()).replace(/\/+$/, '');
+export interface TmslHierarchy {
+  name: string;
+  /** Parent table — not part of the TMSL hierarchy body but needed for Alter routing. */
+  table: string;
+  levels: TmslHierarchyLevel[];
 }
 
-/** Configured AAS model database name (LOOM_AAS_DATABASE), or '' if unset. */
-export function aasDefaultDatabase(): string {
-  return process.env.LOOM_AAS_DATABASE || '';
+export interface TmslColumn {
+  name: string;
+  /** TMSL dataType — string | int64 | double | decimal | dateTime | boolean. */
+  dataType: string;
 }
 
-/** True when LOOM_AAS_SERVER is set and parseable into an XMLA endpoint. */
-export function isAasConfigured(): boolean {
-  return !!xmlaUrl();
+export interface TmslTable {
+  name: string;
+  columns: TmslColumn[];
+  hierarchies?: TmslHierarchy[];
 }
 
-/** Return the XMLA endpoint URL or throw the honest 501 infra-gate. */
-export function requireXmlaUrl(): string {
-  const url = xmlaUrl();
-  if (!url) {
-    throw new AasError(
-      'LOOM_AAS_SERVER is not configured. Set it to the AAS connection string (asazure://<region>.asazure.windows.net/<serverName>).',
-      501,
-    );
-  }
-  return url;
-}
-
-/** Resolve the effective database (arg → LOOM_AAS_DATABASE) or throw 501. */
-export function resolveDatabase(database?: string): string {
-  const db = (database || aasDefaultDatabase()).trim();
-  if (!db) {
-    throw new AasError('LOOM_AAS_DATABASE is not configured. Set it to the AAS model database name.', 501);
-  }
-  return db;
-}
-
-/** Escape XML-special characters so TMSL JSON / DAX text embeds safely. */
-export function xmlEscape(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+function relationshipBody(rel: TmslRelationship): Record<string, unknown> {
+  return {
+    name: rel.name,
+    fromTable: rel.fromTable,
+    fromColumn: rel.fromColumn,
+    toTable: rel.toTable,
+    toColumn: rel.toColumn,
+    fromCardinality: rel.fromCardinality,
+    toCardinality: rel.toCardinality,
+    crossFilteringBehavior: rel.crossFilteringBehavior,
+    // TMSL `isActive` defaults to true — emit only when false so an inactive
+    // (USERELATIONSHIP) role-playing relationship is honored.
+    ...(rel.isActive === false ? { isActive: false } : {}),
+  };
 }
 
 /**
- * Build the SOAP/XMLA Execute envelope wrapping a TMSL or DAX Statement. The
- * Catalog property pins the active database on the XMLA connection; Tabular
- * format yields a row-shaped DAX result.
+ * createOrReplace command that upserts a single relationship on the model. Used
+ * for both create and the active/inactive toggle (re-emit with isActive flipped).
  */
-export function buildSoapEnvelope(database: string, statement: string): string {
-  const escaped = xmlEscape(statement);
-  const catalog = xmlEscape(database || '');
-  return `<?xml version="1.0" encoding="utf-8"?>
-<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">
-  <Body>
-    <Execute xmlns="urn:schemas-microsoft-com:xml-analysis">
-      <Command>
-        <Statement>${escaped}</Statement>
-      </Command>
-      <Properties>
-        <PropertyList>
-          <Catalog>${catalog}</Catalog>
-          <Format>Tabular</Format>
-        </PropertyList>
-      </Properties>
-    </Execute>
-  </Body>
-</Envelope>`;
+export function buildCreateOrReplaceRelationshipTmsl(database: string, rel: TmslRelationship): string {
+  return JSON.stringify(
+    {
+      createOrReplace: {
+        object: { database, relationship: rel.name },
+        relationship: relationshipBody(rel),
+      },
+    },
+    null,
+    2,
+  );
 }
 
-/** Extract a SOAP/XMLA fault message from response XML, namespace-agnostic. */
-export function extractFault(xml: string): string | null {
-  const fs = xml.match(/<(?:[^:>]+:)?faultstring[^>]*>([\s\S]*?)<\/(?:[^:>]+:)?faultstring>/i);
-  if (fs) return fs[1].trim();
-  // AS engine errors arrive as <Error ... Description="..."/> inside the body.
-  const err = xml.match(/<(?:[^:>]+:)?Error[^>]*\bDescription="([^"]+)"/i);
-  if (err) return err[1].trim();
-  return null;
+/** delete command that drops a relationship by name. */
+export function buildDeleteRelationshipTmsl(database: string, relationshipName: string): string {
+  return JSON.stringify(
+    {
+      delete: {
+        object: { database, relationship: relationshipName },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function hierarchyBody(h: Omit<TmslHierarchy, 'table'>): Record<string, unknown> {
+  return {
+    name: h.name,
+    levels: [...h.levels]
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((l) => ({ ordinal: l.ordinal, name: l.name, column: l.column })),
+  };
 }
 
 /**
- * Parse tabular <row> elements from an XMLA Execute response. Each <row>
- * carries named child elements whose local-name is the column header. A simple
- * regex walk is sufficient for the single-row probe pattern this client uses
- * (`EVALUATE ROW(...)`); complex multi-column rowsets keep their string values.
+ * Alter command that sets a table's `hierarchies` array. Alter (not
+ * createOrReplace) is used so only the hierarchies property changes — the
+ * table's columns/partitions are left intact.
  */
-export function parseXmlaRows(xml: string): Record<string, unknown>[] {
-  const rows: Record<string, unknown>[] = [];
-  const rowMatches = xml.matchAll(/<(?:[^:>]+:)?row\b[^>]*>([\s\S]*?)<\/(?:[^:>]+:)?row>/gi);
-  for (const rowMatch of rowMatches) {
-    const rowContent = rowMatch[1];
-    const row: Record<string, unknown> = {};
-    const cellMatches = rowContent.matchAll(/<([A-Za-z_][\w.]*)\b[^>]*>([\s\S]*?)<\/\1>/g);
-    for (const cell of cellMatches) {
-      row[cell[1]] = cell[2].trim();
-    }
-    rows.push(row);
-  }
-  return rows;
+export function buildAlterTableHierarchyTmsl(
+  database: string,
+  tableName: string,
+  hierarchy: Omit<TmslHierarchy, 'table'>,
+): string {
+  return JSON.stringify(
+    {
+      alter: {
+        object: { database, table: tableName },
+        table: {
+          name: tableName,
+          hierarchies: [hierarchyBody(hierarchy)],
+        },
+      },
+    },
+    null,
+    2,
+  );
 }
 
-/** Build the TMSL createOrReplace command for a single measure (pure — testable). */
+/**
+ * Build a full `model.bim` TMSL document from the current model state. This is
+ * the read-only preview shown in the editor AND the payload the Fabric
+ * updateDefinition write overwrites with (it replaces the whole model.bim).
+ */
+export function buildModelBimTmsl(
+  modelName: string,
+  tables: TmslTable[],
+  relationships: TmslRelationship[],
+  hierarchies: TmslHierarchy[],
+): string {
+  const hierByTable = new Map<string, Omit<TmslHierarchy, 'table'>[]>();
+  for (const h of hierarchies) {
+    const list = hierByTable.get(h.table) || [];
+    list.push({ name: h.name, levels: h.levels });
+    hierByTable.set(h.table, list);
+  }
+  return JSON.stringify(
+    {
+      name: modelName,
+      compatibilityLevel: 1567,
+      model: {
+        culture: 'en-US',
+        tables: tables.map((t) => {
+          const hs = hierByTable.get(t.name) || [];
+          return {
+            name: t.name,
+            columns: t.columns.map((c) => ({
+              name: c.name,
+              dataType: c.dataType,
+              sourceColumn: c.name,
+            })),
+            ...(hs.length ? { hierarchies: hs.map(hierarchyBody) } : {}),
+          };
+        }),
+        relationships: relationships.map(relationshipBody),
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Build the TMSL createOrReplace command for a single measure (pure — testable).
+ * Used by the Monaco DAX editor's "Save to model (XMLA)" path. Optional format
+ * string + display folder are included only when supplied.
+ */
 export function buildMeasureUpsertTmsl(opts: {
   database: string;
   tableName: string;
@@ -151,9 +206,9 @@ export function buildMeasureUpsertTmsl(opts: {
   };
 }
 
-/** Build `EVALUATE ROW("value", 'Table'[Measure])` for a single-measure probe. */
+/** Build EVALUATE ROW("value", 'Table'[Measure]) for a single-measure probe. */
 export function buildMeasureEvalQuery(tableName: string, measureName: string): string {
-  const tbl = `'${(tableName || '').replace(/'/g, "''")}'`;
-  const meas = `[${(measureName || '').replace(/]/g, '')}]`;
-  return `EVALUATE ROW("value", ${tbl}${meas})`;
+  const tbl = "'" + (tableName || '').replace(/'/g, "''") + "'";
+  const meas = '[' + (measureName || '').replace(/]/g, '') + ']';
+  return 'EVALUATE ROW("value", ' + tbl + meas + ')';
 }

@@ -14,6 +14,8 @@ import {
   isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem,
   scorecardGoalsFromContent, scorecardMetaFromContent,
 } from '../../_lib/pbi-content-fallback';
+import { computeRollups } from '../rollup';
+import { loadScorecardConfig, mergeConfigOntoLiveGoals } from '../config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,7 +48,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       getScorecard(workspaceId, id),
       listScorecardGoals(workspaceId, id).catch(() => []),
     ]);
-    return NextResponse.json({ ok: true, workspaceId, scorecard, goals });
+    // Overlay the Cosmos-stored rollup + status-rule config onto the live
+    // Fabric goals, then run the Azure-native rollup engine so parent goals
+    // roll up + every goal carries a computed status. No Fabric dependency for
+    // the rollup math — it's pure BFF compute over real Cosmos config.
+    const cfg = await loadScorecardConfig(id, session.claims.oid);
+    const computed = computeRollups(mergeConfigOntoLiveGoals(goals, cfg));
+    return NextResponse.json({ ok: true, workspaceId, scorecard, goals: computed });
   } catch (e: any) {
     if (e instanceof PowerBiError && e.status === 404) {
       const resp = await loomScorecard(id, session.claims.oid, workspaceId);
