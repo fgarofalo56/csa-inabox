@@ -27,12 +27,12 @@ import {
 } from '@fluentui/react-components';
 import {
   Settings24Regular, Dismiss24Regular, Delete24Regular,
-  BranchFork24Regular, Database24Regular,
   Copy16Regular,
 } from '@fluentui/react-icons';
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import { NetworkingPane } from '@/lib/panes/networking';
+import { GitIntegrationPane } from '@/lib/panes/git-integration';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 
@@ -43,7 +43,6 @@ const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: 12 },
   section: { display: 'flex', flexDirection: 'column', gap: 12 },
   row: { display: 'flex', gap: 8, alignItems: 'center' },
-  honest: { marginTop: 6, fontSize: 12, color: tokens.colorNeutralForeground3 },
 });
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
@@ -86,7 +85,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}
-            {tab === 'git' && <GitSection workspaceId={workspace.id} />}
+            {tab === 'git' && <GitIntegrationPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
             {tab === 'sensitivity' && <DeferredSection
@@ -213,6 +212,13 @@ function DeferredSection({ title, body }: { title: string; body: string }) {
 // PermissionsSection was replaced; see lib/panes/manage-access-pane.tsx.
 
 // ------------------------------ Git ------------------------------
+// The Git integration tab now embeds GitIntegrationPane (F12) — Azure-native
+// source control over REAL Azure DevOps + GitHub REST: connect, browse
+// org/project/repo/branch, commit every workspace item as JSON, live status,
+// disconnect. The PAT/SPN secret is stored in Key Vault (never Cosmos). The
+// legacy GitSection below is retained (SourceControlPanel depends on its
+// types) but no longer wired to the git tab; see lib/panes/git-integration.tsx
+// + app/api/admin/workspaces/[id]/git/**.
 
 interface GitBinding {
   provider: 'github' | 'ado';
