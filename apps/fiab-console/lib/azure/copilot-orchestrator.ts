@@ -733,6 +733,40 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     handler: async ({ fixId }) => applyFix(String(fixId)),
   });
 
+  // -------- Approval-gated edits (Keep / Undo) --------
+  // Tools that propose a change to an OPEN editor surface return a result with a
+  // `__proposedChange__` sentinel. The orchestrator strips the sentinel and
+  // emits a `proposed_change` step; the pane renders a Monaco DiffEditor and
+  // mutates the editor ONLY on explicit Keep. The change is NEVER applied here.
+  r.register({
+    name: 'notebook_propose_refactor',
+    service: 'Loom',
+    description:
+      'Propose a refactored version of a notebook code cell. Returns a before/after diff that the USER must approve (Keep) before any change is applied — you do NOT apply it yourself. Use this whenever the user asks to refactor, optimize, clean up, comment, or rewrite a cell, instead of returning the edited code as prose. Pass the cellId, the cell\'s current source verbatim, the language, and your improved source.',
+    parameters: obj({
+      cellId: S_STRING,
+      currentSource: S_STRING,
+      refactoredSource: S_STRING,
+      lang: S_STRING,
+      rationale: S_STRING,
+    }, ['cellId', 'currentSource', 'refactoredSource']),
+    handler: async ({ cellId, currentSource, refactoredSource, lang, rationale }) => {
+      const summary = rationale ? String(rationale) : 'Proposed cell refactor.';
+      return {
+        ok: true,
+        message: 'Proposed a cell refactor. Awaiting the user\'s Keep/Undo decision; the change is not yet applied.',
+        rationale: summary,
+        [PROPOSED_CHANGE_KEY]: {
+          target: `notebook-cell:${String(cellId)}`,
+          before: String(currentSource ?? ''),
+          after: String(refactoredSource ?? ''),
+          lang: String(lang || 'pyspark'),
+          summary,
+        },
+      };
+    },
+  });
+
   return r;
 }
 
@@ -745,7 +779,21 @@ export type OrchestratorStep =
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string }
+  // A tool proposed a code/query/transform change. The pane renders a Monaco
+  // DiffEditor (before|after) and applies it ONLY on explicit Keep — never
+  // automatically. `target` is a deterministic editor-bridge key
+  // (e.g. "notebook-cell:<id>") routed by lib/copilot/apply-change.ts.
+  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string };
+
+/** Sentinel a tool handler attaches to its result to surface an approval-gated
+ *  diff. The orchestrator strips it before feeding the result back to AOAI (so
+ *  the model never sees the plumbing) and emits a `proposed_change` step.
+ *  Re-exported from lib/copilot/proposed-change (kept there so the pure
+ *  sentinel logic is unit-testable without the Azure SDK graph). */
+export { PROPOSED_CHANGE_KEY, extractProposedChange } from '@/lib/copilot/proposed-change';
+export type { ProposedChangePayload } from '@/lib/copilot/proposed-change';
+import { PROPOSED_CHANGE_KEY, extractProposedChange, type ProposedChangePayload } from '@/lib/copilot/proposed-change';
 
 export interface OrchestrateOptions {
   prompt: string;
@@ -976,8 +1024,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       } else {
         try {
           const result = await tool.handler(parsedArgs as any, toolCtx);
+          // If the tool attached an approval-gated change, peel the sentinel off
+          // BEFORE serializing — the model must never see internal plumbing, and
+          // the diff must be gated behind explicit Keep, not described as done.
+          const { publicResult, proposed } = extractProposedChange(result);
           // Cap result size fed back to the model so we don't blow context
-          const serialized = JSON.stringify(result);
+          const serialized = JSON.stringify(publicResult);
           const truncated = serialized.length > 16_000
             ? serialized.slice(0, 16_000) + '...[truncated]'
             : serialized;
@@ -986,7 +1038,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
             name: tc.function.name,
             callId: tc.id,
             durationMs: Date.now() - started,
-            result,
+            result: publicResult,
           };
           messages.push({
             role: 'tool',
@@ -994,6 +1046,25 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
             name: tc.function.name,
             content: truncated,
           });
+          await persistStep(sessionId, userOid, resultStep);
+          yield resultStep;
+          // Surface the approval-gated diff as its own step right after the
+          // tool_result so the pane can open the Keep/Undo modal. Nothing is
+          // mutated server-side — the client applies only on Keep.
+          if (proposed) {
+            const pcStep: OrchestratorStep = {
+              kind: 'proposed_change',
+              target: proposed.target,
+              before: proposed.before,
+              after: proposed.after,
+              lang: proposed.lang,
+              summary: proposed.summary,
+              callId: tc.id,
+            };
+            await persistStep(sessionId, userOid, pcStep);
+            yield pcStep;
+          }
+          continue;
         } catch (e: any) {
           const errMsg = e?.message || String(e);
           resultStep = {

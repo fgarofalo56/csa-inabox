@@ -27,6 +27,8 @@ import { CopilotResult } from '@/lib/components/copilot-result';
 import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
+import { CopilotDiff, type ProposedChange } from './copilot-diff';
+import { applyChange } from '@/lib/copilot/apply-change';
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -35,7 +37,8 @@ type Step =
   | { kind: 'tool_call'; name: string; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string }
+  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string };
 
 interface Msg {
   who: 'you' | 'copilot' | 'system';
@@ -142,6 +145,7 @@ export function CopilotPane() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [copilotCtx, setCopilotCtx] = useState<CopilotContext>({ persona: 'default' });
+  const [pendingChange, setPendingChange] = useState<ProposedChange | null>(null);
   const sessionRef = useRef<string | null>(null);
   const msgIndexRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -229,6 +233,18 @@ export function CopilotPane() {
                 if (step.kind === 'error') return { ...x, text: `Error: ${step.error}`, streaming: false };
                 return { ...x, steps: [...(x.steps ?? []), step] };
               }));
+              // A proposed change opens the Keep/Undo diff modal. The editor is
+              // NOT mutated here — only on Keep (handled in the modal callbacks).
+              if (step.kind === 'proposed_change') {
+                setPendingChange({
+                  target: step.target,
+                  before: step.before,
+                  after: step.after,
+                  lang: step.lang,
+                  callId: step.callId,
+                  summary: step.summary,
+                });
+              }
             } catch {}
           } else if (ev.event === 'done') {
             setMsgs((m) => m.map((x) => x.streaming ? { ...x, streaming: false } : x));
@@ -333,6 +349,20 @@ export function CopilotPane() {
 
   if (!open) return null;
 
+  // Keep: apply the approved change to the registered editor bridge. If the
+  // target editor has since closed (no bridge), surface an honest system note
+  // rather than silently dropping the change.
+  function keepChange(c: ProposedChange) {
+    const applied = applyChange(c.target, c.after);
+    setPendingChange(null);
+    if (!applied) {
+      setMsgs((m) => [...m, {
+        who: 'system',
+        text: `Could not apply the change — the editor for ${c.target} is no longer open. Re-open it and ask again.`,
+      }]);
+    }
+  }
+
   return (
     <>
       <aside className={s.panel} aria-label="Copilot">
@@ -391,6 +421,17 @@ export function CopilotPane() {
                 }
                 if (step.kind === 'thought') {
                   return <div key={j} className={s.stepRow}>💭 {step.content.slice(0, 120)}</div>;
+                }
+                if (step.kind === 'proposed_change') {
+                  return (
+                    <div key={j} className={s.stepRow}>
+                      ⬡ proposed change to <code>{step.target}</code>
+                      <Button size="small" appearance="subtle" onClick={() => setPendingChange({
+                        target: step.target, before: step.before, after: step.after,
+                        lang: step.lang, callId: step.callId, summary: step.summary,
+                      })}>Review</Button>
+                    </div>
+                  );
                 }
                 return null;
               })}
@@ -451,6 +492,11 @@ export function CopilotPane() {
           />
           <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" />
         </div>
+        <CopilotDiff
+          change={pendingChange}
+          onKeep={keepChange}
+          onUndo={() => setPendingChange(null)}
+        />
       </aside>
 
       <OverlayDrawer

@@ -41,6 +41,7 @@ import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
+import { registerBridge } from '@/lib/copilot/apply-change';
 
 // Ribbon is now built dynamically inside the component so each action can
 // hold a real onClick wired to the editor's handlers. See `buildRibbon`
@@ -814,6 +815,24 @@ export function NotebookEditor({ item, id }: Props) {
     setCells(prev => prev.map(c => c.id === id ? next : c));
     setDirty(true);
   }, []);
+
+  // Register an editor-mutation bridge per code cell so a Copilot-proposed
+  // change (orchestrator `proposed_change` step → CopilotDiff Keep) mutates the
+  // REAL cell via applyChange('notebook-cell:<id>', after). The bridge clears
+  // the stale output/exec count so the refactored cell shows as un-run. Cells
+  // are mutated only on explicit Keep — never automatically.
+  useEffect(() => {
+    const cleanups = cells
+      .filter(c => c.type === 'code')
+      .map(cell => registerBridge(`notebook-cell:${cell.id}`, (after: string) => {
+        setCells(prev => prev.map(c =>
+          c.id === cell.id ? { ...c, source: after, output: undefined, executionCount: undefined } : c,
+        ));
+        setDirty(true);
+        setRunMsg('Applied Copilot change — review and Save (Ctrl+S) to persist.');
+      }));
+    return () => cleanups.forEach(fn => fn());
+  }, [cells]);
 
   /**
    * Insert a datastore path (abfss:// / wasbs://) into a code cell. Called by
