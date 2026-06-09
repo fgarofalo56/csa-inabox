@@ -86,6 +86,7 @@ import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
 import { ResultVisualize } from './components/result-visualize';
+import { ReportVisualDesigner } from './components/report-visual-designer';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -11683,6 +11684,9 @@ function ReportLikeEditor({
   // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
   // metadata by default; expose embed/refresh/export only when configured.
   const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
+  // Report main view: the in-Loom Visual designer (build visuals over the
+  // model with Fields/Format/Filters panes) vs the live Power BI embed.
+  const [reportView, setReportView] = useState<'design' | 'view'>('design');
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -12047,18 +12051,37 @@ function ReportLikeEditor({
               </MessageBarBody>
             </MessageBar>
           )}
-          {powerBiConfigured && (
-            <MessageBar intent="info">
+          {powerBiConfigured && kind !== 'paginated' && (
+            <TabList selectedValue={reportView} onTabSelect={(_, d) => setReportView(d.value as 'design' | 'view')} style={{ marginBottom: 8 }}>
+              <Tab value="design" icon={<DataBarVertical20Regular />}>Visual designer</Tab>
+              <Tab value="view" icon={<Eye20Regular />}>Live embed</Tab>
+            </TabList>
+          )}
+          {powerBiConfigured && kind !== 'paginated' && reportView === 'design' && report && report.datasetId && (
+            <div className={s.card} style={{ marginBottom: 8 }}>
+              <ReportVisualDesigner workspaceId={workspaceId} datasetId={report.datasetId} reportId={reportId} />
+            </div>
+          )}
+          {powerBiConfigured && kind !== 'paginated' && reportView === 'design' && report && !report.datasetId && (
+            <MessageBar intent="warning">
               <MessageBarBody>
-                <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
-                Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
-                Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
-                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
-                Power BI REST API. Use <strong>Open in Power BI</strong> to author.
+                <MessageBarTitle>No bound semantic model</MessageBarTitle>
+                This report has no dataset bound, so there are no model fields to build visuals over.
+                Select a report backed by a semantic model, or use the <strong>Live embed</strong> tab.
               </MessageBarBody>
             </MessageBar>
           )}
-          {report && (
+          {powerBiConfigured && (kind === 'paginated' || reportView === 'view') && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Live Power BI embed</MessageBarTitle>
+                This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
+                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+                Power BI REST API. To build visuals inside Loom over the model, switch to the <strong>Visual designer</strong> tab.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {report && (!powerBiConfigured || kind === 'paginated' || reportView === 'view') && (
             <>
               <div className={s.card}>
                 <Subtitle2>{report.name}</Subtitle2>
