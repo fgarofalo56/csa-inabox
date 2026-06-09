@@ -83,6 +83,7 @@ const containers = {
   auditLog: makeContainer(),
   wsPermissions: makeContainer(),
   featurePermissions: makeContainer(),
+  wsRoles: makeContainer(),
 };
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -92,6 +93,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   auditLogContainer: async () => containers.auditLog,
   workspacePermissionsContainer: async () => containers.wsPermissions,
   featurePermissionsContainer: async () => containers.featurePermissions,
+  workspaceRolesContainer: async () => containers.wsRoles,
 }));
 
 // Purview — default to NOT configured (honest gate path)
@@ -129,8 +131,10 @@ vi.mock('@/lib/azure/monitor-client', () => ({
 
 // feature-gate — let tests flip the gate result
 const enforceCapabilityMock = vi.fn(async () => null as any);
+const isTenantAdminMock = vi.fn(() => true);
 vi.mock('@/lib/auth/feature-gate', () => ({
   enforceCapability: (...args: any[]) => enforceCapabilityMock(...args),
+  isTenantAdmin: (...args: any[]) => isTenantAdminMock(...args),
 }));
 vi.mock('@/lib/auth/feature-catalog', () => ({
   getCapability: (id: string) => (id === 'editor.notebook' ? { id, name: 'Notebook' } : null),
@@ -153,6 +157,7 @@ beforeEach(() => {
   queryAuditLogMock.mockRejectedValue(new FakePurviewNotConfigured());
   queryLoomAppEventsMock.mockRejectedValue(new FakeMonitorNotConfigured(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']));
   enforceCapabilityMock.mockResolvedValue(null);
+  isTenantAdminMock.mockReturnValue(true);
   delete process.env.LOOM_GRAPH_USERS_ENABLED;
   delete process.env.LOOM_SUBSCRIPTION_ID;
 });
@@ -267,18 +272,48 @@ describe('/api/admin/users', () => {
 // workspaces
 // --------------------------------------------------------------------------
 describe('/api/admin/workspaces', () => {
-  it('GET returns tenant-wide inventory with computed item counts', async () => {
-    containers.workspaces._setQuery(() => [
-      { id: 'ws1', name: 'Sales', createdBy: 'alice@contoso.com', capacity: 'F8', domain: 'finance', updatedAt: '2026-05-01T00:00:00Z' },
+  it('GET returns TENANT-WIDE inventory (cross-partition) with live item counts + owners', async () => {
+    let wsQuery: any = null;
+    containers.workspaces._setQuery((q) => {
+      wsQuery = q;
+      return [
+        { id: 'ws1', tenantId: 'alice-oid', name: 'Sales', createdBy: 'alice@contoso.com', capacity: 'F8', domain: 'finance', state: 'Active', createdAt: '2026-04-01T00:00:00Z', updatedAt: '2026-05-01T00:00:00Z' },
+        { id: 'ws2', tenantId: 'bob-oid', name: 'Ops', createdBy: 'bob@contoso.com', state: 'Suspended', createdAt: '2026-04-02T00:00:00Z', updatedAt: '2026-05-02T00:00:00Z' },
+      ];
+    });
+    // Batch GROUP BY shape: { workspaceId, n, lastActivity }.
+    containers.items._setQuery(() => [
+      { workspaceId: 'ws1', n: 3, lastActivity: '2026-05-03T00:00:00Z' },
     ]);
-    containers.items._setQuery(() => [{ itemCount: 3, lastActivity: '2026-05-03T00:00:00Z' }]);
+    // F5 workspace-roles Admin rows feed the owner set.
+    containers.wsRoles._setQuery(() => [
+      { workspaceId: 'ws1', role: 'Admin', displayName: 'carol@contoso.com' },
+    ]);
     const { GET } = await import('@/app/api/admin/workspaces/route');
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
-    expect(j.total).toBe(1);
-    expect(j.workspaces[0].itemCount).toBe(3);
-    expect(j.workspaces[0].capacity).toBe('F8');
-    expect(j.workspaces[0].state).toBe('Active');
+    expect(j.total).toBe(2);
+    const ws1 = j.workspaces.find((w: any) => w.id === 'ws1');
+    expect(ws1.itemCount).toBe(3);
+    expect(ws1.capacity).toBe('F8');
+    expect(ws1.state).toBe('Active');
+    expect(ws1.lastActivity).toBe('2026-05-03T00:00:00Z');
+    expect(ws1.owners).toEqual(expect.arrayContaining(['alice@contoso.com', 'carol@contoso.com']));
+    const ws2 = j.workspaces.find((w: any) => w.id === 'ws2');
+    expect(ws2.itemCount).toBe(0); // no item rows → falls back to 0, not a stub
+    expect(ws2.state).toBe('Suspended');
+    // Cross-partition: the workspace scan must NOT filter by tenantId.
+    expect(wsQuery.query).toMatch(/SELECT \* FROM c/);
+    expect(wsQuery.query).not.toMatch(/tenantId/);
+  });
+
+  it('GET 403 when the caller is not a tenant admin', async () => {
+    isTenantAdminMock.mockReturnValue(false);
+    const { GET } = await import('@/app/api/admin/workspaces/route');
+    const r = await GET();
+    const j = await r.json();
+    expect(r.status).toBe(403);
+    expect(j.error).toBe('forbidden');
   });
 
   it('GET 401 when unauthenticated', async () => {
