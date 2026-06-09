@@ -133,6 +133,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Deploy an Azure Analysis Services (AAS) Standard server — the Azure-native semantic-model backend (no Fabric/Power BI). Hosts Import-mode tabular databases for refresh-now / scheduled-refresh. Default off.')
+param aasEnabled bool = false
+
+@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+param aasSkuName string = 'S1'
+
+@description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
+param existingAasServerName string = ''
+
+@description('Region of a reused existing AAS server (existingAasServerName). Empty defaults to the deployment location.')
+param existingAasServerRegion string = ''
+
 @description('Deploy the read-only Workspace-Monitoring ADX database + Azure Monitor diagnostic-export pipeline (Fabric workspace-monitoring parity). Requires adxEnabled (new cluster). Default off.')
 param workspaceMonitorEnabled bool = false
 
@@ -868,6 +881,28 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   }
 }
 
+// =====================================================================
+// Azure Analysis Services (AAS) — Azure-native semantic-model backend.
+// Hosts Import-mode tabular databases for the SemanticModelEditor's Storage
+// Mode + Refresh surfaces (no Fabric / Power BI dependency). Skipped when
+// reusing an existing server (existingAasServerName) or aasEnabled is false.
+// =====================================================================
+module aasServer 'aas.bicep' = if (aasEnabled && empty(existingAasServerName)) {
+  name: 'aas-server'
+  params: {
+    location: location
+    skuName: aasSkuName
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
+    // Console UAMI: client id → AAS server-admin (app:{clientId}@{tenantId});
+    // principal id → Reader (ARM list/get databases + schedule tag).
+    consolePrincipalClientId: identity.outputs.uamiConsoleClientId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    tenantId: tenant().tenantId
+  }
+}
+
 // Continuous-export (Delta → ADLS Gen2) RBAC: grant the new ADX cluster's
 // system-assigned MI Storage Blob Data Contributor on the export account so
 // OneLake-style availability works Azure-native (no Fabric workspace). Deployed
@@ -1207,6 +1242,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // ----------------------------------------------------------------
+            // Azure Analysis Services (AAS) — Azure-native semantic-model
+            // backend (lib/azure/aas-client.ts). When set, the SemanticModel
+            // editor renders the AAS Storage-mode + Refresh surface and the
+            // refresh routes dispatch to AAS by default (NEXT_PUBLIC_LOOM_BI_
+            // BACKEND=aas). Prefer a reused server; else the provisioned module.
+            // Empty when neither → editor shows the honest config-gate.
+            // ----------------------------------------------------------------
+            { name: 'LOOM_AAS_SERVER_NAME', value: !empty(existingAasServerName) ? existingAasServerName : (aasEnabled ? aasServer!.outputs.serverName : '') }
+            { name: 'LOOM_AAS_REGION', value: !empty(existingAasServerName) ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location) : (aasEnabled ? aasServer!.outputs.serverRegion : '') }
+            // Default BI backend for the SemanticModelEditor + refresh routes.
+            // 'aas' when an AAS server is present (Azure-native default, per
+            // no-fabric-dependency.md); 'powerbi' is the opt-in Fabric-family
+            // path. Read client-side as NEXT_PUBLIC_*; server routes also honor
+            // LOOM_BI_BACKEND (mirrored below).
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
+            { name: 'LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
             // Workspace-monitoring read-only ADX DB (Azure Monitor diag-export
             // parity for Fabric workspace monitoring). Set only when deployed so
             // the provisioner + dashboard target the real DB; '' → honest gate.

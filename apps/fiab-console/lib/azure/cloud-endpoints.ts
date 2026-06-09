@@ -591,6 +591,66 @@ export function getPbiGovHost(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (AAS) — data plane (async refresh REST + XMLA)
+// ---------------------------------------------------------------------------
+//
+// AAS exposes a REST data plane for asynchronous refresh
+// (https://<region>.asazure.windows.net/servers/<name>/models/<db>/refreshes)
+// and an XMLA endpoint for TMSL commands. The data-plane host suffix is
+// sovereign-cloud specific; the AAD audience is the cloud-specific literal
+// `https://*.<suffix>` (the `*` is literal — NOT a wildcard — per Microsoft
+// Learn "Asynchronous refresh with the REST API": the audience must be exactly
+// `https://*.asazure.windows.net`). The ARM management plane (list/get
+// databases, schedule-as-tag) reuses armBase()/armScope().
+//
+//  | suffix                | Commercial / GCC      | GCC-High / IL5 (USGov)        |
+//  |-----------------------|-----------------------|-------------------------------|
+//  | AAS data-plane host   | asazure.windows.net   | asazure.usgovcloudapi.net     |
+//  | AAS auth audience     | https://*.asazure.windows.net/.default | https://*.asazure.usgovcloudapi.net/.default |
+
+/**
+ * AAS data-plane hostname suffix (no leading dot, no region prefix).
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5   : asazure.usgovcloudapi.net
+ *   DoD              : not documented in the AAS gov-parity matrix — falls back
+ *                      to the USGov suffix (best effort, never Commercial) and
+ *                      is overridable via LOOM_AAS_DATA_PLANE_SUFFIX.
+ *
+ * `LOOM_AAS_DATA_PLANE_SUFFIX` overrides outright for sovereign clouds we don't
+ * enumerate (the LOOM_AML_DATAPLANE_HOST pattern). Grounded in the Azure
+ * Government endpoint convention: analytics services on Commercial use
+ * *.windows.net; their GovCloud equivalents use *.usgovcloudapi.net (Service
+ * Bus, Kusto, Redis all follow this) — AAS follows the same in US Gov Virginia.
+ */
+export function getAasSuffix(): string {
+  const override = process.env.LOOM_AAS_DATA_PLANE_SUFFIX;
+  if (override) return override.replace(/^\./, '').replace(/\/+$/, '');
+  switch (detectCloud()) {
+    case 'AzureUSGovernment':
+      return 'asazure.usgovcloudapi.net';
+    case 'AzureDOD':
+      // DoD AAS availability is not documented — best-effort USGov suffix;
+      // override with LOOM_AAS_DATA_PLANE_SUFFIX if the air-gapped host differs.
+      return 'asazure.usgovcloudapi.net';
+    default:
+      return 'asazure.windows.net';
+  }
+}
+
+/**
+ * AAD `.default` scope for AAS data-plane + XMLA tokens.
+ *
+ * Per Microsoft Learn ("Asynchronous refresh with the REST API"): "The token
+ * must have the audience set to exactly https://*.asazure.windows.net. Note
+ * that `*` isn't a placeholder or a wildcard, and the audience must have the
+ * `*` character as the subdomain." The `.default` suffix makes it a v2 client-
+ * credentials scope. In GovCloud the literal `*` maps to the gov suffix.
+ */
+export function aasScope(): string {
+  return `https://*.${getAasSuffix()}/.default`;
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 
