@@ -121,6 +121,7 @@ The Console resolves it from these env vars (all set by bicep — see Bicep sync
 | `LOOM_AOAI_ENDPOINT` | `https://aifndry-loom-eastus2.openai.azure.com/` | AOAI chat + embeddings clients |
 | `LOOM_AOAI_CHAT_DEPLOYMENT` | `chat` (gpt-4.1-mini, 2025-04-14, GlobalStandard) | Chat completions |
 | `LOOM_AOAI_EMBED_DEPLOYMENT` | `text-embedding-ada-002` (v2, Standard) | Embeddings |
+| `LOOM_AOAI_COMPLETION_DEPLOYMENT` | _(empty)_ — optional, e.g. `gpt-4o-mini` (2024-07-18, GlobalStandard) | Notebook/SQL inline code completion (ghost text). Empty ⇒ ghost text reuses `LOOM_AOAI_DEPLOYMENT`. Set `loomAoaiCompletionDeployment` to deploy a dedicated low-latency slot; leave empty in GCC-High / IL5 regions where the model is unavailable. |
 
 ### Greenfield (let bicep do it)
 
