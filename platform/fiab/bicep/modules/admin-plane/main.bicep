@@ -266,6 +266,19 @@ param loomMirrorSourceLinkedService string = ''
 @description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
 param loomMirrorAdlsLinkedService string = ''
 
+@description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government).')
+@allowed([
+  'loom-native'
+  'analysis-services'
+])
+param loomSemanticBackend string = 'loom-native'
+
+@description('Azure Analysis Services server URI for the OPT-IN tabular backend (only used when loomSemanticBackend = "analysis-services"). Accepted forms: asazure://<region>.asazure.windows.net/<server> OR an https XMLA URL. Leave empty (default) for loom-native — no AAS dependency. NOTE: Azure Analysis Services is NOT available in Azure Government (GCC-High / IL5 / DoD); leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services model/database name (only used when loomAasServer is set). The Console UAMI must have at least Reader on the AAS server resource.')
+param loomAasDatabase string = 'model'
+
 @description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
 param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
 
@@ -1333,6 +1346,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
             { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
             { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
+            // Semantic-model tabular backend (Semantic Link read — the tabular_*
+            // Copilot tools). Default "loom-native" = Cosmos model metadata +
+            // Synapse SQL DAX eval, NO Power BI / Fabric. "analysis-services"
+            // opts into an Azure Analysis Services XMLA backend (loomAasServer
+            // required; Commercial/GCC only — AAS is not in Azure Government).
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Approval activity (F25) - Consumption Logic App + O365 approval
             // email backing the pipeline editor's Approval activity. Empty name
             // -> the approval-logicapp route returns an honest 503 naming the
