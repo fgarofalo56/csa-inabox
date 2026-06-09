@@ -1029,3 +1029,75 @@ DACPAC) + `SqlPackage /Action:Script` (diff against the checked-in schema). On
 GCC-High / DoD use the Azure DevOps Government endpoints, not the commercial
 `dev.azure.com`.
 
+
+## BI stack — Azure Analysis Services + Direct Lake shim {#bi-stack-aas-direct-lake}
+
+The BI stack (semantic-model `analysis-services` backend + the Direct Lake shim
+that keeps AAS import partitions fresh on Delta commits) is **Azure-native and
+opt-in**. It deploys only on the **Commercial** boundary — Azure Analysis
+Services is not offered in US Gov Virginia (GCC / GCC-High / IL5), so on Gov the
+semantic-model provisioner stays on the loom-native tabular layer (no gate, no
+Fabric / Power BI workspace dependency).
+
+### Step 1 — Enable the stack in the params file
+
+`params/commercial-full.bicepparam` already flips it on:
+
+```bicep
+param aasEnabled = true
+param aasSkuName = 'S0'                 // S1/S2/S4/S8v2/S9v2 for production DAX load
+param loomBiBackend = 'analysis-services'
+param loomDirectLakeShimEnabled = true
+param loomDqSourceConnectionString = readEnvironmentVariable('LOOM_DQ_SOURCE_CONN', '')
+param loomBiRenderFunctionName = readEnvironmentVariable('LOOM_BI_RENDER_FUNCTION_NAME', '')
+param loomDirectLakeEventQueue = readEnvironmentVariable('LOOM_DIRECT_LAKE_EVENT_QUEUE', '')
+```
+
+`aas.bicep` provisions the AAS Standard server with the **loom-direct-lake UAMI
+as a server administrator** (so the shim can connect over XMLA and refresh with
+its managed identity), and `aas-adls-rbac.bicep` grants that UAMI **Storage Blob
+Data Reader** on the DLZ ADLS account (for Delta `_delta_log` partition reads).
+
+### Step 2 — Data-plane grants (post-deploy, not ARM)
+
+Two grants cannot be expressed in ARM/Azure RBAC and run as a one-time step:
+
+```bash
+SUB=<sub> ADMIN_RG=rg-csa-loom-admin-eastus2 DLZ_RG=rg-csa-loom-dlz-single-eastus2 \
+  bash scripts/csa-loom/grant-bi-rbac.sh
+```
+
+This grants the shim UAMI **Cosmos DB Built-in Data Contributor** (read the
+`direct-lake-config/refresh-policies` container) and **`db_datareader`** on the
+Synapse Dedicated SQL pool (DirectQuery + partition-boundary reads). The
+dedicated pool must be **resumed** and the runner must be a Synapse SQL
+Administrator. Idempotent.
+
+### Step 3 — (Optional) DirectQuery + Service Bus wiring
+
+- Set `LOOM_DQ_SOURCE_CONN` to the Synapse pool TDS endpoint
+  (`Server=<ws>.sql.azuresynapse.net;Database=<pool>;Authentication=ActiveDirectoryMSI`)
+  before deploy — it lands in Key Vault and is referenced via `secretRef` as
+  `LOOM_DQ_SOURCE_CONNECTION_STRING`. Empty → the DirectQuery surface honest-gates.
+- Set `LOOM_DIRECT_LAKE_EVENT_QUEUE` to a Service Bus queue carrying Storage
+  Event Grid `BlobCreated` events. Empty → the shim idles gracefully
+  (`DeltaLogEventHandler` logs and waits).
+
+### Verify
+
+With `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET, install a semantic-model item: the
+provision receipt shows the model materialized on the loom-native tabular layer
+and (when `aasEnabled`) the AAS server wired for Direct Lake refresh — no Fabric
+/ Power BI workspace required.
+
+### Bicep sync
+
+| Resource / setting | Where |
+|---|---|
+| AAS Standard server | `modules/admin-plane/aas.bicep` |
+| Shim → ADLS Storage Blob Data Reader | `modules/admin-plane/aas-adls-rbac.bicep` |
+| Env vars (`LOOM_AAS_*`, `LOOM_BI_BACKEND`, `LOOM_DIRECT_LAKE_SHIM_ENABLED`, `LOOM_BI_RENDER_FUNCTION_NAME`, `LOOM_DQ_SOURCE_CONNECTION_STRING`, `EVENTGRID_QUEUE`) | `modules/admin-plane/main.bicep` (console + shim apps) |
+| Cosmos data-contributor + Synapse `db_datareader` | `scripts/csa-loom/grant-bi-rbac.sh` |
+
+
+

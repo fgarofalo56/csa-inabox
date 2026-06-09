@@ -327,6 +327,35 @@ param loomMirrorBackend string = 'adf-cdc'
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
 
+// ---------------------------------------------------------------------
+// BI stack (Azure Analysis Services + Direct Lake shim) — opt-in,
+// Commercial-only. Azure-native; NO Fabric / Power BI workspace dependency.
+// ---------------------------------------------------------------------
+
+@description('Deploy an Azure Analysis Services Standard server for the BI stack. Commercial only — AAS is not offered in US Gov Virginia (GCC / GCC-High / IL5). Default false → loom-native tabular layer.')
+param aasEnabled bool = false
+
+@description('AAS Standard SKU (S0 default; S1/S2/S4/S8v2/S9v2 for production DAX scale-out).')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param aasSkuName string = 'S0'
+
+@description('BI backend selector (LOOM_BI_BACKEND). Default loom-native. analysis-services routes the semantic-model provisioner through the deployed AAS XMLA endpoint; powerbi is the opt-in Power BI path.')
+@allowed(['loom-native', 'analysis-services', 'powerbi'])
+param loomBiBackend string = 'loom-native'
+
+@description('Enable the Direct Lake shim background refresh service (LOOM_DIRECT_LAKE_SHIM_ENABLED).')
+param loomDirectLakeShimEnabled bool = false
+
+@description('DirectQuery source connection string for the AAS model (Synapse Dedicated SQL pool TDS endpoint). Stored in Key Vault, referenced via secretRef. Empty → DirectQuery surface honest-gates.')
+@secure()
+param loomDqSourceConnectionString string = ''
+
+@description('BI render Function app name (LOOM_BI_RENDER_FUNCTION_NAME). Empty honest-gates the BI render surface.')
+param loomBiRenderFunctionName string = ''
+
+@description('Service Bus queue name carrying Storage Event Grid BlobCreated events for the Direct Lake shim (EVENTGRID_QUEUE). Empty → the shim idles gracefully.')
+param loomDirectLakeEventQueue string = ''
+
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
 @secure()
 param shirAdminPassword string = ''
@@ -443,6 +472,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlRegion: loomAmlRegion
     // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
     loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
+    // BI stack (AAS + Direct Lake shim) — opt-in, Commercial-only.
+    aasEnabled: aasEnabled
+    aasSkuName: aasSkuName
+    loomBiBackend: loomBiBackend
+    loomDirectLakeShimEnabled: loomDirectLakeShimEnabled
+    loomDqSourceConnectionString: loomDqSourceConnectionString
+    loomBiRenderFunctionName: loomBiRenderFunctionName
+    loomDirectLakeEventQueue: loomDirectLakeEventQueue
   }
 }
 
