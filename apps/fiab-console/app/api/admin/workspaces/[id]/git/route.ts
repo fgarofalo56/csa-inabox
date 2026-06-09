@@ -11,9 +11,9 @@
  * Vault (never Cosmos). Azure DevOps is the default in every cloud; GitHub is
  * honestly gated off in GCC-High / IL5 via githubCloudGate().
  *
- * NOTE on the path: this lives under `/api/admin/.../git/*`. Front Door's default
- * OWASP ruleset 403s the `git` path segment, so front-door.bicep adds a narrow
- * custom Allow rule scoped to `/api/admin/workspaces/**/git`.
+ * NOTE on the path: this lives under '/api/admin/.../git/*'. Front Door's default
+ * OWASP ruleset 403s the 'git' path segment, so front-door.bicep adds a narrow
+ * custom Allow rule scoped to '/api/admin/workspaces/**/git'.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
