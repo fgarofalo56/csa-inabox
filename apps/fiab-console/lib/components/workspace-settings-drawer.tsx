@@ -32,6 +32,7 @@ import {
 import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
+import { CmkPane } from '@/lib/panes/cmk';
 
 interface Props { workspace: Workspace; }
 
@@ -43,7 +44,7 @@ const useStyles = makeStyles({
   honest: { marginTop: 6, fontSize: 12, color: tokens.colorNeutralForeground3 },
 });
 
-type TabId = 'general' | 'permissions' | 'git' | 'onelake' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'permissions' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
 
 export function WorkspaceSettingsDrawer({ workspace }: Props) {
   const styles = useStyles();
@@ -74,6 +75,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
             <Tab value="permissions">Permissions</Tab>
             <Tab value="git">Git integration</Tab>
             <Tab value="onelake">OneLake</Tab>
+            <Tab value="encryption">Encryption</Tab>
             <Tab value="sensitivity">Sensitivity</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
@@ -82,6 +84,7 @@ export function WorkspaceSettingsDrawer({ workspace }: Props) {
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'git' && <GitSection workspaceId={workspace.id} />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
+            {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
             {tab === 'sensitivity' && <DeferredSection
               title="Sensitivity label"
               body="Sensitivity labels require Microsoft Purview Information Protection. Workspace-level enforcement lands when the Purview governance pillar wires up (see docs/fiab/v118-handoff.md governance backlog)."
