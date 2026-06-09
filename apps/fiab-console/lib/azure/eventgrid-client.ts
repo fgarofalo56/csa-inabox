@@ -77,7 +77,7 @@ async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   return json as T;
 }
 
-export interface ShimSubscriptionStatus {
+function storageAccountId(sub: string, rg: string, account: string): string {
   return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}`;
 }
 
