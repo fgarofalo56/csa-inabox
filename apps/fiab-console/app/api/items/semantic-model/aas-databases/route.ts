@@ -15,7 +15,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { listDatabases, aasConfigGate, aasServerName, aasServerRegion, AasError } from '@/lib/azure/aas-client';
+import { listDatabases, aasServerConfigGate, envAasServerName, envAasServerRegion, AasError } from '@/lib/azure/aas-server-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +24,7 @@ export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
-  const gate = aasConfigGate();
+  const gate = aasServerConfigGate();
   if (gate) {
     return NextResponse.json(
       { ok: false, error: `Azure Analysis Services not configured: ${gate.missing} — ${gate.detail}`, gate },
@@ -33,7 +33,7 @@ export async function GET() {
   }
   try {
     const databases = await listDatabases();
-    const out = { ok: true as const, serverName: aasServerName(), region: aasServerRegion(), databases };
+    const out = { ok: true as const, serverName: envAasServerName(), region: envAasServerRegion(), databases };
     try { console.info(`[aas/aas-databases.GET] receipt: ${JSON.stringify(out).slice(0, 300)}`); } catch { /* noop */ }
     return NextResponse.json(out);
   } catch (e: any) {

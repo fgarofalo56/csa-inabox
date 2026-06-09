@@ -19,10 +19,10 @@ import { refreshDataset, listRefreshHistory, PowerBiError } from '@/lib/azure/po
 import {
   refresh as aasRefresh,
   getRefreshes as aasGetRefreshes,
-  aasConfigGate,
+  aasServerConfigGate,
   AasError,
   type AasRefreshRequest,
-} from '@/lib/azure/aas-client';
+} from '@/lib/azure/aas-server-client';
 import { usingAas } from '../../_lib/bi-backend';
 
 export const runtime = 'nodejs';
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ── AAS path ──────────────────────────────────────────────────────────
-  const gate = aasConfigGate();
+  const gate = aasServerConfigGate();
   if (gate) {
     return NextResponse.json(
       { ok: false, error: `Azure Analysis Services not configured: ${gate.missing} — ${gate.detail}`, gate },
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
   }
 
-  const gate = aasConfigGate();
+  const gate = aasServerConfigGate();
   if (gate) {
     return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
   }

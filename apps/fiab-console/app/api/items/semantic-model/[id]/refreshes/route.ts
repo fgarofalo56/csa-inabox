@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listRefreshHistory, PowerBiError } from '@/lib/azure/powerbi-client';
-import { getRefreshes as aasGetRefreshes, aasConfigGate, AasError } from '@/lib/azure/aas-client';
+import { getRefreshes as aasGetRefreshes, aasServerConfigGate, AasError } from '@/lib/azure/aas-server-client';
 import { usingAas } from '../../_lib/bi-backend';
 
 export const runtime = 'nodejs';
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
   }
 
-  const gate = aasConfigGate();
+  const gate = aasServerConfigGate();
   if (gate) {
     return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
   }

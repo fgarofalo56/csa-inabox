@@ -1,119 +1,147 @@
-// CSA Loom — Azure Analysis Services (AAS) Standard server.
+// CSA Loom — Direct-Lake-Shim infrastructure
 //
-// Hosts Import-mode (and DirectQuery / Hybrid) tabular semantic-model databases
-// for CSA Loom. This is the Azure-native semantic-model backend (per
-// no-fabric-dependency.md) — NO Microsoft Fabric / Power BI workspace is
-// required. The Console BFF talks to it via apps/fiab-console/lib/azure/
-// aas-client.ts over three transports:
-//   • ARM (list/get databases, schedule-as-tag)            — armScope()
-//   • AAS async-refresh REST (refresh now, history)        — aasScope()
-//   • AAS XMLA endpoint (TMSL commands)                    — aasScope()
+// Wires the Azure-native parity for Fabric Direct Lake (which needs a Fabric
+// F-SKU, unavailable in Gov). The shim keeps a warm AAS / Power BI Premium XMLA
+// cache fresh from an ADLS Gen2 Delta source, driven by `_delta_log` change
+// notifications:
 //
-// SKU: Standard S1 (2 QPU, ~$160/mo) — the minimum Standard tier that supports
-// programmatic refresh via the data-plane REST API with a service principal as
-// server administrator (the Dev/D1 tier is single-user and does not support the
-// non-interactive REST refresh path). Upgrade to S2/S4 for production QPU.
+//   1. Service Bus QUEUE — the shim's BackgroundService consumes BlobCreated
+//      events from here (PeekLock + dead-letter for failed refreshes).
+//   2. Event Grid SYSTEM TOPIC on the DLZ ADLS Gen2 account.
+//   3. Event Grid SUBSCRIPTION → the Service Bus queue (delivers BlobCreated).
+//   4. Storage Blob Data Reader grant for the shim UAMI (reads `_delta_log`
+//      commits to derive the partition to refresh) and, optionally, for the
+//      AAS / Power BI Premium service identity (reads Delta Parquet).
 //
-// MI Admin: the Console UAMI is added as an AAS *server administrator* using the
-// canonical service-principal format  app:{clientId}@{tenantId}  (Microsoft
-// Learn: "Add a service principal to the server administrator role"). The async-
-// refresh REST API requires server-admin permission, which this grants. Azure
-// RBAC (Reader) is also granted so the ARM list/get database calls succeed.
+// Sovereign note (verified against Microsoft Learn):
+//   - Event Grid system topics are GA in Commercial, GCC, GCC-High, IL5/DoD.
+//   - Service Bus as an Event Grid destination is GA across all four boundaries.
+//   - Storage Blob Data Reader guid is cloud-invariant (global built-in role).
 //
-// Bicep + bootstrap sync (no-vaporware.md): main.bicep wires the module outputs
-// to the Console env — LOOM_AAS_SERVER_NAME, LOOM_AAS_REGION — and sets
-// NEXT_PUBLIC_LOOM_BI_BACKEND=aas so the SemanticModelEditor renders the AAS
-// surface and the refresh routes dispatch to AAS by default.
+// No Fabric dependency: the shim drives Power BI Premium *enhanced refresh*
+// over XMLA on the sovereign Power BI host — never a Fabric F-SKU.
 
 targetScope = 'resourceGroup'
 
-@description('Primary region.')
+@description('Primary region')
 param location string
 
-@description('AAS server name (lowercase alphanumerics, globally unique within the region).')
-param serverName string = 'aasloom${uniqueString(resourceGroup().id)}'
+@description('ADLS Gen2 storage account name (DLZ lakehouse backing store) that holds the Delta source(s).')
+param storageAccountName string
 
-@description('SKU name — Standard tier required for the data-plane refresh REST API.')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param skuName string = 'S1'
+@description('Service Bus namespace name to host the shim queue. Created in this RG if it does not exist (referenced via existing when reused).')
+param serviceBusNamespaceName string
 
-@description('LAW resource id for diagnostic settings.')
-param workspaceId string
+@description('Service Bus queue name receiving Delta _delta_log BlobCreated events.')
+param serviceBusQueueName string = 'loom-dl-shim-events'
 
-@description('Console UAMI client id — added as AAS server admin via app:{clientId}@{tenantId}.')
-param consolePrincipalClientId string
+@description('Direct-Lake Shim UAMI principal id — granted Storage Blob Data Reader on the Delta source account.')
+param shimMiPrincipalId string
 
-@description('Console UAMI principal (object) id — granted Reader on the AAS server for ARM list/get. Empty skips the grant.')
-param consolePrincipalId string = ''
+@description('AAS / Power BI Premium service-principal object id — granted Storage Blob Data Reader on the Delta source account. Empty skips that grant.')
+param aasMiPrincipalId string = ''
 
-@description('Entra tenant id — forms the AAS server-admin UPN app:{clientId}@{tenantId}.')
-param tenantId string = tenant().tenantId
-
-@description('Compliance tags.')
-param complianceTags object
-
-@description('When true, skip RBAC grants (re-deploy where assignments already exist or the deployer lacks User Access Administrator).')
+@description('Skip role grants on re-deploy (RBAC writes need Owner/User Access Administrator).')
 param skipRoleGrants bool = false
 
-resource aasServer 'Microsoft.AnalysisServices/servers@2017-08-01' = {
-  name: serverName
+@description('Compliance tags')
+param complianceTags object = {}
+
+var blobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1' // Storage Blob Data Reader (global built-in)
+
+resource sa 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+  name: storageAccountName
+}
+
+// Service Bus namespace + queue the shim consumes.
+resource sbNamespace 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
+  name: serviceBusNamespaceName
+  location: location
+  sku: { name: 'Standard', tier: 'Standard' }
+  tags: complianceTags
+  properties: {
+    minimumTlsVersion: '1.2'
+    disableLocalAuth: true
+  }
+}
+
+resource sbQueue 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = {
+  parent: sbNamespace
+  name: serviceBusQueueName
+  properties: {
+    lockDuration: 'PT1M'
+    maxDeliveryCount: 10
+    deadLetteringOnMessageExpiration: true
+    defaultMessageTimeToLive: 'PT1H'
+  }
+}
+
+// Event Grid system topic for the ADLS Gen2 account.
+resource egSystemTopic 'Microsoft.EventGrid/systemTopics@2023-12-15-preview' = {
+  name: 'loom-dl-shim-${storageAccountName}'
   location: location
   tags: complianceTags
-  sku: {
-    name: skuName
-    tier: 'Standard'
-  }
   properties: {
-    asAdministrators: {
-      // Service-principal / managed-identity server administrators use the
-      // app:{clientId}@{tenantId} format. Server-admin is required for the
-      // async-refresh REST API (the data plane the Console calls).
-      members: [
-        'app:${consolePrincipalClientId}@${tenantId}'
-      ]
+    source: sa.id
+    topicType: 'Microsoft.Storage.StorageAccounts'
+  }
+}
+
+// Event Grid subscription → Service Bus queue. The shim's regex
+// (`_delta_log/<n>.json`) does the precise match; we pre-filter to
+// BlobCreated + ".json" to cut noise.
+resource egSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2023-12-15-preview' = {
+  parent: egSystemTopic
+  name: 'loom-dl-shim-delta-log'
+  properties: {
+    eventDeliverySchema: 'EventGridSchema'
+    destination: {
+      endpointType: 'ServiceBusQueue'
+      properties: {
+        resourceId: sbQueue.id
+      }
     }
-    // Standalone AAS server (managedMode left default = not managed). Power BI /
-    // Fabric connectivity is the opt-in Fabric-family path and is NOT enabled
-    // here — the Console talks to AAS Azure-native over REST + XMLA.
+    filter: {
+      includedEventTypes: ['Microsoft.Storage.BlobCreated']
+      subjectEndsWith: '.json'
+      isSubjectCaseSensitive: false
+    }
+    retryPolicy: {
+      maxDeliveryAttempts: 10
+      eventTimeToLiveInMinutes: 60
+    }
   }
 }
 
-resource aasDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  scope: aasServer
-  name: 'diag-loom-stdz'
+// Storage Blob Data Reader for the Shim UAMI (reads Delta _delta_log commits).
+resource shimReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(shimMiPrincipalId) && !skipRoleGrants) {
+  name: guid(sa.id, shimMiPrincipalId, blobDataReaderRoleId, 'shim-uami-reader-v1')
+  scope: sa
   properties: {
-    workspaceId: workspaceId
-    logs: [
-      { categoryGroup: 'allLogs', enabled: true }
-    ]
-    metrics: [
-      { category: 'AllMetrics', enabled: true }
-    ]
-  }
-}
-
-// Console UAMI → Reader on the AAS server (ARM list/get databases + read the
-// loom-refresh-schedule tag). Data-plane server-admin access is granted via
-// asAdministrators.members above (not Azure RBAC). Reader role id is
-// cloud-invariant (identical across Commercial / GCC / GCC-High / IL5).
-resource consoleAasReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
-  scope: aasServer
-  name: guid(aasServer.id, consolePrincipalId, 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
-  properties: {
-    // Reader
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
-    principalId: consolePrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataReaderRoleId)
+    principalId: shimMiPrincipalId
     principalType: 'ServicePrincipal'
+    description: 'Loom Direct-Lake-Shim UAMI: reads Delta _delta_log commits from ADLS for refresh dispatch.'
   }
 }
 
-output serverId string = aasServer.id
-output serverName string = aasServer.name
-// serverRegion is wired to LOOM_AAS_REGION in main.bicep (the AAS data-plane
-// REST host is https://{serverRegion}.{aasSuffix}/servers/{serverName}/...).
-output serverRegion string = location
-// asazure:// connection string for SSMS / Tabular Editor. The suffix follows
-// the Commercial vs USGov split (environment().suffixes.storage discriminates).
-output serverUri string = 'asazure://${location}.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net'}/${serverName}'
-// The UPN added to the server-admin role (for audit).
-output serverAdminMember string = 'app:${consolePrincipalClientId}@${tenantId}'
+// Storage Blob Data Reader for AAS/PBI Premium MI (reads Delta Parquet).
+resource aasReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(aasMiPrincipalId) && !skipRoleGrants) {
+  name: guid(sa.id, aasMiPrincipalId, blobDataReaderRoleId, 'aas-dl-shim-reader-v1')
+  scope: sa
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataReaderRoleId)
+    principalId: aasMiPrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'Loom Direct-Lake-Shim: AAS/PBI Premium MI reads Delta Parquet from ADLS (Storage Blob Data Reader).'
+  }
+}
+
+@description('Service Bus namespace FQDN — set as SERVICEBUS_NAMESPACE on the shim app.')
+output serviceBusFqdn string = '${sbNamespace.name}.servicebus.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'usgovcloudapi.net' : 'windows.net'}'
+
+@description('Service Bus queue ARM resource id — set as LOOM_DIRECT_LAKE_SHIM_QUEUE_ID on the Console for runtime Event Grid wiring.')
+output serviceBusQueueId string = sbQueue.id
+
+@description('Event Grid system topic name.')
+output systemTopicName string = egSystemTopic.name

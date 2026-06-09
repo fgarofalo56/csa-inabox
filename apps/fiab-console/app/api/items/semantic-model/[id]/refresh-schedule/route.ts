@@ -30,10 +30,10 @@ import {
 import {
   getRefreshSchedule as aasGetRefreshSchedule,
   setRefreshSchedule as aasSetRefreshSchedule,
-  aasConfigGate,
+  aasServerConfigGate,
   AasError,
   type AasScheduleWrite,
-} from '@/lib/azure/aas-client';
+} from '@/lib/azure/aas-server-client';
 import { usingAas } from '../../_lib/bi-backend';
 
 export const runtime = 'nodejs';
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const id = (await ctx.params).id;
 
   if (usingAas()) {
-    const gate = aasConfigGate();
+    const gate = aasServerConfigGate();
     if (gate) {
       return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
     }
@@ -84,7 +84,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 
   // ── AAS path ──────────────────────────────────────────────────────────
   if (usingAas()) {
-    const gate = aasConfigGate();
+    const gate = aasServerConfigGate();
     if (gate) {
       return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
     }
