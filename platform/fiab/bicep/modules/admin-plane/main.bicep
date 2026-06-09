@@ -1481,6 +1481,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           [
             { name: 'LOOM_CLOUD_BOUNDARY', value: boundary }
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
+            // Power BI REST base — Azure-Government-backed Power BI host in
+            // GCC-High / IL5 (api.powerbigov.us), Commercial host elsewhere.
+            // This is a Power BI REST host (NOT a Fabric API host), so it is
+            // permitted on the default path per no-fabric-dependency.md. Used by
+            // the report Visual Designer's executeQueries calls + measure
+            // validation. GCC runs on the Commercial api.powerbi.com host.
+            { name: 'LOOM_POWERBI_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.powerbigov.us/v1.0/myorg' : 'https://api.powerbi.com/v1.0/myorg' }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
             // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
             // (Fabric is not IL5-authorized). Unset → Azure-native only.

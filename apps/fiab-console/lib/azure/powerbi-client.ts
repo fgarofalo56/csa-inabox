@@ -34,8 +34,14 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { getPbiGovHost } from './cloud-endpoints';
 
-const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || 'https://api.powerbi.com/v1.0/myorg';
+// Power BI REST base. When LOOM_POWERBI_BASE is unset we resolve the
+// sovereign-cloud-aware host: Commercial / GCC → api.powerbi.com, GCC-High /
+// IL5 / DoD → api.powerbigov.us (the Azure-Government-backed Power BI REST
+// host — NOT a Fabric API host — so this is permitted per no-fabric-dependency).
+// Backwards-compatible: getPbiGovHost() returns api.powerbi.com in Commercial.
+const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || `${getPbiGovHost()}/v1.0/myorg`;
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 
 const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
