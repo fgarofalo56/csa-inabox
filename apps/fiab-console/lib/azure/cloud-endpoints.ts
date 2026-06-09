@@ -747,41 +747,6 @@ export function getAasSuffix(): string {
   return aasSuffix();
 }
 
-// ---------------------------------------------------------------------------
-// Azure Analysis Services (XMLA data plane)
-// ---------------------------------------------------------------------------
-//
-// AAS connection-string / HTTP endpoint format (Microsoft Learn —
-// "Asynchronous refresh with the REST API"):
-//   connection string : asazure://<region>.asazure.windows.net/<serverName>
-//   HTTP base URL      : https://<region>.asazure.windows.net/servers/<serverName>/...
-//   Token audience     : EXACTLY https://*.asazure.windows.net  (the `*` is a
-//                        literal subdomain, NOT a placeholder — custom audiences
-//                        such as https://westus.asazure.windows.net fail auth).
-//   Permission         : the calling principal needs the AAS server-admin role.
-//   Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh#authentication
-//
-// Azure Analysis Services IS available in Azure Government regions (USGov
-// Virginia / Arizona / Texas) using the `asazure.usgovcloudapi.net` suffix.
-// This is an Azure-native service — NOT Fabric / Power BI — so it is permitted
-// here per no-fabric-dependency.md (AAS is the optional Azure-native backend
-// for the semantic-model item type).
-
-/** AAS XMLA data-plane hostname suffix (no leading dot). */
-export function aasSuffix(): string {
-  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
-}
-
-/**
- * AAD `.default` scope for AAS XMLA data-plane tokens. The audience must
- * contain the literal `*` subdomain exactly as shown (per Microsoft Learn —
- * the `*` is NOT a wildcard placeholder; any other subdomain fails auth).
- *   Commercial / GCC     : https://*.asazure.windows.net/.default
- *   GCC-High / IL5 / DoD : https://*.asazure.usgovcloudapi.net/.default
- */
-export function aasScope(): string {
-  return `https://*.${aasSuffix()}/.default`;
-}
 
 /**
  * Normalise an AAS connection-string or HTTP URL into a canonical HTTPS server
