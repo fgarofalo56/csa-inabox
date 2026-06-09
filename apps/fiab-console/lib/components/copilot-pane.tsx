@@ -22,7 +22,7 @@ type Step =
   | { kind: 'tool_call'; name: string; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string; code?: string };
 
 interface Msg {
   who: 'you' | 'copilot' | 'system';
@@ -97,8 +97,20 @@ export function CopilotPane() {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
+  // Content-safety: blocked-response reason (input or output) + honest-gate
+  // when no Content Safety endpoint is configured in this deployment.
+  const [safetyBlock, setSafetyBlock] = useState<string | null>(null);
+  const [safetyGate, setSafetyGate] = useState<boolean>(false);
   const sessionRef = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/copilot/status')
+      .then((r) => r.json())
+      .then((j) => { if (j?.ok && j.contentSafety === false) setSafetyGate(true); })
+      .catch(() => {});
+  }, [open]);
 
   useEffect(() => {
     const o = () => setOpen(true);
@@ -125,6 +137,7 @@ export function CopilotPane() {
     if (!text || busy) return;
     setDraft('');
     setGateError(null);
+    setSafetyBlock(null);
     setBusy(true);
     setMsgs((m) => [...m, { who: 'you', text }, { who: 'copilot', text: '', steps: [], streaming: true }]);
 
@@ -139,6 +152,19 @@ export function CopilotPane() {
         const j = await res.json().catch(() => ({ error: 'Copilot AOAI not wired' }));
         setGateError(j.error || 'Copilot AOAI deployment not wired');
         setMsgs((m) => m.filter((x) => !x.streaming));
+        return;
+      }
+      if (res.status === 400) {
+        // Content-safety INPUT block (or other validation error) returned by
+        // the orchestrate route before the SSE stream opened.
+        const j = await res.json().catch(() => ({ error: {} }));
+        const reason = j?.error?.reason || j?.error || 'Content was blocked by safety filters.';
+        if (j?.error?.code === 'content_safety_input' || typeof j?.error === 'object') {
+          setSafetyBlock(typeof reason === 'string' ? reason : 'Content was blocked by safety filters.');
+          setMsgs((m) => m.filter((x) => !x.streaming));
+          return;
+        }
+        setMsgs((m) => m.map((x) => x.streaming ? { ...x, text: `Error: ${reason}`, streaming: false } : x));
         return;
       }
       if (!res.ok || !res.body) {
@@ -167,6 +193,14 @@ export function CopilotPane() {
           } else if (ev.event === 'step') {
             try {
               const step = JSON.parse(ev.data) as Step;
+              if (step.kind === 'error' &&
+                  (step.code === 'content_safety_input' || step.code === 'content_safety_output')) {
+                // Content-safety block (input echoed back via SSE, or output
+                // filtered) — surface as a MessageBar, not inline error text.
+                setSafetyBlock(step.error);
+                setMsgs((m) => m.filter((x) => !x.streaming));
+                continue;
+              }
               setMsgs((m) => m.map((x) => {
                 if (!x.streaming) return x;
                 if (step.kind === 'final') return { ...x, text: step.content, streaming: false, usage: step.usage, model: step.model };
@@ -203,6 +237,24 @@ export function CopilotPane() {
               <MessageBarTitle>Copilot AOAI deployment not wired</MessageBarTitle>
               {gateError} — set up the AI Foundry hub + a chat-completions deployment.
               Open the AI Foundry editor and click <strong>Deployments → New</strong>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {safetyGate && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Content Safety not configured</MessageBarTitle>
+              Prompts and responses are not filtered in this deployment. Ask your administrator to
+              provision Azure AI Content Safety and set <strong>LOOM_CONTENT_SAFETY_ENDPOINT</strong> on
+              the Console Container App.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {safetyBlock && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Response blocked by content safety</MessageBarTitle>
+              {safetyBlock}
             </MessageBarBody>
           </MessageBar>
         )}

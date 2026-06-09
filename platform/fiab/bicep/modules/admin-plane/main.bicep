@@ -103,6 +103,9 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
 param aiFoundryEnabled bool = false
 
+@description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer Content Safety; the Console then surfaces an honest "not configured" warning MessageBar instead of silently passing.')
+param contentSafetyEnabled bool = false
+
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
@@ -768,7 +771,26 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
-// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// 8a. Azure AI Content Safety — copilot moderation pipeline backend
+// Standalone Content Safety account (Prompt Shields + harm analyze) that
+// every copilot persona routes input + output through. The Console UAMI is
+// granted Cognitive Services User so the BFF calls the data plane token-only.
+// LOOM_CONTENT_SAFETY_ENDPOINT (wired below) gates the pipeline; when this
+// module is off the Console honest-gates with a warning MessageBar.
+// =====================================================================
+
+module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSafetyEnabled) {
+  name: 'content-safety'
+  params: {
+    location: location
+    kind: 'ContentSafety'
+    nameFragment: 'contentsafety'
+    skuName: 'S0'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
@@ -1524,6 +1546,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // data-agent test chat. Empty when AI Foundry isn't deployed.
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
+            // Azure AI Content Safety endpoint — copilot persona moderation
+            // pipeline (Prompt Shields + harm analyze). Empty when the Content
+            // Safety account isn't deployed (e.g. DoD), in which case the
+            // Console honest-gates with a warning MessageBar (no silent pass).
+            { name: 'LOOM_CONTENT_SAFETY_ENDPOINT', value: contentSafetyEnabled ? contentSafety!.outputs.endpoint : '' }
             // Azure ML workspace for notebook Library & Environment management
             // (aml-environments-client.ts) AND MLflow experiment tracking
             // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). The Foundry

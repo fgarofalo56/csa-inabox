@@ -95,6 +95,10 @@ param dlzDomainNames = [
 // Front Door NOT certified for IL5 but is for GCC-H — enabled here.
 param deployAppsEnabled = true
 param aiFoundryEnabled = true
+// Azure AI Content Safety IS available in GCC-High (USGovArizona / USGovVirginia)
+// — Text, Prompt Shield, and Protected Material Text are all supported per the
+// Microsoft Learn region matrix. Wires LOOM_CONTENT_SAFETY_ENDPOINT.
+param contentSafetyEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true

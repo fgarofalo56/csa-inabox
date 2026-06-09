@@ -30,6 +30,7 @@ import {
   type AoaiTarget,
 } from './copilot-orchestrator';
 import { copilotSessionsContainer } from './cosmos-client';
+import { isSafetyConfigured, shieldPrompt, moderateContent } from './foundry-client';
 import {
   searchDocs as ragSearchDocs,
   isSearchConfigured,
@@ -78,7 +79,7 @@ export type HelpStep =
   | { kind: 'citation'; citations: Citation[] }
   | { kind: 'handoff'; reason: string; deepLink: string; suggestedPrompt: string }
   | { kind: 'final'; content: string }
-  | { kind: 'error'; error: string };
+  | { kind: 'error'; error: string; code?: string };
 
 export interface HelpOrchestrateOptions {
   prompt: string;
@@ -519,6 +520,21 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
 
   await persistTurn(sessionId, userId, 'user', prompt);
 
+  // --- Content-safety INPUT check (every persona): Prompt Shields +
+  // harm-category moderation on the user prompt. No-op when Content Safety is
+  // not configured (helpers fail open; isSafetyConfigured() false). ---
+  if (isSafetyConfigured()) {
+    const [shieldResult, inputResult] = await Promise.all([
+      shieldPrompt(prompt),
+      moderateContent(prompt),
+    ]);
+    const blocked = shieldResult.blocked ? shieldResult : inputResult.blocked ? inputResult : null;
+    if (blocked) {
+      yield { kind: 'error', error: blocked.reason, code: 'content_safety_input' };
+      return;
+    }
+  }
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -541,6 +557,14 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
     if (!toolCalls || toolCalls.length === 0) {
       const final = msg.content || '';
       const { handoff, stripped } = parseHandoff(final);
+      // --- Content-safety OUTPUT check: moderate the help answer text. ---
+      if (isSafetyConfigured()) {
+        const outputResult = await moderateContent(stripped);
+        if (outputResult.blocked) {
+          yield { kind: 'error', error: outputResult.reason, code: 'content_safety_output' };
+          return;
+        }
+      }
       if (allCitations.length > 0) {
         yield { kind: 'citation', citations: allCitations };
       }

@@ -31,6 +31,9 @@ param databricksSqlWarehouseEnabled = true
 
 // Security
 param defenderForAIEnabled = true
+// Azure AI Content Safety — copilot persona moderation (Prompt Shields + harm
+// analyze). Available in Commercial; wires LOOM_CONTENT_SAFETY_ENDPOINT.
+param contentSafetyEnabled = true
 // Purview defaults OFF — many Microsoft tenants already have an
 // Enterprise-tier tenant-level Purview account (only one allowed per
 // tenant). Operator opts in once they've decided whether to reuse the

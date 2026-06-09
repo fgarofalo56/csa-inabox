@@ -32,6 +32,9 @@ param databricksSqlWarehouseEnabled = true
 
 // Security
 param defenderForAIEnabled = true
+// Azure AI Content Safety — copilot persona moderation. GCC runs on Commercial
+// Azure endpoints, so Content Safety is available; wires LOOM_CONTENT_SAFETY_ENDPOINT.
+param contentSafetyEnabled = true
 param purviewEnabled = true
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false

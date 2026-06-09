@@ -391,6 +391,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     recycleRetentionDays: recycleRetentionDays
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
+    contentSafetyEnabled: contentSafetyEnabled
     agentFoundryEnabled: agentFoundryEnabled
     loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled

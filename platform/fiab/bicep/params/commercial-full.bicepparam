@@ -102,6 +102,9 @@ param dlzDomainNames = []
 // Re-enable in next iteration when capacity refreshes OR switch region.
 param deployAppsEnabled = true
 param aiFoundryEnabled = true
+// Azure AI Content Safety — copilot persona moderation (Prompt Shields + harm
+// analyze). Available in Commercial; wires LOOM_CONTENT_SAFETY_ENDPOINT.
+param contentSafetyEnabled = true
 // Agent Foundry — provisions the dedicated AIServices account (aifndry-loom-eastus2)
 // with the loom-agents project + chat (gpt-4.1-mini) + text-embedding-ada-002
 // deployments and wires LOOM_AOAI_* / LOOM_FOUNDRY_PROJECT_*. This is what makes

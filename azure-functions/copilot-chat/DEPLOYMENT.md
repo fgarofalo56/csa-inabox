@@ -177,6 +177,41 @@ az functionapp config appsettings set \
     "COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp"
 ```
 
+### Azure AI Content Safety moderation (every persona)
+
+The chat function routes the **user prompt** (Prompt Shields jailbreak/injection
+detection + harm-category analyze) and the **LLM reply** (harm-category analyze)
+through Azure AI Content Safety. A blocked prompt or reply returns HTTP 400
+`{ "ok": false, "error": { "reason": "...", "code": "content_safety_input" |
+"content_safety_output" } }` with the real moderation reason.
+
+Set the endpoint app setting (use the standalone Content Safety account
+provisioned by `contentSafetyEnabled` in the platform bicep, or any
+`Microsoft.CognitiveServices/accounts` of kind `ContentSafety`):
+
+```bash
+az functionapp config appsettings set \
+  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  -g rg-dlz-aiml-stack-dev \
+  -n func-csa-inabox-copilot-fg \
+  --settings \
+    "CONTENT_SAFETY_ENDPOINT=https://<contentsafety-account>.cognitiveservices.azure.com/"
+```
+
+App-settings keys:
+
+| Key | Default | Effect |
+|---|---|---|
+| `CONTENT_SAFETY_ENDPOINT` | unset | When set, every prompt + reply is moderated (Prompt Shields + Hate/SelfHarm/Sexual/Violence at severity ≥ 4). **When unset the function honest-gates** — the regex injection guard still applies but harm/jailbreak moderation is skipped; no silent claim of filtering. |
+| `CONTENT_SAFETY_KEY` | unset | Optional key-auth for local dev. In Azure, the Function's managed identity is granted **Cognitive Services User** and token-auth is used; no key needed. |
+
+Auth in Azure: grant the Function App's managed identity **Cognitive Services
+User** (`a97b65f3-24c7-4388-baec-2e87135dc908`) on the Content Safety account.
+Availability: Commercial, GCC, and GCC-High (USGovArizona / USGovVirginia). NOT
+offered in the DoD regions — leave `CONTENT_SAFETY_ENDPOINT` unset there (the
+function honest-gates).
+
+
 ### MS Learn MCP fallback grounding (CSA-0162 Phase 2)
 
 When the in-repo docs index returns no grounding hits for an on-topic

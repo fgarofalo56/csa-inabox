@@ -88,6 +88,11 @@ param dlzDomainNames = []
 //   - AI Search: limited IL5 region surface → false.
 param deployAppsEnabled = true
 param aiFoundryEnabled = false
+// Azure AI Content Safety is NOT offered in the DoD regions (US DoD Central /
+// US DoD East) per the Microsoft Learn region matrix. Leave off — the Console
+// honest-gates the copilot moderation pipeline with a warning MessageBar
+// (prompts pass unfiltered, never a silent claim of filtering).
+param contentSafetyEnabled = false
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true

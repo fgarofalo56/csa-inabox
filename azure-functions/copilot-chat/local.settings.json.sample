@@ -6,6 +6,8 @@
     "AZURE_OPENAI_ENDPOINT": "https://YOUR-INSTANCE.openai.azure.com",
     "AZURE_OPENAI_KEY": "YOUR-API-KEY-HERE",
     "AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini",
+    "CONTENT_SAFETY_ENDPOINT": "https://YOUR-CONTENTSAFETY.cognitiveservices.azure.com/",
+    "CONTENT_SAFETY_KEY": "OPTIONAL-LOCAL-DEV-KEY",
     "ALLOWED_ORIGINS": "https://fgarofalo56.github.io,http://localhost:8000"
   },
   "Host": {

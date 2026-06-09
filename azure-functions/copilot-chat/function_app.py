@@ -46,6 +46,7 @@ import azure.functions as func
 # modules are correct here. The Functions host puts the function
 # directory on ``sys.path``; tests do the same via a ``conftest``.
 import ms_learn  # type: ignore
+import content_safety  # type: ignore
 import redaction  # type: ignore
 import storage  # type: ignore
 import telemetry  # type: ignore
@@ -753,6 +754,26 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             400, headers,
         )
 
+    # Azure AI Content Safety — INPUT check (Prompt Shields + harm
+    # categories). No-op when CONTENT_SAFETY_ENDPOINT is unset (honest-gate:
+    # the regex injection guard above still applies; no silent crash).
+    cs_blocked, cs_reason = content_safety.check_input(message)
+    if cs_blocked:
+        logger.warning("Content safety blocked input from IP %s: %s", ip, cs_reason)
+        telemetry.track_event(
+            "chat.rejected",
+            {
+                "reason": "content_safety_input",
+                "actor": ip_hashed,
+                "session_id": session_id,
+            },
+        )
+        return _json_response(
+            {"ok": False, "error": {"reason": cs_reason, "code": "content_safety_input"}},
+            headers,
+            status_code=400,
+        )
+
     conv_history = body.get("history", [])
     if not isinstance(conv_history, list):
         conv_history = []
@@ -866,6 +887,27 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                 total_tokens = chunk.usage.total_tokens
 
         reply = "".join(reply_parts)
+
+        # Azure AI Content Safety — OUTPUT check (LLM reply). No-op when
+        # CONTENT_SAFETY_ENDPOINT is unset (honest-gate).
+        cs_out_blocked, cs_out_reason = content_safety.check_output(reply)
+        if cs_out_blocked:
+            logger.warning(
+                "Content safety blocked output for IP %s: %s", ip, cs_out_reason
+            )
+            telemetry.track_event(
+                "chat.rejected",
+                {
+                    "reason": "content_safety_output",
+                    "actor": ip_hashed,
+                    "session_id": session_id,
+                },
+            )
+            return _json_response(
+                {"ok": False, "error": {"reason": cs_out_reason, "code": "content_safety_output"}},
+                headers,
+                status_code=400,
+            )
 
         # ── Topic-class extraction (SEC-COPILOT 2026-05-07) ─────────
         # The system prompt asks the model to emit

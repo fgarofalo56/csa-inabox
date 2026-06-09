@@ -15,6 +15,7 @@ import {
   listSessions,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
+import { isSafetyConfigured } from '@/lib/azure/foundry-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
@@ -72,6 +73,10 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     aoai,
+    // Whether the AI Content Safety pipeline is wired. When false the pane
+    // shows an honest "prompts are not filtered" warning MessageBar (the
+    // copilot still works — honest-gate, not a silent pass).
+    contentSafety: isSafetyConfigured(),
     tools: {
       count: tools.length,
       byService,

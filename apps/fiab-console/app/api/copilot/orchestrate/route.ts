@@ -14,6 +14,7 @@ import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
+import { isSafetyConfigured, shieldPrompt, moderateContent } from '@/lib/azure/foundry-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
@@ -48,6 +49,26 @@ export async function POST(req: NextRequest) {
   }
 
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
+
+  // Content-safety INPUT pre-flight — Prompt Shields + harm moderation on the
+  // user prompt BEFORE the SSE stream opens, so HTTP clients get a clean 400
+  // JSON { ok:false, error:{ reason } } rather than a half-open SSE stream.
+  // No-op when Content Safety is not configured (honest-gate handled in UI).
+  // (The orchestrator repeats the input check internally and adds the OUTPUT
+  // check on the completion, so SSE-only consumers are still covered.)
+  if (isSafetyConfigured()) {
+    const [shield, inputMod] = await Promise.all([
+      shieldPrompt(prompt),
+      moderateContent(prompt),
+    ]);
+    const blocked = shield.blocked ? shield : inputMod.blocked ? inputMod : null;
+    if (blocked) {
+      return NextResponse.json(
+        { ok: false, error: { reason: blocked.reason, code: 'content_safety_input' } },
+        { status: 400 },
+      );
+    }
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
