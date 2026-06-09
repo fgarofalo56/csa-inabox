@@ -9087,7 +9087,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'incremental' | 'config' | 'access' | 'governance' | 'embed'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9129,6 +9129,32 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
+  // Mirrors the Power BI Desktop "Incremental refresh and real-time data" dialog:
+  // archive (keep) range, incremental refresh range, real-time DirectQuery toggle,
+  // detect-changes column. Writes via PUT /refresh-policy → aas-client (TMSL Alter
+  // + Refresh applyRefreshPolicy). Opt-in AAS backend; default stays loom-native.
+  const GRAINS = ['day', 'month', 'quarter', 'year'] as const;
+  type Grain = typeof GRAINS[number];
+  const [irTableName, setIrTableName] = useState('');
+  const [irRollingWindowPeriods, setIrRollingWindowPeriods] = useState(3);
+  const [irRollingWindowGranularity, setIrRollingWindowGranularity] = useState<Grain>('year');
+  const [irIncrementalPeriods, setIrIncrementalPeriods] = useState(10);
+  const [irIncrementalGranularity, setIrIncrementalGranularity] = useState<Grain>('day');
+  const [irEnableHybrid, setIrEnableHybrid] = useState(false);
+  const [irPollingExpression, setIrPollingExpression] = useState('');
+  const [irEffectiveDate, setIrEffectiveDate] = useState('');
+  const [irBusy, setIrBusy] = useState(false);
+  const [irMsg, setIrMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [irPartitions, setIrPartitions] = useState<Array<{ name: string; storageMode: string; queryDefinition?: string }>>([]);
+  const [irGate, setIrGate] = useState<string | null>(null);
+  // Enhanced refresh (apply-policy + targeted) controls.
+  const [enhBusy, setEnhBusy] = useState(false);
+  const [enhMsg, setEnhMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [enhApplyPolicy, setEnhApplyPolicy] = useState(true);
+  const [enhEffectiveDate, setEnhEffectiveDate] = useState('');
+  const [enhCommitMode, setEnhCommitMode] = useState<'transactional' | 'partialBatch'>('transactional');
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9234,6 +9260,74 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
+
+  // Load the live partition schema (TMSCHEMA_PARTITIONS via AAS XMLA). Surfaces
+  // the honest AAS config gate when LOOM_SEMANTIC_BACKEND!=analysis-services.
+  const loadIrPolicy = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setIrGate(null); setIrPartitions([]);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
+      const j = await r.json();
+      if (!j.ok) { setIrGate(j.error); return; }
+      setIrPartitions(j.partitions || []);
+    } catch (e: any) { setIrGate(e?.message || String(e)); }
+  }, [workspaceId, datasetId, irTableName]);
+
+  // Apply an incremental refresh policy: TMSL Alter (set policy) + TMSL Refresh
+  // (applyRefreshPolicy:true → historical Import partitions + live DQ partition
+  // when Hybrid). The receipt is the resulting partition list.
+  const saveIrPolicy = useCallback(async () => {
+    if (!workspaceId || !datasetId || !irTableName) return;
+    setIrBusy(true); setIrMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tableName: irTableName,
+          policy: {
+            rollingWindowGranularity: irRollingWindowGranularity,
+            rollingWindowPeriods: irRollingWindowPeriods,
+            incrementalGranularity: irIncrementalGranularity,
+            incrementalPeriods: irIncrementalPeriods,
+            mode: irEnableHybrid ? 'Hybrid' : 'Import',
+            ...(irPollingExpression.trim() ? { pollingExpression: irPollingExpression.trim() } : {}),
+          },
+          ...(irEffectiveDate.trim() ? { effectiveDate: irEffectiveDate.trim() } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setIrMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setIrPartitions(j.partitions || []);
+      const dq = (j.partitions || []).filter((p: any) => p.storageMode === 'DirectQuery').length;
+      setIrMsg({ ok: true, text: `Policy applied. ${j.partitions?.length ?? 0} partition(s)${dq ? `, including ${dq} live DirectQuery partition` : ''}.` });
+    } catch (e: any) { setIrMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setIrBusy(false); }
+  }, [workspaceId, datasetId, irTableName, irRollingWindowGranularity, irRollingWindowPeriods, irIncrementalGranularity, irIncrementalPeriods, irEnableHybrid, irPollingExpression, irEffectiveDate]);
+
+  // Enhanced (async) refresh — POST /refreshes with commitMode + applyRefreshPolicy
+  // + effectiveDate. Refreshes the rolling Import partitions per the policy while
+  // leaving historical + DQ partitions intact.
+  const triggerEnhancedRefresh = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setEnhBusy(true); setEnhMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'full',
+          commitMode: enhCommitMode,
+          applyRefreshPolicy: enhApplyPolicy,
+          ...(enhEffectiveDate.trim() ? { effectiveDate: enhEffectiveDate.trim() } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEnhMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setEnhMsg({ ok: true, text: `Enhanced refresh queued (requestId: ${String(j.requestId || '').slice(0, 8)}…).` });
+      setTimeout(() => loadRefreshes(workspaceId, datasetId), 2000);
+    } catch (e: any) { setEnhMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setEnhBusy(false); }
+  }, [workspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
 
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
@@ -9384,6 +9478,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="measures">Measures (DAX)</Tab>
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
+                  <Tab value="incremental">Incremental refresh</Tab>
                   <Tab value="config">Configuration</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
@@ -9610,6 +9705,134 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </TableBody>
                     </Table>
                   </div>
+                )}
+                {tab === 'incremental' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Incremental refresh + hybrid table (current-period DirectQuery)</MessageBarTitle>
+                        Sets a <code>refreshPolicy</code> on a table (TMSL Alter over the Azure Analysis Services XMLA
+                        endpoint), then applies it (TMSL Refresh, <code>applyRefreshPolicy:true</code>) to create historical
+                        Import partitions and — when <em>real-time DirectQuery partition</em> is enabled — a live
+                        DirectQuery partition for the current period. Requires <code>LOOM_SEMANTIC_BACKEND=analysis-services</code>{' '}
+                        and <code>LOOM_AAS_XMLA_ENDPOINT</code> (compatibility level 1565+ for Hybrid mode). AAS is an
+                        Azure-native PaaS — no Microsoft Fabric or Power BI workspace required.{' '}
+                        <a href="https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {irGate && (
+                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                        <MessageBarBody><MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>{irGate}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12, maxWidth: 580 }}>
+                      <Field label="Table" required>
+                        <Select value={irTableName} onChange={(_, d) => setIrTableName(d.value)}>
+                          <option value="">(select a table)</option>
+                          {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                        </Select>
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <Field label="Archive data starting (keep)" style={{ flex: 1 }}>
+                          <SpinButton min={1} value={irRollingWindowPeriods} onChange={(_, d) => setIrRollingWindowPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irRollingWindowPeriods)))} />
+                        </Field>
+                        <Field label="Unit" style={{ minWidth: 120 }}>
+                          <Select value={irRollingWindowGranularity} onChange={(_, d) => setIrRollingWindowGranularity(d.value as Grain)}>
+                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
+                          </Select>
+                        </Field>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <Field label="Incrementally refresh data in the last" style={{ flex: 1 }}>
+                          <SpinButton min={1} value={irIncrementalPeriods} onChange={(_, d) => setIrIncrementalPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irIncrementalPeriods)))} />
+                        </Field>
+                        <Field label="Unit" style={{ minWidth: 120 }}>
+                          <Select value={irIncrementalGranularity} onChange={(_, d) => setIrIncrementalGranularity(d.value as Grain)}>
+                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
+                          </Select>
+                        </Field>
+                      </div>
+                      <Switch
+                        label="Get the latest data in real time with DirectQuery (hybrid table — adds a live current-period partition)"
+                        checked={irEnableHybrid}
+                        onChange={(_, d) => setIrEnableHybrid(d.checked)}
+                      />
+                      <Field label="Detect data changes — column expression (optional M, e.g. Table.Max(FactSales, &quot;LastModified&quot;)[LastModified])">
+                        <Input value={irPollingExpression} onChange={(_, d) => setIrPollingExpression(d.value)} placeholder='Table.Max(FactSales, "LastModified")[LastModified]' />
+                      </Field>
+                      <Field label="Effective date override (ISO, optional — overrides &quot;today&quot; for the rolling window)">
+                        <Input value={irEffectiveDate} onChange={(_, d) => setIrEffectiveDate(d.value)} placeholder="2025-06-08" />
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Button appearance="primary" icon={<Save20Regular />} disabled={irBusy || !workspaceId || !datasetId || !irTableName} onClick={saveIrPolicy}>
+                          {irBusy ? 'Applying…' : 'Apply refresh policy'}
+                        </Button>
+                        <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={!workspaceId || !datasetId} onClick={loadIrPolicy}>
+                          Load partitions
+                        </Button>
+                      </div>
+                      {irMsg && <MessageBar intent={irMsg.ok ? 'success' : 'error'}><MessageBarBody>{irMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    {irPartitions.length > 0 && (
+                      <>
+                        <Subtitle2 style={{ marginTop: 18 }}>Partition receipt ({irPartitions.length})</Subtitle2>
+                        <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                          <Table aria-label="Partitions" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Partition</TableHeaderCell>
+                              <TableHeaderCell>Storage mode</TableHeaderCell>
+                              <TableHeaderCell>Query / source</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {irPartitions.map((p) => (
+                                <TableRow key={p.name} style={p.storageMode === 'DirectQuery' ? { background: tokens.colorBrandBackground2 } : undefined}>
+                                  <TableCell>{p.name}</TableCell>
+                                  <TableCell>
+                                    <Badge appearance={p.storageMode === 'DirectQuery' ? 'filled' : 'outline'} color={p.storageMode === 'DirectQuery' ? 'brand' : 'informative'}>{p.storageMode}</Badge>
+                                  </TableCell>
+                                  <TableCell className={s.cell}><code style={{ fontSize: 11 }}>{p.queryDefinition?.slice(0, 140) || '—'}</code></TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </>
+                    )}
+
+                    <Subtitle2 style={{ marginTop: 22 }}>Enhanced refresh (apply policy)</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      POST /refreshes with <code>commitMode</code>, <code>applyRefreshPolicy</code> and <code>effectiveDate</code>.
+                      Refreshes the rolling Import partitions per the policy; the historical and live DirectQuery partitions stay intact.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, maxWidth: 580 }}>
+                      <Switch label="Apply refresh policy (creates / reshuffles partitions)" checked={enhApplyPolicy} onChange={(_, d) => setEnhApplyPolicy(d.checked)} />
+                      <Field label="Commit mode">
+                        <Select value={enhCommitMode} onChange={(_, d) => setEnhCommitMode(d.value as 'transactional' | 'partialBatch')}>
+                          <option value="transactional">transactional (all-or-nothing)</option>
+                          <option value="partialBatch" disabled={enhApplyPolicy}>partialBatch (per-partition commit — not valid with applyRefreshPolicy)</option>
+                        </Select>
+                      </Field>
+                      <Field label="Effective date override (ISO, optional)">
+                        <Input value={enhEffectiveDate} onChange={(_, d) => setEnhEffectiveDate(d.value)} placeholder="2025-06-08" />
+                      </Field>
+                      <Button appearance="primary" icon={<Play20Regular />} disabled={enhBusy || !workspaceId || !datasetId} onClick={triggerEnhancedRefresh}>
+                        {enhBusy ? 'Queuing…' : 'Run enhanced refresh'}
+                      </Button>
+                      {enhMsg && <MessageBar intent={enhMsg.ok ? 'success' : 'error'}><MessageBarBody>{enhMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    <MessageBar intent="info" style={{ marginTop: 18 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Scheduled refresh trigger</MessageBarTitle>
+                        To run this enhanced refresh on a timer, author a Synapse / ADF ScheduleTrigger with a Web Activity
+                        that POSTs to this dataset&apos;s refresh endpoint (the <strong>Data pipeline</strong> editor wires the
+                        pipeline; <code>synapse-dev-client.upsertTrigger()</code> creates the trigger when
+                        <code>LOOM_SYNAPSE_WORKSPACE</code> is configured). The daily run refreshes only the rolling Import
+                        partitions — current-period rows already arrive live through the DirectQuery partition, no full refresh needed.
+                      </MessageBarBody>
+                    </MessageBar>
+                  </>
                 )}
                 {tab === 'config' && (
                   <>

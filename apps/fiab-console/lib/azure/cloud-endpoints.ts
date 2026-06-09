@@ -590,6 +590,35 @@ export function getPbiGovHost(): string {
   return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
 }
 
+/**
+ * Azure Analysis Services token scope for the XMLA / async-refresh REST surface.
+ * Commercial + GCC run on the Commercial Azure plane so they share the Power BI
+ * analysis scope; GCC-High / IL5 / DoD (AzureUSGovernment) use the .usgovcloudapi
+ * analysis audience. AAS is an Azure-native PaaS — NOT Microsoft Fabric — so it is
+ * permitted on the default code path per no-fabric-dependency.md.
+ *
+ * Docs: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+ */
+export function aasXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+/**
+ * Azure Analysis Services endpoint hostname suffix (no leading dot, no region
+ * prefix). Commercial + GCC: asazure.windows.net. GCC-High / IL5 / DoD:
+ * asazure.usgovcloudapi.net. The full XMLA endpoint URL is
+ * `https://{region}.{aasSuffix()}/servers/{server}/models/{db}`. Deployment
+ * tooling carries the full LOOM_AAS_XMLA_ENDPOINT, so this getter mainly serves
+ * validation / display; the per-cloud scope above is the load-bearing one.
+ *
+ * Grounded in: https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure
+ */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------

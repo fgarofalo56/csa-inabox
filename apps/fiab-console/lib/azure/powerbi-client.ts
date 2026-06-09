@@ -660,6 +660,63 @@ export async function refreshDataset(
   return { ok: true };
 }
 
+/**
+ * Enhanced (asynchronous) refresh body — the rich superset of `refreshDataset`.
+ * Supports commitMode, applyRefreshPolicy (drives the incremental-refresh
+ * partition apply for hybrid tables), effectiveDate, partition-level targeting
+ * and a timeout. Used by the semantic-model Incremental-refresh surface.
+ *
+ * Docs: https://learn.microsoft.com/power-bi/connect-data/asynchronous-refresh
+ */
+export interface EnhancedRefreshBody {
+  type?: 'full' | 'clearValues' | 'calculate' | 'dataOnly' | 'automatic' | 'defragment';
+  commitMode?: 'transactional' | 'partialBatch';
+  maxParallelism?: number;
+  retryCount?: number;
+  /** Applies the incremental refresh policy when true. NOT valid with partialBatch. */
+  applyRefreshPolicy?: boolean;
+  /** Overrides "today" for rolling-window calculation. ISO date e.g. "2025-06-08". */
+  effectiveDate?: string;
+  objects?: Array<{ table: string; partition?: string }>;
+  /** e.g. "02:00:00" (hh:mm:ss). */
+  timeout?: string;
+}
+
+/**
+ * Enhanced refresh — POST /groups/{ws}/datasets/{id}/refreshes with the full
+ * async-refresh body. Returns the requestId parsed from the 202 Location header
+ * so callers can poll GET /refreshes/{requestId} for status. Uses a raw fetch
+ * (not `call`) because the requestId lives in the response header, not the body.
+ */
+export async function enhancedRefreshDataset(
+  workspaceId: string,
+  datasetId: string,
+  body: EnhancedRefreshBody = {},
+): Promise<{ requestId: string }> {
+  const token = await getToken(POWERBI_SCOPE);
+  const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/refreshes`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ type: 'full', commitMode: 'transactional', ...body }),
+    cache: 'no-store',
+  });
+  if (res.status !== 202) {
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+    throw new PowerBiError(
+      json?.error?.message || json?.message || text || `enhancedRefresh failed ${res.status}`,
+      res.status,
+      json || text,
+      url,
+    );
+  }
+  const location = res.headers.get('location') || res.headers.get('Location') || '';
+  const requestId = location.split('/').pop() || '';
+  return { requestId };
+}
+
 export async function listRefreshHistory(
   workspaceId: string,
   datasetId: string,

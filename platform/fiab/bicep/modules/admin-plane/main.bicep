@@ -569,6 +569,12 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Azure Analysis Services XMLA endpoint base URL (no /xmla or /refreshes suffix), e.g. https://eastus2.asazure.windows.net/servers/loom-aas/models/FiabModel. Required only when loomSemanticBackend=analysis-services to enable the incremental-refresh / hybrid-table surface. GCC-High / IL5 / DoD must use the asazure.usgovcloudapi.net suffix. AAS is Azure-native (NOT Microsoft Fabric); the semantic-model default stays loom-native, so leaving this empty is fully supported.')
+param loomAasXmlaEndpoint string = ''
+
+@description('Azure Analysis Services model/database name for the XMLA Catalog property. Defaults to the last path segment of loomAasXmlaEndpoint when empty.')
+param loomAasDatabase string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -1321,6 +1327,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // LOOM_DATAPRODUCTS_BACKEND=unified-catalog, rather than fabricated data.
           !empty(loomPurviewUnifiedAccount) ? [
             { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
+          ] : [],
+          // Azure Analysis Services XMLA endpoint backing the semantic-model
+          // incremental-refresh / hybrid-table surface (opt-in:
+          // loomSemanticBackend=analysis-services). Only emitted when set;
+          // absence makes the /refresh-policy route serve an honest 503 gate
+          // naming LOOM_AAS_XMLA_ENDPOINT rather than fabricated partitions. AAS
+          // is Azure-native, NOT Microsoft Fabric — the default loom-native
+          // semantic backend works with this unset. GCC-High/IL5 must point the
+          // endpoint at asazure.usgovcloudapi.net AND grant the Console UAMI the
+          // AAS Server Administrator role on the model.
+          !empty(loomAasXmlaEndpoint) ? [
+            { name: 'LOOM_AAS_XMLA_ENDPOINT', value: loomAasXmlaEndpoint }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
           ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
