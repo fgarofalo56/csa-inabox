@@ -27,13 +27,14 @@ import {
 import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
-  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useJobsStore } from '@/lib/state/jobs-store';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
@@ -621,6 +622,11 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   );
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // Background-job continuity + TDS cancel token (see jobs-store.startSqlQuery).
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const startSqlQuery = useJobsStore((st) => st.startSqlQuery);
+  const jobs = useJobsStore((st) => st.jobs);
   const [mirrorState, setMirrorState] = useState<any>(null);
   const [sql2025State, setSql2025State] = useState<any>(null);
 
@@ -663,18 +669,57 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     finally { setGeoBusy(false); }
   }, [id, server, database, replicaServer, replicaDb, replicaLocation, replicaSku]);
 
-  const run = useCallback(async () => {
+  const run = useCallback(() => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActiveRequestId(reqId);
     setLoading(true); setResult(null);
+    // Runs in the module-scope jobs-store so it survives this editor unmounting
+    // (tab switch / close); a backgrounded query raises a completion toast.
+    const jobId = startSqlQuery({
+      databaseName: database,
+      server,
+      sqlLabel: sqlText.slice(0, 80),
+      sqlText,
+      queryUrl: `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`,
+      requestId: reqId,
+      onDone: ({ ok, queryResult, error, code }) => {
+        setLoading(false); setActiveJobId(null); setActiveRequestId(null);
+        setResult(ok && queryResult
+          ? { ok: true, ...queryResult }
+          : { ok: false, error: error || 'query failed', code });
+      },
+    });
+    setActiveJobId(jobId);
+  }, [id, server, database, sqlText, startSqlQuery]);
+
+  // Cancel via a real TDS ATTENTION packet (not an AbortController) — the server
+  // stops the query and the jobs-store fetch resolves with code 'ECANCEL'.
+  const cancelQuery = useCallback(async () => {
+    if (!activeRequestId) return;
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${id}/query`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ server, database, sql: sqlText }),
+      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: activeRequestId }),
       });
-      setResult(await r.json());
-    } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
-    finally { setLoading(false); }
-  }, [id, server, database, sqlText]);
+    } catch { /* best-effort; the query promise still settles */ }
+  }, [id, activeRequestId]);
+
+  // Recover a result for a query that finished while this editor was unmounted.
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = jobs.find((j) => j.id === activeJobId);
+    if (!job || job.status === 'running') return;
+    setLoading(false);
+    setResult(job.status === 'success' && job.queryResult
+      ? { ok: true, ...job.queryResult }
+      : { ok: false, error: job.error || 'query failed' });
+    setActiveJobId(null);
+    setActiveRequestId(null);
+  }, [jobs, activeJobId]);
 
   const toggleMirror = useCallback(async () => {
     const r = await fetch(`/api/items/azure-sql-database/${id}/mirroring`, {
@@ -815,7 +860,15 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 <Badge appearance="filled" color="brand">Azure SQL</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>, db: <strong>{database || 'not set'}</strong></Caption1>
                 <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !server || !database} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
+                {loading && (
+                  <Button appearance="secondary" icon={<Stop20Regular />} onClick={cancelQuery} disabled={!activeRequestId} title="Send a TDS ATTENTION packet — cancels the running query on the server">Cancel</Button>
+                )}
               </div>
+              {loading && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Running in background — switch tabs or close this editor freely; a toast fires when the query completes.
+                </Caption1>
+              )}
               <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
               <ResultsPanel result={result} loading={loading} />
             </>

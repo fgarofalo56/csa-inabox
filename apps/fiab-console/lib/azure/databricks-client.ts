@@ -65,6 +65,24 @@ async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
 // Warehouse management
 // ------------------------------------------------------------
 
+/**
+ * Connection endpoint details for a SQL Warehouse, returned verbatim by
+ * `GET /api/2.0/sql/warehouses/{id}` in the `odbc_params` field. These are the
+ * real, externally-routable JDBC/ODBC coordinates a BI tool or `databricks sql`
+ * client uses to reach the warehouse — the Connection details panel surfaces
+ * them so an analyst can copy a working JDBC URL.
+ *   hostname : adb-7405613013893759.19.azuredatabricks.net (workspace FQDN)
+ *   path     : /sql/1.0/warehouses/<warehouse-id> (the warehouse HTTP path)
+ *   protocol : 'https'
+ *   port     : 443
+ */
+export interface WarehouseOdbcParams {
+  hostname: string;
+  path: string;
+  protocol?: string;
+  port?: number;
+}
+
 export interface Warehouse {
   id: string;
   name: string;
@@ -82,6 +100,12 @@ export interface Warehouse {
   min_num_clusters?: number;
   max_num_clusters?: number;
   auto_stop_mins?: number;
+  /**
+   * ODBC/JDBC connection coordinates — present on a started warehouse. A
+   * STOPPED warehouse may omit these until it has been provisioned at least
+   * once; the connection route gates honestly when they are absent.
+   */
+  odbc_params?: WarehouseOdbcParams;
 }
 
 export async function listWarehouses(): Promise<Warehouse[]> {
@@ -99,6 +123,56 @@ export async function getWarehouse(id: string): Promise<Warehouse> {
     throw new Error(`getWarehouse failed ${res.status}: ${await res.text()}`);
   }
   return (await res.json()) as Warehouse;
+}
+
+// ------------------------------------------------------------
+// Warehouse events (running-clusters timeline for the Monitoring tab)
+//
+// GET /api/2.0/sql/warehouses/{id}/events returns lifecycle events for the
+// warehouse — STARTING / RUNNING / SCALED_UP / SCALED_DOWN / STOPPING /
+// STOPPED — each stamped with `timestamp` (epoch ms) and, where applicable,
+// `cluster_count` (the number of clusters active at that instant). This is
+// the real signal the Databricks SQL warehouse monitoring view plots for
+// "Running clusters over time".
+// Learn: https://learn.microsoft.com/azure/databricks/sql/api/sql-warehouses
+// ------------------------------------------------------------
+export interface WarehouseEvent {
+  /** STARTING | RUNNING | STOPPING | STOPPED | SCALED_UP | SCALED_DOWN | … */
+  event_type?: string;
+  /** Epoch ms (UTC) the event was recorded. */
+  timestamp?: number;
+  /** Number of clusters running at this instant (present on RUNNING/SCALED_* events). */
+  cluster_count?: number;
+  /** Optional human-readable detail Databricks attaches to some events. */
+  message?: string;
+}
+
+/**
+ * List recent warehouse lifecycle events (most-recent first). The Databricks
+ * endpoint paginates with `next_page_token`; we walk pages up to `limit`
+ * total events so the last-hour window is complete even on a busy warehouse.
+ */
+export async function listWarehouseEvents(
+  warehouseId: string,
+  limit = 200,
+): Promise<WarehouseEvent[]> {
+  const out: WarehouseEvent[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams();
+    params.set('max_results', String(Math.min(1000, Math.max(1, limit))));
+    if (pageToken) params.set('page_token', pageToken);
+    const res = await dbxFetch(
+      `/api/2.0/sql/warehouses/${encodeURIComponent(warehouseId)}/events?${params.toString()}`,
+    );
+    const body = await asJsonOrThrow<{ events?: WarehouseEvent[]; next_page_token?: string }>(
+      res,
+      'listWarehouseEvents',
+    );
+    out.push(...(body.events || []));
+    pageToken = body.next_page_token;
+  } while (pageToken && out.length < limit);
+  return out.slice(0, limit);
 }
 
 export async function startWarehouse(id: string): Promise<void> {
@@ -127,6 +201,14 @@ export interface WarehouseCreateSpec {
   auto_stop_mins?: number;
   warehouse_type?: 'CLASSIC' | 'PRO';
   enable_serverless_compute?: boolean;
+  // Advanced options (parity with the Databricks "Create SQL warehouse" dialog —
+  // every field below is accepted by POST /api/2.0/sql/warehouses, verified
+  // against Microsoft Learn `warehouses/create` + the createWarehouse audit
+  // request_params list).
+  enable_photon?: boolean;        // Photon vectorized engine (default on for serverless)
+  channel?: { name: 'CHANNEL_NAME_CURRENT' | 'CHANNEL_NAME_PREVIEW' };
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
+  spot_instance_policy?: 'COST_OPTIMIZED' | 'RELIABILITY_OPTIMIZED' | 'POLICY_UNSPECIFIED';
 }
 
 /** Create a SQL Warehouse. POST /api/2.0/sql/warehouses → { id }. */
@@ -141,6 +223,18 @@ export async function createWarehouse(spec: WarehouseCreateSpec): Promise<{ id: 
   };
   if (typeof spec.enable_serverless_compute === 'boolean') {
     payload.enable_serverless_compute = spec.enable_serverless_compute;
+  }
+  if (typeof spec.enable_photon === 'boolean') {
+    payload.enable_photon = spec.enable_photon;
+  }
+  if (spec.channel?.name) {
+    payload.channel = { name: spec.channel.name };
+  }
+  if (spec.tags?.custom_tags && spec.tags.custom_tags.length > 0) {
+    payload.tags = { custom_tags: spec.tags.custom_tags };
+  }
+  if (spec.spot_instance_policy) {
+    payload.spot_instance_policy = spec.spot_instance_policy;
   }
   const res = await dbxFetch('/api/2.0/sql/warehouses', {
     method: 'POST',
@@ -252,6 +346,97 @@ export async function listQueryHistory(
   return { entries, nextPageToken: body.next_page_token };
 }
 
+/**
+ * Per-query execution metrics, returned by the Query History API when
+ * `include_metrics=true`. Field set per the Databricks `QueryMetrics`
+ * object (the same numbers the Databricks Query Profile UI renders).
+ * https://docs.databricks.com/api/workspace/queryhistory/get
+ */
+export interface DbxQueryMetrics {
+  compilation_time_ms?: number;
+  execution_time_ms?: number;
+  photon_total_time_ms?: number;
+  total_time_ms?: number;
+  read_bytes?: number;
+  read_remote_bytes?: number;
+  write_remote_bytes?: number;
+  read_cache_bytes?: number;
+  rows_read_count?: number;
+  rows_produced_count?: number;
+  result_fetch_time_ms?: number;
+  read_files_count?: number;
+  read_partitions_count?: number;
+  pruned_files_count?: number;
+  pruned_bytes?: number;
+  network_sent_bytes?: number;
+  spill_to_disk_bytes?: number;
+  task_total_time_ms?: number;
+  result_from_cache?: boolean;
+}
+
+/**
+ * Single-query execution profile. The `metrics` object carries the IO/Photon
+ * stats; `spark_ui_url` is the authoritative deep-link to the full physical
+ * plan DAG in the Spark UI (the same data the Databricks Query Profile view
+ * renders). `plans_state` reports whether the plan tree is available; when the
+ * workspace returns the structured plan inline it lands on `plans` (opaque
+ * JSON, passed straight through to the UI).
+ */
+export interface DbxQueryProfile {
+  query_id: string;
+  status: string;
+  query_text?: string;
+  query_start_time_ms?: number;
+  query_end_time_ms?: number;
+  duration?: number; // ms
+  user_name?: string;
+  warehouse_id?: string;
+  rows_produced?: number;
+  error_message?: string;
+  spark_ui_url?: string;
+  statement_type?: string;
+  metrics?: DbxQueryMetrics;
+  plans_state?: string;
+  plans?: unknown;
+}
+
+/**
+ * GET /api/2.0/sql/history/queries/{statement_id}?include_metrics=true
+ *
+ * Fetches a single query's execution profile (metrics + plan state + Spark UI
+ * deep-link). The caller MI must own the query or hold CAN MONITOR on the
+ * warehouse.
+ */
+export async function getQueryProfile(queryId: string): Promise<DbxQueryProfile> {
+  const res = await dbxFetch(
+    `/api/2.0/sql/history/queries/${encodeURIComponent(queryId)}?include_metrics=true`,
+  );
+  if (!res.ok) {
+    throw new Error(`getQueryProfile failed ${res.status}: ${await res.text()}`);
+  }
+  // The single-query endpoint returns the QueryInfo object directly; some
+  // workspace versions nest it under `res`. Accept either shape.
+  const body = (await res.json()) as any;
+  const q = body?.query_id ? body : body?.res || body;
+  return {
+    query_id: q.query_id,
+    status: q.status,
+    query_text: q.query_text,
+    query_start_time_ms: q.query_start_time_ms,
+    query_end_time_ms: q.query_end_time_ms,
+    duration: q.duration,
+    user_name: q.user_name,
+    warehouse_id: q.warehouse_id,
+    rows_produced: q.rows_produced,
+    error_message: q.error_message,
+    spark_ui_url: q.spark_ui_url,
+    statement_type: q.statement_type,
+    metrics: q.metrics,
+    plans_state: q.plans_state,
+    plans: q.plans,
+  };
+}
+
 // ------------------------------------------------------------
 // Statement execution
 // ------------------------------------------------------------
@@ -282,11 +467,27 @@ const MAX_ROWS = 5_000;
 const POLL_INTERVAL_MS = 1_000;
 const POLL_TIMEOUT_MS = 120_000;
 
+/**
+ * A named parameter for the Statement Execution API. The SQL references the
+ * marker as `:name` (colon-prefixed); the value here is bound SEPARATELY by
+ * Databricks, never spliced into the SQL string — the canonical SQL-injection-
+ * safe path. `type` is an optional SQL type hint (STRING/INT/DOUBLE/DATE/…).
+ *
+ * See: https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-parameter-marker
+ */
+export interface DbxQueryParam {
+  name: string;
+  value: string | null;
+  type?: string;
+}
+
 export async function executeStatement(
   warehouseId: string,
   sql: string,
   catalog?: string,
   schema?: string,
+  parameters?: DbxQueryParam[],
+  onStatementId?: (id: string) => void,
 ): Promise<QueryResult> {
   const t0 = Date.now();
   const payload: Record<string, unknown> = {
@@ -300,6 +501,16 @@ export async function executeStatement(
   };
   if (catalog) payload.catalog = catalog;
   if (schema) payload.schema = schema;
+  // Named parameter markers (`:name`) → the API `parameters` array. The value
+  // is bound by Databricks, NOT concatenated into the statement, so this is
+  // injection-safe regardless of what the user types.
+  if (parameters?.length) {
+    payload.parameters = parameters.map((p) => ({
+      name: p.name,
+      value: p.value,
+      ...(p.type ? { type: p.type } : {}),
+    }));
+  }
 
   const res = await dbxFetch('/api/2.0/sql/statements', {
     method: 'POST',
@@ -309,6 +520,10 @@ export async function executeStatement(
     throw new Error(`executeStatement submit failed ${res.status}: ${await res.text()}`);
   }
   let body = (await res.json()) as StatementResponse;
+  // Surface the server-assigned statement_id immediately so a caller (the BFF
+  // query route) can register it for cancellation while we keep polling. The
+  // Statement Execution API cancel endpoint keys off this id.
+  if (body.statement_id) onStatementId?.(body.statement_id);
 
   // Poll until terminal (SUCCEEDED / FAILED / CANCELED / CLOSED).
   const deadline = Date.now() + POLL_TIMEOUT_MS;
@@ -348,8 +563,58 @@ export async function executeStatement(
 }
 
 // ============================================================
-// Helpers — uniform error surfacing
+// Statement cancellation (SQL Statement Execution API 2.0)
 // ============================================================
+
+/**
+ * In-process registry mapping a client-generated query id to the
+ * server-assigned Databricks statement_id, so a separate /cancel request can
+ * resolve the running statement without the client having to wait for the
+ * (blocking) /query response to return the id first.
+ *
+ * Same-process only — sufficient for Loom's single-instance Container App.
+ * On scale-out, a cancel may land on a different replica and find no entry;
+ * the client then shows "Cancel sent" and the original query completes.
+ */
+const pendingStatements = new Map<string, string>(); // clientQueryId -> statement_id
+
+export function registerPendingStatement(clientQueryId: string, statementId: string): void {
+  if (clientQueryId && statementId) pendingStatements.set(clientQueryId, statementId);
+}
+
+export function clearPendingStatement(clientQueryId: string): void {
+  if (clientQueryId) pendingStatements.delete(clientQueryId);
+}
+
+/**
+ * Cancel a running statement.
+ *   POST /api/2.0/sql/statements/{statement_id}/cancel
+ * Grounded in the SQL Statement Execution API
+ * (https://learn.microsoft.com/azure/databricks/api/workspace/statementexecution/cancelexecution).
+ * Returns 200 with empty body when accepted; a 404 means the statement is
+ * already terminal — both are treated as success.
+ */
+export async function cancelStatement(statementId: string): Promise<void> {
+  const res = await dbxFetch(
+    `/api/2.0/sql/statements/${encodeURIComponent(statementId)}/cancel`,
+    { method: 'POST', body: '{}' },
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`cancelStatement failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+/** Resolve a client query id to its statement_id and cancel it. */
+export async function cancelByClientId(
+  clientQueryId: string,
+): Promise<{ canceled: boolean; statementId?: string }> {
+  const statementId = pendingStatements.get(clientQueryId);
+  if (!statementId) return { canceled: false };
+  await cancelStatement(statementId);
+  return { canceled: true, statementId };
+}
+
+
 async function asJsonOrThrow<T>(res: Response, op: string): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
@@ -1427,5 +1692,180 @@ export async function deleteUcVolumesFile(volumePath: string): Promise<void> {
   if (!res.ok && res.status !== 404) {
     throw new Error(`deleteUcVolumesFile failed for ${volumePath}: HTTP ${res.status}`);
   }
+}
+
+// ============================================================
+// Databricks SQL — Queries + Alerts (query-result alerting)
+//
+// The modern Databricks SQL alerting model (Learn:
+// /azure/databricks/sql/user/alerts/) is a two-object pair:
+//   1. a saved Query object — owns the SQL text + the warehouse it runs on
+//      (POST /api/2.0/sql/queries)
+//   2. an Alert object — references that query_id, evaluates a Condition
+//      (op / value-column / threshold) on the result, and runs on a Schedule
+//      (POST /api/2.0/sql/alerts)
+// Both modern endpoints wrap the resource in a single-key envelope
+// (`{ query: {...} }` / `{ alert: {...} }`) and return the created object with
+// its server-assigned `id`. Condition shape is grounded in the documented CLI
+// example:
+//   { op:'GREATER_THAN', operand:{ column:{ name:'cpu' } },
+//     threshold:{ value:{ double_value: 80 } } }
+// Notification destinations are managed separately (workspace notification
+// destinations); the alert links subscribers by id. This client creates the
+// rule; the editor surfaces an honest note that subscribers are added in the
+// Databricks portal / via the destinations API.
+// ============================================================
+
+/** A Databricks SQL saved query (the query an alert evaluates). */
+export interface DbxSqlQuery {
+  id: string;
+  display_name?: string;
+  query_text?: string;
+  warehouse_id?: string;
+}
+
+/**
+ * Create a saved SQL query that an alert can evaluate.
+ *   POST /api/2.0/sql/queries  body { query: { display_name, query_text, warehouse_id } }
+ * Returns the created query (incl. its server-assigned `id`).
+ */
+export async function createDbxQuery(
+  displayName: string,
+  queryText: string,
+  warehouseId: string,
+): Promise<DbxSqlQuery> {
+  const res = await dbxFetch('/api/2.0/sql/queries', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: { display_name: displayName, query_text: queryText, warehouse_id: warehouseId },
+    }),
+  });
+  const body = await asJsonOrThrow<DbxSqlQuery & { query?: DbxSqlQuery }>(res, 'createDbxQuery');
+  // Tolerate either a bare object or a `{ query: {...} }` envelope on the response.
+  return (body.id ? body : body.query) as DbxSqlQuery;
+}
+
+/** Move a saved SQL query to the trash. DELETE /api/2.0/sql/queries/{id}. */
+export async function trashDbxQuery(queryId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/sql/queries/${encodeURIComponent(queryId)}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'trashDbxQuery');
+}
+
+export type DbxAlertOp =
+  | 'GREATER_THAN'
+  | 'GREATER_THAN_OR_EQUAL'
+  | 'LESS_THAN'
+  | 'LESS_THAN_OR_EQUAL'
+  | 'EQUAL'
+  | 'NOT_EQUAL';
+
+export interface DbxAlertCondition {
+  op: DbxAlertOp;
+  /** The value column of the query result to evaluate. */
+  operand: { column: { name: string } };
+  /** Numeric threshold the column value is compared against. */
+  threshold: { value: { double_value: number } };
+}
+
+export interface DbxAlertSchedule {
+  quartz_cron_schedule: { quartz_cron_expression: string; timezone_id: string };
+}
+
+export interface DbxAlert {
+  id: string;
+  display_name?: string;
+  query_id?: string;
+  condition?: DbxAlertCondition;
+  schedule?: DbxAlertSchedule;
+  /** OK | TRIGGERED | ERROR (modern alerts dropped the legacy UNKNOWN state). */
+  state?: string;
+  create_time?: string;
+  update_time?: string;
+  owner_user_name?: string;
+}
+
+/** List SQL alerts. GET /api/2.0/sql/alerts (paged: { results, next_page_token }). */
+export async function listDbxAlerts(opts?: {
+  page_size?: number;
+  page_token?: string;
+}): Promise<{ alerts: DbxAlert[]; next_page_token?: string }> {
+  const qs = new URLSearchParams();
+  if (opts?.page_size) qs.set('page_size', String(opts.page_size));
+  if (opts?.page_token) qs.set('page_token', opts.page_token);
+  const res = await dbxFetch(`/api/2.0/sql/alerts${qs.toString() ? `?${qs}` : ''}`);
+  const body = await asJsonOrThrow<{ results?: DbxAlert[]; alerts?: DbxAlert[]; next_page_token?: string }>(
+    res,
+    'listDbxAlerts',
+  );
+  return { alerts: body.results || body.alerts || [], next_page_token: body.next_page_token };
+}
+
+/** Get a single SQL alert. GET /api/2.0/sql/alerts/{id}. */
+export async function getDbxAlert(alertId: string): Promise<DbxAlert> {
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`);
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'getDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+export interface DbxAlertCreateSpec {
+  display_name: string;
+  query_id: string;
+  condition: DbxAlertCondition;
+  schedule?: DbxAlertSchedule;
+}
+
+/**
+ * Create a SQL alert.
+ *   POST /api/2.0/sql/alerts  body { alert: { display_name, query_id, condition, schedule? } }
+ * Returns the created alert incl. its server-assigned `id`.
+ */
+export async function createDbxAlert(spec: DbxAlertCreateSpec): Promise<DbxAlert> {
+  const res = await dbxFetch('/api/2.0/sql/alerts', {
+    method: 'POST',
+    body: JSON.stringify({
+      alert: {
+        display_name: spec.display_name,
+        query_id: spec.query_id,
+        condition: spec.condition,
+        ...(spec.schedule ? { schedule: spec.schedule } : {}),
+      },
+    }),
+  });
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'createDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+/**
+ * Partial-update a SQL alert (name / condition / schedule).
+ *   PATCH /api/2.0/sql/alerts/{id}  body { alert: { …fields }, update_mask: 'a,b' }
+ */
+export async function updateDbxAlert(
+  alertId: string,
+  patch: { display_name?: string; condition?: DbxAlertCondition; schedule?: DbxAlertSchedule },
+): Promise<DbxAlert> {
+  const fields: string[] = [];
+  const alert: Record<string, unknown> = {};
+  if (patch.display_name !== undefined) { alert.display_name = patch.display_name; fields.push('display_name'); }
+  if (patch.condition !== undefined) { alert.condition = patch.condition; fields.push('condition'); }
+  if (patch.schedule !== undefined) { alert.schedule = patch.schedule; fields.push('schedule'); }
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ alert, update_mask: fields.join(',') }),
+  });
+  const body = await asJsonOrThrow<DbxAlert & { alert?: DbxAlert }>(res, 'updateDbxAlert');
+  return (body.id ? body : body.alert) as DbxAlert;
+}
+
+/**
+ * Move a SQL alert to the trash. DELETE /api/2.0/sql/alerts/{id}. Trashed alerts
+ * stop triggering immediately and are permanently deleted after 30 days.
+ */
+export async function trashDbxAlert(alertId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/sql/alerts/${encodeURIComponent(alertId)}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'trashDbxAlert');
 }
 
