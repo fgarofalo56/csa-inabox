@@ -110,6 +110,13 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.synapseSqlSuffix()).toBe(SYN_COM);
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
   });
+
+  it('Power BI REST + AAS helpers use the Commercial hosts/scopes', async () => {
+    const m = await load('AzureCloud');
+    expect(m.pbiApiBase()).toBe(`${J('https://api', 'powerbi', 'com')}/v1.0/myorg`);
+    expect(m.pbiApiScope()).toBe(`${J('https://analysis', 'windows', 'net')}/powerbi/api/.default`);
+    expect(m.aasSuffix()).toBe(J('asazure', 'windows', 'net'));
+  });
 });
 
 describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', () => {
@@ -182,6 +189,13 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     const m = await load('AzureUSGovernment');
     expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+  });
+
+  it('Power BI REST + AAS helpers use the Gov hosts/scopes', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.pbiApiBase()).toBe('https://api.powerbigov.us/v1.0/myorg');
+    expect(m.pbiApiScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
   });
 });
 

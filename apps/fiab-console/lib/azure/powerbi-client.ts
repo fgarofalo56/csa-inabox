@@ -34,11 +34,17 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { pbiApiBase, pbiApiScope } from './cloud-endpoints';
 
-const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || 'https://api.powerbi.com/v1.0/myorg';
+// Cloud-aware Power BI REST host + scope. GCC-High / IL5 use api.powerbigov.us
+// and the analysis.usgovcloudapi.net audience; pbiApiBase()/pbiApiScope() are
+// the single source of truth (cloud-endpoints.ts) so a Gov deployment no longer
+// silently 401s against a hard-coded Commercial host. LOOM_POWERBI_BASE /
+// LOOM_POWERBI_SCOPE still override for private/non-standard endpoints.
+const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || pbiApiBase();
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 
-const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
+const POWERBI_SCOPE = process.env.LOOM_POWERBI_SCOPE || pbiApiScope();
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -450,6 +456,26 @@ export async function deleteReport(workspaceId: string, reportId: string): Promi
 export async function listPaginatedReports(workspaceId: string): Promise<PbiReport[]> {
   const all = await listReports(workspaceId);
   return all.filter((r) => r.reportType === 'PaginatedReport');
+}
+
+/**
+ * GET /groups/{ws}/reports/{id}/Export — download the raw .rdl definition of a
+ * paginated report as UTF-8 XML text. Synchronous (unlike the async ExportTo
+ * job). Used by the paginated-report renderer ONLY on the opt-in Power BI
+ * backend (LOOM_PAGINATED_REPORT_BACKEND=powerbi|fabric + a bound workspace);
+ * the Azure-native default path parses a stored RDL and never calls this.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/reports/export-report-in-group
+ */
+export async function downloadReportDefinition(workspaceId: string, reportId: string): Promise<string> {
+  const token = await getToken(POWERBI_SCOPE);
+  const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/Export`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new PowerBiError(text || `rdl download failed (${res.status})`, res.status, text, url);
+  }
+  return res.text();
 }
 
 // ============================================================

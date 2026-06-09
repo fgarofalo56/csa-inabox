@@ -590,6 +590,50 @@ export function getPbiGovHost(): string {
   return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
 }
 
+/**
+ * Power BI REST API base URL INCLUDING the `/v1.0/myorg` version segment (no
+ * trailing slash). Composed from `getPbiGovHost()` — the single source of truth
+ * for the Power BI host — so it is correct in GCC-High / IL5 (where the host is
+ * `api.powerbigov.us`, not `api.powerbi.com`). powerbi-client.ts uses this as
+ * the fallback for `LOOM_POWERBI_BASE` instead of a hard-coded Commercial host.
+ *
+ * NOTE: this is the Azure-Government-backed Power BI REST host (per
+ * no-fabric-dependency.md, Power BI REST is only reached on the *opt-in* Fabric
+ * path — the Azure-native paginated-report renderer parses a stored RDL and
+ * executes its datasets against Synapse SQL / AAS, never touching this host).
+ */
+export function pbiApiBase(): string {
+  return `${getPbiGovHost()}/v1.0/myorg`;
+}
+
+/**
+ * Power BI REST AAD token scope. The audience differs by sovereign boundary:
+ *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
+ *   GCC-High / IL5 / DoD (USGov) : https://analysis.usgovcloudapi.net/powerbi/api/.default
+ * Using the Commercial scope against the Gov Power BI REST host yields 401.
+ */
+export function pbiApiScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+/**
+ * Azure Analysis Services (AAS) XMLA data-plane hostname suffix (no leading
+ * dot, no region/server prefix). AAS is the optional DAX-execution backend the
+ * paginated-report renderer routes to when an RDL DataSource ConnectionString
+ * is an `asazure://` URI.
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5 / DoD (USGov) : asazure.usgovcloudapi.net
+ * `LOOM_AAS_HOST_SUFFIX` overrides for private-link / non-standard AAS hosts.
+ * AAS is an Azure-native service (NOT Fabric / Power BI), so this helper is
+ * permitted here per no-fabric-dependency.md.
+ */
+export function aasSuffix(): string {
+  if (process.env.LOOM_AAS_HOST_SUFFIX) return process.env.LOOM_AAS_HOST_SUFFIX;
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------

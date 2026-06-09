@@ -1485,6 +1485,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
             // (Fabric is not IL5-authorized). Unset → Azure-native only.
             { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary != 'IL5') ? '1' : '' }
+            // Power BI REST host + token scope — cloud-aware (GCC-High / IL5 use
+            // api.powerbigov.us + analysis.usgovcloudapi.net). powerbi-client.ts
+            // falls back to cloud-endpoints.pbiApiBase()/pbiApiScope() when unset,
+            // but bicep sets them explicitly so the value is deterministic in the
+            // Container App env. Power BI is reached ONLY on the opt-in paginated
+            // backend (no-fabric-dependency.md) — the Azure-native renderer never
+            // calls it.
+            { name: 'LOOM_POWERBI_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.powerbigov.us/v1.0/myorg' : 'https://api.powerbi.com/v1.0/myorg' }
+            { name: 'LOOM_POWERBI_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default' : 'https://analysis.windows.net/powerbi/api/.default' }
+            // Azure Analysis Services XMLA host suffix — used by aas-client.ts to
+            // execute RDL DAX datasets (asazure:// sources) on the Azure-native
+            // paginated-report renderer. AAS is Azure-native (not Fabric).
+            { name: 'LOOM_AAS_HOST_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net' }
+            // Paginated-report renderer paging size + backend selector. Backend
+            // defaults to Azure-native (Synapse SQL / AAS); set to 'powerbi' or
+            // 'fabric' ONLY to opt into pulling the RDL from a Power BI workspace.
+            { name: 'LOOM_RDL_ROWS_PER_PAGE', value: '50' }
+            { name: 'LOOM_PAGINATED_REPORT_BACKEND', value: 'azure' }
           ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }

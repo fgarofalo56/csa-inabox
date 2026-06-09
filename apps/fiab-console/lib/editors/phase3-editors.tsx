@@ -10135,8 +10135,285 @@ function ReportLikeEditor({
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
 }
+
+// ============================================================
+// Paginated report (Loom-native RDL renderer)
+//
+// Azure-native by default (no-fabric-dependency.md): the RDL definition comes
+// from the Loom item's stored definition (Cosmos) — imported from any .rdl file
+// produced by Report Builder / SSRS — and its datasets execute against Synapse
+// Serverless SQL (or Azure Analysis Services for asazure:// sources). A real
+// Power BI workspace is NEVER required. Parameters render as a typed form, the
+// report renders a multi-page tablix/table/list/chart layout, and page
+// navigation pulls one rendered page at a time from the BFF.
+// ============================================================
+interface RdlParamSpecLite {
+  name: string;
+  prompt?: string;
+  dataType: 'String' | 'Integer' | 'Float' | 'Boolean' | 'DateTime';
+  nullable: boolean;
+  multiValue: boolean;
+  allowBlank: boolean;
+  defaultValue?: string[];
+  validValues?: Array<{ label: string; value: string }>;
+}
+interface RdlSectionLite {
+  kind: 'tablix' | 'table' | 'list' | 'chart';
+  name: string;
+  dataSetName: string;
+  columns: Array<{ header: string }>;
+  rows: Array<{ cells: Array<string | number | boolean | null> }>;
+  totalRows: number;
+}
+
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
+  const s = useStyles();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [hasDefinition, setHasDefinition] = useState<boolean | null>(null);
+  const [reportName, setReportName] = useState<string>(item.displayName);
+  const [params, setParams] = useState<RdlParamSpecLite[]>([]);
+  const [userParams, setUserParams] = useState<Record<string, string[]>>({});
+  const [sections, setSections] = useState<RdlSectionLite[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageCount, setPageCount] = useState(0);
+  const [source, setSource] = useState<string>('item');
+  const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [gate, setGate] = useState<{ msg: string; hint?: string } | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const setParamValue = useCallback((name: string, values: string[]) => {
+    setUserParams((prev) => ({ ...prev, [name]: values }));
+  }, []);
+
+  // POST the render route for a given page using the current parameter values.
+  const render = useCallback(async (page: number) => {
+    setBusy(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/render`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params: userParams, page, run: true }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        if (r.status === 409 || j.hint) setGate({ msg: j.error || `HTTP ${r.status}`, hint: j.hint });
+        else setErr(j.error || `HTTP ${r.status}`);
+        return;
+      }
+      if (Array.isArray(j.params)) setParams(j.params);
+      setSource(j.source || 'item');
+      setReportName(j.reportName || reportName);
+      setPageCount(j.pageCount ?? 0);
+      setCurrentPage(j.currentPage ?? 1);
+      setSections(j.page?.sections ?? []);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [id, userParams, reportName]);
+
+  // Load the stored definition (params) on mount; auto-render page 1 if present.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) {
+          setHasDefinition(!!j.hasDefinition);
+          if (j.reportName) setReportName(j.reportName);
+          if (Array.isArray(j.params)) {
+            setParams(j.params);
+            // Seed default parameter values so the first render shows data.
+            const seed: Record<string, string[]> = {};
+            for (const p of j.params as RdlParamSpecLite[]) if (p.defaultValue?.length) seed[p.name] = p.defaultValue;
+            setUserParams(seed);
+          }
+        } else {
+          setHasDefinition(false);
+          setErr(j.error || null);
+        }
+      } catch (e: any) {
+        if (!cancelled) { setHasDefinition(false); setErr(e?.message || String(e)); }
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Once params + defaults are known and a definition exists, render page 1.
+  useEffect(() => {
+    if (loaded && hasDefinition && pageCount === 0 && !busy && sections.length === 0) {
+      render(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, hasDefinition]);
+
+  // Import an .rdl file → PUT the definition store → re-render.
+  const onImportFile = useCallback(async (file: File) => {
+    setImporting(true); setErr(null); setGate(null);
+    try {
+      const text = await file.text();
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rdl: text }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
+      setHasDefinition(true);
+      setParams(j.params ?? []);
+      const seed: Record<string, string[]> = {};
+      for (const p of (j.params ?? []) as RdlParamSpecLite[]) if (p.defaultValue?.length) seed[p.name] = p.defaultValue;
+      setUserParams(seed);
+      await render(1);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, [id, render]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Definition', actions: [
+        { label: importing ? 'Importing…' : 'Import .rdl', icon: <Open20Regular />, onClick: () => fileRef.current?.click(), disabled: importing, title: 'import a Report Definition Language (.rdl) file from Report Builder / SSRS' },
+      ]},
+      { label: 'View', actions: [
+        { label: busy ? 'Running…' : 'Run report', icon: <Play20Regular />, onClick: hasDefinition && !busy ? () => render(1) : undefined, disabled: !hasDefinition || busy, title: !hasDefinition ? 'import an .rdl first' : 'run the report with the current parameters' },
+      ]},
+      { label: 'Navigate', actions: [
+        { label: 'Previous page', icon: <ArrowSync20Regular />, onClick: currentPage > 1 && !busy ? () => render(currentPage - 1) : undefined, disabled: currentPage <= 1 || busy },
+        { label: 'Next page', icon: <ArrowSync20Regular />, onClick: currentPage < pageCount && !busy ? () => render(currentPage + 1) : undefined, disabled: currentPage >= pageCount || busy },
+      ]},
+    ]},
+  ], [importing, busy, hasDefinition, render, currentPage, pageCount]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <input
+            ref={fileRef} type="file" accept=".rdl,.xml,application/xml,text/xml"
+            style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onImportFile(f); e.target.value = ''; }}
+          />
+          <Subtitle2 style={{ marginBottom: 8 }}>Parameters</Subtitle2>
+          {params.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>This report has no parameters.</Caption1>}
+          {params.map((p) => (
+            <Field key={p.name} label={p.prompt || p.name} style={{ marginBottom: 10 }}>
+              {p.dataType === 'Boolean' ? (
+                <Switch
+                  checked={userParams[p.name]?.[0] === 'true'}
+                  onChange={(_, d) => setParamValue(p.name, [String(d.checked)])}
+                />
+              ) : p.validValues && p.validValues.length > 0 ? (
+                <Dropdown
+                  value={(() => { const v = userParams[p.name]?.[0] ?? ''; return p.validValues!.find((x) => x.value === v)?.label ?? v; })()}
+                  selectedOptions={userParams[p.name] ? [userParams[p.name][0]] : []}
+                  onOptionSelect={(_, d) => setParamValue(p.name, [d.optionValue ?? ''])}
+                >
+                  {p.validValues.map((vv) => <Option key={vv.value} value={vv.value}>{vv.label}</Option>)}
+                </Dropdown>
+              ) : (
+                <Input
+                  value={userParams[p.name]?.[0] ?? ''}
+                  type={p.dataType === 'Integer' || p.dataType === 'Float' ? 'number' : p.dataType === 'DateTime' ? 'datetime-local' : 'text'}
+                  onChange={(_, d) => setParamValue(p.name, [d.value])}
+                />
+              )}
+            </Field>
+          ))}
+          <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} onClick={() => render(1)} disabled={!hasDefinition || busy} style={{ marginTop: 8 }}>
+            {busy ? 'Running…' : 'Run report'}
+          </Button>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Paginated report</Badge>
+            <Subtitle2>{reportName}</Subtitle2>
+            <Badge appearance="outline">{source === 'powerbi' ? 'Power BI (opt-in)' : 'Azure-native (Synapse / AAS)'}</Badge>
+            <Button appearance="outline" icon={<Open20Regular />} onClick={() => fileRef.current?.click()} disabled={importing}>{importing ? 'Importing…' : 'Import .rdl'}</Button>
+          </div>
+
+          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+          {gate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>{gate.msg}</MessageBarTitle>
+                {gate.hint}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          {hasDefinition === false && !gate && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>No report definition yet</MessageBarTitle>
+                Import a Report Definition Language (.rdl) file authored in Power BI Report Builder or SQL Server
+                Report Builder. Loom renders it natively over Azure — parameters become a form, and the report&rsquo;s
+                tablix / table / list / chart regions render multi-page from Synapse Serverless SQL (or Azure Analysis
+                Services for <code>asazure://</code> datasets). No Power BI workspace required.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="primary" icon={<Open20Regular />} onClick={() => fileRef.current?.click()}>Import .rdl</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+
+          {pageCount > 0 && (
+            <div className={s.toolbar} style={{ marginTop: 4 }}>
+              <Badge appearance="tint" color="informative">Page {currentPage} of {pageCount}</Badge>
+              <Button size="small" appearance="outline" onClick={() => render(currentPage - 1)} disabled={currentPage <= 1 || busy}>← Previous</Button>
+              <Button size="small" appearance="outline" onClick={() => render(currentPage + 1)} disabled={currentPage >= pageCount || busy}>Next →</Button>
+              {busy && <Spinner size="tiny" />}
+            </div>
+          )}
+
+          {sections.map((sec, si) => (
+            <div key={`${sec.name}-${si}`} className={s.card} style={{ marginTop: 12 }}>
+              <div className={s.resultMeta}>
+                <DocumentTable20Regular />
+                <Caption1><strong>{sec.name}</strong> · {sec.kind} · dataset: {sec.dataSetName || '(none)'} · {sec.totalRows} row{sec.totalRows === 1 ? '' : 's'}</Caption1>
+              </div>
+              {sec.columns.length === 0 ? (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No columns returned for this region.</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small">
+                    <TableHeader>
+                      <TableRow>
+                        {sec.columns.map((c, ci) => <TableHeaderCell key={ci}>{c.header}</TableHeaderCell>)}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sec.rows.map((row, ri) => (
+                        <TableRow key={ri}>
+                          {row.cells.map((cell, ci) => <TableCell key={ci}><span className={s.cell}>{cell !== null && cell !== undefined ? String(cell) : '—'}</span></TableCell>)}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {hasDefinition && pageCount > 0 && sections.length === 0 && !busy && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>This page has no renderable regions.</Caption1>
+          )}
+        </div>
+      }
+    />
+  );
 }
 
 // ============================================================
