@@ -120,18 +120,48 @@ function buildTmsl(content: any, displayName: string, steps: string[]): string {
   const measures = Array.isArray(content?.measures) ? content.measures : [];
   const allRelationships = Array.isArray(content?.relationships) ? content.relationships : [];
   const relationships = validateRelationships(allRelationships, buildColumnIndex(tables), steps);
+  // Per-table storage mode override (composite model). When a bundle/install
+  // carries content.tableModes (a map of tableName -> 'import'|'directQuery'|
+  // 'dual'), the table's default partition is emitted with that mode so one
+  // model can mix Import + DirectQuery + Dual. Absent → all-import (the prior
+  // behavior). Dual is a Premium/Fabric XMLA extension; this path is the Fabric
+  // opt-in branch so it is permitted here. The Loom-native default provisioner
+  // (provisionLoomNative) is unchanged and never requires this.
+  const tableModes: Record<string, string> =
+    content?.tableModes && typeof content.tableModes === 'object' ? content.tableModes : {};
+  const usesQueryMode = tables.some((t: any) => {
+    const m = tableModes[t?.name];
+    return m === 'directQuery' || m === 'dual';
+  });
+  if (Object.keys(tableModes).length) {
+    steps.push(
+      `Composite storage modes: ${tables.map((t: any) => `${t.name}=${tableModes[t.name] || 'import'}`).join(', ')}.`,
+    );
+  }
   return JSON.stringify({
     name: displayName,
     compatibilityLevel: 1567,
     model: {
       culture: 'en-US',
-      tables: tables.map((t: any) => ({
-        name: t.name,
-        columns: (t.columns || []).map((c: any) => ({ name: c.name, dataType: c.dataType, sourceColumn: c.name })),
-        measures: measures.filter((m: any) => m.table === t.name).map((m: any) => ({
-          name: m.name, expression: m.expression, ...(m.formatString ? { formatString: m.formatString } : {}),
-        })),
-      })),
+      tables: tables.map((t: any) => {
+        const mode = tableModes[t.name] || 'import';
+        const partition =
+          mode === 'import'
+            ? { name: `${t.name}-import`, mode: 'import', source: { type: 'none' } }
+            : {
+                name: `${t.name}-${mode}`,
+                mode,
+                source: { type: 'query', query: `SELECT * FROM [${t.name}]`, dataSource: 'sqlSource' },
+              };
+        return {
+          name: t.name,
+          columns: (t.columns || []).map((c: any) => ({ name: c.name, dataType: c.dataType, sourceColumn: c.name })),
+          measures: measures.filter((m: any) => m.table === t.name).map((m: any) => ({
+            name: m.name, expression: m.expression, ...(m.formatString ? { formatString: m.formatString } : {}),
+          })),
+          partitions: [partition],
+        };
+      }),
       // Power BI / Tabular permits only ONE active relationship between any two
       // tables. Bundles must declare a valid active set (the SemanticModelContent
       // schema has no active/inactive flag, so each table-pair appears at most
@@ -146,6 +176,9 @@ function buildTmsl(content: any, displayName: string, steps: string[]): string {
         crossFilteringBehavior: 'oneDirection',
         ...(r.isActive === false ? { isActive: false } : {}),
       })),
+      // A DirectQuery/Dual partition needs a model-level data source to read
+      // from. Emit a default structured SQL source the partitions reference.
+      ...(usesQueryMode ? { dataSources: [{ name: 'sqlSource', type: 'structured', connectionString: '' }] } : {}),
     },
   }, null, 2);
 }
