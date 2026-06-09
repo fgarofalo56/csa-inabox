@@ -31,8 +31,9 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Sparkle16Regular, Info16Regular, Wrench16Regular } from '@fluentui/react-icons';
+import { Sparkle16Regular, Info16Regular, Wrench16Regular, Comment16Regular, Gauge16Regular } from '@fluentui/react-icons';
 import { MonacoTextarea, type MonacoTextareaProps } from './monaco-textarea';
+import { getPersonaCommands } from '@/lib/azure/copilot-personas-slash';
 
 export type SqlCopilotEngine =
   | 'warehouse'
@@ -59,6 +60,13 @@ const useStyles = makeStyles({
 });
 
 type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
+type AssistMode = 'generate' | 'explain' | 'fix' | 'comments' | 'optimize';
+
+// The sql-warehouse persona's slash commands (explain / fix / comments /
+// optimize) drive which assist buttons render — sourced from the single
+// registry, never hard-coded. A command absent from the persona is hidden.
+const PERSONA_COMMANDS = getPersonaCommands('sql-warehouse');
+const HAS = (c: string) => PERSONA_COMMANDS.some((p) => p.command === c);
 
 export interface SqlCopilotEditorProps {
   engine: SqlCopilotEngine;
@@ -101,10 +109,10 @@ export function SqlCopilotEditor({
   const [assistPrompt, setAssistPrompt] = useState('');
   const [assistResult, setAssistResult] = useState<string | null>(null);
   const [assistError, setAssistError] = useState<string | null>(null);
-  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
+  const lastModeRef = useRef<AssistMode>('generate');
 
   const callAssist = useCallback(
-    async (mode: 'generate' | 'explain' | 'fix') => {
+    async (mode: AssistMode) => {
       lastModeRef.current = mode;
       setAssistView('loading');
       setAssistError(null);
@@ -131,6 +139,8 @@ export function SqlCopilotEditor({
           return;
         }
         setAssistResult(j.result);
+        // explain → read-only prose; generate/fix/comments/optimize → editable
+        // SQL that goes through the Apply (approval-diff) affordance.
         setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
       } catch (e: any) {
         setAssistView('idle');
@@ -160,19 +170,49 @@ export function SqlCopilotEditor({
             Ask Copilot
           </Button>
         </Tooltip>
-        <Tooltip content="Explain this query" relationship="label">
-          <Button
-            size="small"
-            appearance="subtle"
-            icon={<Info16Regular />}
-            disabled={!value.trim() || assistView === 'loading'}
-            onClick={() => callAssist('explain')}
-            aria-label="Explain SQL"
-          >
-            Explain
-          </Button>
-        </Tooltip>
-        {resultError && (
+        {HAS('explain') && (
+          <Tooltip content="Explain this query" relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Info16Regular />}
+              disabled={!value.trim() || assistView === 'loading'}
+              onClick={() => callAssist('explain')}
+              aria-label="Explain SQL"
+            >
+              Explain
+            </Button>
+          </Tooltip>
+        )}
+        {HAS('comments') && (
+          <Tooltip content={`Add inline comments to this ${dialectLabel} query`} relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Comment16Regular />}
+              disabled={!value.trim() || assistView === 'loading'}
+              onClick={() => callAssist('comments')}
+              aria-label="Add comments to SQL"
+            >
+              {assistView === 'loading' && lastModeRef.current === 'comments' ? 'Adding…' : 'Comments'}
+            </Button>
+          </Tooltip>
+        )}
+        {HAS('optimize') && (
+          <Tooltip content={`Optimize this ${dialectLabel} query for performance`} relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Gauge16Regular />}
+              disabled={!value.trim() || assistView === 'loading'}
+              onClick={() => callAssist('optimize')}
+              aria-label="Optimize SQL"
+            >
+              {assistView === 'loading' && lastModeRef.current === 'optimize' ? 'Optimizing…' : 'Optimize'}
+            </Button>
+          </Tooltip>
+        )}
+        {HAS('fix') && resultError && (
           <Tooltip content="Fix the SQL error" relationship="label">
             <Button
               size="small"
@@ -228,7 +268,11 @@ export function SqlCopilotEditor({
                 ? `Generating ${dialectLabel}…`
                 : lastModeRef.current === 'explain'
                   ? 'Explaining…'
-                  : 'Fixing…'
+                  : lastModeRef.current === 'comments'
+                    ? 'Adding comments…'
+                    : lastModeRef.current === 'optimize'
+                      ? 'Optimizing…'
+                      : 'Fixing…'
             }
           />
         </div>

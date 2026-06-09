@@ -778,10 +778,117 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   // model sees per turn. No Fabric dependency — see activator-tools.ts.
   for (const t of buildActivatorTools()) r.register(t);
 
+  // -------- SQL slash-command tools (explain / fix / comments / optimize) --------
+  // The cross-item Copilot exposure of the Loom slash commands: when the user
+  // says "explain this query" / "fix this" / "comment this" / "make this faster"
+  // the model can call these directly. Each grounds in the live warehouse schema
+  // and calls the SAME AOAI deployment the chat loop uses (no Fabric Copilot).
+  // See lib/copilot/slash-commands.ts + lib/azure/copilot-personas.ts.
+  r.register({
+    name: 'sql_explain',
+    service: 'SQL Copilot',
+    description:
+      'Explain a T-SQL or Spark SQL query in plain language, grounded in the live warehouse schema. Use when the user asks what a query does. Returns { explanation }.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const explanation = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL assistant for CSA Loom. Explain what the following ${dialect} query does ` +
+            `in 3-5 concise sentences, referencing the actual tables, columns, filters, joins and ` +
+            `aggregations and the business intent. Plain prose, no code fences.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { explanation: explanation.trim() };
+    },
+  });
+  r.register({
+    name: 'sql_fix',
+    service: 'SQL Copilot',
+    description:
+      'Fix a T-SQL or Spark SQL query that produced an error, using the real error text. Returns { sql } with the corrected query.',
+    parameters: obj({ sql: S_STRING, errorText: S_STRING, engine: S_STRING, db: S_STRING }, ['sql', 'errorText']),
+    handler: async ({ sql, errorText, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL debugger for CSA Loom. Fix the following ${dialect} query that produced an ` +
+            `error. Return ONLY the corrected, runnable ${dialect} — no fences, no explanation.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`\n\nError:\n${String(errorText || '')}` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+  r.register({
+    name: 'sql_comments',
+    service: 'SQL Copilot',
+    description:
+      'Add inline comments to a T-SQL or Spark SQL query, preserving the exact table/column names and logic. Returns { sql } with the commented query.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL documentation assistant for CSA Loom. Return the SAME ${dialect} query, ` +
+            `unchanged in logic, with a concise inline comment (-- syntax) above every non-trivial ` +
+            `clause. Preserve the EXACT table/column names. Return ONLY the commented SQL — no fences.` +
+            schemaSection,
+        },
+        { role: 'user', content: `${dialect} query:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+  r.register({
+    name: 'sql_optimize',
+    service: 'SQL Copilot',
+    description:
+      'Rewrite a T-SQL or Spark SQL query for better performance with engine-specific hints (Synapse OPTION()/columnstore, Databricks AQE/Z-ordering/broadcast). Pass explainPlan when a real query plan is available. Returns { sql } with the optimized query.',
+    parameters: obj({ sql: S_STRING, engine: S_STRING, db: S_STRING, explainPlan: S_STRING }, ['sql']),
+    handler: async ({ sql, engine, db, explainPlan }) => {
+      const dialect = dialectForToolEngine(engine);
+      const schema = await toolSqlSchemaContext(engine, db);
+      const schemaSection = schema ? `\n\nWarehouse schema:\n${schema}` : '';
+      const planSection = String(explainPlan || '').trim()
+        ? `\n\nActual query plan (target these operators):\n${String(explainPlan).slice(0, 4000)}`
+        : '';
+      const raw = await aoaiCompleteText([
+        {
+          role: 'system',
+          content:
+            `You are a SQL performance engineer for CSA Loom. Rewrite the ${dialect} query to run ` +
+            `faster, keeping the result set identical and preserving exact table/column names. ` +
+            `For T-SQL/Synapse: sargable predicates, JOIN order, OPTION() hints, columnstore-friendly ` +
+            `projections, no scalar UDFs/cursors. For Spark SQL/Databricks: AQE, predicate/projection ` +
+            `pushdown, Delta Z-ordering/partition pruning, broadcast-join hints, no collect()/Python UDFs. ` +
+            `Return ONLY the rewritten SQL — no fences, no commentary.` +
+            schemaSection +
+            planSection,
+        },
+        { role: 'user', content: `${dialect} query to optimize:\n\`\`\`\n${sql}\n\`\`\`` },
+      ]);
+      return { sql: stripSqlFences(raw) };
+    },
+  });
+
   return r;
 }
-
-// ---------- Orchestrator ----------
 
 export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -887,6 +994,90 @@ async function callAoai(
     throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
   }
   return res.json();
+}
+
+/**
+ * Plain single-shot AOAI completion (NO tools) — the engine behind the
+ * SQL slash-command tools (sql_explain / sql_fix / sql_comments / sql_optimize).
+ * Resolves the AOAI target the same way the orchestrator does, gets an AAD
+ * bearer (cognitiveservices scope), and retries once without temperature for
+ * reasoning-model deployments. Returns the assistant message text.
+ */
+async function aoaiCompleteText(
+  messages: { role: 'system' | 'user'; content: string }[],
+): Promise<string> {
+  const target = await resolveAoaiTarget();
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+  const token = await aoaiToken();
+  const send = (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(
+        withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
+      ),
+    });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) res = await send(false);
+    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const j = await res.json();
+  return String(j?.choices?.[0]?.message?.content ?? '');
+}
+
+/** Strip stray ```lang fences a model may add despite ONLY-SQL instructions. */
+function stripSqlFences(raw: string): string {
+  return raw
+    .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+}
+
+/** Human dialect label for the SQL slash-command tools' prompts. */
+function dialectForToolEngine(engine?: string): string {
+  const e = String(engine || '').toLowerCase();
+  if (e.includes('databricks') || e.includes('spark')) return 'Spark SQL (Databricks)';
+  if (e.includes('serverless')) return 'T-SQL (Synapse Serverless)';
+  return 'T-SQL';
+}
+
+// Best-effort schema grounding for the SQL slash-command tools — one DMV
+// round-trip returns the columns of every user table (soft-fail to '' on a
+// paused pool / cold warehouse / no grant so the tool still answers).
+const TOOL_SCHEMA_SQL = `SELECT TOP 400 s.name + '.' + t.name AS table_name, c.name AS column_name, tp.name AS type_name
+FROM sys.columns c
+JOIN sys.tables t ON t.object_id = c.object_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.types tp ON tp.user_type_id = c.user_type_id
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name, c.column_id`;
+
+async function toolSqlSchemaContext(engine?: string, db?: string): Promise<string> {
+  const e = String(engine || '').toLowerCase();
+  try {
+    if (e.includes('databricks') || e.includes('spark')) return '';
+    const serverless = e.includes('serverless');
+    const target = serverless ? serverlessTarget(db || 'master') : dedicatedTarget();
+    const res = await synapseExecute(target, TOOL_SCHEMA_SQL, 20_000);
+    if (!res.rows.length) return '';
+    const byTable = new Map<string, string[]>();
+    for (const row of res.rows) {
+      const [table, col, type] = row as [string, string, string];
+      const cols = byTable.get(table) || [];
+      cols.push(`${col} ${type}`);
+      byTable.set(table, cols);
+    }
+    const str = [...byTable.entries()].map(([t, cols]) => `${t}(${cols.join(', ')})`).join('\n');
+    return str.length > 6000 ? `${str.slice(0, 6000)}\n…(schema truncated)` : str;
+  } catch {
+    return '';
+  }
 }
 
 let _registry: LoomToolRegistry | null = null;
