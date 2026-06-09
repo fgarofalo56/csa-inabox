@@ -80,6 +80,9 @@ param openaiEmbeddingsModel string
 @description('Key Vault Premium HSM isolated (IL5)')
 param keyVaultHsmIsolated bool
 
+@description('Grant the Console UAMI "Key Vault Crypto Service Encryption User" on the admin-plane Key Vault for Customer-Managed Keys (F14). Also drives LOOM_KEY_VAULT_ID / LOOM_UAMI_RESOURCE_ID env wiring. Off by default.')
+param consolePrincipalNeedsCmkBind bool = false
+
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
@@ -785,6 +788,7 @@ module keyvault 'keyvault.bicep' = {
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
@@ -1276,6 +1280,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
+            // F14 Customer-Managed Keys — the ARM resource id of the admin-plane
+            // Key Vault (scopes the KV Crypto role check) and the Console UAMI
+            // resource id used as the storage account's CMK encryption identity.
+            { name: 'LOOM_KEY_VAULT_ID', value: keyvault.outputs.keyVaultId }
+            { name: 'LOOM_UAMI_RESOURCE_ID', value: identity.outputs.uamiConsoleId }
             // F4: schedule-time pipeline parameter overrides. KV defaults to the
             // admin-plane vault (Console UAMI already has Secrets Officer there);
             // point at a separate vault by overriding loomParamKeyVaultUri and
