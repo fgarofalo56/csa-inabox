@@ -135,6 +135,15 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-previ
 // =====================================================================
 // Model deployments. Embedding depends on chat so the two serialize
 // (CognitiveServices rejects concurrent deployment writes on one account).
+//
+// The 'chat' deployment backs ALL Loom Copilot surfaces from one model:
+//   - the cross-item Copilot orchestrator (/api/copilot/orchestrate)
+//   - the Notebook chat drawer (/api/copilot/notebook-assist)
+//   - the per-cell in-cell Copilot (/api/notebook/[id]/assist) — /explain,
+//     /fix, /comments, /optimize, and free-form refactor. No extra deployment,
+//     env var, or RBAC is required for the in-cell surface beyond what this
+//     module already wires into admin-plane/main.bicep (LOOM_AOAI_ENDPOINT +
+//     LOOM_AOAI_DEPLOYMENT) and the role assignments granted below.
 // =====================================================================
 resource chatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: account
