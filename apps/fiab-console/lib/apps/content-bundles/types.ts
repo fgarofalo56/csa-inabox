@@ -172,6 +172,14 @@ export interface ScorecardOkr {
   statusRules?: StatusRule[];
   /** Fallback status when no rule fires. */
   otherwiseStatus?: StatusColor;
+  /** Optional scorecard status band (onTrack / atRisk / behindGoal / …). */
+  status?: string;
+  /** Optional goal owner (display name or email). */
+  owner?: string;
+  /** Optional ISO due date. */
+  dueDate?: string;
+  /** Optional sub-goal ids (two-level hierarchy). */
+  subGoalIds?: string[];
 }
 
 export interface ScorecardContent {

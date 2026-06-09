@@ -250,7 +250,25 @@ export function scorecardListEntry(item: WorkspaceItem) {
 export function scorecardGoalsFromContent(item: WorkspaceItem): ComputedGoal[] | null {
   const content = contentOf<ScorecardContent>(item, 'scorecard');
   if (!content) return null;
-  return computeRollups(content.okrs || []);
+  const okrs = content.okrs || [];
+  const computed = computeRollups(okrs);
+  // Re-attach extended fields the bundle can author inline (owner/dueDate/
+  // subGoalIds/status) that the rollup engine drops; the editor's Goals table
+  // expects them alongside the computed status/value.
+  const byId = new Map(okrs.map((o) => [o.id, o]));
+  return computed.map((g) => {
+    const src = byId.get(g.id);
+    if (!src) return g;
+    return {
+      ...g,
+      // Prefer the rollup engine's resolved status; fall back to bundle-authored
+      // status when the engine couldn't resolve one (e.g. no rules + no value).
+      status: g.status ?? (src.status as any),
+      owner: src.owner,
+      dueDate: src.dueDate,
+      subGoalIds: src.subGoalIds,
+    } as ComputedGoal & { owner?: string; dueDate?: string; subGoalIds?: string[] };
+  });
 }
 
 export function scorecardMetaFromContent(item: WorkspaceItem) {

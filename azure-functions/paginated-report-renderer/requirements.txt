@@ -1,0 +1,5 @@
+azure-functions>=1.18.0
+azure-identity>=1.17.1
+reportlab>=4.2.0
+openpyxl>=3.1.5
+python-docx>=1.1.2

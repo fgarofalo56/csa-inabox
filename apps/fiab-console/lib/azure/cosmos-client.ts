@@ -65,6 +65,8 @@ let _dataProductJobs: Container | null = null;
 let _accessRequests: Container | null = null;
 let _attributeGroups: Container | null = null;
 let _okrs: Container | null = null;
+let _scorecardGoals: Container | null = null;
+let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
@@ -80,6 +82,25 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Paginated-report (RDL) definitions — the Loom-native authoring document for
+// the paginated-report editor (data sources, datasets, tablixes, parameters).
+// One row per report (id = reportId, PK /workspaceId) so every per-report load
+// hits a single physical partition. Azure-native parity with a Power BI
+// Paginated Report .rdl — NO Fabric/Power BI workspace required to author or
+// export (export delegates to the paginated-report-renderer Azure Function).
+// Created lazily so a fresh environment needs no extra ARM/Bicep step beyond
+// the account+database.
+let _paginatedReportDefinitions: Container | null = null;
+// Loom-native deployment pipelines — Azure-native parity for Fabric Deployment
+// pipelines (no-fabric-dependency.md). `loom-pipelines` holds one doc per
+// pipeline (PK /tenantId so the per-tenant list hits a single physical
+// partition); `pipeline-stage-rules` holds per-stage parameter/data-source
+// override rules (PK /pipelineId); `pipeline-history` holds one receipt per
+// deploy run (PK /pipelineId). Created lazily so a fresh environment needs no
+// extra ARM/Bicep step beyond the account+database.
+let _loomPipelines: Container | null = null;
+let _pipelineStageRules: Container | null = null;
+let _pipelineHistory: Container | null = null;
 // Scorecard rollup + status-rule config — one row per scorecard (id =
 // scorecardId), PK /scorecardId so every per-scorecard read is a single-
 // partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
@@ -280,6 +301,20 @@ async function ensure() {
   // item id so the editor's OKR list hits a single physical partition. The F10
   // linked-resources route is the live consumer (PK /dataProductId).
   _okrs              = await mk('okrs',                '/dataProductId');
+  // Scorecard extended goal metadata (F — Scorecard goals + connected metrics)
+  // — status / owner / dueDate / connected-DAX-metric binding / sub-goals that
+  // the Fabric Scorecards REST surface doesn't expose as first-class fields.
+  // One row per (scorecard, goal), PK /scorecardId so the editor's per-scorecard
+  // goal-merge load hits a single physical partition. Azure-native: the goal's
+  // live value is pulled from a Power BI / AAS semantic model via executeQueries
+  // (see aas-client.ts) — no real Fabric scorecard required. Created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  _scorecardGoals    = await mk('scorecard-goals',     '/scorecardId');
+  // Scorecard check-in history — one append-only row per manual/automated
+  // check-in (value + status + note + date). PK /goalId so every per-goal
+  // history query is a single-partition read. Records check-ins even for
+  // bundle-template scorecards that aren't yet live in Fabric.
+  _scorecardCheckins = await mk('scorecard-checkins',  '/goalId');
   // Item-level permissions & sharing (F6) — one row per (item, principal),
   // partitioned by the item id so every per-item permission lookup hits a
   // single physical partition. The Azure-native default mirrors each grant to
@@ -331,6 +366,18 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Paginated-report (RDL) definitions — Loom-native authoring doc per report.
+  // PK /workspaceId so the editor's per-report GET/PUT and the renderer's read
+  // hit a single physical partition. Azure-native; no Fabric/Power BI needed.
+  _paginatedReportDefinitions = await mk('paginated-report-definitions', '/workspaceId');
+  // Loom-native deployment pipelines (Azure-native parity for Fabric Deployment
+  // pipelines). Three containers: the pipeline catalog (PK /tenantId), the
+  // per-stage deployment rules (PK /pipelineId), and the deploy-receipt history
+  // (PK /pipelineId). Created lazily so a fresh environment needs no extra
+  // ARM/Bicep step beyond the account+database.
+  _loomPipelines = await mk('loom-pipelines', '/tenantId');
+  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
+  _pipelineHistory = await mk('pipeline-history', '/pipelineId');
   // Scorecard rollup + status-rule config — one row per scorecard (PK
   // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
   // live Fabric goals; loom: bundle scorecards carry config inline in
@@ -361,6 +408,14 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+/** Paginated-report (RDL) authoring definitions — PK /workspaceId. */
+export async function paginatedReportDefinitionsContainer(): Promise<Container> { await ensure(); return _paginatedReportDefinitions!; }
+/** Loom-native deployment-pipeline catalog — PK /tenantId. */
+export async function loomPipelinesContainer(): Promise<Container> { await ensure(); return _loomPipelines!; }
+/** Per-stage deployment rules (parameter / data-source overrides) — PK /pipelineId. */
+export async function pipelineStageRulesContainer(): Promise<Container> { await ensure(); return _pipelineStageRules!; }
+/** Deploy-receipt history (diff + deployed item ids per run) — PK /pipelineId. */
+export async function pipelineHistoryContainer(): Promise<Container> { await ensure(); return _pipelineHistory!; }
 /** Scorecard rollup + status-rule config — PK /scorecardId. */
 export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
 
@@ -370,6 +425,51 @@ export async function dataProductJobsContainer(): Promise<Container> { await ens
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
 export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
+/** Status of a scorecard goal — mirrors Fabric/Power BI scorecard status bands. */
+export type ScorecardGoalStatus =
+  | 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
+
+/** Binding from a scorecard goal to a live DAX measure in a PBI/AAS model. */
+export interface ScorecardConnectedMetric {
+  workspaceId: string;
+  datasetId: string;
+  daxExpression: string;
+  /** ISO timestamp of the last successful live pull. */
+  lastRefreshed?: string;
+  /** Last value pulled from the model. */
+  lastValue?: number;
+}
+
+/** Extended per-goal metadata that the Fabric Scorecards REST surface lacks. */
+export interface ScorecardGoalRecord {
+  id: string;            // `${scorecardId}:${goalId}`
+  scorecardId: string;   // partition key
+  goalId: string;        // Fabric goal GUID or bundle OKR id
+  status?: ScorecardGoalStatus;
+  owner?: string;        // display name or email
+  dueDate?: string;      // ISO date
+  connectedMetric?: ScorecardConnectedMetric;
+  subGoalIds?: string[];
+  updatedAt: string;
+  updatedBy: string;     // session OID
+}
+
+/** A single scorecard goal check-in (manual or metric-driven). */
+export interface ScorecardCheckIn {
+  id: string;            // UUID
+  goalId: string;        // partition key
+  scorecardId: string;
+  value: number;
+  status?: ScorecardGoalStatus;
+  note?: string;
+  checkInDate?: string;  // ISO date the value is for (defaults to today)
+  source?: 'manual' | 'metric';
+  recordedAt: string;    // ISO timestamp, server-side
+  recordedBy: string;    // session OID
+}
+
+export async function scorecardGoalsContainer(): Promise<Container> { await ensure(); return _scorecardGoals!; }
+export async function scorecardCheckinsContainer(): Promise<Container> { await ensure(); return _scorecardCheckins!; }
 
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
@@ -448,8 +548,10 @@ const KNOWN_CONTAINER_IDS = [
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
+  'scorecard-goals', 'scorecard-checkins',
   'access-request-workflow',
   'saved-queries',
+  'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
 ];
 

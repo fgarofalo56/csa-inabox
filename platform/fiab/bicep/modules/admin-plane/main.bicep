@@ -391,6 +391,12 @@ param loomPostureFunctionUrl string = ''
 @description('Key Vault secret name holding the posture-refresh Function host key. The Console reads this via secretRef as LOOM_POSTURE_FUNCTION_KEY. Only emitted when loomPostureFunctionUrl is set.')
 param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 
+@description('Base URL of the paginated-report-renderer Azure Function (deployed from azure-functions/paginated-report-renderer/deploy/main.bicep). Backs PDF/Excel/Word export for the paginated-report editor. Empty surfaces an honest export gate in the designer; authoring still works fully (no Microsoft Fabric / Power BI dependency).')
+param loomPaginatedRenderUrl string = ''
+
+@description('Key Vault secret name holding the paginated-report-renderer Function host key. The Console reads this via secretRef as LOOM_PAGINATED_RENDER_KEY. Only emitted when loomPaginatedRenderUrl is set.')
+param loomPaginatedRenderKeySecretName string = 'loom-paginated-render-key'
+
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
@@ -1513,6 +1519,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Govern tab data-owner view (F3) — on-open posture refresh Function.
             // Empty → honest gate; the owner view still computes posture live.
             { name: 'LOOM_POSTURE_FUNCTION_URL', value: loomPostureFunctionUrl }
+            // Paginated-report (RDL) export renderer Function — PDF/Excel/Word.
+            // Empty → honest export gate in the designer; authoring still works.
+            { name: 'LOOM_PAGINATED_RENDER_URL', value: loomPaginatedRenderUrl }
             // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
             // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
             // the one-time tenant config required to use them.
@@ -1619,6 +1628,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Surfaced to the Govern owner-view refresh BFF, never to the browser.
           !empty(loomPostureFunctionUrl) ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
+          ] : [],
+          // Paginated-report-renderer Function host key — only when wired.
+          // Surfaced to the export BFF (?code=…), never to the browser.
+          !empty(loomPaginatedRenderUrl) ? [
+            { name: 'LOOM_PAGINATED_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
           ] : [],
           // Analysis Services — RLS/OLS Security tab backend (Azure-native).
           // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
@@ -1986,6 +2000,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // 'loom-posture-function-key' (see azure-functions/posture-refresh/DEPLOYMENT.md).
           !empty(loomPostureFunctionUrl) ? [
             { name: 'loom-posture-function-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPostureFunctionKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // Paginated-report-renderer Function host key — stored in KV post-deploy
+          // as 'loom-paginated-render-key' (see
+          // azure-functions/paginated-report-renderer/DEPLOYMENT.md).
+          !empty(loomPaginatedRenderUrl) ? [
+            { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }

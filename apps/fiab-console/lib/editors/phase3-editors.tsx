@@ -67,6 +67,11 @@ import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '
 import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import type {
+  RdlReportDefinition, RdlDataSource, RdlDataset, RdlTablix, RdlParameter,
+  RdlField, RdlDataSourceType, RdlExportFormat,
+} from '@/lib/azure/paginated-report-client';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
 import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
@@ -13328,7 +13333,734 @@ export function ReportEditor({ item, id }: { item: FabricItemType; id: string })
   return <LoomNativeReportEditor item={item} id={id} />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
+  return <PaginatedReportDesigner item={item} id={id} />;
+}
+
+// ============================================================
+// Paginated report (RDL) designer — Azure-native, no Fabric/Power BI.
+//
+// Loom-native parity with a Power BI Paginated Report (.rdl): author data
+// sources + dataset SQL + a tablix (columns / row groups / expressions) +
+// parameters + page setup, then export to PDF / Excel / Word via the
+// paginated-report-renderer Azure Function. The whole surface works with
+// LOOM_DEFAULT_FABRIC_WORKSPACE UNSET (no-fabric-dependency.md). Export is the
+// only honest-gated control (LOOM_PAGINATED_RENDER_URL); authoring is always on.
+// ============================================================
+
+const RDL_DS_TYPES: RdlDataSourceType[] = ['AzureSQL', 'Synapse', 'Cosmos', 'ADLS'];
+const RDL_FIELD_TYPES: RdlField['type'][] = ['String', 'Int', 'Decimal', 'DateTime', 'Boolean'];
+const RDL_PARAM_TYPES: RdlParameter['type'][] = ['String', 'Int', 'Boolean', 'DateTime'];
+const RDL_AGGS = ['', 'Sum', 'Count', 'Avg', 'Max', 'Min'] as const;
+
+function rdlId(prefix: string): string {
+  const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID().slice(0, 8) : Math.random().toString(16).slice(2, 10);
+  return `${prefix}_${rnd}`;
+}
+
+/** Build a default detail-row cell expression for a field. */
+function fieldExpr(field: string): string { return `Fields!${field}.Value`; }
+/** Build an aggregate expression token. */
+function aggExpr(agg: string, field: string): string { return agg ? `=${agg}(Fields!${field}.Value)` : fieldExpr(field); }
+/** Parse {agg, field} back out of a stored cell expression (for the picker). */
+function parseExpr(expr: string): { agg: string; field: string } {
+  const m = /^=(\w+)\(Fields!(.+?)\.Value\)$/.exec(expr);
+  if (m) return { agg: m[1], field: m[2] };
+  const f = /^Fields!(.+?)\.Value$/.exec(expr);
+  return { agg: '', field: f ? f[1] : '' };
+}
+
+function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [def, setDef] = useState<RdlReportDefinition | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const [renderDeployed, setRenderDeployed] = useState(false);
+  const [exportBusy, setExportBusy] = useState<RdlExportFormat | null>(null);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+  const [exportHint, setExportHint] = useState<NotConfiguredHint | undefined>(undefined);
+
+  // Dialogs
+  const [dsDialog, setDsDialog] = useState<{ open: boolean; editing?: RdlDataSource }>(() => ({ open: false }));
+  const [dsetDialog, setDsetDialog] = useState<{ open: boolean; editing?: RdlDataset }>(() => ({ open: false }));
+  const [tablixWizard, setTablixWizard] = useState(false);
+  const [paramDialog, setParamDialog] = useState<{ open: boolean; editing?: RdlParameter }>(() => ({ open: false }));
+  const [selectedTablix, setSelectedTablix] = useState<string>('');
+
+  const isNew = id === 'new';
+
+  // Resolve the owning Loom workspace (partition key) from the item.
+  useEffect(() => {
+    if (isNew) { setLoadErr(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const it = await getItem(item.slug, id);
+        if (!cancelled) setWorkspaceId(it.workspaceId);
+      } catch (e: any) { if (!cancelled) setLoadErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+  }, [item.slug, id, isNew]);
+
+  // Load the RDL definition once the workspace is known.
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) { setDef(j.definition); setSelectedTablix(j.definition.tablixes?.[0]?.id || ''); setIsDirty(false); }
+        else setLoadErr(j.error || `HTTP ${r.status}`);
+      } catch (e: any) { if (!cancelled) setLoadErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, id]);
+
+  // Renderer capability probe (pre-disable Export with the exact remediation).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/paginated-report/capabilities');
+        const j = await r.json();
+        if (!cancelled && j.ok) setRenderDeployed(!!j.renderDeployed);
+      } catch { /* leave disabled */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const patch = useCallback((mut: (d: RdlReportDefinition) => RdlReportDefinition) => {
+    setDef((prev) => (prev ? mut(structuredClone(prev)) : prev));
+    setIsDirty(true);
+    setSaveMsg(null);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!def) return;
+    setSaveBusy(true); setSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(def),
+      });
+      const j = await r.json();
+      if (j.ok) { setDef(j.definition); setIsDirty(false); setSaveMsg({ ok: true, text: 'Report saved.' }); }
+      else setSaveMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setSaveMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSaveBusy(false); }
+  }, [def, id]);
+
+  const doExport = useCallback(async (format: RdlExportFormat) => {
+    if (!def || !workspaceId) return;
+    setExportBusy(format); setExportErr(null); setExportHint(undefined);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/render`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, format }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setExportErr(j.error || `render failed (HTTP ${r.status})`);
+        if (j.hint) setExportHint(j.hint);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(def.name || 'report').replace(/[^A-Za-z0-9._-]+/g, '_')}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e: any) { setExportErr(e?.message || String(e)); }
+    finally { setExportBusy(null); }
+  }, [def, workspaceId, id]);
+
+  if (isNew) {
+    return (
+      <NewItemCreateGate item={item} createLabel="New paginated report"
+        intro="Author a Loom-native paginated (RDL) report — data sources, dataset queries, a tablix, and parameters — then export to PDF, Excel, or Word. No Microsoft Fabric or Power BI workspace required." />
+    );
+  }
+
+  const hasDefinition = !!def && def.tablixes.length > 0;
+  const exportDisabledReason = !renderDeployed
+    ? 'Set LOOM_PAGINATED_RENDER_URL to enable export'
+    : !hasDefinition ? 'Add a tablix first' : isDirty ? 'Save the report first' : undefined;
+
+  const ribbon: RibbonTab[] = [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Report', actions: [
+        { label: saveBusy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: def ? handleSave : undefined, disabled: !def || saveBusy || !isDirty },
+      ]},
+      { label: 'Data', actions: [
+        { label: 'Add data source', icon: <Database20Regular />, onClick: () => setDsDialog({ open: true }), disabled: !def },
+        { label: 'Add dataset', icon: <DocumentTable20Regular />, onClick: () => setDsetDialog({ open: true }), disabled: !def || (def?.dataSources.length ?? 0) === 0,
+          title: (def?.dataSources.length ?? 0) === 0 ? 'Add a data source first' : undefined },
+      ]},
+      { label: 'Design', actions: [
+        { label: 'Add tablix', icon: <Table20Regular />, onClick: () => setTablixWizard(true), disabled: !def || (def?.datasets.length ?? 0) === 0,
+          title: (def?.datasets.length ?? 0) === 0 ? 'Add a dataset first' : undefined },
+        { label: 'Add parameter', icon: <Form20Regular />, onClick: () => setParamDialog({ open: true }), disabled: !def },
+      ]},
+      { label: 'Export', actions: [
+        { label: exportBusy === 'pdf' ? 'Exporting…' : 'Export PDF', onClick: () => doExport('pdf'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+        { label: exportBusy === 'xlsx' ? 'Exporting…' : 'Export Excel', onClick: () => doExport('xlsx'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+        { label: exportBusy === 'docx' ? 'Exporting…' : 'Export Word', onClick: () => doExport('docx'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+      ]},
+    ]},
+  ];
+
+  const selTablix = def?.tablixes.find((t) => t.id === selectedTablix) || null;
+
+  const leftPanel = def ? (
+    <div className={s.treePad}>
+      <Tree aria-label="Paginated report objects" defaultOpenItems={['ds', 'dsets', 'items', 'params']}>
+        <TreeItem itemType="branch" value="ds">
+          <TreeItemLayout iconBefore={<Database20Regular />}>Data sources ({def.dataSources.length})</TreeItemLayout>
+          <Tree>
+            {def.dataSources.map((ds) => (
+              <TreeItem key={ds.id} itemType="leaf" value={ds.id}>
+                <TreeItemLayout onClick={() => setDsDialog({ open: true, editing: ds })}>{ds.name} · {ds.type}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.dataSources.length === 0 && <TreeItem itemType="leaf" value="ds-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="dsets">
+          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>Datasets ({def.datasets.length})</TreeItemLayout>
+          <Tree>
+            {def.datasets.map((d) => (
+              <TreeItem key={d.id} itemType="leaf" value={d.id}>
+                <TreeItemLayout onClick={() => setDsetDialog({ open: true, editing: d })}>{d.name} ({d.fields.length} fields)</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.datasets.length === 0 && <TreeItem itemType="leaf" value="dset-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="items">
+          <TreeItemLayout iconBefore={<Table20Regular />}>Report items ({def.tablixes.length})</TreeItemLayout>
+          <Tree>
+            {def.tablixes.map((t) => (
+              <TreeItem key={t.id} itemType="leaf" value={t.id}>
+                <TreeItemLayout onClick={() => setSelectedTablix(t.id)}
+                  style={t.id === selectedTablix ? { fontWeight: 600 } : undefined}>{t.name}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.tablixes.length === 0 && <TreeItem itemType="leaf" value="tbx-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="params">
+          <TreeItemLayout iconBefore={<Form20Regular />}>Parameters ({def.parameters.length})</TreeItemLayout>
+          <Tree>
+            {def.parameters.map((p) => (
+              <TreeItem key={p.name} itemType="leaf" value={p.name}>
+                <TreeItemLayout onClick={() => setParamDialog({ open: true, editing: p })}>{p.name} · {p.type}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.parameters.length === 0 && <TreeItem itemType="leaf" value="param-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+      </Tree>
+    </div>
+  ) : undefined;
+
+  const main = (
+    <div className={s.pad}>
+      {loadErr && (
+        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not load report</MessageBarTitle>{loadErr}</MessageBarBody></MessageBar>
+      )}
+      {saveMsg && (
+        <MessageBar intent={saveMsg.ok ? 'success' : 'error'}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>
+      )}
+      {exportErr && (
+        <NotConfiguredBar surface="Paginated report export" hint={exportHint} rawError={exportErr} />
+      )}
+      {!renderDeployed && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Export renderer not wired in this deployment</MessageBarTitle>
+          Authoring works fully. To enable PDF / Excel / Word export, deploy{' '}
+          <code>azure-functions/paginated-report-renderer/deploy/main.bicep</code> and set{' '}
+          <code>LOOM_PAGINATED_RENDER_URL</code> on the Console.
+        </MessageBarBody></MessageBar>
+      )}
+
+      {def && (
+        <>
+          {/* Report + page setup */}
+          <div className={s.card}>
+            <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Report</Subtitle2>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+              <Field label="Name" style={{ minWidth: 260 }}>
+                <Input value={def.name} onChange={(_, d) => patch((x) => ({ ...x, name: d.value }))} />
+              </Field>
+              <Field label="Page size" style={{ minWidth: 130 }}>
+                <Dropdown selectedOptions={[def.pageSize]} value={def.pageSize}
+                  onOptionSelect={(_, d) => patch((x) => ({ ...x, pageSize: (d.optionValue as RdlReportDefinition['pageSize']) || x.pageSize }))}>
+                  {['Letter', 'A4', 'Legal'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Orientation" style={{ minWidth: 140 }}>
+                <Dropdown selectedOptions={[def.pageOrientation]} value={def.pageOrientation}
+                  onOptionSelect={(_, d) => patch((x) => ({ ...x, pageOrientation: (d.optionValue as RdlReportDefinition['pageOrientation']) || x.pageOrientation }))}>
+                  {['Portrait', 'Landscape'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                </Dropdown>
+              </Field>
+            </div>
+          </div>
+
+          {/* Selected tablix designer */}
+          {selTablix ? (
+            <TablixDesignSurface
+              tablix={selTablix}
+              dataset={def.datasets.find((d) => d.id === selTablix.datasetId) || null}
+              onChange={(next) => patch((x) => ({ ...x, tablixes: x.tablixes.map((t) => (t.id === next.id ? next : t)) }))}
+              onDelete={() => { patch((x) => ({ ...x, tablixes: x.tablixes.filter((t) => t.id !== selTablix.id) })); setSelectedTablix(''); }}
+            />
+          ) : (
+            <div className={s.card}>
+              <Caption1>
+                No report item selected. Use <strong>Add data source → Add dataset → Add tablix</strong> to design a paginated report,
+                then <strong>Export PDF / Excel / Word</strong>.
+              </Caption1>
+            </div>
+          )}
+        </>
+      )}
+      {!def && !loadErr && <Spinner label="Loading report…" />}
+    </div>
+  );
+
+  return (
+    <>
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={main} />
+      {def && (
+        <>
+          <DataSourceDialog
+            open={dsDialog.open}
+            editing={dsDialog.editing}
+            onClose={() => setDsDialog({ open: false })}
+            onSave={(ds) => {
+              patch((x) => {
+                const exists = x.dataSources.some((d) => d.id === ds.id);
+                return { ...x, dataSources: exists ? x.dataSources.map((d) => (d.id === ds.id ? ds : d)) : [...x.dataSources, ds] };
+              });
+              setDsDialog({ open: false });
+            }}
+            onDelete={dsDialog.editing ? (dsId) => { patch((x) => ({ ...x, dataSources: x.dataSources.filter((d) => d.id !== dsId) })); setDsDialog({ open: false }); } : undefined}
+          />
+          <DatasetDialog
+            open={dsetDialog.open}
+            editing={dsetDialog.editing}
+            dataSources={def.dataSources}
+            reportId={id}
+            onClose={() => setDsetDialog({ open: false })}
+            onSave={(d) => {
+              patch((x) => {
+                const exists = x.datasets.some((q) => q.id === d.id);
+                return { ...x, datasets: exists ? x.datasets.map((q) => (q.id === d.id ? d : q)) : [...x.datasets, d] };
+              });
+              setDsetDialog({ open: false });
+            }}
+            onDelete={dsetDialog.editing ? (dId) => { patch((x) => ({ ...x, datasets: x.datasets.filter((q) => q.id !== dId) })); setDsetDialog({ open: false }); } : undefined}
+          />
+          <AddTablixWizard
+            open={tablixWizard}
+            datasets={def.datasets}
+            onClose={() => setTablixWizard(false)}
+            onCreate={(t) => { patch((x) => ({ ...x, tablixes: [...x.tablixes, t] })); setSelectedTablix(t.id); setTablixWizard(false); }}
+          />
+          <ParameterDialog
+            open={paramDialog.open}
+            editing={paramDialog.editing}
+            onClose={() => setParamDialog({ open: false })}
+            onSave={(p) => {
+              patch((x) => {
+                const exists = x.parameters.some((q) => q.name === p.name);
+                return { ...x, parameters: exists ? x.parameters.map((q) => (q.name === p.name ? p : q)) : [...x.parameters, p] };
+              });
+              setParamDialog({ open: false });
+            }}
+            onDelete={paramDialog.editing ? (name) => { patch((x) => ({ ...x, parameters: x.parameters.filter((q) => q.name !== name) })); setParamDialog({ open: false }); } : undefined}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+// --- Tablix design surface: header labels + per-column expression picker ---
+function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
+  tablix: RdlTablix; dataset: RdlDataset | null;
+  onChange: (t: RdlTablix) => void; onDelete: () => void;
+}) {
+  const s = useStyles();
+  const fieldNames = dataset?.fields.map((f) => f.name) ?? [];
+  const detailRow = tablix.cells[0] ?? [];
+
+  const setHeader = (ci: number, label: string) => {
+    const headerRow = [...tablix.headerRow]; headerRow[ci] = label;
+    onChange({ ...tablix, headerRow });
+  };
+  const setExpr = (ci: number, expr: string) => {
+    const cells = tablix.cells.map((r) => [...r]);
+    if (!cells[0]) cells[0] = [];
+    cells[0][ci] = { ...(cells[0][ci] || { expression: '' }), expression: expr };
+    onChange({ ...tablix, cells });
+  };
+
+  return (
+    <div className={s.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Subtitle2>Tablix · {tablix.name}</Subtitle2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Switch label="Column headers" checked={tablix.showColumnHeaders}
+            onChange={(_, d) => onChange({ ...tablix, showColumnHeaders: d.checked })} />
+          <Switch label="Page break" checked={tablix.pageBreak}
+            onChange={(_, d) => onChange({ ...tablix, pageBreak: d.checked })} />
+          <Button appearance="subtle" icon={<Delete20Regular />} onClick={onDelete}>Delete tablix</Button>
+        </div>
+      </div>
+      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+        Dataset: {dataset?.name || '—'} · row groups: {tablix.rowGroups.length ? tablix.rowGroups.join(', ') : 'none'}
+      </Caption1>
+      <div className={s.tableWrap}>
+        <Table size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell style={{ width: 120 }}>Field</TableHeaderCell>
+              <TableHeaderCell>Header label</TableHeaderCell>
+              <TableHeaderCell style={{ width: 360 }}>Cell expression</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {tablix.columns.map((col, ci) => {
+              const parsed = parseExpr(detailRow[ci]?.expression || fieldExpr(col));
+              return (
+                <TableRow key={col}>
+                  <TableCell><Badge appearance="outline">{col}</Badge></TableCell>
+                  <TableCell>
+                    <Input size="small" value={tablix.headerRow[ci] ?? col} onChange={(_, d) => setHeader(ci, d.value)} />
+                  </TableCell>
+                  <TableCell>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <Dropdown size="small" style={{ minWidth: 110 }}
+                        selectedOptions={[parsed.agg]} value={parsed.agg || '(value)'}
+                        onOptionSelect={(_, d) => setExpr(ci, aggExpr(d.optionValue || '', parsed.field || col))}>
+                        {RDL_AGGS.map((a) => <Option key={a || 'none'} value={a}>{a || '(value)'}</Option>)}
+                      </Dropdown>
+                      <Dropdown size="small" style={{ minWidth: 140 }}
+                        selectedOptions={[parsed.field || col]} value={parsed.field || col}
+                        onOptionSelect={(_, d) => setExpr(ci, aggExpr(parsed.agg, d.optionValue || col))}>
+                        {(fieldNames.length ? fieldNames : [col]).map((f) => <Option key={f} value={f}>{f}</Option>)}
+                      </Dropdown>
+                      <Caption1 style={{ fontFamily: 'Consolas, monospace' }}>{detailRow[ci]?.expression || fieldExpr(col)}</Caption1>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// --- Data source dialog ---
+function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlDataSource;
+  onClose: () => void; onSave: (ds: RdlDataSource) => void; onDelete?: (id: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<RdlDataSourceType>('AzureSQL');
+  const [server, setServer] = useState('');
+  const [database, setDatabase] = useState('');
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setType(editing?.type || 'AzureSQL');
+      setServer(editing?.server || '');
+      setDatabase(editing?.database || '');
+    }
+  }, [open, editing]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit data source' : 'Add data source'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Type">
+                <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlDataSourceType) || 'AzureSQL')}>
+                  {RDL_DS_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Server / host" hint="e.g. myserver.database.windows.net (AzureSQL) or ws-ondemand.sql.azuresynapse.net (Synapse)">
+                <Input value={server} onChange={(_, d) => setServer(d.value)} />
+              </Field>
+              <Field label="Database / pool"><Input value={database} onChange={(_, d) => setDatabase(d.value)} /></Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.id)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim()}
+              onClick={() => onSave({ id: editing?.id || rdlId('ds'), name: name.trim(), type, server: server.trim() || undefined, database: database.trim() || undefined })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Dataset dialog (Monaco SQL + Run preview → fields/sampleRows) ---
+function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlDataset; dataSources: RdlDataSource[]; reportId: string;
+  onClose: () => void; onSave: (d: RdlDataset) => void; onDelete?: (id: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [dataSourceId, setDataSourceId] = useState('');
+  const [query, setQuery] = useState('');
+  const [fields, setFields] = useState<RdlField[]>([]);
+  const [sampleRows, setSampleRows] = useState<Array<Record<string, unknown>>>([]);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewMsg, setPreviewMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setDataSourceId(editing?.dataSourceId || dataSources[0]?.id || '');
+      setQuery(editing?.query || 'SELECT TOP 50 * FROM dbo.YourTable');
+      setFields(editing?.fields || []);
+      setSampleRows(editing?.sampleRows || []);
+      setPreviewMsg(null);
+    }
+  }, [open, editing, dataSources]);
+
+  const runPreview = useCallback(async () => {
+    const ds = dataSources.find((d) => d.id === dataSourceId);
+    if (!ds) { setPreviewMsg({ ok: false, text: 'pick a data source first' }); return; }
+    setPreviewBusy(true); setPreviewMsg(null);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(reportId)}/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dataSource: { type: ds.type, server: ds.server, database: ds.database }, query }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setFields(j.fields);
+        setSampleRows(j.sampleRows);
+        setPreviewMsg({ ok: true, text: `${j.fields.length} fields · ${j.sampleRows.length} sample rows captured${j.truncated ? ' (truncated)' : ''}` });
+      } else setPreviewMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setPreviewMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setPreviewBusy(false); }
+  }, [dataSources, dataSourceId, query, reportId]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit dataset' : 'Add dataset'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Data source">
+                <Dropdown selectedOptions={[dataSourceId]} value={dataSources.find((d) => d.id === dataSourceId)?.name || ''}
+                  onOptionSelect={(_, d) => setDataSourceId(d.optionValue || '')}>
+                  {dataSources.map((d) => <Option key={d.id} value={d.id}>{d.name} ({d.type})</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Query (T-SQL)">
+                <MonacoTextarea value={query} onChange={setQuery} language="sql" minHeight={160} />
+              </Field>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button appearance="secondary" icon={<Play20Regular />} onClick={runPreview} disabled={previewBusy || !dataSourceId}>
+                  {previewBusy ? 'Running…' : 'Run preview'}
+                </Button>
+                {previewMsg && <Caption1 style={{ color: previewMsg.ok ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>{previewMsg.text}</Caption1>}
+              </div>
+              {fields.length > 0 && (
+                <Field label={`Fields (${fields.length})`}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {fields.map((f) => <Badge key={f.name} appearance="outline">{f.name}: {f.type}</Badge>)}
+                  </div>
+                </Field>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.id)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim() || !dataSourceId || fields.length === 0}
+              title={fields.length === 0 ? 'Run preview to capture fields first' : undefined}
+              onClick={() => onSave({ id: editing?.id || rdlId('dset'), name: name.trim(), dataSourceId, query, fields, sampleRows })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Add tablix wizard: dataset → columns → row groups → headers ---
+function AddTablixWizard({ open, datasets, onClose, onCreate }: {
+  open: boolean; datasets: RdlDataset[];
+  onClose: () => void; onCreate: (t: RdlTablix) => void;
+}) {
+  const [name, setName] = useState('');
+  const [datasetId, setDatasetId] = useState('');
+  const [columns, setColumns] = useState<string[]>([]);
+  const [rowGroups, setRowGroups] = useState<string[]>([]);
+  const [headers, setHeaders] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (open) {
+      setName(`Table ${Math.floor(Math.random() * 900 + 100)}`);
+      const first = datasets[0];
+      setDatasetId(first?.id || '');
+      setColumns(first?.fields.map((f) => f.name) || []);
+      setRowGroups([]);
+      setHeaders(Object.fromEntries((first?.fields || []).map((f) => [f.name, f.name])));
+    }
+  }, [open, datasets]);
+
+  const ds = datasets.find((d) => d.id === datasetId) || null;
+  const allFields = ds?.fields.map((f) => f.name) ?? [];
+
+  const onPickDataset = (dsetId: string) => {
+    setDatasetId(dsetId);
+    const next = datasets.find((d) => d.id === dsetId);
+    const fns = next?.fields.map((f) => f.name) || [];
+    setColumns(fns);
+    setHeaders(Object.fromEntries(fns.map((f) => [f, f])));
+    setRowGroups([]);
+  };
+
+  const create = () => {
+    if (!ds || columns.length === 0) return;
+    const t: RdlTablix = {
+      id: rdlId('tbx'),
+      name: name.trim() || 'Table',
+      datasetId,
+      columns,
+      rowGroups,
+      headerRow: columns.map((c) => headers[c] || c),
+      cells: [columns.map((c) => ({ expression: fieldExpr(c) }))],
+      showColumnHeaders: true,
+      pageBreak: false,
+    };
+    onCreate(t);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 640 }}>
+        <DialogBody>
+          <DialogTitle>Add tablix</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name"><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Dataset">
+                <Dropdown selectedOptions={[datasetId]} value={ds?.name || ''} onOptionSelect={(_, d) => onPickDataset(d.optionValue || '')}>
+                  {datasets.map((d) => <Option key={d.id} value={d.id}>{d.name}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label={`Columns (${columns.length})`}>
+                <Dropdown multiselect selectedOptions={columns}
+                  value={columns.join(', ')}
+                  onOptionSelect={(_, d) => setColumns(d.selectedOptions)}>
+                  {allFields.map((f) => <Option key={f} value={f}>{f}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Row groups (optional)">
+                <Dropdown multiselect selectedOptions={rowGroups}
+                  value={rowGroups.join(', ')}
+                  onOptionSelect={(_, d) => setRowGroups(d.selectedOptions)}>
+                  {allFields.map((f) => <Option key={f} value={f}>{f}</Option>)}
+                </Dropdown>
+              </Field>
+              {columns.length > 0 && (
+                <Field label="Column headers">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {columns.map((c) => (
+                      <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Badge appearance="outline" style={{ minWidth: 120 }}>{c}</Badge>
+                        <Input size="small" value={headers[c] ?? c} onChange={(_, d) => setHeaders((h) => ({ ...h, [c]: d.value }))} />
+                      </div>
+                    ))}
+                  </div>
+                </Field>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!ds || columns.length === 0} onClick={create}>Add tablix</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Parameter dialog ---
+function ParameterDialog({ open, editing, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlParameter;
+  onClose: () => void; onSave: (p: RdlParameter) => void; onDelete?: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<RdlParameter['type']>('String');
+  const [prompt, setPrompt] = useState('');
+  const [defaultValue, setDefaultValue] = useState('');
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setType(editing?.type || 'String');
+      setPrompt(editing?.prompt || '');
+      setDefaultValue(editing?.defaultValue || '');
+    }
+  }, [open, editing]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit parameter' : 'Add parameter'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} disabled={!!editing} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Type">
+                <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlParameter['type']) || 'String')}>
+                  {RDL_PARAM_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Prompt"><Input value={prompt} onChange={(_, d) => setPrompt(d.value)} /></Field>
+              <Field label="Default value"><Input value={defaultValue} onChange={(_, d) => setDefaultValue(d.value)} /></Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.name)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim()}
+              onClick={() => onSave({ name: name.trim(), type, prompt: prompt.trim(), defaultValue: defaultValue.trim() || undefined })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
 }
 
 // ============================================================
@@ -13521,6 +14253,8 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
 // Scorecard (Fabric)
 // ============================================================
 interface ScorecardLite { id: string; displayName: string; description?: string; }
+type ScorecardGoalStatusUi = 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
+interface ConnectedMetricUi { workspaceId: string; datasetId: string; daxExpression: string; lastValue?: number; lastRefreshed?: string; }
 interface GoalLite {
   id?: string;
   name?: string;
@@ -13531,10 +14265,39 @@ interface GoalLite {
   targetValue?: number;
   /** Resolved status color from the BFF rollup engine. */
   status?: StatusColor;
+  /** Editor-only UI status band (notStarted/onTrack/atRisk/…), kept distinct from the rollup-engine StatusColor. */
+  statusUi?: ScorecardGoalStatusUi;
+  owner?: string;
+  dueDate?: string;
+  subGoalIds?: string[];
+  connectedMetric?: ConnectedMetricUi;
   parentId?: string;
   rollupMethod?: RollupMethod;
   statusRules?: StatusRule[];
   otherwiseStatus?: StatusColor;
+}
+interface CheckInRow { id: string; value: number; status?: string; note?: string; checkInDate?: string; recordedAt: string; source?: string; }
+interface DatasetLite { id: string; name?: string; displayName?: string; }
+
+const SC_STATUS_OPTIONS: { value: ScorecardGoalStatusUi; label: string }[] = [
+  { value: 'notStarted', label: 'Not started' },
+  { value: 'onTrack', label: 'On track' },
+  { value: 'atRisk', label: 'At risk' },
+  { value: 'behindGoal', label: 'Behind' },
+  { value: 'aheadOfGoal', label: 'Ahead' },
+  { value: 'completed', label: 'Completed' },
+];
+function scStatusColor(st?: string): 'success' | 'warning' | 'danger' | 'informative' | 'brand' {
+  switch (st) {
+    case 'onTrack': case 'completed': return 'success';
+    case 'aheadOfGoal': return 'brand';
+    case 'atRisk': return 'warning';
+    case 'behindGoal': return 'danger';
+    default: return 'informative';
+  }
+}
+function scStatusLabel(st?: string): string {
+  return SC_STATUS_OPTIONS.find((o) => o.value === st)?.label || (st ? String(st) : '—');
 }
 
 const SC_STATUS_LABEL: Record<StatusColor, string> = {
@@ -13651,6 +14414,7 @@ function ScRollupEditor({ goal, childCount, onChange }: {
   );
 }
 
+
 export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
@@ -13661,10 +14425,15 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   const [scorecardId, setScorecardId] = useState('');
   const [goals, setGoals] = useState<GoalLite[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+
+  // Check-in flyout (value + status + note + date).
   const [entryOpen, setEntryOpen] = useState<{ goalId: string } | null>(null);
   const [entryValue, setEntryValue] = useState('');
   const [entryTarget, setEntryTarget] = useState('');
   const [entryNote, setEntryNote] = useState('');
+  const [entryStatus, setEntryStatus] = useState<ScorecardGoalStatusUi | ''>('');
+  const [entryDate, setEntryDate] = useState('');
   const [entryBusy, setEntryBusy] = useState(false);
   const [entryErr, setEntryErr] = useState<string | null>(null);
   // Rollup + status-rule config (Configure rollups panel).
@@ -13679,6 +14448,24 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   // NEXT_PUBLIC_LOOM_POWERBI_PORTAL is set; empty string hides the link
   // (GCC-High / IL5 where Power BI isn't reachable).
   const pbiPortal = process.env.NEXT_PUBLIC_LOOM_POWERBI_PORTAL ?? 'https://app.powerbi.com';
+
+  // Connected-metric binder flyout.
+  const [bindOpen, setBindOpen] = useState<{ goalId: string } | null>(null);
+  const [bindDatasets, setBindDatasets] = useState<DatasetLite[]>([]);
+  const [bindDatasetId, setBindDatasetId] = useState('');
+  const [bindDax, setBindDax] = useState('');
+  const [bindBusy, setBindBusy] = useState(false);
+  const [bindTestValue, setBindTestValue] = useState<number | null | undefined>(undefined);
+  const [bindErr, setBindErr] = useState<string | null>(null);
+
+  // Live metric pull (per-goal, from the grid).
+  const [metricBusy, setMetricBusy] = useState<string | null>(null);
+  const [metricValues, setMetricValues] = useState<Record<string, number | null>>({});
+
+  // Check-in history flyout.
+  const [historyOpen, setHistoryOpen] = useState<{ goalId: string } | null>(null);
+  const [historyRows, setHistoryRows] = useState<CheckInRow[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -13716,14 +14503,99 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ goalId: entryOpen.goalId, value, targetValue: entryTarget ? Number(entryTarget) : undefined, noteText: entryNote || undefined }),
+        body: JSON.stringify({
+          goalId: entryOpen.goalId,
+          value,
+          targetValue: entryTarget ? Number(entryTarget) : undefined,
+          noteText: entryNote || undefined,
+          status: entryStatus || undefined,
+          goalValueDate: entryDate || undefined,
+        }),
       });
       const j = await r.json();
       if (!j.ok) { setEntryErr(j.error || 'submit failed'); return; }
-      setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote('');
+      setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote(''); setEntryStatus(''); setEntryDate('');
       loadGoals(workspaceId, scorecardId);
-    } finally { setEntryBusy(false); }
-  }, [entryOpen, entryValue, entryTarget, entryNote, workspaceId, scorecardId, loadGoals]);
+    } catch (e: any) { setEntryErr(e?.message || String(e)); } finally { setEntryBusy(false); }
+  }, [entryOpen, entryValue, entryTarget, entryNote, entryStatus, entryDate, workspaceId, scorecardId, loadGoals]);
+
+  // Open the connected-metric binder for a goal and load candidate datasets.
+  const openBinder = useCallback(async (goalId: string) => {
+    const goal = goals.find((g) => g.id === goalId);
+    setBindOpen({ goalId });
+    setBindDatasetId(goal?.connectedMetric?.datasetId || '');
+    setBindDax(goal?.connectedMetric?.daxExpression || '');
+    setBindTestValue(undefined); setBindErr(null); setBindDatasets([]);
+    if (!workspaceId) return;
+    try {
+      const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok) setBindDatasets(j.datasets || []);
+    } catch { /* dataset list is best-effort; the binder still works by saving */ }
+  }, [goals, workspaceId]);
+
+  // Test a candidate DAX expression — pulls a live scalar via the metric route
+  // after a transient save (binds, then evaluates). We bind first so the
+  // metric-value route can read the binding from Cosmos.
+  const testMetric = useCallback(async () => {
+    if (!bindOpen || !workspaceId || !scorecardId) return;
+    if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
+    setBindBusy(true); setBindErr(null); setBindTestValue(undefined);
+    try {
+      const put = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
+      });
+      const pj = await put.json();
+      if (!pj.ok) { setBindErr(pj.error || 'bind failed'); return; }
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(bindOpen.goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok) { setBindErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`); return; }
+      setBindTestValue(j.value);
+    } catch (e: any) { setBindErr(e?.message || String(e)); } finally { setBindBusy(false); }
+  }, [bindOpen, bindDatasetId, bindDax, workspaceId, scorecardId]);
+
+  // Persist the binding and close.
+  const saveMetric = useCallback(async () => {
+    if (!bindOpen || !workspaceId || !scorecardId) return;
+    if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
+    setBindBusy(true); setBindErr(null);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setBindErr(j.error || 'save failed'); return; }
+      setBindOpen(null);
+      loadGoals(workspaceId, scorecardId);
+    } catch (e: any) { setBindErr(e?.message || String(e)); } finally { setBindBusy(false); }
+  }, [bindOpen, bindDatasetId, bindDax, workspaceId, scorecardId, loadGoals]);
+
+  // Pull the live value for a bound goal directly from the grid.
+  const pullMetric = useCallback(async (goalId: string) => {
+    if (!workspaceId || !scorecardId) return;
+    setMetricBusy(goalId);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok) setMetricValues((m) => ({ ...m, [goalId]: j.value }));
+      else setErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setMetricBusy(null); }
+  }, [workspaceId, scorecardId]);
+
+  // Open + load the check-in history flyout for a goal.
+  const openHistory = useCallback(async (goalId: string) => {
+    if (!workspaceId || !scorecardId) return;
+    setHistoryOpen({ goalId }); setHistoryRows([]); setHistoryBusy(true);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}&history=${encodeURIComponent(goalId)}`);
+      const j = await r.json();
+      if (j.ok) setHistoryRows(j.checkIns || []); else setErr(j.error);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setHistoryBusy(false); }
+  }, [workspaceId, scorecardId]);
 
   const refreshScorecard = useCallback(() => {
     if (workspaceId) loadList(workspaceId);
@@ -13735,6 +14607,14 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       window.open(url, '_blank', 'noreferrer');
     }
   }, [workspaceId, scorecardId, pbiPortal]);
+  const openCheckIn = useCallback((goalId: string) => {
+    const g = goals.find((x) => x.id === goalId);
+    setEntryOpen({ goalId });
+    setEntryValue(''); setEntryNote('');
+    setEntryTarget(g?.targetValue?.toString() || '');
+    setEntryStatus(g?.statusUi || '');
+    setEntryDate(new Date().toISOString().slice(0, 10));
+  }, [goals]);
 
   // Patch one goal's config draft in place.
   const patchDraft = useCallback((goalId: string, patch: Partial<GoalLite>) => {
@@ -13778,6 +14658,11 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       { label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: scorecardId && pbiPortal ? openScorecardInPbi : undefined, disabled: !scorecardId || !pbiPortal, title: !pbiPortal ? 'Power BI is not reachable in this cloud' : (!scorecardId ? 'select a scorecard first' : 'opens Power BI Web — Fabric scorecard authoring lives there') },
       ]},
+      { label: 'Goal', actions: [
+        { label: 'Check in', icon: <Add20Regular />, onClick: selectedGoalId ? () => openCheckIn(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'record a goal value + status + note' },
+        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source' },
+        { label: 'History', icon: <List20Regular />, onClick: selectedGoalId ? () => openHistory(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'view this goal’s check-in history' },
+      ]},
       { label: 'Metadata', actions: [
         { label: 'Refresh', onClick: workspaceId ? refreshScorecard : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected scorecard goals' },
       ]},
@@ -13785,7 +14670,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
         { label: configOpen ? 'Hide config' : 'Configure rollups', onClick: scorecardId ? () => setConfigOpen((v) => !v) : undefined, disabled: !scorecardId, title: !scorecardId ? 'select a scorecard first' : 'edit rollup aggregation + status rules' },
       ]},
     ]},
-  ], [scorecardId, workspaceId, pbiPortal, openScorecardInPbi, refreshScorecard, configOpen]);
+  ], [scorecardId, workspaceId, selectedGoalId, pbiPortal, openScorecardInPbi, refreshScorecard, openCheckIn, openBinder, openHistory, configOpen]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
@@ -13814,18 +14699,22 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Fabric Scorecard surface</MessageBarTitle>
-              Goals roll up from their children and color by status entirely in Loom (Azure-native — no Fabric
-              dependency). Use <strong>Configure rollups</strong> to set each goal's rollup aggregation
-              (Sum / Average / Min&nbsp;= worst-child / Max) and ordered status rules (threshold → color).
-              Live Fabric scorecards can still be authored in Power BI Web via <strong>Open in Power BI</strong>.
+              <MessageBarTitle>Scorecard goals + rollups + connected metrics</MessageBarTitle>
+              Track goals with <strong>current / target / status / owner / due</strong>, bind a goal to a live
+              <strong> DAX measure</strong> in a Power BI or Azure Analysis Services model (the goal value is pulled
+              live via <em>executeQueries</em> — no Fabric capacity required), and record <strong>check-ins</strong>
+              (value + status + note) with full history. Goals roll up from their children and color by status
+              entirely in Loom (Azure-native — no Fabric dependency). Use <strong>Configure rollups</strong> to
+              set each goal's rollup aggregation (Sum / Average / Min&nbsp;= worst-child / Max) and ordered status
+              rules (threshold → color). <strong>Open in Power BI</strong> opens the Fabric scorecard canvas
+              when one is bound.
             </MessageBarBody>
           </MessageBar>
           {scorecardId && (
             <>
               <Subtitle2>Goals ({goals.length})</Subtitle2>
               {goals.length === 0 ? (
-                <Caption1>No goals on this scorecard (or the Fabric scorecard preview API is not enabled in this tenant).</Caption1>
+                <Caption1>No goals on this scorecard yet. Install a scorecard app bundle or author goals in Power BI, then refresh.</Caption1>
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Goals" size="small">
@@ -13834,26 +14723,68 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                       <TableHeaderCell>Current</TableHeaderCell>
                       <TableHeaderCell>Target</TableHeaderCell>
                       <TableHeaderCell>Status</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
+                      <TableHeaderCell>Owner</TableHeaderCell>
+                      <TableHeaderCell>Due</TableHeaderCell>
+                      <TableHeaderCell>Actions</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {goals.map((g, i) => (
-                        <TableRow key={g.id || i}>
-                          <TableCell>{g.name || g.id || '—'}</TableCell>
-                          <TableCell>
-                            {g.computedValue !== undefined ? (
-                              <span title={`rolled up from children (${g.rollupMethod ?? 'rollup'}): ${g.computedValue}`}>
-                                {g.computedValue} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(rollup)</Caption1>
+                      {goals.map((g, i) => {
+                        const isSub = !!g.id && goals.some((o) => (o.subGoalIds || []).includes(g.id!));
+                        const live = g.id && g.id in metricValues ? metricValues[g.id] : undefined;
+                        const current = live !== undefined ? live : (g.currentValue ?? g.connectedMetric?.lastValue);
+                        const selected = selectedGoalId === g.id;
+                        return (
+                          <TableRow
+                            key={g.id || i}
+                            appearance={selected ? 'brand' : undefined}
+                            onClick={() => g.id && setSelectedGoalId(g.id)}
+                            style={{ cursor: g.id ? 'pointer' : 'default' }}
+                          >
+                            <TableCell>
+                              <span style={{ paddingLeft: isSub ? 20 : 0 }}>
+                                {isSub && <span style={{ color: tokens.colorNeutralForeground3, marginRight: 4 }}>↳</span>}
+                                {g.name || g.id || '—'}
+                                {g.connectedMetric && <DatabaseLink20Regular style={{ marginLeft: 6, verticalAlign: 'middle' }} title="connected metric" />}
                               </span>
-                            ) : (g.currentValue ?? '—')}
-                          </TableCell>
-                          <TableCell>{g.targetValue ?? '—'}</TableCell>
-                          <TableCell><ScStatusBadge status={g.status} /></TableCell>
-                          <TableCell>
-                            {g.id && <Button size="small" appearance="subtle" onClick={() => { setEntryOpen({ goalId: g.id! }); setEntryTarget(g.targetValue?.toString() || ''); }}>Add value</Button>}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                            <TableCell>
+                              {g.computedValue !== undefined ? (
+                                <span title={`rolled up from children (${g.rollupMethod ?? 'rollup'}): ${g.computedValue}`}>
+                                  {g.computedValue} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(rollup)</Caption1>
+                                </span>
+                              ) : (current ?? '—')}
+                              {g.id && g.connectedMetric && (
+                                <Tooltip content="pull the live value from the connected DAX metric" relationship="label">
+                                  <Button
+                                    size="small" appearance="subtle" icon={<ArrowSync20Regular />}
+                                    disabled={metricBusy === g.id}
+                                    onClick={(e) => { e.stopPropagation(); pullMetric(g.id!); }}
+                                  />
+                                </Tooltip>
+                              )}
+                            </TableCell>
+                            <TableCell>{g.targetValue ?? '—'}</TableCell>
+                            <TableCell>
+                              {g.status ? (
+                                <ScStatusBadge status={g.status} />
+                              ) : (
+                                <Badge appearance="filled" color={scStatusColor(g.statusUi)}>{scStatusLabel(g.statusUi)}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>{g.owner || '—'}</TableCell>
+                            <TableCell>{g.dueDate || '—'}</TableCell>
+                            <TableCell>
+                              {g.id && (
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
+                                  <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
+                                  <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
+                                </div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -13889,22 +14820,118 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
             </>
           )}
 
+          {/* Check-in flyout — value + status + note + date */}
           <Dialog open={!!entryOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setEntryOpen(null); }}>
             <DialogSurface>
               <DialogBody>
-                <DialogTitle>Add goal value</DialogTitle>
+                <DialogTitle>Check in</DialogTitle>
                 <DialogContent>
-                  <Caption1>value</Caption1>
-                  <Input value={entryValue} onChange={(_: unknown, d: any) => setEntryValue(d.value)} type="number" style={{ width: '100%' }} />
-                  <Caption1 style={{ marginTop: 8 }}>target (optional)</Caption1>
-                  <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
-                  <Caption1 style={{ marginTop: 8 }}>note (optional)</Caption1>
-                  <Input value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  <Field label="Value" required>
+                    <SpinButton value={Number(entryValue) || 0} onChange={(_: unknown, d: any) => setEntryValue(String(d.value ?? (d.displayValue ?? '')))} style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Target (optional)" style={{ marginTop: 8 }}>
+                    <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Status" style={{ marginTop: 8 }}>
+                    <Select value={entryStatus} onChange={(_: unknown, d: any) => setEntryStatus(d.value as ScorecardGoalStatusUi | '')}>
+                      <option value="">(unchanged)</option>
+                      {SC_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Check-in date" style={{ marginTop: 8 }}>
+                    <Input value={entryDate} onChange={(_: unknown, d: any) => setEntryDate(d.value)} type="date" style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Note (optional)" style={{ marginTop: 8 }}>
+                    <Textarea value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  </Field>
                   {entryErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setEntryOpen(null)}>Cancel</Button>
-                  <Button appearance="primary" disabled={entryBusy || !entryValue} onClick={submitValue}>{entryBusy ? 'Saving…' : 'Save'}</Button>
+                  <Button appearance="primary" disabled={entryBusy || entryValue === ''} onClick={submitValue}>{entryBusy ? 'Saving…' : 'Record check-in'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Connected-metric binder flyout */}
+          <Dialog open={!!bindOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setBindOpen(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Bind connected metric</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    The goal&apos;s current value is pulled live from a DAX measure in a Power BI / Azure Analysis
+                    Services semantic model. No Fabric capacity required — evaluation runs via Power BI executeQueries.
+                  </Caption1>
+                  <Field label="Semantic model (dataset)" required style={{ marginTop: 8 }}>
+                    {bindDatasets.length > 0 ? (
+                      <Dropdown
+                        selectedOptions={bindDatasetId ? [bindDatasetId] : []}
+                        value={bindDatasets.find((d) => d.id === bindDatasetId)?.name || bindDatasets.find((d) => d.id === bindDatasetId)?.displayName || ''}
+                        onOptionSelect={(_: unknown, d: any) => setBindDatasetId(d.optionValue)}
+                        placeholder="Select a dataset"
+                      >
+                        {bindDatasets.map((d) => <Option key={d.id} value={d.id}>{d.name || d.displayName || d.id}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input value={bindDatasetId} onChange={(_: unknown, d: any) => setBindDatasetId(d.value)} placeholder="Power BI dataset id (GUID)" style={{ width: '100%' }} />
+                    )}
+                  </Field>
+                  <Field label="DAX expression" required style={{ marginTop: 8 }} hint="a measure reference like [Total Revenue] or an inline scalar like SUM(Sales[Amount])">
+                    <MonacoTextarea value={bindDax} onChange={setBindDax} language="plaintext" minHeight={80} />
+                  </Field>
+                  {bindTestValue !== undefined && (
+                    <MessageBar intent="success" style={{ marginTop: 8 }}>
+                      <MessageBarBody>Live value: <strong>{bindTestValue === null ? '(null)' : bindTestValue}</strong></MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {bindErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{bindErr}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setBindOpen(null)}>Cancel</Button>
+                  <Button appearance="outline" disabled={bindBusy || !bindDatasetId || !bindDax.trim()} onClick={testMetric}>{bindBusy ? 'Testing…' : 'Test'}</Button>
+                  <Button appearance="primary" disabled={bindBusy || !bindDatasetId || !bindDax.trim()} onClick={saveMetric}>Save binding</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Check-in history flyout */}
+          <Dialog open={!!historyOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setHistoryOpen(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Check-in history</DialogTitle>
+                <DialogContent>
+                  {historyBusy ? <Spinner size="tiny" label="Loading…" /> : historyRows.length === 0 ? (
+                    <Caption1>No check-ins recorded for this goal yet.</Caption1>
+                  ) : (
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Check-in history" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Date</TableHeaderCell>
+                          <TableHeaderCell>Value</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Note</TableHeaderCell>
+                          <TableHeaderCell>Source</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {historyRows.map((h) => (
+                            <TableRow key={h.id}>
+                              <TableCell>{h.checkInDate || h.recordedAt?.slice(0, 10) || '—'}</TableCell>
+                              <TableCell>{h.value}</TableCell>
+                              <TableCell><Badge appearance="filled" color={scStatusColor(h.status)}>{scStatusLabel(h.status)}</Badge></TableCell>
+                              <TableCell>{h.note || '—'}</TableCell>
+                              <TableCell>{h.source || 'manual'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setHistoryOpen(null)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
