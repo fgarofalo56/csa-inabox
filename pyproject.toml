@@ -410,6 +410,15 @@ ignore = [
     "ARG002",  # unused-method-argument (mock overrides)
     "B008",    # function-call-in-default-argument (pytest fixtures)
 ]
+# ai_functions wheel test suite (apps/copilot/ai_functions/tests/) uses the same
+# mock-signature patterns: fake call_chat / requests.post / credential stubs
+# whose parameters mirror the real API but go unused.
+"apps/copilot/ai_functions/tests/**/*.py" = [
+    "ARG001",  # unused-function-argument (fake call_chat / requests.post params)
+    "ARG002",  # unused-method-argument (credential stub __init__/get_token)
+    "ARG005",  # unused-lambda-argument (monkeypatch lambdas)
+    "B008",    # function-call-in-default-argument (pytest fixtures)
+]
 # Exclude broken notebook (empty/malformed)
 "scripts/monitor/SynapseTroubleshooting.ipynb" = [
     "E999",    # syntax-error (empty notebook file)
