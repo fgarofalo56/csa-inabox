@@ -130,6 +130,52 @@ describe('fetchMetrics', () => {
     const { fetchMetrics } = await import('../monitor-client');
     await expect(fetchMetrics({ resourceId: '/x', metricNames: [] })).rejects.toThrow(/metricNames/);
   });
+
+  it('appends a URL-encoded $filter for Cosmos dimension scoping (db/container + 429)', async () => {
+    const calls = captureFetch(() => ({
+      body: { value: [{ name: { value: 'TotalRequests' }, unit: 'Count', timeseries: [{ data: [{ timeStamp: '2026-06-06T00:00:00Z', count: 3 }] }] }] },
+    }));
+    const { fetchMetrics } = await import('../monitor-client');
+    await fetchMetrics({
+      resourceId: '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.DocumentDB/databaseAccounts/acct',
+      metricNames: ['TotalRequests'],
+      aggregation: 'Count',
+      timespan: 'PT1H', interval: 'PT5M',
+      filter: "DatabaseName eq 'db1' and CollectionName eq 'c1' and StatusCode eq '429'",
+    });
+    const url = calls[0].url;
+    expect(url).toContain('&$filter=');
+    expect(decodeURIComponent(url)).toContain("CollectionName eq 'c1'");
+    expect(decodeURIComponent(url)).toContain("StatusCode eq '429'");
+  });
+
+  it('merges multiple dimensioned timeseries by summing each timestamp', async () => {
+    // A dimension split (e.g. several partition-key ranges) returns >1 timeseries;
+    // the Cosmos charts want one merged series per metric.
+    const calls = captureFetch(() => ({
+      body: {
+        value: [{
+          name: { value: 'TotalRequestUnits' }, unit: 'Count',
+          timeseries: [
+            { data: [{ timeStamp: 't0', total: 10 }, { timeStamp: 't1', total: 5 }] },
+            { data: [{ timeStamp: 't0', total: 2 }, { timeStamp: 't1', total: null }] },
+          ],
+        }],
+      },
+    }));
+    const { fetchMetrics } = await import('../monitor-client');
+    const out = await fetchMetrics({
+      resourceId: '/x',
+      metricNames: ['TotalRequestUnits'],
+      aggregation: 'Total',
+      filter: "DatabaseName eq 'db1'",
+    });
+    expect(calls[0].url).toContain('metricnames=TotalRequestUnits');
+    expect(out[0].points).toEqual([
+      { timeStamp: 't0', value: 12 },
+      { timeStamp: 't1', value: 5 },
+    ]);
+  });
 });
 
 describe('isoDurationMs', () => {

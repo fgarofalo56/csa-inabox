@@ -174,6 +174,24 @@ async function armPost(path: string, body: unknown): Promise<{ status: number; j
   return { status: res.status, json, operationLocation };
 }
 
+async function armDelete(path: string): Promise<void> {
+  const tk = await token(ARM_SCOPE);
+  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
+    cache: 'no-store',
+  });
+  // 200 (deleted) and 204 (deleted, no body) are success; 404 = already gone.
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+    const msg = (json?.error?.message || text || `ARM DELETE failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+}
+
 // ----------------------------------------------------------------------------
 // 1) Resource inventory — ARM list resources across the Loom RGs
 // ----------------------------------------------------------------------------
@@ -291,6 +309,15 @@ export interface FetchMetricsOpts {
   interval?: string;
   /** Average | Total | Count | Minimum | Maximum. Defaults to Average. */
   aggregation?: string;
+  /**
+   * OData $filter for metric-dimension scoping, e.g.
+   *   "DatabaseName eq 'db1' and CollectionName eq 'c1'"
+   * Used by the Cosmos metrics surface to scope TotalRequestUnits / DataUsage /
+   * TotalRequests to one database/container, and to isolate StatusCode '429'.
+   * When the response splits into multiple dimensioned timeseries we sum them
+   * per timestamp so the chart still gets one series per metric.
+   */
+  filter?: string;
 }
 
 /**
@@ -315,19 +342,35 @@ export async function fetchMetrics(opts: FetchMetricsOpts): Promise<MetricResult
     timespan,
     interval,
   });
-  const j = await armGet(`${opts.resourceId}/providers/microsoft.insights/metrics?${qs.toString()}`);
+  const base = `${opts.resourceId}/providers/microsoft.insights/metrics?${qs.toString()}`;
+  // Dimension scoping (e.g. one Cosmos database/container, or StatusCode '429').
+  const url = opts.filter ? `${base}&$filter=${encodeURIComponent(opts.filter)}` : base;
+  const j = await armGet(url);
   const results: MetricResult[] = [];
+  const aggKey = aggregation.toLowerCase();
   for (const m of j?.value || []) {
-    const series = m?.timeseries?.[0]?.data || [];
-    const aggKey = aggregation.toLowerCase();
+    const seriesList: any[] = m?.timeseries || [];
+    // A dimension filter can split the metric into several timeseries (one per
+    // dimension combination). Merge them by summing each timestamp's value so
+    // the chart gets a single series per metric regardless of dimensions.
+    const merged = new Map<string, number | null>();
+    const order: string[] = [];
+    for (const ts of seriesList) {
+      for (const d of ts?.data || []) {
+        const t = d.timeStamp as string;
+        const v = typeof d[aggKey] === 'number' ? (d[aggKey] as number) : null;
+        if (!merged.has(t)) { merged.set(t, v); order.push(t); }
+        else if (v != null) {
+          const prev = merged.get(t);
+          merged.set(t, (prev == null ? 0 : prev) + v);
+        }
+      }
+    }
     results.push({
       name: m?.name?.value || m?.name || '',
       unit: m?.unit || '',
       aggregation,
-      points: series.map((d: any) => ({
-        timeStamp: d.timeStamp,
-        value: typeof d[aggKey] === 'number' ? d[aggKey] : null,
-      })),
+      points: order.map((t) => ({ timeStamp: t, value: merged.get(t) ?? null })),
     });
   }
   return results;
@@ -652,9 +695,11 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
     { metric: 'Replicas', aggregation: 'Maximum', label: 'Replicas' },
   ],
   'microsoft.documentdb/databaseaccounts': [
-    { metric: 'TotalRequestUnits', aggregation: 'Total', label: 'Request Units' },
+    { metric: 'TotalRequestUnits', aggregation: 'Total', label: 'Request Units consumed' },
+    { metric: 'ProvisionedThroughput', aggregation: 'Maximum', label: 'Provisioned throughput (RU/s)' },
+    { metric: 'DataUsage', aggregation: 'Total', label: 'Data storage (bytes)' },
     { metric: 'TotalRequests', aggregation: 'Count', label: 'Requests' },
-    { metric: 'ServerSideLatency', aggregation: 'Average', label: 'Server latency (ms)' },
+    { metric: 'ServerSideLatencyDirect', aggregation: 'Average', label: 'Server latency direct (ms)' },
   ],
   'microsoft.search/searchservices': [
     { metric: 'SearchLatency', aggregation: 'Average', label: 'Search latency (s)' },
@@ -1115,4 +1160,71 @@ export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): 
   };
   const res = await armPut(path, body);
   return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/scheduledQueryRules/${input.name}`;
+}
+
+export interface ScheduledQueryRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  severity?: number;
+  description?: string;
+  displayName?: string;
+  scopes?: string[];
+  query?: string;
+  operator?: string;
+  threshold?: number;
+  evaluationFrequency?: string;
+  windowSize?: string;
+  actionGroupIds?: string[];
+  resourceGroup?: string;
+}
+
+/**
+ * List scheduled query alert rules in the alert resource group. These are the
+ * real Azure-native query-result alerts (Microsoft.Insights/scheduledQueryRules)
+ * the Loom alerts editor creates on the Government path — the parity for a
+ * Databricks SQL alert when Databricks is not authorized (GCC-High / IL5 / DoD).
+ *   GET .../resourceGroups/{rg}/providers/Microsoft.Insights/scheduledQueryRules
+ */
+export async function listScheduledQueryRules(): Promise<ScheduledQueryRule[]> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const j = await armGet(
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules?api-version=${SCHEDULED_QUERY_RULES_API}`,
+  );
+  return (j?.value || []).map((r: any): ScheduledQueryRule => {
+    const p = r?.properties || {};
+    const crit = (p.criteria?.allOf || [])[0] || {};
+    return {
+      id: r.id,
+      name: r.name,
+      enabled: p.enabled !== false,
+      severity: p.severity,
+      description: p.description,
+      displayName: p.displayName,
+      scopes: p.scopes,
+      query: crit.query,
+      operator: crit.operator,
+      threshold: crit.threshold,
+      evaluationFrequency: p.evaluationFrequency,
+      windowSize: p.windowSize,
+      actionGroupIds: p.actions?.actionGroups,
+      resourceGroup: rgFromId(r.id || '') || rg,
+    };
+  });
+}
+
+/**
+ * Delete a scheduled query alert rule by name from the alert resource group.
+ *   DELETE .../scheduledQueryRules/{name}?api-version=2023-12-01
+ * A 404 (already gone) is treated as success.
+ */
+export async function deleteScheduledQueryRule(name: string): Promise<void> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  await armDelete(
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(name)}?api-version=${SCHEDULED_QUERY_RULES_API}`,
+  );
 }

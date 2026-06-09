@@ -29,6 +29,10 @@ import { listPipelineRuns, adfConfigGate } from './adf-client';
 import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
 import { queryItems } from './cosmos-data-client';
 import { listContainers } from './cosmos-account-client';
+// httpsToAbfss lives in cloud-endpoints (pure, sovereign-aware) so it is unit-
+// testable without this module's mssql/identity native chain; re-exported here
+// for the existing `@/lib/azure/mirror-engine` consumers (Thread edges).
+export { httpsToAbfss } from './cloud-endpoints';
 
 /** SQL-family sources the engine can snapshot directly via TDS. */
 export const MIRROR_SQL_FAMILY = new Set(['AzureSqlDatabase', 'AzureSqlMI', 'SqlServer2025', 'MSSQL']);
@@ -103,19 +107,6 @@ export interface MirrorRunResult {
   note: string;
   error?: string;
   gate?: { missing: string; message: string };
-}
-
-/**
- * Convert a landed snapshot's https dfs URL into the abfss form Spark reads:
- *   https://ACCT.dfs.core.windows.net/CONTAINER/PATH
- *     → abfss://CONTAINER@ACCT.dfs.core.windows.net/PATH
- * Returns the input unchanged if it isn't a dfs https URL.
- */
-export function httpsToAbfss(httpsUrl: string): string {
-  const m = (httpsUrl || '').match(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net\/([^/]+)\/(.*)$/i);
-  if (!m) return httpsUrl;
-  const [, account, container, path] = m;
-  return `abfss://${container}@${account}.dfs.core.windows.net/${path}`;
 }
 
 /** Is the ADLS Bronze landing zone configured? */

@@ -28,13 +28,16 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import {
-  Button, Tooltip, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Button, Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, Dismiss12Regular,
   Home16Regular, DocumentBulletList16Regular, Settings20Regular,
   Search16Regular, Code16Regular, MathFormula20Regular, Flow20Regular,
+  Organization20Regular,
+  Table20Regular,
+  DataHistogram20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -42,7 +45,11 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/components/cosmos/cosmos-tree';
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
-import { CosmosSettings } from '@/lib/components/cosmos/cosmos-settings';
+import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel';
+import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
+import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
+import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
+import { CosmosMetrics } from './components/cosmos-metrics';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -95,7 +102,9 @@ function tabIcon(kind: CosmosAction) {
     case 'home': return <Home16Regular />;
     case 'items': return <DocumentBulletList16Regular />;
     case 'settings': return <Settings20Regular />;
+    case 'metrics': return <DataHistogram20Regular />;
     case 'newSqlQuery': return <Search16Regular />;
+    case 'graph': return <Organization20Regular />;
     case 'storedProcedure':
     case 'newStoredProcedure': return <Code16Regular />;
     case 'udf':
@@ -113,8 +122,26 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   const [activeKey, setActiveKey] = useState<string>('home');
   // Bumped when the Home "New Container" card / Connect card needs the tree to act.
   const [treeNewContainer, setTreeNewContainer] = useState(0);
+  // Multi-step New Container wizard (richer than the tree's inline create dialog).
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardDatabases, setWizardDatabases] = useState<{ name: string }[]>([]);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  /** Open the New Container wizard, loading the live database list first. */
+  const openContainerWizard = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cosmos/databases');
+      const text = await res.text();
+      const body = text ? JSON.parse(text) : {};
+      setWizardDatabases(body.ok && Array.isArray(body.databases)
+        ? body.databases.map((d: { name: string }) => ({ name: d.name }))
+        : []);
+    } catch {
+      setWizardDatabases([]);
+    }
+    setWizardOpen(true);
+  }, []);
 
   /** Open (or focus) a work-area tab for a tree selection. */
   const openTab = useCallback((sel: CosmosSelection) => {
@@ -136,6 +163,14 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
         defaultTtl: sel.defaultTtl, throughput: sel.throughput,
       };
+    } else if (a === 'metrics') {
+      // Container-scoped (or account-level) Azure Monitor RU/storage/429 charts.
+      const scope = sel.container ? `${sel.db}|${sel.container}` : (sel.db || 'account');
+      tab = {
+        key: `metrics:${scope}`, kind: 'metrics',
+        title: sel.container ? `${sel.container} · Metrics` : 'Metrics', closable: true,
+        db: sel.db, container: sel.container,
+      };
     } else if (a === 'newSqlQuery') {
       // A standalone query tab against a chosen db/container (or db only).
       const n = Date.now().toString(36);
@@ -145,6 +180,9 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
         seedQuery: 'SELECT * FROM c',
       };
+    } else if (a === 'graph') {
+      // Cosmos Gremlin graph explorer — one tab per account (pinned key).
+      tab = { key: 'graph', kind: 'graph', title: 'Graph explorer', closable: true };
     } else {
       // Script tabs (existing or new sproc/udf/trigger) — honest-gated authoring.
       const label =
@@ -184,11 +222,14 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Data Explorer', actions: [
+        { label: 'New Container', icon: <Table20Regular />, onClick: () => { void openContainerWizard(); } },
         { label: 'New SQL Query', icon: <Search16Regular />, onClick: () => openTab({ action: 'newSqlQuery' }) },
+        { label: 'Graph explorer', icon: <Organization20Regular />, onClick: () => openTab({ action: 'graph' }) },
+        { label: 'Metrics', icon: <DataHistogram20Regular />, onClick: () => openTab({ action: 'metrics' }) },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refresh },
       ]},
     ]},
-  ], [refresh, openTab]);
+  ], [refresh, openTab, openContainerWizard]);
 
   return (
     <ItemEditorChrome
@@ -234,7 +275,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.panel}>
             {active.kind === 'home' && (
               <CosmosHome
-                onNewContainer={() => { setTreeNewContainer((n) => n + 1); refresh(); }}
+                onNewContainer={() => { void openContainerWizard(); }}
                 onConnect={() => openTab({ action: 'settings', db: '', container: '' })}
               />
             )}
@@ -269,8 +310,12 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
               )
             )}
 
+            {active.kind === 'graph' && (
+              <GremlinExplorerPanel id={id} />
+            )}
+
             {active.kind === 'settings' && active.container && (
-              <CosmosSettings
+              <CosmosSettingsPanel
                 key={active.key}
                 db={active.db as string}
                 container={active.container}
@@ -281,7 +326,16 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
             )}
 
             {active.kind === 'settings' && !active.container && (
-              <ConnectPanel />
+              <CosmosConnectPanel id={id} />
+            )}
+
+            {active.kind === 'metrics' && (
+              <CosmosMetrics
+                key={active.key}
+                id={id}
+                db={active.db}
+                container={active.container}
+              />
             )}
 
             {(active.kind === 'storedProcedure' || active.kind === 'newStoredProcedure'
@@ -290,31 +344,29 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
               <ScriptGate kind={active.kind} db={active.db} container={active.container} scriptName={active.scriptName} />
             )}
           </div>
+
+          {/* Multi-step New Container wizard (Home card / future ribbon entry). */}
+          <CosmosContainerWizard
+            open={wizardOpen}
+            onOpenChange={setWizardOpen}
+            databases={wizardDatabases}
+            onCreated={(_container, db) => {
+              // Refresh the tree so the new container (and its db) appear, then
+              // open the new container's Settings tab to show the control-plane receipt.
+              setTreeNewContainer((n) => n + 1);
+              refresh();
+              if (_container?.name) {
+                openTab({
+                  action: 'settings', db, container: _container.name,
+                  partitionKey: _container.partitionKey, defaultTtl: _container.defaultTtl,
+                  throughput: _container.throughput,
+                });
+              }
+            }}
+          />
         </div>
       }
     />
-  );
-}
-
-/** Connect card → live account-info surface (real document endpoint). */
-function ConnectPanel() {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>Connect</MessageBarTitle>
-          The account chip in the Data Explorer pane shows the live account name + region from{' '}
-          <code>/api/cosmos/account</code> (the real <code>documentEndpoint</code> on{' '}
-          <code>documents.azure.com</code>). Loom drives the data plane with the Console managed
-          identity (AAD token), so there is no key/connection-string to copy — the SDK connect
-          pattern is <code>new CosmosClient(endpoint, new DefaultAzureCredential())</code>.
-        </MessageBarBody>
-      </MessageBar>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-        Account keys are intentionally not surfaced here; Loom uses RBAC (AAD) data-plane access, not
-        primary keys, per the deployment&apos;s security posture.
-      </Caption1>
-    </div>
   );
 }
 
@@ -344,6 +396,40 @@ function ScriptGate({ kind, db, container, scriptName }: { kind: CosmosAction; d
           headers). Not wired yet — surfaced honestly per no-vaporware.md rather than faked.
         </MessageBarBody>
       </MessageBar>
+    </div>
+  );
+}
+
+/**
+ * Graph explorer tab — the Cosmos DB Gremlin (graph) API surface. Renders a
+ * read-only endpoint chip (server-bound, per no-vaporware.md) plus the live
+ * force-directed canvas + Gremlin editor. The canvas runs `g.V().limit(25)`
+ * on mount and surfaces the real BFF honest-gate inline when the account
+ * isn't Gremlin-enabled or the runtime endpoint isn't wired.
+ */
+function GremlinExplorerPanel({ id }: { id: string }) {
+  // Server-bound endpoint (read-only). The BFF drives the real runtime via
+  // LOOM_COSMOS_GREMLIN_ENDPOINT; this client mirror is informational only.
+  const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+      <MessageBar intent={endpoint ? 'info' : 'warning'}>
+        <MessageBarBody>
+          <MessageBarTitle>Cosmos Gremlin (graph) API</MessageBarTitle>
+          {endpoint ? (
+            <>Connected to <code>{endpoint}</code> (server-bound via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>).
+              Run a traversal below — <code>g.V()</code>/<code>g.E()</code> results render on the
+              force-directed canvas; <code>addV</code>/<code>addE</code> persist to the live graph.</>
+          ) : (
+            <>No Gremlin runtime endpoint is bound. The Gremlin API needs a dedicated
+              <strong> EnableGremlin</strong> account (deploy{' '}
+              <code>cosmos-graph-vector.bicep</code>), then set <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>
+              {' '}on the Console Container App. The canvas below still renders and reports the precise
+              gate returned by the backend.</>
+          )}
+        </MessageBarBody>
+      </MessageBar>
+      <GremlinGraphCanvas itemId={id} />
     </div>
   );
 }

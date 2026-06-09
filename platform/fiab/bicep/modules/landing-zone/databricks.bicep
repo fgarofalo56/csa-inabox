@@ -66,6 +66,27 @@ resource workspace 'Microsoft.Databricks/workspaces@2024-09-01-preview' = {
   }
 }
 
+// =====================================================================
+// Databricks Access Connector (system-assigned MI)
+// =====================================================================
+// The Access Connector's system-assigned managed identity is the storage
+// credential Unity Catalog uses to reach external locations (ADLS Gen2). It is
+// what the Databricks SQL Warehouse runs OPTIMIZE / ANALYZE / write-back as on
+// external Delta tables. Its principalId is granted Storage Blob Data
+// Contributor on the lakehouse ADLS account by databricks-storage-rbac.bicep so
+// OPTIMIZE can rewrite compacted Parquet + update the _delta_log.
+// Only created where Unity Catalog is supported (Commercial + GCC); on
+// GCC-High / IL5 (Hive metastore) the connector + UC external-location model do
+// not apply, so it is skipped and the RBAC grant is a no-op.
+resource accessConnector 'Microsoft.Databricks/accessConnectors@2024-09-01-preview' = if (ucSupported) {
+  name: 'dbac-loom-${domainName}-${location}'
+  location: location
+  tags: complianceTags
+  identity: {
+    type: 'SystemAssigned'
+  }
+}
+
 // Outputs the caller uses to bootstrap:
 // - UC metastore wiring (if ucSupported)
 // - SQL Warehouse provisioning (via Databricks REST API post-deploy)
@@ -111,3 +132,9 @@ output workspaceUrl string = 'https://${workspace.properties.workspaceUrl}'
 output workspaceName string = workspace.name
 output ucSupported bool = ucSupported
 output managedRgId string = workspace.properties.managedResourceGroupId
+
+// Access Connector system-assigned MI principal id — empty when UC is not
+// supported (connector skipped). Consumed by databricks-storage-rbac.bicep to
+// grant Storage Blob Data Contributor on the lakehouse ADLS account.
+output accessConnectorPrincipalId string = ucSupported ? accessConnector.identity.principalId : ''
+output accessConnectorName string = ucSupported ? accessConnector.name : ''
