@@ -363,6 +363,18 @@ param loomDatabricksHostname string = ''
 @description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
 param loomDatabricksSqlWarehouseId string = ''
 
+@description('Enable the Direct-Lake-shim (Azure-native parity for Fabric Direct Lake). When true, the shim app gets its Cosmos/Service Bus/Event Grid env, the Console exposes the Direct Lake (shim) tab as active, and aas.bicep deploys the Service Bus queue + Event Grid system topic. Requires a Power BI Premium / PPU workspace + XMLA endpoint. Opt-in (default false) per no-fabric-dependency.md.')
+param loomDirectLakeShimEnabled bool = false
+
+@description('Service Bus namespace name hosting the Direct-Lake-shim queue. Empty defaults to sb-loom-dlshim-<location>.')
+param loomDirectLakeShimSbNamespace string = ''
+
+@description('Service Bus queue name for Delta _delta_log BlobCreated events (Direct-Lake-shim).')
+param loomDirectLakeShimQueue string = 'loom-dl-shim-events'
+
+@description('AAS / Power BI Premium service-principal object id — granted Storage Blob Data Reader on the DLZ ADLS account so the warm-cache model can read Delta Parquet. Empty skips that grant (the shim UAMI grant still applies).')
+param loomAasMiPrincipalId string = ''
+
 // ---------------------------------------------------------------------------
 // Standalone Azure Machine Learning workspace — backs aml-client.ts
 // (resolveAmlTarget). These coordinate the AML control-plane navigator
@@ -440,6 +452,16 @@ var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGrou
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
 var kustoSuffix = boundary == 'GCC-High' || boundary == 'IL5' ? 'kusto.usgovcloudapi.net' : 'kusto.windows.net'
+
+// Direct-Lake-shim derived values (Service Bus + Cosmos endpoint). The shim
+// queue lives in the DLZ RG alongside the ADLS Delta source. These are vars
+// (not module outputs) so the shim/Console app env can reference them even
+// when the aasShim module is skipped (loomDirectLakeShimEnabled=false).
+var dlShimSbNamespaceName = !empty(loomDirectLakeShimSbNamespace) ? loomDirectLakeShimSbNamespace : 'sb-loom-dlshim-${location}'
+var dlShimSbSuffix = environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'servicebus.usgovcloudapi.net' : 'servicebus.windows.net'
+var dlShimSbFqdn = '${dlShimSbNamespaceName}.${dlShimSbSuffix}'
+var dlShimQueueId = '${subscription().id}/resourceGroups/${loomDlzRg}/providers/Microsoft.ServiceBus/namespaces/${dlShimSbNamespaceName}/queues/${loomDirectLakeShimQueue}'
+var loomCosmosEndpointVal = !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
 
 // CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
 // orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
@@ -1310,6 +1332,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
+            // When enabled, the semantic-model "Direct Lake (shim)" tab is active
+            // and the BFF can wire the Event Grid → Service Bus subscription at
+            // runtime via LOOM_DIRECT_LAKE_SHIM_QUEUE_ID. Empty when opt-out →
+            // the tab shows the honest setup MessageBar.
+            { name: 'LOOM_DIRECT_LAKE_SHIM_ENABLED', value: loomDirectLakeShimEnabled ? 'true' : '' }
+            { name: 'LOOM_DIRECT_LAKE_SHIM_QUEUE_ID', value: loomDirectLakeShimEnabled ? dlShimQueueId : '' }
             // Govern tab data-owner view (F3) — on-open posture refresh Function.
             // Empty → honest gate; the owner view still computes posture live.
             { name: 'LOOM_POSTURE_FUNCTION_URL', value: loomPostureFunctionUrl }
@@ -1748,13 +1777,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         name: 'loom-direct-lake-shim'
         image: 'loom-direct-lake-shim:${appImageTags.directLake}'
         uamiId: identity.outputs.uamiDirectLakeId
-        uamiClientId: identity.outputs.uamiDirectLakeId
+        uamiClientId: identity.outputs.uamiDirectLakeClientId
         ingressPort: 8080
         external: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
         minReplicas: 1
         maxReplicas: 2
+        env: [
+          // Cosmos config store the shim reads its per-model refresh policy from
+          // (direct-lake-config.refresh-policies). Same account as the Console
+          // (the shim UAMI holds Cosmos DB Built-in Data Contributor).
+          { name: 'COSMOS_ENDPOINT', value: loomCosmosEndpointVal }
+          { name: 'COSMOS_DATABASE', value: 'direct-lake-config' }
+          { name: 'COSMOS_CONTAINER', value: 'refresh-policies' }
+          { name: 'AZURE_CLIENT_ID', value: identity.outputs.uamiDirectLakeClientId }
+          // Service Bus queue the Event Grid system topic delivers _delta_log
+          // BlobCreated events to. Empty when the shim is disabled → the
+          // BackgroundService idles (honest, see DeltaLogEventHandler).
+          { name: 'SERVICEBUS_NAMESPACE', value: loomDirectLakeShimEnabled ? dlShimSbFqdn : '' }
+          { name: 'EVENTGRID_QUEUE', value: loomDirectLakeShimEnabled ? loomDirectLakeShimQueue : '' }
+          { name: 'LOOM_DIRECT_LAKE_SHIM_ENABLED', value: loomDirectLakeShimEnabled ? 'true' : '' }
+        ]
       }
     ]
   }
@@ -1897,6 +1941,30 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// Direct-Lake-shim — Azure-native parity for Fabric Direct Lake. Deploys the
+// Service Bus queue + Event Grid system topic on the DLZ ADLS account and
+// grants the shim UAMI (+ optional AAS MI) Storage Blob Data Reader, so the
+// shim can keep a warm AAS / Power BI Premium XMLA cache fresh from Delta
+// `_delta_log` change events. Opt-in (loomDirectLakeShimEnabled) + requires the
+// DLZ storage account; otherwise skipped (the semantic-model editor stays fully
+// functional, showing the honest setup MessageBar in the Direct Lake tab).
+// =====================================================================
+module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && !empty(loomStorageAccount)) {
+  name: 'aas-direct-lake-shim'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    location: location
+    storageAccountName: loomStorageAccount
+    serviceBusNamespaceName: dlShimSbNamespaceName
+    serviceBusQueueName: loomDirectLakeShimQueue
+    shimMiPrincipalId: identity.outputs.uamiDirectLakePrincipalId
+    aasMiPrincipalId: loomAasMiPrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
   }
 }
 
