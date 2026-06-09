@@ -80,6 +80,16 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Loom-native deployment pipelines — Azure-native parity for Fabric Deployment
+// pipelines (no-fabric-dependency.md). `loom-pipelines` holds one doc per
+// pipeline (PK /tenantId so the per-tenant list hits a single physical
+// partition); `pipeline-stage-rules` holds per-stage parameter/data-source
+// override rules (PK /pipelineId); `pipeline-history` holds one receipt per
+// deploy run (PK /pipelineId). Created lazily so a fresh environment needs no
+// extra ARM/Bicep step beyond the account+database.
+let _loomPipelines: Container | null = null;
+let _pipelineStageRules: Container | null = null;
+let _pipelineHistory: Container | null = null;
 // Scorecard rollup + status-rule config — one row per scorecard (id =
 // scorecardId), PK /scorecardId so every per-scorecard read is a single-
 // partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
@@ -331,6 +341,14 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Loom-native deployment pipelines (Azure-native parity for Fabric Deployment
+  // pipelines). Three containers: the pipeline catalog (PK /tenantId), the
+  // per-stage deployment rules (PK /pipelineId), and the deploy-receipt history
+  // (PK /pipelineId). Created lazily so a fresh environment needs no extra
+  // ARM/Bicep step beyond the account+database.
+  _loomPipelines = await mk('loom-pipelines', '/tenantId');
+  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
+  _pipelineHistory = await mk('pipeline-history', '/pipelineId');
   // Scorecard rollup + status-rule config — one row per scorecard (PK
   // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
   // live Fabric goals; loom: bundle scorecards carry config inline in
@@ -361,6 +379,12 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+/** Loom-native deployment-pipeline catalog — PK /tenantId. */
+export async function loomPipelinesContainer(): Promise<Container> { await ensure(); return _loomPipelines!; }
+/** Per-stage deployment rules (parameter / data-source overrides) — PK /pipelineId. */
+export async function pipelineStageRulesContainer(): Promise<Container> { await ensure(); return _pipelineStageRules!; }
+/** Deploy-receipt history (diff + deployed item ids per run) — PK /pipelineId. */
+export async function pipelineHistoryContainer(): Promise<Container> { await ensure(); return _pipelineHistory!; }
 /** Scorecard rollup + status-rule config — PK /scorecardId. */
 export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
 
@@ -450,6 +474,7 @@ const KNOWN_CONTAINER_IDS = [
   'attribute-groups', 'okrs',
   'access-request-workflow',
   'saved-queries',
+  'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
 ];
 

@@ -50,8 +50,10 @@ import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
- * here are Cosmos-only (no Phase-2 backend side-effect). */
-const PROVISIONERS: Record<string, Provisioner> = {
+ * here are Cosmos-only (no Phase-2 backend side-effect). Exported so the
+ * deployment-pipeline selective-deploy route can re-run the same real
+ * provisioner per item when promoting content between stages. */
+export const PROVISIONERS: Record<string, Provisioner> = {
   'notebook': notebookProvisioner,
   'lakehouse': lakehouseProvisioner,
   'warehouse': warehouseProvisioner,
