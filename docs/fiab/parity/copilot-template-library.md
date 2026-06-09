@@ -21,3 +21,18 @@ Learn: <https://learn.microsoft.com/microsoft-copilot-studio/authoring-first-bot
 
 - List → `GET /api/items/copilot-template-library`
 - Use → `POST .../[id]` — creates a real `msdyn_copilots` agent and seeds knowledge/topics via the Dataverse Web API.
+
+## Per-cloud notes
+
+The gallery is Cosmos-backed (cloud-agnostic); "Use template" instantiates a
+real agent via **Power Platform / Dataverse**, so its sovereign routing is
+Dataverse-specific. `lib/azure/copilot-studio-client.ts` reads the BAP host from
+env (`LOOM_POWER_PLATFORM_BAP_BASE`) so the same code targets each cloud.
+
+| Concern | Commercial / GCC | GCC-High | IL5 / DoD |
+| --- | --- | --- | --- |
+| Gallery (Cosmos) | works in every cloud | works | works (template list renders; "Use" gated) |
+| BAP base (`LOOM_POWER_PLATFORM_BAP_BASE`) | `api.bap.microsoft.com` | `api.bap.microsoft.us` | Power Platform unavailable — honest ⚠️ gate on "Use template" |
+| Dataverse host | `*.crm.dynamics.com` / `*.crm9.dynamics.com` (GCC) | `*.crm.microsoftdynamics.us` | N/A |
+| Dataverse auth | `LOOM_DATAVERSE_CLIENT_ID` / `_SECRET` / `_TENANT_ID` (MSAL SP) | same vars, US-cloud audience | N/A |
+| Availability | GA | GA with limits | "Use template" not available — render `MessageBar intent="error"` |

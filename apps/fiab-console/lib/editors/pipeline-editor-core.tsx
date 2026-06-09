@@ -34,6 +34,7 @@ import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
 import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { PipelineCopilotPane } from './pipeline-editor';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import { PipelineDesigner, type PipelineDesignerHandle } from '@/lib/components/pipeline/pipeline-designer';
@@ -399,6 +400,23 @@ export function PipelineEditorCore({
     return () => window.removeEventListener('keydown', onKey);
   }, [bound, dirty, busy, save]);
 
+  // ------------------------------------------------------------------
+  // Canvas apply bridge — the Pipeline Copilot pane (rightPanel) emits a
+  // generated/upserted spec via `onApplySpec`; we set it on the real React-Flow
+  // canvas. The spec is ALREADY persisted to the bound ADF/Synapse pipeline by
+  // the pipeline_apply_canvas tool, so we mark it clean (origSpec = spec) and
+  // refresh runs. fitToScreen after the designer re-renders the new nodes.
+  // ------------------------------------------------------------------
+  const applyGeneratedSpec = useCallback((generated: PipelineSpec) => {
+    const txt = JSON.stringify(generated, null, 2);
+    setSpec(txt);
+    setOrigSpec(txt);
+    setTab('graph');
+    setValidation(null);
+    setTimeout(() => designerRef.current?.fitToScreen(), 150);
+    void loadRuns();
+  }, [loadRuns]);
+
   // ADF Studio toolbar — Save · Validate · Debug · Run (trigger now) · Add
   // trigger · canvas layout controls (auto-align / fit). Activities are added
   // from the left palette pane in the designer, matching ADF Studio (no
@@ -454,6 +472,9 @@ export function PipelineEditorCore({
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      rightPanel={
+        <PipelineCopilotPane apiBase={apiBase} bound={bound} onApplySpec={applyGeneratedSpec} />
+      }
       leftPanel={
         isAdf ? (
           // ADF Studio Factory Resources navigator — typed groups with live
