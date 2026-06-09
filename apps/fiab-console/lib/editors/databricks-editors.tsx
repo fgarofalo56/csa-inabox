@@ -715,7 +715,6 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [sqlText0] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
   );
-  );
   // Multi-tab query state (run-selection + cancel are wired per active tab).
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
     useSqlTabs<QueryResponse>(sqlText0);
