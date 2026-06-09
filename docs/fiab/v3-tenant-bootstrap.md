@@ -947,3 +947,85 @@ az role assignment create \
 of RBAC, grant the **Console UAMI** the `Storage Blob Delegator` role on the DLZ
 storage account (it is not part of the default grant set). The editor's "Producer
 credentials → SAS" tab surfaces this as an honest gate with the exact command.
+
+## Item-level Share — per-database Azure RBAC (Access control / IAM) {#sql-database-share-rbac}
+
+The **Share** tab in the SQL database editor mirrors the Azure portal *Access
+control (IAM) → Add role assignment* blade scoped to a single Azure SQL database
+(`Microsoft.Sql/servers/{server}/databases/{db}`). It assigns **Reader**,
+**Contributor**, or **SQL DB Contributor** to an Entra user/group, lists the
+assignments declared at that scope, and revokes them — all real ARM REST.
+
+Assigning roles requires the Console UAMI to hold **Role Based Access Control
+Administrator** (`f58310d9-a9f6-439a-9e8d-f62e7b41a168`) on the SQL server's
+resource group. To stay least-privilege the grant is **ABAC-constrained** to
+exactly those three role GUIDs — the UAMI cannot grant Owner / User Access
+Administrator even though it holds RBAC-Admin. The principal picker also needs
+the UAMI's Graph `User.Read.All` + `Group.Read.All` app-roles (already granted
+by the Identity Picker bootstrap; see `identity-graph-rbac.bicep`).
+
+### Bicep sync (default — no manual step)
+
+`admin-plane/sql-database-share-rbac.bicep` runs automatically (unless
+`skipRoleGrants=true`), scoped to `LOOM_SQL_RG` (defaults to `LOOM_DLZ_RG`):
+
+```bicep
+// params/<cloud>-full.bicepparam — only if your SQL servers live outside the DLZ RG
+param loomSqlServerRg = 'rg-my-sql-servers'   // → constrained RBAC-Admin grant here + LOOM_SQL_RG
+```
+
+### Existing deployment (manual grant)
+
+```bash
+RG=<sql-server-rg>
+az role assignment create \
+  --assignee-object-id <console-uami-oid> --assignee-principal-type ServicePrincipal \
+  --role "Role Based Access Control Administrator" \
+  --scope "/subscriptions/<sub>/resourceGroups/$RG" \
+  --condition-version 2.0 \
+  --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {acdd72a7-3385-48ef-bd42-f606fba81ae7, b24988ac-6180-42a0-ab88-20f7382dd24c, 9b7fa17d-e63e-47b0-bb0a-15c516ac86ec})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {acdd72a7-3385-48ef-bd42-f606fba81ae7, b24988ac-6180-42a0-ab88-20f7382dd24c, 9b7fa17d-e63e-47b0-bb0a-15c516ac86ec}))"
+```
+
+**Verify.** On the Share tab, search a user, pick **Reader**, click **Assign** —
+the success MessageBar prints the live ARM **assignment id**
+(`…/providers/Microsoft.Authorization/roleAssignments/<guid>`). The *Current
+access* sub-tab lists it; **Revoke** removes it. If the UAMI lacks the grant the
+ARM call returns **403** and the verbatim message surfaces in the dialog (no
+fake success).
+
+## Source control for SQL schema — ADO / GitHub connection {#sql-database-git}
+
+The **Source control** tab on the SQL database editor is an **honest gate** until
+a Git provider is connected. Schema version control (DACPAC diff, migration
+history) runs through an Azure DevOps service connection or a GitHub Actions
+workflow — not a live ARM data-plane API — so it is configured via environment
+variables + a pipeline, not an in-app commit form.
+
+Set on the Console container app (then redeploy) — wire in
+`admin-plane/main.bicep` (these map 1:1 to the params there):
+
+| Setting | When | Meaning |
+|---|---|---|
+| `LOOM_SQL_GIT_PROVIDER` | always | `azdo` or `github` (empty = honest gate) |
+| `LOOM_SQL_GIT_ADO_ORG` | azdo | Azure DevOps organization name |
+| `LOOM_SQL_GIT_ADO_PROJECT` | azdo | Azure DevOps project holding the repo |
+| `LOOM_SQL_GIT_ADO_REPO` | azdo | Git repository name for the DACPAC project |
+| `LOOM_SQL_GIT_ADO_PAT_SECRET` | azdo | Key Vault secret name holding the ADO PAT |
+| `LOOM_SQL_GIT_GITHUB_REPO` | github | `org/repo` for the schema project |
+| `LOOM_SQL_GIT_GITHUB_BRANCH` | github | default branch (e.g. `main`) |
+| `LOOM_SQL_GIT_GITHUB_PAT_SECRET` | github | Key Vault secret name holding the GitHub PAT |
+
+```bicep
+// params/<cloud>-full.bicepparam
+param loomSqlGitProvider = 'azdo'
+param loomSqlGitAdoOrg = 'contoso'
+param loomSqlGitAdoProject = 'DataPlatform'
+param loomSqlGitAdoRepo = 'sql-schema'
+param loomSqlGitAdoPatSecretName = 'sql-git-ado-pat'   // a Key Vault secret name
+```
+
+Then add a pipeline step that runs `SqlPackage /Action:Extract` (produce a
+DACPAC) + `SqlPackage /Action:Script` (diff against the checked-in schema). On
+GCC-High / DoD use the Azure DevOps Government endpoints, not the commercial
+`dev.azure.com`.
+

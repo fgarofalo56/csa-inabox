@@ -34,6 +34,11 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Soft-delete retention days for blob/directory recovery (Recycle bin restore window). 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
 var saName = take('saloom${replace(domainName, '-', '')}${uniqueString(resourceGroup().id)}', 24)
 
 resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
@@ -87,11 +92,11 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   properties: {
     deleteRetentionPolicy: {
       enabled: true
-      days: 30
+      days: recycleRetentionDays
     }
     containerDeleteRetentionPolicy: {
       enabled: true
-      days: 30
+      days: recycleRetentionDays
     }
     // Blob versioning conflicts with HNS (ADLS Gen2) — disable.
     // Delta Lake's _delta_log/ already gives us per-commit time travel,
