@@ -221,6 +221,9 @@ param loomDefaultSparkPool string = 'loompool'
 @description('Loom Synapse Spark (Big Data) pool name — backs the Lakehouse column-summary stats job + notebook/spark editors. Defaults to the loompool Spark pool the landing-zone Synapse module deploys.')
 param loomSynapseSparkPool string = 'loompool'
 
+@description('Max lakehouse Delta tables the Notebook Copilot persona reads into its schema-grounding context (delta-schema.ts buildDatastoreSchema cap). Keeps the AOAI prompt small; defaults to 30.')
+param loomNotebookPersonaContextMaxTables int = 30
+
 @description('AML workspace name for Serverless Spark %%pyspark cell execution (Commercial / GCC only). Empty disables AML Spark; the editor falls back to the Synapse Spark Livy path. Gov boundaries force this empty (AML Serverless Spark is not offered in Azure Government).')
 param loomAmlSparkWorkspace string = ''
 
@@ -1236,6 +1239,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_DEV_SUFFIX', value: loomSynapseDevSuffix }
             { name: 'LOOM_SYNAPSE_HOST_SUFFIX', value: loomSynapseHostSuffix }
             { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
+            // Notebook Copilot persona (copilot-personas.ts) schema-grounding cap —
+            // max lakehouse Delta tables read into buildDatastoreSchema() context.
+            { name: 'LOOM_NOTEBOOK_PERSONA_CONTEXT_MAX_TABLES', value: string(loomNotebookPersonaContextMaxTables) }
             // %%pyspark cell routing (execute-spark). Commercial / GCC: AML
             // Serverless Spark when loomAmlSparkWorkspace is set. Gov (GCC-High /
             // IL5): forced empty so the route always uses Synapse Livy — AML
