@@ -125,7 +125,60 @@ let _azureConnections: Container | null = null;
 // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
 // account+database.
 let _taskFlows: Container | null = null;
+// Spark / compute configuration (F13) — one doc per Loom workspace holding the
+// operator-desired Databricks Spark settings (Pool / Runtime / Environment /
+// Jobs). The Cosmos doc is the source of truth; the live Databricks cluster/pool
+// is the projection applied on cluster create/edit. Partitioned by /workspaceId
+// so every Spark-settings read is a single-partition point read. Created lazily
+// (createIfNotExists) so a fresh environment needs no extra ARM/Bicep step
+// beyond the account+database. Azure-native default — no Fabric dependency.
+let _workspaceSparkConfig: Container | null = null;
 let _ensured = false;
+
+/**
+ * Persisted Spark / compute configuration for one Loom workspace (F13).
+ * Mirrors the Fabric "Spark settings" object (Pool / Environment / Jobs) but
+ * backed by Databricks instance pools + cluster spec. The doc is authoritative;
+ * runtime/jobs settings are merged into the ClusterSpec when a cluster is
+ * created/edited from this workspace's template.
+ */
+export interface WorkspaceSparkConfig {
+  id: string;                 // == workspaceId
+  workspaceId: string;        // partition key
+  tenantId?: string;
+  pool: {
+    mode: 'starter' | 'custom';
+    instance_pool_id?: string;
+    instance_pool_name?: string;
+    node_type_id?: string;
+    min_idle_instances?: number;
+    max_capacity?: number;
+    idle_instance_autotermination_minutes?: number;
+    availability?: 'ON_DEMAND_AZURE' | 'SPOT_AZURE';
+  };
+  runtime: {
+    spark_version?: string;          // e.g. '15.4.x-scala2.12'
+    node_type_id?: string;
+    driver_node_type_id?: string;
+    autoscale?: { min_workers: number; max_workers: number };
+    num_workers?: number;
+  };
+  environment: {
+    pypi?: string[];
+    maven?: string[];
+    sessionLevelPackages?: boolean;
+  };
+  jobs: {
+    session_timeout_minutes: number;
+    optimistic_admission: boolean;
+    reserve_cores: number;
+    dynamic_executors?: boolean;
+    min_executors?: number;
+    max_executors?: number;
+  };
+  updatedAt: string;
+  updatedBy?: string;
+}
 
 /**
  * Bulk-import job record for the Data product "Import from CSV" flyout (F2/F18).
@@ -478,6 +531,12 @@ async function ensure() {
   // account+database (the Console UAMI already holds Cosmos DB Built-in Data
   // Contributor at account scope).
   _taskFlows = await mk('task-flows', '/workspaceId');
+  // Spark / compute configuration (F13) — one doc per workspace holding the
+  // Databricks Spark settings (Pool / Runtime / Environment / Jobs). PK
+  // /workspaceId so the Spark-settings pane hits a single physical partition.
+  // Created lazily so a fresh environment needs no extra ARM/Bicep step beyond
+  // the account+database. Azure-native default — no Fabric dependency.
+  _workspaceSparkConfig = await mk('workspace-spark-config', '/workspaceId');
   _ensured = true;
 }
 
@@ -522,6 +581,8 @@ export async function reportDeliveryLogContainer(): Promise<Container> { await e
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 /** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
 export async function taskFlowsContainer(): Promise<Container> { await ensure(); return _taskFlows!; }
+/** Spark / compute configuration (F13) — PK /workspaceId. */
+export async function workspaceSparkConfigContainer(): Promise<Container> { await ensure(); return _workspaceSparkConfig!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -660,6 +721,7 @@ const KNOWN_CONTAINER_IDS = [
   'scorecard-config',
   'azure-connections',
   'task-flows',
+  'workspace-spark-config',
 ];
 
 /** List all Loom containers with their current throughput shape. */
