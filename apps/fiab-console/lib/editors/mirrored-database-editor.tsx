@@ -22,15 +22,18 @@ import {
   Subtitle2, Caption1, Badge, Button, Spinner, Select, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Tree, TreeItem, TreeItemLayout,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
   PlugConnected20Regular, CheckmarkCircle16Filled, ShieldTask20Regular,
+  Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
+import { OpenMirrorConfig } from './components/open-mirror-config';
 import { MirrorSourceWizard, type MirrorTableSpec } from './components/mirror-source-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -87,8 +90,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
-  // Top-level view: the mirroring surface vs the OneLake Security (F7) tab.
-  const [secView, setSecView] = useState<'mirror' | 'security'>('mirror');
+  // Top-level view: the mirroring surface, the Monitor (status/rows/last-sync)
+  // tab, or the OneLake Security (F7) tab.
+  const [view, setView] = useState<'mirror' | 'monitor' | 'security'>('mirror');
+  // Monitor tab — auto-refreshing per-table replication status (real backend).
+  const [monitorData, setMonitorData] = useState<any | null>(null);
+  const [monitorErr, setMonitorErr] = useState<string | null>(null);
+  const [monitorLoading, setMonitorLoading] = useState(false);
+  // Lifecycle (Stop/Start/Restart) — confirm dialog + before/after receipt.
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleMsg, setLifecycleMsg] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'stop' | 'restart' | null>(null);
   // Test-connection state.
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<{ intent: 'success' | 'error' | 'info'; text: string } | null>(null);
@@ -152,6 +164,46 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     setEditing(false); setWizardInitial(undefined); setWizardOpen(true);
   }, []);
 
+  // Monitor tab — pull the real per-table replication snapshot (status, true row
+  // counts, last-sync, ADLS landing probe, ADF run telemetry). GET, no side effects.
+  const loadMonitor = useCallback(async () => {
+    if (!workspaceId || !mirrorId) return;
+    setMonitorLoading(true); setMonitorErr(null);
+    try {
+      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/monitor?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok) { setMonitorErr(j.error || 'monitor failed'); return; }
+      setMonitorData(j);
+    } catch (e: any) { setMonitorErr(e?.message || String(e)); }
+    finally { setMonitorLoading(false); }
+  }, [workspaceId, mirrorId]);
+
+  // Auto-refresh the Monitor grid every 30 s while the Monitor tab is open.
+  useEffect(() => {
+    if (view !== 'monitor' || !workspaceId || !mirrorId) return;
+    void loadMonitor();
+    const t = setInterval(() => void loadMonitor(), 30_000);
+    return () => clearInterval(t);
+  }, [view, workspaceId, mirrorId, loadMonitor]);
+
+  // Lifecycle control — stop / start / restart with a before/after receipt.
+  const lifecycle = useCallback(async (action: 'stop' | 'start' | 'restart') => {
+    if (!workspaceId || !mirrorId) return;
+    setLifecycleBusy(true); setLifecycleMsg(null);
+    try {
+      const r = await fetch(
+        `/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/lifecycle?workspaceId=${encodeURIComponent(workspaceId)}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) },
+      );
+      const j = await r.json();
+      if (!j.ok) { setLifecycleMsg(`${action} ${j.gate ? 'gated' : 'failed'}: ${j.gate?.message || j.error}`); await loadMonitor(); return; }
+      setLifecycleMsg(`${action} accepted. Status: before=${j.before?.mirroringStatus} → after=${j.after?.mirroringStatus}${j.adfLastRun ? ` · ADF run ${j.adfLastRun.status}` : ''}`);
+      await loadMonitor();
+      void loadDetail(workspaceId, mirrorId);
+    } catch (e: any) { setLifecycleMsg(e?.message || String(e)); }
+    finally { setLifecycleBusy(false); }
+  }, [workspaceId, mirrorId, loadMonitor, loadDetail]);
+
   // Open the wizard pre-filled to EDIT the selected mirror's config.
   const openEdit = useCallback(() => {
     const sc = (detail?.source || {}) as any;
@@ -208,15 +260,16 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
         { label: 'Test connection', onClick: mirrorId && detail && !testing ? testConnection : undefined, disabled: !mirrorId || !detail || testing },
       ]},
       { label: 'Replication', actions: [
-        { label: 'Start', onClick: mirrorId && !acting ? () => act('start') : undefined, disabled: !mirrorId || acting },
-        { label: 'Stop', onClick: mirrorId && !acting ? () => act('stop') : undefined, disabled: !mirrorId || acting },
-        { label: 'Status', onClick: workspaceId && mirrorId ? () => loadDetail(workspaceId, mirrorId) : undefined, disabled: !workspaceId || !mirrorId },
+        { label: 'Start', onClick: mirrorId && !lifecycleBusy ? () => lifecycle('start') : undefined, disabled: !mirrorId || lifecycleBusy },
+        { label: 'Stop', onClick: mirrorId && !lifecycleBusy ? () => setConfirmAction('stop') : undefined, disabled: !mirrorId || lifecycleBusy },
+        { label: 'Restart', onClick: mirrorId && !lifecycleBusy ? () => setConfirmAction('restart') : undefined, disabled: !mirrorId || lifecycleBusy },
+        { label: 'Monitor', onClick: workspaceId && mirrorId ? () => { setView('monitor'); void loadMonitor(); } : undefined, disabled: !workspaceId || !mirrorId },
       ]},
       { label: 'List', actions: [
         { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
       ]},
     ]},
-  ], [workspaceId, mirrorId, detail, acting, testing, del, act, loadDetail, loadList, openEdit, openNew, testConnection]);
+  ], [workspaceId, mirrorId, detail, acting, testing, lifecycleBusy, del, act, lifecycle, loadDetail, loadList, loadMonitor, openNew, openEdit, testConnection]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -239,14 +292,123 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={secView} onTabSelect={(_, d) => setSecView(d.value as 'mirror' | 'security')}>
+          <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'mirror' | 'monitor' | 'security')}>
             <Tab value="mirror" icon={<Database20Regular />}>Mirroring</Tab>
+            <Tab value="monitor" icon={<Eye20Regular />}>Monitor</Tab>
             <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
           </TabList>
-          {secView === 'security' && (
+          {view === 'security' && (
             <OneLakeSecurityTab itemId={id} itemType="mirrored-database" container="bronze" workspaceId={workspaceId || undefined} fabricItemId={mirrorId || undefined} />
           )}
-          {secView === 'mirror' && (
+          {view === 'monitor' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={s.toolbar}>
+                <Badge appearance="filled" color="brand">Replication monitor</Badge>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={monitorLoading || !mirrorId} onClick={() => void loadMonitor()}>
+                  {monitorLoading ? 'Refreshing…' : 'Refresh'}
+                </Button>
+                {monitorData?.mirroringStatus && (
+                  <Badge appearance="filled" color={statusColor(monitorData.mirroringStatus)}>{monitorData.mirroringStatus}</Badge>
+                )}
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Auto-refresh every 30 s</Caption1>
+                {lifecycleBusy && <Spinner size="tiny" label="Working…" />}
+              </div>
+
+              {/* Lifecycle controls — Stop/Start/Restart with confirm for the destructive ones. */}
+              <div className={s.toolbar}>
+                <Button appearance="primary" icon={<Play20Regular />} disabled={!mirrorId || lifecycleBusy} onClick={() => void lifecycle('start')}>Start</Button>
+                <Button appearance="outline" icon={<Stop20Regular />} disabled={!mirrorId || lifecycleBusy} onClick={() => setConfirmAction('stop')}>Stop</Button>
+                <Button appearance="outline" icon={<ArrowCounterclockwise20Regular />} disabled={!mirrorId || lifecycleBusy} onClick={() => setConfirmAction('restart')}>Restart</Button>
+              </div>
+
+              {/* ADF pipeline-run telemetry bar (provisioner-backed Bronze-copy pipeline). */}
+              {monitorData?.adfLastRun && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  ADF pipeline <strong>{monitorData.adfLastRun.pipelineName}</strong> · last run <strong>{monitorData.adfLastRun.status}</strong>
+                  {monitorData.adfLastRun.runStart ? ` · started ${new Date(monitorData.adfLastRun.runStart).toLocaleString()}` : ''}
+                  {monitorData.adfLastRun.durationMs != null ? ` · ${Math.round(monitorData.adfLastRun.durationMs / 1000)}s` : ''}
+                </Caption1>
+              )}
+
+              {/* Confirm dialog — Stop or Restart. */}
+              <Dialog open={!!confirmAction} onOpenChange={(_, d) => { if (!d.open) setConfirmAction(null); }}>
+                <DialogSurface>
+                  <DialogBody>
+                    <DialogTitle>Confirm {confirmAction}</DialogTitle>
+                    <DialogContent>
+                      {confirmAction === 'stop' && 'Stop replication? Landed data and change-tracking watermarks remain. New source changes will not replicate until you Start. Start to resume.'}
+                      {confirmAction === 'restart' && 'Restart replication? All per-table change-tracking watermarks are cleared, so every table is re-snapshotted from scratch on the next run.'}
+                    </DialogContent>
+                    <DialogActions>
+                      <Button appearance="secondary" onClick={() => setConfirmAction(null)}>Cancel</Button>
+                      <Button appearance="primary" disabled={lifecycleBusy}
+                        onClick={() => { const a = confirmAction!; setConfirmAction(null); void lifecycle(a); }}>
+                        {confirmAction === 'stop' ? 'Stop' : 'Restart'}
+                      </Button>
+                    </DialogActions>
+                  </DialogBody>
+                </DialogSurface>
+              </Dialog>
+
+              {lifecycleMsg && <MessageBar intent="info"><MessageBarBody>{lifecycleMsg}</MessageBarBody></MessageBar>}
+              {monitorErr && <MessageBar intent="error"><MessageBarBody>{monitorErr}</MessageBarBody></MessageBar>}
+              {!mirrorId && <Caption1>Select a mirrored database from the left panel to view monitor data.</Caption1>}
+
+              {/* Per-table replication monitor grid (real backend). */}
+              {monitorData?.tables && (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Replication monitor" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Table</TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Rows</TableHeaderCell>
+                      <TableHeaderCell>Landing files</TableHeaderCell>
+                      <TableHeaderCell>Last sync</TableHeaderCell>
+                      <TableHeaderCell>Error / Note</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {(monitorData.tables as any[]).length === 0 && (
+                        <TableRow><TableCell colSpan={6}>No tables yet. Start mirroring to populate this view.</TableCell></TableRow>
+                      )}
+                      {(monitorData.tables as any[]).map((t: any, i: number) => (
+                        <TableRow key={`${t.schema}.${t.table}.${i}`}>
+                          <TableCell className={s.cell}>{t.schema}.{t.table}</TableCell>
+                          <TableCell>
+                            <Badge appearance="tint" size="small"
+                              color={t.status === 'Replicated' ? 'success' : t.status === 'Error' ? 'severe' : 'informative'}>
+                              {t.status}
+                            </Badge>
+                            {t.mode && (
+                              <Badge appearance="outline" size="small" style={{ marginLeft: 6 }}
+                                color={t.mode === 'incremental' ? 'success' : 'informative'}>
+                                {t.mode === 'incremental' ? 'Incremental' : 'Snapshot'}
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className={s.cell}>{typeof t.rows === 'number' ? t.rows : '—'}</TableCell>
+                          <TableCell className={s.cell}>
+                            {t.landingFiles != null ? `${t.landingFiles} file${t.landingFiles === 1 ? '' : 's'}` : '—'}
+                            {t.landingBytes != null ? ` (${Math.round(t.landingBytes / 1024)} KB)` : ''}
+                          </TableCell>
+                          <TableCell className={s.cell}>{t.lastSync ? new Date(t.lastSync).toLocaleString() : '—'}</TableCell>
+                          <TableCell>
+                            {t.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{t.error}</Caption1>}
+                            {t.note && !t.error && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.note}</Caption1>}
+                            {!t.error && !t.note && '—'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {monitorData?.note && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{monitorData.note}</Caption1>
+              )}
+            </div>
+          )}
+          {view === 'mirror' && (
           <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Mirrored Database</Badge>
@@ -330,6 +492,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
               {Array.isArray(detail.source.tables) && detail.source.tables.length ? ` · ${detail.source.tables.length} table(s) selected` : ''}
             </Caption1>
+          )}
+
+          {/* Open mirroring (push Parquet → managed Delta) — only for the
+              GenericMirror source. Azure-native: ADLS landing → Synapse Spark
+              merge → managed Delta, no Microsoft Fabric. */}
+          {mirrorId && workspaceId && detail?.source?.sourceType === 'GenericMirror' && (
+            <OpenMirrorConfig
+              mirrorId={mirrorId}
+              workspaceId={workspaceId}
+              tableName={detail?.source?.database || 'default'}
+            />
           )}
 
           {mirrorId && detail && (

@@ -65,6 +65,26 @@ export function GlobalJobToaster() {
           </Toast>,
           { intent: 'info', timeout: 8000 },
         );
+      } else if (job.kind === 'sql-query' && job.status === 'success') {
+        dispatchToast(
+          <Toast>
+            <ToastTitle>Query complete — {job.lakehouseName}</ToastTitle>
+            <ToastBody>
+              {(job.queryResult?.rowCount ?? 0).toLocaleString()} rows ·{' '}
+              {job.queryResult?.executionMs ?? 0} ms
+              {job.queryResult?.truncated ? ' (truncated at 5,000)' : ''}
+            </ToastBody>
+          </Toast>,
+          { intent: 'success', timeout: 8000 },
+        );
+      } else if (job.kind === 'sql-query' && job.status === 'error') {
+        dispatchToast(
+          <Toast>
+            <ToastTitle>Query failed — {job.lakehouseName}</ToastTitle>
+            <ToastBody>{job.error || 'Unknown error'}</ToastBody>
+          </Toast>,
+          { intent: 'error', timeout: 12000 },
+        );
       }
     };
 

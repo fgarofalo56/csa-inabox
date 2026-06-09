@@ -1,0 +1,280 @@
+/**
+ * sql-xlsx-export — dependency-free XLSX (OOXML SpreadsheetML) writer for
+ * multi-result-set SQL results.
+ *
+ * Why hand-rolled: an .xlsx file is just a ZIP of XML parts. This module emits
+ * a valid workbook using only `Uint8Array` + `TextEncoder` (a small CRC-32 ZIP
+ * writer with STORED/uncompressed entries, which Excel opens natively). That
+ * keeps it working identically in the browser (the `'use client'` results
+ * pane downloads the bytes directly) AND in Node (vitest / a server route) with
+ * ZERO new npm dependencies — no SheetJS, no `exceljs`, no phantom packages.
+ *
+ * Sheet layout — parity with the SSMS / Azure Data Studio "save grid as Excel":
+ *   "Result 1" .. "Result N" — one worksheet per SELECT result set, header row.
+ *                              A truncated set appends an honest note row.
+ *   "Messages"               — Severity / Number / Message / Line / Proc
+ *                              (only added when messages[] is non-empty).
+ *
+ * No I/O, no Azure calls, no cloud dependency: pure transform
+ * recordsets[] + messages[] -> XLSX bytes. Works in Commercial / GCC /
+ * GCC-High / DoD without any per-cloud configuration.
+ */
+
+import type { RecordsetSlice, InfoMessage } from './azure-sql-client';
+
+const enc = new TextEncoder();
+
+// XML control-char strip: keep tab (09), lf (0A), cr (0D); drop the rest of
+// the C0 range (illegal in XML 1.0 and rejected by Excel's loader).
+const XML_BAD = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
+
+function xmlEscape(v: unknown): string {
+  const s =
+    v === null || v === undefined
+      ? ''
+      : typeof v === 'object'
+        ? JSON.stringify(v)
+        : String(v);
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(XML_BAD, '');
+}
+
+/** 0 -> "A", 25 -> "Z", 26 -> "AA" ... (spreadsheet column letters). */
+function colName(idx: number): string {
+  let n = idx;
+  let s = '';
+  do {
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return s;
+}
+
+function isNumeric(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** Build one <worksheet> XML part from a header row + body rows. */
+function sheetXml(header: string[], rows: unknown[][]): string {
+  const allRows = [header, ...rows];
+  const body = allRows
+    .map((row, r) => {
+      const cells = row
+        .map((cell, c) => {
+          const ref = `${colName(c)}${r + 1}`;
+          if (cell === null || cell === undefined || cell === '') {
+            // header cells are always strings; body empties become blank cells
+            if (r === 0) return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell)}</t></is></c>`;
+            return '';
+          }
+          if (r > 0 && isNumeric(cell)) {
+            return `<c r="${ref}"><v>${cell}</v></c>`;
+          }
+          return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell)}</t></is></c>`;
+        })
+        .join('');
+      return `<row r="${r + 1}">${cells}</row>`;
+    })
+    .join('');
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    `<sheetData>${body}</sheetData></worksheet>`
+  );
+}
+
+// CRC-32 (for ZIP entries).
+let CRC_TABLE: Uint32Array | null = null;
+function crcTable(): Uint32Array {
+  if (CRC_TABLE) return CRC_TABLE;
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  CRC_TABLE = t;
+  return t;
+}
+function crc32(bytes: Uint8Array): number {
+  const t = crcTable();
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = t[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+// Minimal STORED (method 0) ZIP writer.
+interface ZipEntry {
+  name: string;
+  data: Uint8Array;
+  crc: number;
+  offset: number;
+}
+
+function buildZip(files: { name: string; content: string }[]): Uint8Array {
+  const entries: ZipEntry[] = [];
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+
+  const push = (u8: Uint8Array) => {
+    chunks.push(u8);
+    offset += u8.length;
+  };
+  const u16 = (n: number) => new Uint8Array([n & 0xff, (n >>> 8) & 0xff]);
+  const u32 = (n: number) =>
+    new Uint8Array([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]);
+
+  // Local file headers + data
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const data = enc.encode(f.content);
+    const crc = crc32(data);
+    const start = offset;
+    push(u32(0x04034b50)); // local file header signature
+    push(u16(20)); // version needed
+    push(u16(0)); // flags
+    push(u16(0)); // method = stored
+    push(u16(0)); // mod time
+    push(u16(0)); // mod date
+    push(u32(crc)); // crc-32
+    push(u32(data.length)); // compressed size
+    push(u32(data.length)); // uncompressed size
+    push(u16(nameBytes.length)); // filename length
+    push(u16(0)); // extra length
+    push(nameBytes);
+    push(data);
+    entries.push({ name: f.name, data, crc, offset: start });
+  }
+
+  // Central directory
+  const cdStart = offset;
+  for (const e of entries) {
+    const nameBytes = enc.encode(e.name);
+    push(u32(0x02014b50)); // central dir header signature
+    push(u16(20)); // version made by
+    push(u16(20)); // version needed
+    push(u16(0)); // flags
+    push(u16(0)); // method
+    push(u16(0)); // mod time
+    push(u16(0)); // mod date
+    push(u32(e.crc)); // crc-32
+    push(u32(e.data.length)); // compressed size
+    push(u32(e.data.length)); // uncompressed size
+    push(u16(nameBytes.length)); // filename length
+    push(u16(0)); // extra length
+    push(u16(0)); // comment length
+    push(u16(0)); // disk number start
+    push(u16(0)); // internal attrs
+    push(u32(0)); // external attrs
+    push(u32(e.offset)); // local header offset
+    push(nameBytes);
+  }
+  const cdSize = offset - cdStart;
+
+  // End of central directory
+  push(u32(0x06054b50)); // EOCD signature
+  push(u16(0)); // disk number
+  push(u16(0)); // disk with central dir
+  push(u16(entries.length)); // entries on this disk
+  push(u16(entries.length)); // total entries
+  push(u32(cdSize)); // central dir size
+  push(u32(cdStart)); // central dir offset
+  push(u16(0)); // comment length
+
+  // Concatenate
+  const total = chunks.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const c of chunks) {
+    out.set(c, p);
+    p += c.length;
+  }
+  return out;
+}
+
+/**
+ * Build an XLSX workbook from the batch result and return it as a Uint8Array.
+ * One sheet per result set ("Result 1".."Result N") plus a "Messages" sheet
+ * when any in-band SQL messages are present. Pure + synchronous.
+ */
+export function recordsetsToXlsxBuffer(
+  recordsets: RecordsetSlice[],
+  messages: InfoMessage[],
+): Uint8Array {
+  const sheets: { name: string; xml: string }[] = [];
+
+  const sets = recordsets.length
+    ? recordsets
+    : [{ columns: [], rows: [], rowCount: 0, truncated: false }];
+  sets.forEach((rs, i) => {
+    const header = rs.columns.length ? rs.columns : ['(no columns)'];
+    const rows = rs.rows.map((r) => header.map((_, j) => (r[j] !== undefined ? r[j] : null)));
+    if (rs.truncated) {
+      rows.push([
+        `** Showing first ${rs.rows.length.toLocaleString()} of ${rs.rowCount.toLocaleString()} rows **`,
+      ]);
+    }
+    sheets.push({ name: `Result ${i + 1}`, xml: sheetXml(header, rows) });
+  });
+
+  if (messages.length > 0) {
+    const header = ['Severity', 'Number', 'Message', 'Line', 'Proc'];
+    const rows = messages.map((m) => [m.severity, m.number, m.message, m.lineNumber, m.procName]);
+    sheets.push({ name: 'Messages', xml: sheetXml(header, rows) });
+  }
+
+  // Assemble the OOXML package parts.
+  const contentTypes =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    sheets
+      .map(
+        (_, i) =>
+          `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+      )
+      .join('') +
+    '</Types>';
+
+  const rootRels =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    '</Relationships>';
+
+  const workbook =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+    sheets
+      .map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
+      .join('') +
+    '</sheets></workbook>';
+
+  const workbookRels =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    sheets
+      .map(
+        (_, i) =>
+          `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+      )
+      .join('') +
+    '</Relationships>';
+
+  const files: { name: string; content: string }[] = [
+    { name: '[Content_Types].xml', content: contentTypes },
+    { name: '_rels/.rels', content: rootRels },
+    { name: 'xl/workbook.xml', content: workbook },
+    { name: 'xl/_rels/workbook.xml.rels', content: workbookRels },
+    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, content: s.xml })),
+  ];
+
+  return buildZip(files);
+}

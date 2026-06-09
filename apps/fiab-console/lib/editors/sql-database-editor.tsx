@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Field,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -28,10 +29,10 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, ArrowSync20Regular, Database20Regular, Delete20Regular, Play20Regular,
+  Add20Regular, ArrowSync20Regular, Database20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -63,6 +64,7 @@ interface Props { item: FabricItemType; id: string }
 
 export function SqlDatabaseEditor({ item, id }: Props) {
   const s = useStyles();
+  const router = useRouter();
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [workspaceId, setWorkspaceId] = useState('');
   const [fabricWsId, setFabricWsId] = useState<string | null>(null);
@@ -145,15 +147,16 @@ WHERE is_ms_shipped = 0;`,
     } finally { setCBusy(false); }
   }, [workspaceId, cName, cDesc, loadList]);
 
-  const runSql = useCallback(async () => {
+  const runSql = useCallback(async (sqlOverride?: string) => {
     if (!dbId) return;
+    const sqlToRun = sqlOverride ?? sqlText;
     setSqlBusy(true); setSqlResult(null);
     try {
       // The Fabric SQL DB shares the engine with Azure SQL DB; route through
       // the existing azure-sql-database query path.
       const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(dbId)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sqlText }),
+        body: JSON.stringify({ sql: sqlToRun }),
       });
       const j = (await r.json()) as QueryResp;
       setSqlResult(j);
@@ -165,6 +168,23 @@ WHERE is_ms_shipped = 0;`,
     setSqlText(sql);
     setTab('query');
   }, []);
+
+  const openInNotebook = useCallback((sql: string) => {
+    // Deep-link a new notebook pre-filled with the SQL (read on mount via
+    // localStorage `loom.notebook.prefill`, same pattern as the lakehouse editor).
+    const code = [
+      '# Auto-generated from the SQL Database Object Explorer.',
+      'import pyodbc, pandas as pd',
+      '# conn = pyodbc.connect("Driver={ODBC Driver 18 for SQL Server};Server=...;Database=...;Authentication=ActiveDirectoryMsi;")',
+      `sql = """${sql}"""`,
+      '# df = pd.read_sql(sql, conn)',
+      '# display(df)',
+    ].join('\n');
+    try {
+      localStorage.setItem('loom.notebook.prefill', JSON.stringify({ source: 'sql-db', sql, code }));
+    } catch { /* ignore */ }
+    router.push('/items/notebook/new?source=sql-db');
+  }, [router]);
 
   const del = useCallback(async () => {
     if (!workspaceId || !dbId) return;
@@ -185,7 +205,7 @@ WHERE is_ms_shipped = 0;`,
         { label: 'Delete', onClick: dbId ? del : undefined, disabled: !dbId },
       ]},
       { label: 'Query', actions: [
-        { label: 'Run', onClick: dbId && !sqlBusy ? runSql : undefined, disabled: !dbId || sqlBusy },
+        { label: 'Run', onClick: dbId && !sqlBusy ? () => runSql() : undefined, disabled: !dbId || sqlBusy },
         { label: 'Tables', onClick: () => setTab('tables'), disabled: !dbId },
         { label: 'Mirroring', onClick: () => setTab('mirroring'), disabled: !dbId },
       ]},
@@ -273,6 +293,7 @@ WHERE is_ms_shipped = 0;`,
                       workspaceId={workspaceId}
                       itemId={dbId}
                       onOpenQuery={openInQuery}
+                      onOpenInNotebook={openInNotebook}
                     />
                   </div>
                 )}
@@ -286,17 +307,15 @@ WHERE is_ms_shipped = 0;`,
                   <>
                     <div className={s.toolbar}>
                       <Body1>T-SQL (runs through Azure SQL engine)</Body1>
-                      <Button appearance="primary" icon={<Play20Regular />} disabled={sqlBusy} onClick={runSql} style={{ marginLeft: 'auto' }}>
-                        {sqlBusy ? 'Running…' : 'Run'}
-                      </Button>
                     </div>
-                    <MonacoTextarea
+                    <TsqlMonaco
                       value={sqlText}
                       onChange={setSqlText}
-                      language="tsql"
-                      height={220}
-                      minHeight={160}
-                      ariaLabel="T-SQL editor"
+                      onRun={(sql) => runSql(sql)}
+                      itemId={dbId}
+                      workspaceId={workspaceId}
+                      height={240}
+                      busy={sqlBusy}
                     />
                     {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}
                     {!sqlBusy && sqlResult && !sqlResult.ok && (
