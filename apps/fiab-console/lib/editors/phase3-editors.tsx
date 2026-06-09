@@ -78,6 +78,8 @@ import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '
 import { WarehouseAlerts } from './components/warehouse-alerts';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
+import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
@@ -9072,6 +9074,33 @@ interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
 
+// "Get data" starter mashup — a self-contained inline table so the wizard runs
+// end-to-end with zero external connection config; the source picker replaces
+// the Source step when a connector is chosen.
+const INGEST_STARTER_M = `section Section1;
+
+shared IngestQuery = let
+    Source = #table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}}),
+    Filtered = Table.SelectRows(Source, each [value] > 0)
+in
+    Filtered;`;
+
+// Source picker connectors. Each emits a real Power Query M `Source =`
+// expression. Connectors that reach an external system reference an ADF linked
+// service / account the operator already configured (no secrets in the UI).
+const INGEST_SOURCES: Array<{ key: string; label: string; hint: string; m: string }> = [
+  { key: 'inline', label: 'Sample table (inline)', hint: 'A literal #table — runs with no connection config.',
+    m: '#table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}})' },
+  { key: 'adls-csv', label: 'ADLS Gen2 — CSV', hint: 'Delimited file in your data lake.',
+    m: 'Csv.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv])' },
+  { key: 'adls-parquet', label: 'ADLS Gen2 — Parquet', hint: 'Parquet file/folder in your data lake.',
+    m: 'Parquet.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.parquet"))' },
+  { key: 'azuresql', label: 'Azure SQL Database', hint: 'A table or view over your Azure SQL server.',
+    m: 'Sql.Database("<server>.database.windows.net", "<database>"){[Schema="dbo", Item="<table>"]}[Data]' },
+  { key: 'odata', label: 'REST / OData feed', hint: 'An OData v4 endpoint.',
+    m: 'OData.Feed("https://<host>/<service>/", null, [Implementation="2.0"])' },
+];
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
@@ -9129,6 +9158,54 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // --- Get data (Power Query / M → Delta → semantic layer) ----------------
+  // Source picker → Power Query (M) authoring (PowerQueryHost) → materialise to
+  // Delta in ADLS via ADF/Synapse data flows → refresh the AAS tabular model.
+  // POSTs to /api/items/semantic-model/{id}/ingest (real backends; honest gate).
+  const [getDataOpen, setGetDataOpen] = useState(false);
+  const [ingestTab, setIngestTab] = useState<'source' | 'transform' | 'run'>('source');
+  const [ingestMScript, setIngestMScript] = useState(INGEST_STARTER_M);
+  const [ingestContainer, setIngestContainer] = useState<'bronze' | 'silver' | 'gold'>('silver');
+  const [ingestAasTable, setIngestAasTable] = useState('');
+  const [ingestRunning, setIngestRunning] = useState(false);
+  const [ingestResult, setIngestResult] = useState<{
+    ok: boolean; deltaPath?: string; adfRunId?: string; deltaRunId?: string; deltaBackend?: string;
+    aasRefreshId?: string; warnings?: string[]; error?: string;
+  } | null>(null);
+
+  const insertSource = useCallback((mExpr: string) => {
+    // Append/replace the active query's Source step with the connector's M.
+    setIngestMScript((prev) => {
+      const qs = parseSharedQueries(prev);
+      const target = qs[qs.length - 1];
+      const body = `let\n    Source = ${mExpr}\nin\n    Source`;
+      if (!target) {
+        return `section Section1;\n\nshared IngestQuery = ${body};\n`;
+      }
+      return setQueryBody(prev, target.name, body);
+    });
+    setIngestTab('transform');
+  }, []);
+
+  const runIngest = useCallback(async () => {
+    setIngestRunning(true); setIngestResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mScript: typeof window === 'undefined' ? '' : window.btoa(unescape(encodeURIComponent(ingestMScript))),
+          container: ingestContainer,
+          aasTable: ingestAasTable.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setIngestResult({ ok: false, error: j.error || j.hint || `HTTP ${r.status}`, warnings: j.warnings }); return; }
+      setIngestResult({ ok: true, deltaPath: j.deltaPath, adfRunId: j.adfRunId, deltaRunId: j.deltaRunId, deltaBackend: j.deltaBackend, aasRefreshId: j.aasRefreshId, warnings: j.warnings });
+    } catch (e: any) {
+      setIngestResult({ ok: false, error: e?.message || String(e) });
+    } finally { setIngestRunning(false); }
+  }, [id, ingestMScript, ingestContainer, ingestAasTable]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9307,6 +9384,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Get data', onClick: () => { setGetDataOpen(true); setIngestTab('source'); }, title: 'Ingest data with Power Query (M) → Delta in ADLS → refresh the semantic layer (Azure-native, no Fabric required)' },
+      ]},
       { label: 'Model', actions: [
         { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
       ]},
@@ -9339,6 +9419,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.pad}>
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
+              <Button appearance="outline" icon={<DatabaseLink20Regular />} onClick={() => { setGetDataOpen(true); setIngestTab('source'); }} title="Power Query (M) → Delta in ADLS → semantic layer (Azure-native, no Fabric required)">Get data</Button>
               {powerBiConfigured && (
                 <>
                   <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
@@ -9356,6 +9437,117 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
             </div>
+
+            {/* Get data — Power Query (M) → Delta → semantic layer ingest wizard */}
+            <Dialog open={getDataOpen} onOpenChange={(_, d) => setGetDataOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: '1080px', width: '94vw' }}>
+                <DialogBody>
+                  <DialogTitle>Get data — Power Query (M) ingest</DialogTitle>
+                  <DialogContent>
+                    <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Azure-native, no Fabric required</MessageBarTitle>
+                        Author a Power Query (M) mashup, then <strong>Run ingest</strong>: Loom compiles it into an ADF
+                        WranglingDataFlow (M → Parquet), a Mapping Data Flow lands the result as <strong>Delta</strong> in
+                        ADLS Gen2, and the Azure Analysis Services tabular model is refreshed so the table is queryable.
+                        Set <code>LOOM_SYNAPSE_WORKSPACE</code> to run the Delta step on Synapse instead. In Government
+                        clouds (no AAS) the Delta is queryable via Synapse Serverless <code>OPENROWSET</code>.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div className={s.tabBar}>
+                      <TabList selectedValue={ingestTab} onTabSelect={(_: unknown, d: any) => setIngestTab(d.value)}>
+                        <Tab value="source">1 · Source</Tab>
+                        <Tab value="transform">2 · Transform (M)</Tab>
+                        <Tab value="run">3 · Run</Tab>
+                      </TabList>
+                    </div>
+
+                    {ingestTab === 'source' && (
+                      <div style={{ marginTop: 12 }}>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
+                          details on the next tab. External connectors reference a server / account you already configured.
+                        </Caption1>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12, marginTop: 12 }}>
+                          {INGEST_SOURCES.map((src) => (
+                            <div key={src.key} className={s.card} style={{ cursor: 'pointer' }} role="button" tabIndex={0}
+                              onClick={() => insertSource(src.m)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') insertSource(src.m); }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Database20Regular />
+                                <span style={{ fontWeight: 600 }}>{src.label}</span>
+                              </div>
+                              <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>{src.hint}</Caption1>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {ingestTab === 'transform' && (
+                      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+                        <PowerQueryHost mScript={ingestMScript} onChange={setIngestMScript} />
+                      </div>
+                    )}
+
+                    {ingestTab === 'run' && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          <Field label="Delta destination (ADLS zone)" style={{ minWidth: 220 }}>
+                            <Select value={ingestContainer} onChange={(_, d) => setIngestContainer(d.value as 'bronze' | 'silver' | 'gold')}>
+                              <option value="bronze">bronze</option>
+                              <option value="silver">silver</option>
+                              <option value="gold">gold</option>
+                            </Select>
+                          </Field>
+                          <Field label="AAS table to refresh (optional)" style={{ minWidth: 260 }} hint="Defaults to the output query name. The AAS model's partition source must point at the Delta path.">
+                            <Input value={ingestAasTable} onChange={(_, d) => setIngestAasTable(d.value)} placeholder="(output query name)" />
+                          </Field>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                          <Button appearance="primary" icon={<Play20Regular />} disabled={ingestRunning} onClick={runIngest}>
+                            {ingestRunning ? 'Running ingest…' : 'Run ingest'}
+                          </Button>
+                          {ingestRunning && <Spinner size="tiny" />}
+                        </div>
+                        {ingestResult?.ok && (
+                          <MessageBar intent="success" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest dispatched</MessageBarTitle>
+                              Delta landing at <code>{ingestResult.deltaPath}</code> — ADF run <code>{ingestResult.adfRunId}</code>
+                              {ingestResult.deltaRunId ? <> → Delta run <code>{ingestResult.deltaRunId}</code> ({ingestResult.deltaBackend})</> : null}
+                              {ingestResult.aasRefreshId ? <>. AAS refresh <code>{ingestResult.aasRefreshId}</code> queued.</> : '.'}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {ingestResult && !ingestResult.ok && (
+                          <MessageBar intent="error" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest failed</MessageBarTitle>
+                              {ingestResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {(ingestResult?.warnings || []).map((w, i) => (
+                          <MessageBar key={i} intent="warning" style={{ marginTop: 8 }}>
+                            <MessageBarBody>{w}</MessageBarBody>
+                          </MessageBar>
+                        ))}
+                      </div>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    {ingestTab !== 'run' && (
+                      <Button appearance="primary" onClick={() => setIngestTab(ingestTab === 'source' ? 'transform' : 'run')}>Next</Button>
+                    )}
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Close</Button>
+                    </DialogTrigger>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}

@@ -223,6 +223,12 @@ param loomPostgresAadUser string = ''
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Azure Analysis Services connection string (asazure://<region>.asazure.windows.net/<server>) backing the semantic-model Power Query ingest refresh. Empty = the AAS refresh phase is honestly gated (Delta still lands; query via Synapse Serverless). Set from landing-zone aas.bicep output aasConnectionString when deployAas=true. AAS is unavailable in Government clouds — leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
+param loomAasModel string = ''
+
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
@@ -1094,6 +1100,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in Azure Analysis Services semantic layer — backs the
+            // semantic-model "Get data" (Power Query M) ingest refresh phase.
+            // Empty values honestly gate the AAS phase (Delta still lands; query
+            // via Synapse Serverless). Unavailable in Government clouds.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
             // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
             // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
             // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
