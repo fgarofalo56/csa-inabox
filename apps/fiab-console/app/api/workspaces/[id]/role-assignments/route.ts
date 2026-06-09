@@ -22,6 +22,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listWorkspaceRoles,
   addWorkspaceRole,
@@ -42,7 +43,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
-    if (!role) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
+    // Tenant admins (admin-plane "Workspace access") may read any workspace's roster
+    // even when they hold no per-workspace role.
+    const tenantAdmin = isTenantAdmin(s);
+    if (!role && !tenantAdmin) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
 
     const roleAssignments = await listWorkspaceRoles(id);
     const gate = await checkRbacAdminCapability();
@@ -51,7 +55,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       roleAssignments,
       rbacAdminGate: gate.ok ? undefined : gate.detail,
       fabricMode: process.env.LOOM_WORKSPACE_ROLES_FABRIC === '1' ? 'fabric+azure' : 'azure-native',
-      callerRole: role,
+      callerRole: tenantAdmin ? 'admin' : role,
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
@@ -65,9 +69,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
-    if (role !== 'admin') {
+    if (role !== 'admin' && !isTenantAdmin(s)) {
       return NextResponse.json(
-        { ok: false, error: 'Only the workspace owner or an Admin can add members.', role },
+        { ok: false, error: 'Only the workspace owner, an Admin, or a tenant admin can add members.', role },
         { status: 403 },
       );
     }

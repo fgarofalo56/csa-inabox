@@ -1482,9 +1482,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_CLOUD_BOUNDARY', value: boundary }
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
-            // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
-            // (Fabric is not IL5-authorized). Unset → Azure-native only.
-            { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary != 'IL5') ? '1' : '' }
+            // F5/F9 Manage Access — Fabric role mirroring is OPT-IN and only
+            // ever allowed in Commercial. GCC-High / IL5 / DoD are sovereign gov
+            // boundaries where Fabric is not authorized for production workloads,
+            // and even GCC should stay Azure-native by default. Unset → Azure-native only.
+            { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary == 'Commercial') ? '1' : '' }
           ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
