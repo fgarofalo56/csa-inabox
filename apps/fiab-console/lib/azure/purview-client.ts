@@ -1352,18 +1352,22 @@ export async function deleteBusinessDomain(id: string): Promise<void> {
  */
 export async function updateBusinessDomain(
   id: string,
-  body: { name?: string; description?: string },
+  body: { name?: string; description?: string; parentId?: string },
 ): Promise<PurviewBusinessDomain> {
   purviewAccount();
   const colName = domainCollectionName(id);
-  const root = await rootCollectionName();
+  // Preserve the collection hierarchy: a subdomain's mirror keeps its parent
+  // collection (passed by the caller); a root domain re-asserts the account
+  // root collection. PUT /collections is create-or-update, so omitting the
+  // parent would otherwise re-parent the collection to root.
+  const parent = body.parentId || (await rootCollectionName());
   const res = await purviewFetch(`/collections/${encodeURIComponent(colName)}`, {
     method: 'PUT',
     apiVersion: ACCOUNT_API_VERSION,
     body: JSON.stringify({
       ...(body.name ? { friendlyName: body.name } : {}),
       ...(body.description !== undefined ? { description: body.description } : {}),
-      ...(root ? { parentCollection: { referenceName: root } } : {}),
+      ...(parent ? { parentCollection: { referenceName: parent } } : {}),
     }),
   });
   const j = await readJson<any>(res);
