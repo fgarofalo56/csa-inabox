@@ -575,14 +575,18 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Deploy an Azure Analysis Services server to host a COMPOSITE (mixed Import / DirectQuery / Dual) tabular model. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on only to opt into a standalone composite-model host.')
+param aasEnabled bool = false
+
+@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). S0/S1/S2/S4 = Standard (prod).')
+@allowed(['D1', 'B1', 'S0', 'S1', 'S2', 'S4'])
+param aasSku string = 'D1'
+
 @description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
 @allowed(['', 'powerbi'])
 param loomBiBackend string = ''
 
-@description('Azure Analysis Services server XMLA URI — platform-level default for the Loom-native report renderer. Format: asazure://{region}.asazure.windows.net/{serverName} (gov: asazure.usgovcloudapi.net). Leave empty to require a per-item state.aasServer binding. The Console UAMI must be a server admin on this AAS instance.')
-param loomAasServer string = ''
-
-@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer. Leave empty to require a per-item state.aasDatabase binding.')
+@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer (declared above). Leave empty to require a per-item state.aasDatabase binding.')
 param loomAasDatabase string = ''
 
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
@@ -784,7 +788,26 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
-// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// 8a-bis. Azure Analysis Services (opt-in composite-model host)
+// Hosts a COMPOSITE tabular model mixing Import / DirectQuery / Dual
+// storage modes. Off by default — the semantic-model item's default is the
+// Loom-native tabular layer (no AAS required). See analysis-services.bicep.
+// =====================================================================
+
+module aas 'analysis-services.bicep' = if (aasEnabled) {
+  name: 'aas'
+  params: {
+    location: location
+    serverName: 'aasloom${uniqueString(resourceGroup().id)}'
+    skuName: aasSku
+    skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
+    aasDatabase: 'LoomComposite'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    aasAdminUpn: 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
+    skipRoleGrants: skipRoleGrants
+    tags: complianceTags
+  }
+}
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
@@ -1541,6 +1564,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            // Semantic-model backend + opt-in Azure Analysis Services composite
+            // host. The semantic-model item defaults to the Loom-native tabular
+            // layer (no AAS needed); these only populate when aasEnabled. The
+            // per-table storage-mode picker builds composite TMSL regardless.
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -1639,6 +1669,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
           ]
         )
         secrets: concat(

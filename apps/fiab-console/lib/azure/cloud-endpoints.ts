@@ -590,6 +590,22 @@ export function getPbiGovHost(): string {
   return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
 }
 
+/**
+ * Build the AAS HTTP REST base URL for a region + server + database. The AAS
+ * REST surface only exposes async *refresh* operations; full TMSL command
+ * execution (createOrReplace / alter) requires an XMLA TCP connection (TOM/AMO)
+ * which is not issuable from Node.js — that is why the composite-model apply
+ * path uses the Fabric updateDefinition REST API (which wraps XMLA) and falls
+ * back to returning the TMSL as an offline `Invoke-ASCmd` receipt.
+ *
+ * `aasSuffix()` / `aasScope()` are the canonical AAS data-plane helpers — they
+ * live in the "Azure Analysis Services (AAS) data plane" section below (the
+ * scope MUST carry the literal `*` subdomain per the AAS REST auth spec).
+ */
+export function aasRestBase(region: string, serverName: string, databaseName: string): string {
+  return `https://${region}.${aasSuffix()}/servers/${serverName}/models/${encodeURIComponent(databaseName)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
