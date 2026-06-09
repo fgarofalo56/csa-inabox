@@ -89,8 +89,8 @@ export interface LakehouseContent {
 
 export interface SemanticModelContent {
   kind: 'semantic-model';
-  tables: { name: string; columns: { name: string; dataType: string }[] }[];
-  measures: { table: string; name: string; expression: string; formatString?: string }[];
+  tables: { name: string; columns: { name: string; dataType: string; description?: string }[] }[];
+  measures: { table: string; name: string; expression: string; formatString?: string; description?: string }[];
   relationships?: { from: string; to: string; cardinality: '1:1' | '1:many' | 'many:many' }[];
   /**
    * Calculation groups (TMSL calculationGroup tables). Each item swaps the

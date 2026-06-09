@@ -68,6 +68,7 @@ import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
+import { registerDaxTools } from '@/lib/copilot/dax-tools';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -299,11 +300,20 @@ export class LoomToolRegistry {
 
   list(): ToolDef[] { return Array.from(this.tools.values()); }
 
+  /** Tools whose name starts with any of the given prefixes (empty = all). Used
+   *  to scope a persona to a subset of the registry (e.g. ['dax_','loom_']). */
+  filterByPrefixes(prefixes?: string[]): ToolDef[] {
+    if (!prefixes || prefixes.length === 0) return this.list();
+    return this.list().filter((t) => prefixes.some((p) => t.name.startsWith(p)));
+  }
+
   get(name: string): ToolDef | undefined { return this.tools.get(name); }
 
-  /** OpenAI-compatible tools array for the AOAI chat-completions call. */
-  toAoaiTools(): unknown[] {
-    return this.list().map((t) => ({
+  /** OpenAI-compatible tools array for the AOAI chat-completions call. When
+   *  `prefixes` is supplied, only tools matching a prefix are advertised
+   *  (persona scoping); execution still resolves against the full registry. */
+  toAoaiTools(prefixes?: string[]): unknown[] {
+    return this.filterByPrefixes(prefixes).map((t) => ({
       type: 'function',
       function: {
         name: t.name,
@@ -933,6 +943,11 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   });
   // -------- Warehouse Copilot (schema read / EXPLAIN plan / run) --------
   registerWarehouseTools(r);
+  // -------- DAX Copilot (Loom-native tabular layer; no Power BI) --------
+  // NL2DAX, explain, optimize, auto-describe over item.state.model. Evaluates
+  // via Synapse SQL — zero api.powerbi.com on this path. Surfaced on the `dax`
+  // persona (toolPrefixes ['dax_','loom_']).
+  registerDaxTools(r);
 
   return r;
 }
@@ -981,6 +996,13 @@ export interface OrchestrateOptions {
   /** Per-surface context injected as an extra system message (e.g. the
    *  activator id + existing rule names the user is working with). */
   personaContext?: Record<string, unknown> | null;
+  /** Persona system-prompt override. Replaces the default SYSTEM_PROMPT — used
+   *  by focused surfaces (e.g. the DAX Copilot) to narrow the assistant. */
+  personaSystemPrompt?: string;
+  /** Persona tool allowlist (name prefixes). When set, only matching tools are
+   *  advertised to the model — execution still resolves against the full
+   *  registry. e.g. ['dax_','loom_'] for the DAX persona. */
+  toolPrefixes?: string[];
 }
 
 interface ChatMessage {
@@ -1302,12 +1324,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       .filter((t) => allow.has(t.name))
       .map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
   } else {
-    tools = reg.toAoaiTools();
+    tools = reg.toAoaiTools(opts.toolPrefixes);
   }
 
   const systemPrompt = persona?.systemPrompt || SYSTEM_PROMPT;
   const messages: ChatMessage[] = [
-    { role: 'system', content: opts.systemPromptOverride ?? systemPrompt },
+    { role: 'system', content: opts.systemPromptOverride ?? opts.personaSystemPrompt ?? systemPrompt },
   ];
   // Inject per-surface context (e.g. the activator id + existing rule names) as
   // a second system message so the model grounds its draft in the live editor.
