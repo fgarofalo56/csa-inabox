@@ -1222,7 +1222,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // provisioned cluster this is the ARM dataIngestionUri; for a reused
             // cluster the ingest-<name> host is reconciled post-deploy alongside
             // LOOM_KUSTO_CLUSTER_URI by patch-navigator-env.sh. Empty when ADX off.
-            { name: 'LOOM_KUSTO_DATA_INGESTION_URI', value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
+            { name: 'LOOM_KUSTO_DATA_INGESTION_URI', value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             // Sovereign-cloud ARM endpoint for Azure Monitor metrics calls (e.g.
             // the Eventhouse Capacity/throttle panel). Empty = public cloud
             // (https://management.azure.com). Operators in GCC-High / IL5 set
@@ -1859,6 +1859,19 @@ module sqlRbac 'sql-rbac.bicep' = if (!empty(loomAzureSqlServerRg) && !skipRoleG
   name: 'console-sql-scale-rbac'
   scope: resourceGroup(loomAzureSqlServerRg)
   params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Eventstream IoT Hub source — Reader + Event Hubs Data Receiver on the bound
+// IoT Hub so the Console UAMI can resolve + receive from its built-in endpoint.
+// Opt-in: only when loomIotHubResourceId names a hub (scoped to that hub's RG).
+module iotHubRbac 'iothub-rbac.bicep' = if (!empty(loomIotHubResourceId) && !skipRoleGrants) {
+  name: 'console-iothub-rbac'
+  scope: resourceGroup(split(loomIotHubResourceId, '/')[4])
+  params: {
+    iotHubName: last(split(loomIotHubResourceId, '/'))
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
   }

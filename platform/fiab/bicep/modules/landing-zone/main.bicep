@@ -241,6 +241,9 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = {
     dedicatedPoolName: synapse.outputs.dedicatedPoolName
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // Sovereign-cloud ARM host so the auto-pause Logic App targets the correct
+    // management plane (Commercial vs Gov), matching LOOM_ARM_ENDPOINT.
+    loomArmEndpoint: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com'
   }
 }
 

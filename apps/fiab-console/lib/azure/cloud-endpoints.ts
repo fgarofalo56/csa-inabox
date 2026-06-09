@@ -590,6 +590,36 @@ export function getPbiGovHost(): string {
   return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
 }
 
+/**
+ * Azure Analysis Services data-plane hostname suffix (no leading dot, no
+ * region/server prefix). AAS is the Azure-native tabular engine Loom uses as
+ * the optional backing store for semantic-model / report parity (per
+ * no-fabric-dependency.md — Power BI / Fabric stay opt-in).
+ *   Commercial / GCC     : asazure.windows.net
+ *   GCC-High / IL5 / DoD : asazure.usgovcloudapi.net
+ *
+ * Grounded in the Azure PowerShell environment table, which defines a distinct
+ * `USGovernmentAnalysisServicesEndpointSuffix` for the Government cloud
+ * (`asazure.usgovcloudapi.net`). GCC runs on the Commercial Azure environment,
+ * so its AAS server is a `asazure.windows.net` server — which is exactly what
+ * `isGovCloud()` (false for GCC) yields. Hard-coding the Commercial suffix
+ * silently fails the XMLA endpoint resolution in Gov.
+ */
+export function getAasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * Build the Azure Analysis Services XMLA/connection server URI from a region
+ * and server name, e.g. `asazure://eastus2.asazure.windows.net/myserver`
+ * (`asazure://usgovvirginia.asazure.usgovcloudapi.net/myserver` in Gov). This
+ * is the connection string an XMLA client (ADOMD/AMO/Tabular Object Model)
+ * targets for TMSL execute + model refresh.
+ */
+export function aasServerUri(region: string, serverName: string): string {
+  return `asazure://${region}.${getAasSuffix()}/${serverName}`;
+}
+
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------

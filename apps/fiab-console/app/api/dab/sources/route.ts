@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { jerr } from '../../items/_lib/item-crud';
 import { listServers, listDatabases } from '@/lib/azure/azure-sql-client';
+import { synapseSqlSuffix } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,22 +69,23 @@ export async function GET(req: NextRequest) {
         );
       }
       const dedicatedPool = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+      const synHost = synapseSqlSuffix(); // sql.azuresynapse.net | …usgovcloudapi.net
       const sources: ServerSrc[] = [];
-      // Dedicated SQL pool endpoint: <ws>.sql.azuresynapse.net, DB = pool name.
+      // Dedicated SQL pool endpoint: <ws>.<synHost>, DB = pool name.
       sources.push({
-        server: `${ws}.sql.azuresynapse.net`,
-        fqdn: `${ws}.sql.azuresynapse.net`,
+        server: `${ws}.${synHost}`,
+        fqdn: `${ws}.${synHost}`,
         synapseRole: 'dedicated',
         databases: dedicatedPool ? [{ name: dedicatedPool }] : [],
         note: dedicatedPool
           ? undefined
           : 'Set LOOM_SYNAPSE_DEDICATED_POOL to the dedicated pool name, or type it on the Data source stage.',
       });
-      // Serverless SQL on-demand endpoint: <ws>-ondemand.sql.azuresynapse.net.
+      // Serverless SQL on-demand endpoint: <ws>-ondemand.<synHost>.
       // DAB does NOT support serverless; included for object exploration only.
       sources.push({
-        server: `${ws}-ondemand.sql.azuresynapse.net`,
-        fqdn: `${ws}-ondemand.sql.azuresynapse.net`,
+        server: `${ws}-ondemand.${synHost}`,
+        fqdn: `${ws}-ondemand.${synHost}`,
         synapseRole: 'serverless',
         databases: [{ name: 'master' }],
         note: 'Serverless SQL pool — Data API builder does NOT support serverless as a deployable source. Browse objects for exploration; deploy a Dedicated pool or mirror to Azure SQL to publish an API.',

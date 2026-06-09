@@ -11,6 +11,7 @@ import {
   getGraphScope,
   getSqlSuffix,
   synapseSqlSuffix,
+  getAasSuffix,
   getLogAnalyticsHost,
   getBlobSuffix,
   getOpenAiSuffix,
@@ -121,6 +122,12 @@ const TABLE: Record<string, Record<(typeof CLOUDS)[number], string>> = {
     'GCC-High': 'sql.azuresynapse.usgovcloudapi.net',
     DoD: 'sql.azuresynapse.usgovcloudapi.net',
   },
+  getAasSuffix: {
+    Commercial: 'asazure.windows.net',
+    GCC: 'asazure.windows.net',
+    'GCC-High': 'asazure.usgovcloudapi.net',
+    DoD: 'asazure.usgovcloudapi.net',
+  },
   getLogAnalyticsHost: {
     Commercial: 'https://api.loganalytics.azure.com',
     GCC: 'https://api.loganalytics.azure.com',
@@ -168,6 +175,7 @@ const FNS: Record<string, () => string> = {
   getGraphScope,
   getSqlSuffix,
   synapseSqlSuffix,
+  getAasSuffix,
   getLogAnalyticsHost,
   getBlobSuffix,
   getOpenAiSuffix,

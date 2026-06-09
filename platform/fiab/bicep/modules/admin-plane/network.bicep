@@ -292,7 +292,7 @@ var dnsZones = [
   'privatelink.cognitiveservices.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.openai.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.search.windows.net'
-  'privatelink.documents.azure.com'
+  'privatelink.documents.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.servicebus.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
   'privatelink.eventgrid.azure.net'
   'privatelink.azurewebsites.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
