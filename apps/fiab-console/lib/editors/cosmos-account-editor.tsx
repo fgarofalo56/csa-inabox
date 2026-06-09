@@ -28,7 +28,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import {
-  Button, Tooltip, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Button, Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -44,6 +44,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/components/cosmos/cosmos-tree';
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
+import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel';
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
@@ -313,7 +314,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
             )}
 
             {active.kind === 'settings' && !active.container && (
-              <ConnectPanel />
+              <CosmosConnectPanel id={id} />
             )}
 
             {(active.kind === 'storedProcedure' || active.kind === 'newStoredProcedure'
@@ -345,28 +346,6 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         </div>
       }
     />
-  );
-}
-
-/** Connect card → live account-info surface (real document endpoint). */
-function ConnectPanel() {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>Connect</MessageBarTitle>
-          The account chip in the Data Explorer pane shows the live account name + region from{' '}
-          <code>/api/cosmos/account</code> (the real <code>documentEndpoint</code> on{' '}
-          <code>documents.azure.com</code>). Loom drives the data plane with the Console managed
-          identity (AAD token), so there is no key/connection-string to copy — the SDK connect
-          pattern is <code>new CosmosClient(endpoint, new DefaultAzureCredential())</code>.
-        </MessageBarBody>
-      </MessageBar>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-        Account keys are intentionally not surfaced here; Loom uses RBAC (AAD) data-plane access, not
-        primary keys, per the deployment&apos;s security posture.
-      </Caption1>
-    </div>
   );
 }
 

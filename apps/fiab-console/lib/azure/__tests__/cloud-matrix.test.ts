@@ -91,6 +91,9 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     // Assembled from fragments to keep the contiguous literal out of source.
     const COSMOS_COM = J('documents', 'azure', 'com');
     expect(m.cosmosSuffix()).toBe(COSMOS_COM);
+    // getCosmosSuffix() is the canonical getter the Connect panel / keys route
+    // build the account endpoint fallback from — it must match cosmosSuffix().
+    expect(m.getCosmosSuffix()).toBe(COSMOS_COM);
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe(`https://cosmos-loom.${COSMOS_COM}:443/`);
   });
 
@@ -165,6 +168,7 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
   it('Cosmos DB helpers use documents.azure.us', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.cosmosSuffix()).toBe('documents.azure.us');
+    expect(m.getCosmosSuffix()).toBe('documents.azure.us');
     expect(m.cosmosEndpointFromName('cosmos-loom')).toBe('https://cosmos-loom.documents.azure.us:443/');
   });
 
@@ -193,6 +197,7 @@ describe('cloud-endpoints — overrides + DoD', () => {
     expect(m.armBase()).toBe('https://management.azure.microsoft.scloud');
     expect(m.isGovCloud()).toBe(true);
     expect(m.kustoSuffix()).toBe('kusto.usgovcloudapi.net');
+    expect(m.getCosmosSuffix()).toBe('documents.azure.us');
     // Cosmos Gremlin in DoD uses the same Gov suffix as GCC-High / IL5.
     expect(m.gremlinSuffix()).toBe('gremlin.cosmos.azure.us');
     // Synapse JDBC cert wildcard carries the Gov suffix in DoD too.
