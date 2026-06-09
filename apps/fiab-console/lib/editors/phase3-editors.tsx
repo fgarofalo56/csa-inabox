@@ -9130,6 +9130,19 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
 
+  // Composite + Dual per-table storage mode (Tables tab). Each table gets an
+  // Import / DirectQuery / Dual picker so a single model can MIX modes; the
+  // selection is pushed to the BFF datasource route which builds a model.bim
+  // TMSL with a per-partition `mode` and applies it (Fabric updateDefinition)
+  // or returns it as an Invoke-ASCmd receipt. Dual requires Premium/Fabric.
+  const TABLE_STORAGE_MODES = ['import', 'directQuery', 'dual'] as const;
+  type TableStorageMode = typeof TABLE_STORAGE_MODES[number];
+  const [tableModes, setTableModes] = useState<Record<string, TableStorageMode>>({});
+  const [tableSourceQ, setTableSourceQ] = useState<Record<string, string>>({});
+  const [modesBusy, setModesBusy] = useState(false);
+  const [modesMsg, setModesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [tmslReceipt, setTmslReceipt] = useState<string | null>(null);
+
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
     try {
@@ -9234,6 +9247,53 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
+
+  // Apply the per-table storage modes: builds a composite model.bim TMSL with a
+  // per-partition `mode` (import/directQuery/dual) and applies it via the
+  // datasource BFF route, then surfaces the live DAX probe + TMSL receipt.
+  const applyModes = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setModesBusy(true); setModesMsg(null); setTmslReceipt(null);
+    try {
+      const tables = (detail?.tables || []).map((t) => {
+        const mode: TableStorageMode = tableModes[t.name] ?? 'import';
+        return {
+          name: t.name,
+          mode,
+          ...(mode !== 'import'
+            ? { sourceQuery: (tableSourceQ[t.name] || `SELECT * FROM [${t.name}]`).trim(), dataSourceName: 'sqlSource' }
+            : {}),
+          columns: (t.columns || []).map((c) => ({ name: c.name, dataType: c.dataType })),
+        };
+      });
+      const rels = relationships
+        .filter((r) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
+        .map((r) => ({
+          name: r.name,
+          fromTable: r.fromTable!, fromColumn: r.fromColumn!,
+          toTable: r.toTable!, toColumn: r.toColumn!,
+          crossFilteringBehavior: (r.crossFilteringBehavior === 'bothDirections' ? 'bothDirections' : 'oneDirection') as 'oneDirection' | 'bothDirections',
+        }));
+      const r = await fetch(
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: detail?.dataset?.name || 'CompositeModel', tables, relationships: rels }),
+        },
+      );
+      const j = await r.json();
+      if (!j.ok) { setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null); setModesMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null);
+      const probe = j.probe ? ` Query probe (first rows): ${j.probe}` : '';
+      setModesMsg({
+        ok: true,
+        text: j.applied
+          ? `Composite TMSL applied in-place via Fabric.${probe}`
+          : `Composite TMSL built (apply offline via Invoke-ASCmd, or opt into a Fabric/Premium backend). See receipt below.${probe}`,
+      });
+    } catch (e: any) { setModesMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setModesBusy(false); }
+  }, [workspaceId, datasetId, detail?.tables, detail?.dataset?.name, tableModes, tableSourceQ, relationships]);
 
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
@@ -9392,24 +9452,92 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </div>
               <div className={s.pad}>
                 {tab === 'tables' && (
-                  <div className={s.tableWrap}>
-                    <Table aria-label="Tables" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Table</TableHeaderCell>
-                        <TableHeaderCell>Columns</TableHeaderCell>
-                        <TableHeaderCell>Measures</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {(detail?.tables || []).map((t) => (
-                          <TableRow key={t.name}>
-                            <TableCell>{t.name}</TableCell>
-                            <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
-                            <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                  <>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 8 }}>
+                      Set a per-table <strong>storage mode</strong> to build a composite model that mixes
+                      Import, DirectQuery, and Dual tables. Apply pushes a <code>model.bim</code> TMSL with a
+                      per-partition mode (Fabric updateDefinition), or returns it as an <code>Invoke-ASCmd</code>
+                      receipt. <strong>Dual</strong> requires Power BI Premium / Fabric capacity.
+                    </Caption1>
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Tables" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Table</TableHeaderCell>
+                          <TableHeaderCell>Columns</TableHeaderCell>
+                          <TableHeaderCell>Measures</TableHeaderCell>
+                          <TableHeaderCell>Storage mode</TableHeaderCell>
+                          <TableHeaderCell>Source query (DQ / Dual)</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(detail?.tables || []).map((t) => {
+                            const mode = tableModes[t.name] ?? 'import';
+                            return (
+                              <TableRow key={t.name}>
+                                <TableCell>{t.name}</TableCell>
+                                <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
+                                <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
+                                <TableCell>
+                                  <Select
+                                    size="small"
+                                    value={mode}
+                                    onChange={(_, d) => setTableModes((prev) => ({ ...prev, [t.name]: d.value as TableStorageMode }))}
+                                    aria-label={`Storage mode for ${t.name}`}
+                                    title={`Storage mode for ${t.name}. 'dual' requires Power BI Premium / Fabric capacity.`}
+                                  >
+                                    {TABLE_STORAGE_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                                  </Select>
+                                </TableCell>
+                                <TableCell>
+                                  {mode === 'import' ? (
+                                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+                                  ) : (
+                                    <Input
+                                      size="small"
+                                      value={tableSourceQ[t.name] ?? `SELECT * FROM [${t.name}]`}
+                                      onChange={(_, d) => setTableSourceQ((prev) => ({ ...prev, [t.name]: d.value }))}
+                                      aria-label={`Source query for ${t.name}`}
+                                      style={{ minWidth: 220 }}
+                                    />
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+                      <Button
+                        appearance="primary"
+                        icon={<ArrowSync20Regular />}
+                        disabled={modesBusy || !datasetId || !powerBiConfigured || (detail?.tables || []).length === 0}
+                        onClick={applyModes}
+                        title={!powerBiConfigured ? 'Power BI / Fabric not configured' : 'Build the composite TMSL with the selected per-table modes and apply via Fabric updateDefinition (or generate the Invoke-ASCmd receipt), then probe the live model'}
+                      >
+                        {modesBusy ? 'Applying…' : 'Apply storage modes'}
+                      </Button>
+                      {!powerBiConfigured && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Power BI / Fabric not configured — storage modes build TMSL only (no live apply).
+                        </Caption1>
+                      )}
+                    </div>
+                    {modesMsg && (
+                      <MessageBar intent={modesMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                        <MessageBarBody>{modesMsg.text}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {tmslReceipt && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary style={{ cursor: 'pointer' }}>
+                          <Caption1>TMSL receipt (apply offline: <code>Invoke-ASCmd -Server &quot;asazure://…&quot; -Query &lt;tmsl&gt;</code>)</Caption1>
+                        </summary>
+                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, marginTop: 4 }}>
+                          {tmslReceipt.slice(0, 4000)}
+                        </pre>
+                      </details>
+                    )}
+                  </>
                 )}
                 {tab === 'relationships' && (
                   <>
