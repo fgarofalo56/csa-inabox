@@ -31,14 +31,14 @@ import {
 } from '@/lib/azure/powerbi-client';
 import {
   isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem, semanticModelDetailFromContent,
-} from '../../_lib/pbi-content-fallback';
+} from '../../../_lib/pbi-content-fallback';
 import {
   readSmModelState, writeSmModelState,
   normalizeSmRelationship, normalizeSmHierarchy,
   upsertSmRelationship, removeSmRelationship,
   upsertSmHierarchy, removeSmHierarchy,
   type SmModelState, type SmStoredRelationship,
-} from '../../_lib/semantic-model-store';
+} from '../../../_lib/semantic-model-store';
 import {
   buildModelBimTmsl, buildCreateOrReplaceRelationshipTmsl, buildDeleteRelationshipTmsl,
   buildAlterTableHierarchyTmsl, executeAasXmla, updateFabricSemanticModelTmsl,
