@@ -74,6 +74,14 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Scorecard rollup + status-rule config — one row per scorecard (id =
+// scorecardId), PK /scorecardId so every per-scorecard read is a single-
+// partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
+// overlay applied to live Fabric goals (loom: items carry their config inline
+// in state.content). Created lazily so a fresh environment needs no extra
+// ARM/Bicep step beyond the account+database (the Console UAMI already holds
+// Cosmos DB Built-in Data Contributor at account scope).
+let _scorecardConfig: Container | null = null;
 let _ensured = false;
 
 /**
@@ -289,6 +297,11 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Scorecard rollup + status-rule config — one row per scorecard (PK
+  // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
+  // live Fabric goals; loom: bundle scorecards carry config inline in
+  // state.content. Single-partition point-read per scorecard.
+  _scorecardConfig = await mk('scorecard-config', '/scorecardId');
   _ensured = true;
 }
 
@@ -314,6 +327,8 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+/** Scorecard rollup + status-rule config — PK /scorecardId. */
+export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -394,6 +409,7 @@ const KNOWN_CONTAINER_IDS = [
   'attribute-groups', 'okrs',
   'access-request-workflow',
   'saved-queries',
+  'scorecard-config',
 ];
 
 /** List all Loom containers with their current throughput shape. */

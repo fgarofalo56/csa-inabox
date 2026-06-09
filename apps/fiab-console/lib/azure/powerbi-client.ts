@@ -34,8 +34,14 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { getPbiGovHost } from './cloud-endpoints';
 
-const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || 'https://api.powerbi.com/v1.0/myorg';
+// Power BI REST base. When LOOM_POWERBI_BASE is unset we resolve the
+// sovereign-cloud-aware host: Commercial / GCC → api.powerbi.com, GCC-High /
+// IL5 / DoD → api.powerbigov.us (the Azure-Government-backed Power BI REST
+// host — NOT a Fabric API host — so this is permitted per no-fabric-dependency).
+// Backwards-compatible: getPbiGovHost() returns api.powerbi.com in Commercial.
+const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || `${getPbiGovHost()}/v1.0/myorg`;
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 
 const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
@@ -1394,4 +1400,96 @@ export async function setLabelsAsAdmin(
       },
     },
   );
+}
+
+// ============================================================
+// Calculation Groups + Field Parameters — TMSL shapes
+//
+// These types are shared by the BFF model route, the semantic-model
+// provisioner, the aas-client TMSL builders, and the SemanticModelEditor UI.
+// They mirror the TMSL / TOM object model exactly:
+//   https://learn.microsoft.com/analysis-services/tabular-models/calculation-groups
+//   https://learn.microsoft.com/power-bi/create-reports/power-bi-field-parameters
+// ============================================================
+
+export interface TmslCalcItem {
+  /** Calculation item name (becomes a slicer value, e.g. "YTD"). */
+  name: string;
+  /** DAX expression using SELECTEDMEASURE(). */
+  expression: string;
+  /** Optional dynamic format-string DAX (e.g. SELECTEDMEASUREFORMATSTRING()). */
+  formatStringDefinition?: string;
+  /** Display order (-1 = unordered, sorts by name). */
+  ordinal?: number;
+}
+
+export interface TmslCalcGroup {
+  /** Table name that also becomes the slicer column users see. */
+  name: string;
+  /** Integer precedence — higher = applied outermost when groups nest. */
+  precedence: number;
+  /** The calculation items in this group. */
+  items: TmslCalcItem[];
+}
+
+export interface FieldParamEntry {
+  /** Friendly label shown in the slicer (e.g. "Total Sales"). */
+  displayName: string;
+  /** NAMEOF-ready reference: 'Table'[Column] or 'Table'[Measure]. */
+  fieldRef: string;
+  /** Sort order of this entry in the parameter table. */
+  order: number;
+}
+
+export interface FieldParamDef {
+  /** Calculated-table name. Appears in the Fields pane + drives a slicer. */
+  name: string;
+  /** The fields the reader can switch between. */
+  fields: FieldParamEntry[];
+}
+
+/** Request body for POST /api/items/semantic-model/{id}/model. */
+export interface ModelWriteRequest {
+  calculationGroups?: TmslCalcGroup[];
+  fieldParameters?: FieldParamDef[];
+}
+
+// ============================================================
+// Fabric Semantic Model Definition (opt-in path only — no-fabric-dependency.md)
+//   GET  /v1/workspaces/{ws}/semanticModels/{id}/definition
+//   POST /v1/workspaces/{ws}/semanticModels/{id}/updateDefinition
+// Only reached when LOOM_SEMANTIC_BACKEND=fabric + a bound workspace.
+//   https://learn.microsoft.com/rest/api/fabric/semanticmodel/items/update-semantic-model-definition
+// ============================================================
+
+export interface FabricDefinitionPart {
+  path: string;
+  /** base64-encoded payload. */
+  payload: string;
+  payloadType: 'InlineBase64';
+}
+
+/** Read the current TMSL/TMDL definition parts of a Fabric semantic model. */
+export async function getFabricModelDefinition(
+  workspaceId: string,
+  modelId: string,
+  format: 'TMSL' | 'TMDL' = 'TMSL',
+): Promise<{ definition: { parts: FabricDefinitionPart[] } }> {
+  return call<{ definition: { parts: FabricDefinitionPart[] } }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/semanticModels/${encodeURIComponent(modelId)}/getDefinition`,
+    { api: 'fabric', method: 'POST', query: { format } },
+  );
+}
+
+/** Replace the definition parts of a Fabric semantic model (full TMSL push). */
+export async function updateFabricModelDefinition(
+  workspaceId: string,
+  modelId: string,
+  parts: FabricDefinitionPart[],
+): Promise<{ ok: true }> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/semanticModels/${encodeURIComponent(modelId)}/updateDefinition`,
+    { api: 'fabric', method: 'POST', body: { definition: { parts } } },
+  );
+  return { ok: true };
 }

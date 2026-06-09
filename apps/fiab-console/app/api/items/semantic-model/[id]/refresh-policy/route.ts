@@ -29,7 +29,7 @@ import {
   listPartitions,
   AasError,
   type AasRefreshPolicy,
-} from '@/lib/azure/aas-client';
+} from '@/lib/azure/aas-incremental-refresh';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
