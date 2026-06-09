@@ -266,6 +266,19 @@ param loomMirrorSourceLinkedService string = ''
 @description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
 param loomMirrorAdlsLinkedService string = ''
 
+@description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government).')
+@allowed([
+  'loom-native'
+  'analysis-services'
+])
+param loomSemanticBackend string = 'loom-native'
+
+@description('Azure Analysis Services server URI for the OPT-IN tabular backend (only used when loomSemanticBackend = "analysis-services"). Accepted forms: asazure://<region>.asazure.windows.net/<server> OR an https XMLA URL. Leave empty (default) for loom-native — no AAS dependency. NOTE: Azure Analysis Services is NOT available in Azure Government (GCC-High / IL5 / DoD); leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services model/database name (only used when loomAasServer is set). The Console UAMI must have at least Reader on the AAS server resource.')
+param loomAasDatabase string = 'model'
+
 @description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
 param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
 
@@ -568,6 +581,23 @@ param loomGovernPbiReportId string = ''
 @description('Managed Grafana dashboard UID to embed (when loomReportKind=grafana). Endpoint is auto-wired from the deployed Grafana when managedGrafanaEnabled.')
 param loomGrafanaDashboardUid string = ''
 
+@description('F21 Usage page (/admin/usage) "Open analytics" embedded report kind. "powerbi" (Commercial/GCC) or "grafana" (GCC-High/IL5). Empty = the native Fluent charts + Log Analytics telemetry only (no embed). Power BI is Fabric-family and strictly opt-in (no-fabric-dependency.md).')
+@allowed([
+  ''
+  'powerbi'
+  'grafana'
+])
+param loomUsageReportKind string = ''
+
+@description('Power BI workspace id holding the usage report (when loomUsageReportKind=powerbi).')
+param loomUsagePbiWorkspaceId string = ''
+
+@description('Power BI report id to embed in the Usage "Open analytics" panel (when loomUsageReportKind=powerbi).')
+param loomUsagePbiReportId string = ''
+
+@description('Managed Grafana dashboard UID for the Usage "Open analytics" panel (when loomUsageReportKind=grafana). Endpoint is shared with loomGrafanaDashboardUid via the deployed Grafana when managedGrafanaEnabled.')
+param loomGrafanaUsageDashboardUid string = ''
+
 @description('ADLS Gen2 / Blob container URL for custom domain images (optional). When set, the /admin/domains Image tab shows a gallery of image blobs in this container alongside the always-available preset color swatches + icon tiles. Format: https://<account>.dfs.core.windows.net/<container>[/<prefix>]. Grant the Console UAMI Storage Blob Data Reader on the container. When empty, only preset swatches and icons are offered (honest gate — no Fabric/OneLake dependency).')
 param loomDomainImageStorage string = ''
 
@@ -649,6 +679,12 @@ param loomLakehouseBackend string = 'adls'
 @description('Semantic model backend selector. Default: loom-native (calc groups + field parameters stored with the item, emitted in TMSL at provision time — NO Fabric/Power BI dependency). Alternatives (opt-in): aas (Azure Analysis Services, writes calc groups + field parameters to a live model over XMLA — Commercial/GCC only), fabric (Fabric updateDefinition), powerbi.')
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
+
+@description('Azure Analysis Services data-plane address for DAX tile / semantic execution when loomSemanticBackend=analysis-services. Form: <region>.<aasSuffix>/<serverName> e.g. westus2.asazure.windows.net/myserver (Gov: <region>.asazure.usgovcloudapi.net/<server>). Leave empty to keep the AAS gate active — the dashboard tile-query route then returns an honest gate naming this env var. One-time bootstrap: add the Console UAMI as an AAS server admin (az ams server admin add).')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name for DAX execution. Must match the model deployed on loomAasServer.')
+param loomAasModel string = ''
 
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
@@ -832,6 +868,10 @@ module containerPlatformModule 'container-platform.bicep' = {
     lawCustomerId: monitoring.outputs.lawCustomerId
     lawSharedKey: monitoring.outputs.lawSharedKey
     complianceTags: complianceTags
+    // Scale & manage drawer → AKS node-pool scaling needs the Console UAMI to
+    // hold "Azure Kubernetes Service Cluster Admin" on the cluster (AKS path).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -1327,6 +1367,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
             { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
             { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
+            // Semantic-model tabular backend (Semantic Link read — the tabular_*
+            // Copilot tools). Default "loom-native" = Cosmos model metadata +
+            // Synapse SQL DAX eval, NO Power BI / Fabric. "analysis-services"
+            // opts into an Azure Analysis Services XMLA backend (loomAasServer
+            // required; Commercial/GCC only — AAS is not in Azure Government).
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Approval activity (F25) - Consumption Logic App + O365 approval
             // email backing the pipeline editor's Approval activity. Empty name
             // -> the approval-logicapp route returns an honest 503 naming the
@@ -1346,6 +1394,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            // Capacity & compute → Scale & manage drawer → AKS node-pool scaling.
+            // Only populated on the AKS container platform (GCC-High / IL5); on
+            // Commercial / GCC these are empty and the drawer's AKS section
+            // honest-gates (503). LOOM_AKS_RG defaults to this admin RG (where the
+            // AKS cluster lives) — aks-arm-client.ts reads both + LOOM_SUBSCRIPTION_ID.
+            { name: 'LOOM_AKS_CLUSTER_NAME', value: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksName : '' }
+            { name: 'LOOM_AKS_RG', value: containerPlatform == 'aks' ? resourceGroup().name : '' }
             // Azure-native Activator (lib/azure/activator-monitor.ts) creates
             // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
             // to THIS admin RG — the same RG where monitoring.bicep grants the
@@ -1551,9 +1606,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            // Azure Analysis Services DirectQuery source binder (semantic-model)
-            // — empty server honest-gates the DirectQuery source tab; no Fabric
-            // / Power BI dependency on the default path.
+            // Azure Analysis Services DAX backend (dashboard Q&A / pinned-DAX
+            // tiles + DirectQuery source binder for semantic-model) — Azure-native,
+            // active when LOOM_SEMANTIC_BACKEND=analysis-services. Empty server
+            // honest-gates the DirectQuery source tab and the dashboard tile-query
+            // route; no Fabric / Power BI dependency on the default path.
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_REGION', value: empty(loomAasServer) ? '' : loomAasRegion }
             { name: 'LOOM_AAS_MODEL', value: empty(loomAasServer) ? '' : loomAasModel }
@@ -1732,12 +1789,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           boundary == 'GCC-High' || boundary == 'IL5' ? [
             { name: 'LOOM_MIP_GRAPH_BASE', value: 'https://graph.microsoft.us' }
           ] : [],
-          // Custom domain-image gallery storage (optional, honest-gated). The
+          // Custom domain-image gallery storage (honest-gated). The
           // /admin/domains Image tab lists image blobs here; preset swatches +
-          // icons work regardless. No Fabric/OneLake dependency.
+          // icons work regardless. Precedence: an explicit operator param wins;
+          // otherwise fall back to the catalog module's auto-provisioned ADLS
+          // (DFS) container URL so the custom-image gallery is wired with NO
+          // manual step whenever Purview/catalog storage is deployed. Stays
+          // unset (honest "not configured" gate) only when neither is present.
+          // No Fabric/OneLake dependency.
           !empty(loomDomainImageStorage) ? [
             { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: loomDomainImageStorage }
-          ] : [],
+          ] : (!empty(catalog.outputs.domainImagesDfsContainerUrl) ? [
+            { name: 'LOOM_DOMAIN_IMAGE_STORAGE', value: catalog.outputs.domainImagesDfsContainerUrl }
+          ] : []),
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
@@ -1757,6 +1821,27 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : (loomReportKind == 'grafana' && !empty(loomGrafanaDashboardUid) ? [
             { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
           ] : []),
+          // F21 Usage page (/admin/usage) "Open analytics" embed — per-cloud,
+          // strictly opt-in (the native Fluent charts + Log Analytics telemetry
+          // are the always-on default). Power BI is Fabric-family → opt-in only
+          // (no-fabric-dependency.md). Gov renders Managed Grafana, never an
+          // EmptyState upsell.
+          !empty(loomUsageReportKind) ? [
+            { name: 'LOOM_USAGE_REPORT_KIND', value: loomUsageReportKind }
+          ] : [],
+          (loomUsageReportKind == 'powerbi' && !empty(loomUsagePbiWorkspaceId) && !empty(loomUsagePbiReportId)) ? [
+            { name: 'LOOM_USAGE_PBI_WORKSPACE_ID', value: loomUsagePbiWorkspaceId }
+            { name: 'LOOM_USAGE_PBI_REPORT_ID', value: loomUsagePbiReportId }
+          ] : [],
+          (loomUsageReportKind == 'grafana' && !empty(loomGrafanaUsageDashboardUid)) ? [
+            { name: 'LOOM_GRAFANA_USAGE_DASHBOARD_UID', value: loomGrafanaUsageDashboardUid }
+          ] : [],
+          // Ensure LOOM_GRAFANA_ENDPOINT is wired for the Usage grafana embed
+          // even when the Govern report doesn't also use grafana (avoid a
+          // duplicate env name when both do).
+          (loomUsageReportKind == 'grafana' && managedGrafanaEnabled && loomReportKind != 'grafana') ? [
+            { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
+          ] : [],
           // F6 item-level permissions: the Fabric /share mirror is strictly
           // opt-in and additive — the Azure-native backing (Cosmos
           // item-permissions + ADLS POSIX ACL + Storage data-plane RBAC) is

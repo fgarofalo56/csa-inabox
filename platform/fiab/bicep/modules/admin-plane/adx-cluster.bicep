@@ -192,6 +192,22 @@ resource consoleMonitoringContributor 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
+// ---- Console UAMI → Azure Kusto Contributor at cluster scope ----
+// Required for the Admin → Capacity & compute "Scale & manage" detail pane to
+// PATCH the cluster SKU (kusto-arm-client.ts updateKustoClusterSku). Monitoring
+// Contributor alone cannot change the SKU — ARM returns 403 — so the scale
+// drawer would surface an honest-gate MessageBar without this grant.
+// Role ID 833127c3-3d62-4978-9c27-c0a5e418f64f is cloud-agnostic.
+resource consoleKustoContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: adxCluster
+  name: guid(adxCluster.id, consolePrincipalId, '833127c3-3d62-4978-9c27-c0a5e418f64f')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '833127c3-3d62-4978-9c27-c0a5e418f64f')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output clusterId string = adxCluster.id
 output clusterName string = adxCluster.name
 output clusterUri string = adxCluster.properties.uri
