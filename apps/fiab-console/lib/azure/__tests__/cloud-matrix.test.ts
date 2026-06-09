@@ -86,6 +86,12 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.kustoClusterUri('adx-loom', 'eastus2')).toBe(`https://adx-loom.eastus2.${KUSTO_COM}`);
   });
 
+  it('AAS helpers use asazure.windows.net + the asterisk scope', async () => {
+    const m = await load('AzureCloud');
+    expect(m.aasSuffix()).toBe('asazure.windows.net');
+    expect(m.aasScope()).toBe('https://*.asazure.windows.net/.default');
+  });
+
   it('Cosmos DB helpers use documents.azure.com', async () => {
     const m = await load('AzureCloud');
     // Assembled from fragments to keep the contiguous literal out of source.
@@ -163,6 +169,12 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.kustoClusterUri('adx-loom', 'usgovvirginia')).toBe(
       'https://adx-loom.usgovvirginia.kusto.usgovcloudapi.net',
     );
+  });
+
+  it('AAS helpers use the Gov asazure suffix + asterisk scope', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasScope()).toBe('https://*.asazure.usgovcloudapi.net/.default');
   });
 
   it('Cosmos DB helpers use documents.azure.us', async () => {

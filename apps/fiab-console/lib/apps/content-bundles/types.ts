@@ -116,7 +116,22 @@ export interface MirroredDatabaseContent {
 
 export interface ScorecardContent {
   kind: 'scorecard';
-  okrs: { id: string; name: string; description?: string; metric: string; target: number | string; current?: number | string }[];
+  okrs: {
+    id: string;
+    name: string;
+    description?: string;
+    metric: string;
+    target: number | string;
+    current?: number | string;
+    /** Optional scorecard status band (onTrack / atRisk / behindGoal / …). */
+    status?: string;
+    /** Optional goal owner (display name or email). */
+    owner?: string;
+    /** Optional ISO due date. */
+    dueDate?: string;
+    /** Optional sub-goal ids (two-level hierarchy). */
+    subGoalIds?: string[];
+  }[];
 }
 
 export interface DataProductContent {

@@ -53,6 +53,8 @@ param loomNotebookBackend string = ''
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
 
+@description('OPTIONAL standalone Azure Analysis Services server URI (asazure://<region>.asazure.windows.net/<server>) for Scorecard connected-metrics. Leave EMPTY (default): connected-metric DAX runs through the Power BI executeQueries REST path (Azure-native, no Fabric capacity required). When set, the Console UAMI must be a Server Administrator on the AAS resource; the standalone XMLA path is gated honestly in-app (LOOM_METRIC_BACKEND=aas-xmla).')
+param loomAasServer string = ''
 @description('Enable rich display() visualization for notebook cells (F-DS). When true, the BFF injects the ai-display.py helper as Livy session statement 0 so display(df) renders the Loom interactive grid + chart recommendations. Azure-native (Synapse Spark) — no Fabric dependency. When false/unset, display(df) falls back to the kernel built-in table.')
 param loomRichDisplay bool = true
 
@@ -1485,6 +1487,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
             // (Fabric is not IL5-authorized). Unset → Azure-native only.
             { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary != 'IL5') ? '1' : '' }
+            // Scorecard connected-metrics — OPTIONAL standalone AAS server. Empty
+            // (default) → connected-metric DAX runs through Power BI executeQueries
+            // (Azure-native, no Fabric capacity required).
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
           ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }

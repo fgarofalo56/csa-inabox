@@ -384,6 +384,35 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (data plane — XMLA host suffix + AAD scope)
+// ---------------------------------------------------------------------------
+
+/**
+ * AAS data-plane hostname suffix (no leading dot, no region/server prefix).
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5   : asazure.usgovcloudapi.net
+ * AAS is available in the US Gov cloud under the usgovcloudapi suffix.
+ */
+export function aasSuffix(): string {
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * AAD scope for AAS data-plane tokens. Per Microsoft Learn the audience is
+ * literally `https://*.asazure.windows.net` (with the asterisk) — it is an
+ * exact required string, not a wildcard the caller substitutes into. The
+ * Scorecard connected-metric DEFAULT path uses the Power BI scope instead
+ * (executeQueries); this scope is only relevant when a standalone AAS server
+ * (LOOM_AAS_SERVER) is wired for a future XMLA integration.
+ * See: https://learn.microsoft.com/azure/analysis-services/analysis-services-addservprinc-admins
+ */
+export function aasScope(): string {
+  return isGovCloud()
+    ? 'https://*.asazure.usgovcloudapi.net/.default'
+    : 'https://*.asazure.windows.net/.default';
+}
+
+// ---------------------------------------------------------------------------
 // Azure Cosmos DB (data plane — documents endpoint)
 // ---------------------------------------------------------------------------
 

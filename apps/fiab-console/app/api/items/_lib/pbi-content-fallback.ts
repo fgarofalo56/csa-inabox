@@ -253,6 +253,11 @@ export function scorecardGoalsFromContent(item: WorkspaceItem) {
     description: o.description || o.metric,
     currentValue: typeof o.current === 'number' ? o.current : Number(o.current) || undefined,
     targetValue: typeof o.target === 'number' ? o.target : Number(o.target) || undefined,
+    // Extended scorecard fields (present when the bundle includes them).
+    status: o.status,
+    owner: o.owner,
+    dueDate: o.dueDate,
+    subGoalIds: o.subGoalIds,
   }));
 }
 
