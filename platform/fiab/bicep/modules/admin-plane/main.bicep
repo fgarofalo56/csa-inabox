@@ -248,8 +248,9 @@ param loomPostgresAadUser string = ''
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
-@description('Azure Analysis Services connection string (asazure://<region>.asazure.windows.net/<server>) backing the semantic-model Power Query ingest refresh. Empty = the AAS refresh phase is honestly gated (Delta still lands; query via Synapse Serverless). Set from landing-zone aas.bicep output aasConnectionString when deployAas=true. AAS is unavailable in Government clouds — leave empty there.')
-param loomAasServer string = ''
+// NOTE: loomAasServer (AAS connection string used by both the semantic-model
+// Power Query ingest refresh path AND the DAX tile / analysis-services
+// backend path) is declared further below alongside loomSemanticBackend.
 
 @description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
 param loomAasModel string = ''
@@ -266,10 +267,13 @@ param loomMirrorSourceLinkedService string = ''
 @description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
 param loomMirrorAdlsLinkedService string = ''
 
-@description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government).')
+@description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" / "aas" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government). "fabric" / "powerbi" remain opt-in alternatives that require a bound Power BI / Fabric workspace.')
 @allowed([
   'loom-native'
   'analysis-services'
+  'aas'
+  'fabric'
+  'powerbi'
 ])
 param loomSemanticBackend string = 'loom-native'
 
@@ -676,9 +680,11 @@ param loomMirrorBackend string = 'adf-cdc'
 @allowed(['adls', 'fabric'])
 param loomLakehouseBackend string = 'adls'
 
-@description('Semantic model backend selector. Default: loom-native (calc groups + field parameters stored with the item, emitted in TMSL at provision time — NO Fabric/Power BI dependency). Alternatives (opt-in): aas (Azure Analysis Services, writes calc groups + field parameters to a live model over XMLA — Commercial/GCC only), fabric (Fabric updateDefinition), powerbi.')
-@allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
-param loomSemanticBackend string = 'loom-native'
+// NOTE: loomSemanticBackend is declared once earlier in this file (the
+// allow-list there is the union of all opt-in backends). loomAasServer /
+// loomAasModel / loomAasDatabase are also declared once earlier (semantic-model
+// Power Query ingest refresh + DAX tile path share the same env vars). Re-
+// declaring any of them here would produce BCP028.
 
 // NOTE: loomAasServer / loomAasModel are declared once earlier in this file
 // (semantic-model Power Query ingest refresh path). They are REUSED below by
@@ -698,8 +704,8 @@ param loomAasServerUrl string = ''
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
 
-@description('AAS database (TMSL Catalog) name. Used by the Console for column-metadata XMLA reads/writes, calc-group/field-param writes, and the Loom-native report renderer. Defaults to the last path segment of loomAasXmlaEndpoint when empty for the incremental-refresh path; otherwise defaults to loomdb for the column-editor path.')
-param loomAasDatabase string = 'loomdb'
+// NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
+// (defaulted to 'model'). The column-editor path reuses the same param.
 
 @description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
 param loomAasResourceGroup string = ''
