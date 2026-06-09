@@ -66,6 +66,7 @@ const useStyles = makeStyles({
     padding: '24px 0',
   },
   audit: { color: tokens.colorNeutralForeground3 },
+  rootCause: { display: 'flex', flexDirection: 'column', gap: '2px' },
 });
 
 export interface CopilotPaneProps {
@@ -82,6 +83,8 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [proposedCode, setProposedCode] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [rootCause, setRootCause] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const lang = (cell.lang || 'pyspark') as MonacoLanguage;
@@ -93,6 +96,8 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
     setError(null);
     setHint(null);
     setProposedCode(null);
+    setSummary(null);
+    setRootCause(null);
     setSessionId(null);
 
     const traceback = Array.isArray(output.traceback)
@@ -111,6 +116,11 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
             cellSource: cell.source,
             lang: cell.lang || 'pyspark',
             errorContext: { ename: output.ename, evalue: output.evalue, traceback },
+            // Real execution details from the failed run (the Spark pool name is
+            // added server-side from LOOM_SYNAPSE_SPARK_POOL).
+            executionCount: cell.executionCount,
+            durationMs: output.durationMs,
+            executedAtUtc: output.executedAtUtc,
           }),
         });
         const j = await res.json().catch(() => ({}));
@@ -120,6 +130,8 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
           setHint(j?.hint || null);
         } else {
           setProposedCode(j.proposedCode);
+          setSummary(j.summary || null);
+          setRootCause(j.rootCause || null);
           setSessionId(j.sessionId);
         }
       } catch (e: any) {
@@ -162,6 +174,20 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
 
             {!loading && proposedCode != null && (
               <>
+                {summary && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Error summary</MessageBarTitle>
+                      {summary}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {rootCause && (
+                  <div className={s.rootCause}>
+                    <Caption1 className={s.sectionLabel}>Root cause</Caption1>
+                    <Caption1>{rootCause}</Caption1>
+                  </div>
+                )}
                 <Caption1 className={s.sectionLabel}>Current (failing)</Caption1>
                 <div className={s.currentBox}>
                   <MonacoTextarea
@@ -198,7 +224,7 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
               disabled={loading || proposedCode == null}
               onClick={() => proposedCode != null && onAccept(proposedCode)}
             >
-              Accept fix
+              Keep
             </Button>
             <Button appearance="secondary" onClick={onClose}>
               Dismiss

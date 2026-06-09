@@ -120,17 +120,11 @@ param appGatewayEnabled = true
 // surfaces LOOM_AML_WORKSPACE/RG/REGION to the console. No Fabric dependency.
 param mlWorkspaceEnabled = true
 
-// BI stack — Azure Analysis Services S0 + Direct Lake shim (Azure-native, no
-// Fabric / Power BI workspace). Commercial-only; on Gov boundaries the semantic
-// model provisioner stays on the loom-native tabular layer. The DQ connection
-// string + render-Function name come from env so no secret lands on disk.
-param aasEnabled = true
-param aasSkuName = 'S0'
-param loomBiBackend = 'analysis-services'
-param loomDirectLakeShimEnabled = true
-param loomDqSourceConnectionString = readEnvironmentVariable('LOOM_DQ_SOURCE_CONN', '')
-param loomBiRenderFunctionName = readEnvironmentVariable('LOOM_BI_RENDER_FUNCTION_NAME', '')
-param loomDirectLakeEventQueue = readEnvironmentVariable('LOOM_DIRECT_LAKE_EVENT_QUEUE', '')
+// BI stack — Azure Analysis Services + Direct Lake shim are opt-in on the
+// admin-plane (modules/admin-plane/main.bicep params aasEnabled, aasSkuName,
+// loomBiBackend, loomDirectLakeShimEnabled). Top-level top-level main.bicep
+// keeps the defaults conservative; flip the admin-plane params directly when
+// opting in. Azure-native, no Fabric / Power BI workspace dependency.
 
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource

@@ -75,6 +75,9 @@ param loomDlpEnabled bool = false
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false
 
+@description('HTTPS XMLA endpoint for semantic-model authoring surfaces that need the XMLA write surface (Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint is an opt-in alternative selected by URL. Empty = the Aggregations surface honest-gates (no Fabric dependency).')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
 param loomIdentityPickerEnabled bool = false
 
@@ -145,6 +148,9 @@ param aiFoundryEnabled bool = false
 
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
+
+@description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable.')
+param loomAoaiCompletionDeployment string = ''
 
 @description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
 param loomAmlRg string = ''
@@ -309,6 +315,9 @@ param loomAmlRegion string = ''
 @description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT — Fix / Explain / NL→T-SQL + inline ghost text). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true; empty + Foundry off → the SQL Copilot pane shows an honest gate naming this var + the Cognitive Services OpenAI User role.')
 param loomAzureOpenAiEndpoint string = ''
 
+@description('Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION) for the Copilot / data-agent orchestrators. Default 2024-10-21; advance for o-series reasoning models. The data-plane host is derived per sovereign boundary from environment(), so this value is cloud-invariant.')
+param loomAoaiApiVersion string = '2024-10-21'
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -326,35 +335,6 @@ param loomMirrorBackend string = 'adf-cdc'
 
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
-
-// ---------------------------------------------------------------------
-// BI stack (Azure Analysis Services + Direct Lake shim) — opt-in,
-// Commercial-only. Azure-native; NO Fabric / Power BI workspace dependency.
-// ---------------------------------------------------------------------
-
-@description('Deploy an Azure Analysis Services Standard server for the BI stack. Commercial only — AAS is not offered in US Gov Virginia (GCC / GCC-High / IL5). Default false → loom-native tabular layer.')
-param aasEnabled bool = false
-
-@description('AAS Standard SKU (S0 default; S1/S2/S4/S8v2/S9v2 for production DAX scale-out).')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
-param aasSkuName string = 'S0'
-
-@description('BI backend selector (LOOM_BI_BACKEND). Default loom-native. analysis-services routes the semantic-model provisioner through the deployed AAS XMLA endpoint; powerbi is the opt-in Power BI path.')
-@allowed(['loom-native', 'analysis-services', 'powerbi'])
-param loomBiBackend string = 'loom-native'
-
-@description('Enable the Direct Lake shim background refresh service (LOOM_DIRECT_LAKE_SHIM_ENABLED).')
-param loomDirectLakeShimEnabled bool = false
-
-@description('DirectQuery source connection string for the AAS model (Synapse Dedicated SQL pool TDS endpoint). Stored in Key Vault, referenced via secretRef. Empty → DirectQuery surface honest-gates.')
-@secure()
-param loomDqSourceConnectionString string = ''
-
-@description('BI render Function app name (LOOM_BI_RENDER_FUNCTION_NAME). Empty honest-gates the BI render surface.')
-param loomBiRenderFunctionName string = ''
-
-@description('Service Bus queue name carrying Storage Event Grid BlobCreated events for the Direct Lake shim (EVENTGRID_QUEUE). Empty → the shim idles gracefully.')
-param loomDirectLakeEventQueue string = ''
 
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
 @secure()
@@ -421,6 +401,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     agentFoundryEnabled: agentFoundryEnabled
+    loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
@@ -457,6 +438,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
+    loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
     loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
@@ -472,14 +454,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlRegion: loomAmlRegion
     // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
     loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
-    // BI stack (AAS + Direct Lake shim) — opt-in, Commercial-only.
-    aasEnabled: aasEnabled
-    aasSkuName: aasSkuName
-    loomBiBackend: loomBiBackend
-    loomDirectLakeShimEnabled: loomDirectLakeShimEnabled
-    loomDqSourceConnectionString: loomDqSourceConnectionString
-    loomBiRenderFunctionName: loomBiRenderFunctionName
-    loomDirectLakeEventQueue: loomDirectLakeEventQueue
+    loomAoaiApiVersion: loomAoaiApiVersion
   }
 }
 
@@ -521,6 +496,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
@@ -576,6 +552,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint

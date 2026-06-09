@@ -120,7 +120,34 @@ The Console resolves it from these env vars (all set by bicep — see Bicep sync
 | `LOOM_FOUNDRY_PROJECT_NAME` | `loom-agents` | Project display / resolve |
 | `LOOM_AOAI_ENDPOINT` | `https://aifndry-loom-eastus2.openai.azure.com/` | AOAI chat + embeddings clients |
 | `LOOM_AOAI_CHAT_DEPLOYMENT` | `chat` (gpt-4.1-mini, 2025-04-14, GlobalStandard) | Chat completions |
+| `LOOM_AOAI_DEPLOYMENT` | `chat` (mirror of `_CHAT_DEPLOYMENT`) | Copilot / data-agent orchestrators |
 | `LOOM_AOAI_EMBED_DEPLOYMENT` | `text-embedding-ada-002` (v2, Standard) | Embeddings |
+| `LOOM_AOAI_COMPLETION_DEPLOYMENT` | _(empty)_ — optional, e.g. `gpt-4o-mini` (2024-07-18, GlobalStandard) | Notebook/SQL inline code completion (ghost text). Empty ⇒ ghost text reuses `LOOM_AOAI_DEPLOYMENT`. Set `loomAoaiCompletionDeployment` to deploy a dedicated low-latency slot; leave empty in GCC-High / IL5 regions where the model is unavailable. |
+| `LOOM_AOAI_API_VERSION` | `2024-10-21` (bicep param `loomAoaiApiVersion`) | Chat Completions REST version; advance for o-series reasoning models |
+| `LOOM_AOAI_AUDIENCE` | `https://cognitiveservices.azure.com` (Gov: `…azure.us`) | AOAI bearer token scope, derived per boundary |
+
+#### Per-cloud AOAI endpoint patterns {#aoai-per-cloud}
+
+`resolveAoaiTarget()` (`apps/fiab-console/lib/azure/copilot-orchestrator.ts`)
+picks the host suffix from `getOpenAiSuffix()` and the token audience from
+`cogScope()`, both keyed off the active sovereign boundary (`LOOM_CLOUD`, falling
+back to `AZURE_CLOUD`). When the resolved `LOOM_AOAI_ENDPOINT` host contradicts
+the active cloud, the resolver throws an honest `NoAoaiDeploymentError` (rather
+than letting the data-plane 401) and the Copilot pane renders a MessageBar with a
+cloud-correct **Configure in AI Studio** deep-link.
+
+| LoomCloud | `LOOM_CLOUD` | `LOOM_AOAI_ENDPOINT` pattern | Token audience (`LOOM_AOAI_AUDIENCE`) | AI Studio portal | Regions |
+|---|---|---|---|---|---|
+| Commercial | `Commercial` (or unset) | `https://<acct>.openai.azure.com/` | `https://cognitiveservices.azure.com` | `ai.azure.com` | all commercial regions |
+| GCC | `GCC` | `https://<acct>.openai.azure.com/` | `https://cognitiveservices.azure.com` | `ai.azure.com` | GCC tenant on Commercial Azure AOAI |
+| GCC-High | `GCC-High` | `https://<acct>.openai.azure.us/` | `https://cognitiveservices.azure.us` | `ai.azure.us` | `usgovarizona`, `usgovvirginia` |
+| IL5 | `IL5` (→ `GCC-High`) | `https://<acct>.openai.azure.us/` | `https://cognitiveservices.azure.us` | `ai.azure.us` | `usgovarizona`, `usgovvirginia` |
+
+When `agentFoundryEnabled = true`, bicep derives the correct suffix automatically
+via `environment().suffixes.storage` — the patterns above only matter when reusing
+an existing account through the `az containerapp update --set-env-vars` path. The
+4-cloud host resolution is locked by the unit test
+`apps/fiab-console/lib/azure/__tests__/cloud-matrix.test.ts` (AOAI describe block).
 
 ### Greenfield (let bicep do it)
 
@@ -1030,74 +1057,95 @@ GCC-High / DoD use the Azure DevOps Government endpoints, not the commercial
 `dev.azure.com`.
 
 
-## BI stack — Azure Analysis Services + Direct Lake shim {#bi-stack-aas-direct-lake}
+## Semantic-model column metadata — Azure Analysis Services XMLA {#semantic-model-aas-xmla}
 
-The BI stack (semantic-model `analysis-services` backend + the Direct Lake shim
-that keeps AAS import partitions fresh on Delta commits) is **Azure-native and
-opt-in**. It deploys only on the **Commercial** boundary — Azure Analysis
-Services is not offered in US Gov Virginia (GCC / GCC-High / IL5), so on Gov the
-semantic-model provisioner stays on the loom-native tabular layer (no gate, no
-Fabric / Power BI workspace dependency).
+The Semantic model editor's **Tables** tab edits column metadata (data
+category, format string, summarize-by, display folder, sort-by, hidden, and
+calculated columns / tables) over the **XMLA** endpoint of a Tabular model. The
+Azure-native backend is **Azure Analysis Services** — a standalone Azure
+resource, so this requires **no Microsoft Fabric / Power BI workspace** (per
+`.claude/rules/no-fabric-dependency.md`).
 
-### Step 1 — Enable the stack in the params file
+### Step 1 — Deploy AAS (bicep, automatic)
 
-`params/commercial-full.bicepparam` already flips it on:
+Set `loomSemanticBackend=analysis-services`. `admin-plane/main.bicep` then
+deploys `analysis-services.bicep`, adds the Console UAMI as a server
+administrator (`app:<clientId>@<tenantId>`), and wires
+`LOOM_AAS_SERVER_URL=asazure://<region>.asazure.windows.net/<name>` +
+`LOOM_AAS_DATABASE=loomdb` to the Console app. AAS is **Commercial / GCC only**
+— the module is guarded off at `GCC-High` / `IL5`.
 
-```bicep
-param aasEnabled = true
-param aasSkuName = 'S0'                 // S1/S2/S4/S8v2/S9v2 for production DAX load
-param loomBiBackend = 'analysis-services'
-param loomDirectLakeShimEnabled = true
-param loomDqSourceConnectionString = readEnvironmentVariable('LOOM_DQ_SOURCE_CONN', '')
-param loomBiRenderFunctionName = readEnvironmentVariable('LOOM_BI_RENDER_FUNCTION_NAME', '')
-param loomDirectLakeEventQueue = readEnvironmentVariable('LOOM_DIRECT_LAKE_EVENT_QUEUE', '')
-```
+### Step 1b — Existing deployment / pre-existing server
 
-`aas.bicep` provisions the AAS Standard server with the **loom-direct-lake UAMI
-as a server administrator** (so the shim can connect over XMLA and refresh with
-its managed identity), and `aas-adls-rbac.bicep` grants that UAMI **Storage Blob
-Data Reader** on the DLZ ADLS account (for Delta `_delta_log` partition reads).
+Set `loomAasServerUrl` to an existing `asazure://…` URL (and add the Console
+UAMI as a server administrator on that server). The module is skipped and the
+URL is wired through verbatim.
 
-### Step 2 — Data-plane grants (post-deploy, not ARM)
+### GCC-High / IL5 / DoD
 
-Two grants cannot be expressed in ARM/Azure RBAC and run as a one-time step:
-
-```bash
-SUB=<sub> ADMIN_RG=rg-csa-loom-admin-eastus2 DLZ_RG=rg-csa-loom-dlz-single-eastus2 \
-  bash scripts/csa-loom/grant-bi-rbac.sh
-```
-
-This grants the shim UAMI **Cosmos DB Built-in Data Contributor** (read the
-`direct-lake-config/refresh-policies` container) and **`db_datareader`** on the
-Synapse Dedicated SQL pool (DirectQuery + partition-boundary reads). The
-dedicated pool must be **resumed** and the runner must be a Synapse SQL
-Administrator. Idempotent.
-
-### Step 3 — (Optional) DirectQuery + Service Bus wiring
-
-- Set `LOOM_DQ_SOURCE_CONN` to the Synapse pool TDS endpoint
-  (`Server=<ws>.sql.azuresynapse.net;Database=<pool>;Authentication=ActiveDirectoryMSI`)
-  before deploy — it lands in Key Vault and is referenced via `secretRef` as
-  `LOOM_DQ_SOURCE_CONNECTION_STRING`. Empty → the DirectQuery surface honest-gates.
-- Set `LOOM_DIRECT_LAKE_EVENT_QUEUE` to a Service Bus queue carrying Storage
-  Event Grid `BlobCreated` events. Empty → the shim idles gracefully
-  (`DeltaLogEventHandler` logs and waits).
+AAS is not offered in Azure Government. If a tenant licenses **Power BI
+Premium**, set `LOOM_POWERBI_XMLA_ENDPOINT` to the Premium XMLA endpoint and the
+editor uses it instead (token scope `https://high.analysis.usgovcloudapi.net/powerbi/api/.default`).
+Otherwise the Tables tab renders read-only structure with an honest gate
+MessageBar — no fabricated data.
 
 ### Verify
 
-With `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET, install a semantic-model item: the
-provision receipt shows the model materialized on the loom-native tabular layer
-and (when `aasEnabled`) the AAS server wired for Direct Lake refresh — no Fabric
-/ Power BI workspace required.
+`GET /api/items/semantic-model/<id>/model` returns `{ ok: true, backend, tables }`
+with real columns; a column `Apply` (`PATCH … op=alter-column`) returns
+`{ ok: true, tmsl }` echoing the exact TMSL Alter sent.
+## Analysis Services — RLS/OLS Security tab {#analysis-services-rls-ols}
 
-### Bicep sync
+The semantic-model **Security (RLS/OLS)** tab authors model roles (row-level DAX
+filters + object-level table/column permissions) and runs **test-as-role**
+probes through an Analysis-Services XMLA endpoint. This is **Azure-native and
+needs no Fabric/Power BI workspace** — when nothing is configured the tab shows
+an honest MessageBar naming the env var to set; the full editor surface still
+renders.
 
-| Resource / setting | Where |
-|---|---|
-| AAS Standard server | `modules/admin-plane/aas.bicep` |
-| Shim → ADLS Storage Blob Data Reader | `modules/admin-plane/aas-adls-rbac.bicep` |
-| Env vars (`LOOM_AAS_*`, `LOOM_BI_BACKEND`, `LOOM_DIRECT_LAKE_SHIM_ENABLED`, `LOOM_BI_RENDER_FUNCTION_NAME`, `LOOM_DQ_SOURCE_CONNECTION_STRING`, `EVENTGRID_QUEUE`) | `modules/admin-plane/main.bicep` (console + shim apps) |
-| Cosmos data-contributor + Synapse `db_datareader` | `scripts/csa-loom/grant-bi-rbac.sh` |
+Two interchangeable backends:
 
+### Option A — Azure Analysis Services (default; no Fabric/Power BI tenant)
 
+AAS **cannot** use a managed identity as a server admin, so a dedicated service
+principal is the admin and the XMLA data-plane auth uses that SPN.
 
+1. Deploy the server (wired in `admin-plane/main.bicep`):
+   ```bicep
+   // params/<cloud>-full.bicepparam
+   param aasEnabled = true
+   param aasSpnClientId = '<appId of the AAS-admin SPN>'   // NOT the Console UAMI
+   param aasSku = 'D1'                                     // Developer; $0 idle
+   ```
+   The module sets `asAdministrators` to `app:<clientId>@<tenantId>` and grants
+   the Console UAMI ARM Reader on the server. It emits `LOOM_AAS_SERVER`
+   (`asazure://…`), `LOOM_AAS_TENANT_ID`, and `LOOM_AAS_CLIENT_ID` to the app.
+2. Store the SPN secret in Key Vault and wire it as the env var
+   `LOOM_AAS_CLIENT_SECRET` (Container App secretRef → KV secret
+   `loom-aas-client-secret`). This is the one out-of-band step (the SPN secret
+   is not created by bicep).
+3. Deploy your semantic-model database(s) into the AAS server (Visual Studio /
+   Tabular Editor / a TMSL `createOrReplace`).
+
+### Option B — Power BI Premium / Fabric capacity XMLA (opt-in)
+
+1. Capacity admin: enable **XMLA endpoint = Read Write** on the Premium/Fabric
+   capacity.
+2. Tenant admin: enable **"Allow XMLA endpoints and Analyze in Excel"**.
+3. Add the Console UAMI as a **Member** on the Power BI workspace.
+4. Set the endpoint:
+   ```bicep
+   param loomPowerbiXmlaEndpoint = 'powerbi://api.powerbi.com/v1.0/myorg/<Workspace>'
+   ```
+   (GCC-High / IL5 use the `analysis.usgovcloudapi.net` token scope automatically.)
+
+> Service principals can execute the role TMSL but **cannot** be added as role
+> *members* (Power BI/AAS restriction) — use real Entra users or security groups.
+
+### Verify
+
+Open a semantic model → **Security (RLS/OLS)** tab → Add a role with a row
+filter (e.g. `[Region] = "East"`) and a hidden column → Save → **Test as role**
+with a tenant UPN. The result grid returns only the filtered rows and omits the
+OLS-hidden column — that JSON is the receipt. Not available in the DoD (IL6)
+boundary (AAS is not offered there; the tab shows a DoD gate).
