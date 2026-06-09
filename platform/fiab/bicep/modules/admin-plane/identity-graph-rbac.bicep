@@ -35,6 +35,9 @@ param boundary string
 @description('When true, document only (matches the repo-wide skipRoleGrants convention). No grant is attempted from Bicep regardless, since Graph AppRoles are out-of-band.')
 param skipRoleGrants bool = false
 
+@description('When true, also document the Group.ReadWrite.All AppRole required for the workspace settings "Teams and SharePoint" tab to CREATE a Microsoft 365 group for a workspace (set LOOM_WORKSPACE_M365_LINK=true on the console). Read-only group search needs only Group.Read.All; group creation needs this additional consent, so it is opt-in to avoid a surprise consent prompt on existing deployments.')
+param workspaceM365LinkEnabled bool = false
+
 var graphBase = boundary == 'GCC-High'
   ? 'https://graph.microsoft.us'
   : boundary == 'IL5'
@@ -45,11 +48,19 @@ var consentPortal = boundary == 'GCC-High' || boundary == 'IL5'
   ? 'https://portal.azure.us'
   : 'https://portal.azure.com'
 
-output requiredAppRoles array = [
+// Group.ReadWrite.All — required ONLY when the workspace ↔ M365-group "create a
+// new group" affordance is enabled. Append it conditionally so the documented
+// grant set matches what's actually consented.
+var baseAppRoles = [
   { name: 'User.Read.All',        appRoleId: 'df021288-bdef-4463-88db-98f22de89214', reason: 'Search users by displayName or UPN.' }
-  { name: 'Group.Read.All',       appRoleId: '5b567255-7703-4780-807c-7be8301ae99b', reason: 'Search groups and expand transitiveMembers.' }
+  { name: 'Group.Read.All',       appRoleId: '5b567255-7703-4780-807c-7be8301ae99b', reason: 'Search groups and expand transitiveMembers; link an existing M365 group to a workspace.' }
   { name: 'Application.Read.All', appRoleId: '9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30', reason: 'Search service principals / managed identities.' }
 ]
+var m365WriteAppRole = [
+  { name: 'Group.ReadWrite.All', appRoleId: '62a82d76-70ea-41e2-9197-370581804d09', reason: 'Create a Microsoft 365 group for a workspace (settings → Teams and SharePoint).' }
+]
+
+output requiredAppRoles array = workspaceM365LinkEnabled ? concat(baseAppRoles, m365WriteAppRole) : baseAppRoles
 
 output graphBase string = graphBase
 output graphScope string = '${graphBase}/.default'

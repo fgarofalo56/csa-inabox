@@ -1,3 +1,15 @@
+/**
+ * Workspace licensing model — one-for-one with the Fabric "License mode" the
+ * workspace settings General → License panel exposes (Trial / Pro / Premium /
+ * Embedded / Premium-Per-User), plus Loom's Azure-native default `Org` which
+ * means "organizational Azure-native capacity, no Power BI / Fabric license
+ * required". Persisted on the workspace doc; the Azure-native path NEVER
+ * enforces a Power BI / Fabric license (see no-fabric-dependency.md) — the
+ * value drives the settings UI + capacity-bind affordance only.
+ */
+export type WorkspaceLicenseMode =
+  | 'Org' | 'Trial' | 'Pro' | 'Premium' | 'PremiumPerUser' | 'Embedded' | 'Delegated';
+
 export interface Workspace {
   id: string;
   tenantId: string;
@@ -9,6 +21,35 @@ export interface Workspace {
   capacity?: string;
   /** Selected Loom-managed business domain id. */
   domain?: string;
+  /** Licensing model (workspace settings → License tab). Defaults to 'Org'. */
+  licenseMode?: WorkspaceLicenseMode;
+  /**
+   * Workspace contacts — UPNs / group display names assigned in the create
+   * wizard's "Contact list" step (workspace admins / members beyond the
+   * creator). Mirrors the Fabric "Contact list" workspace setting.
+   */
+  contacts?: string[];
+  /**
+   * Linked Microsoft 365 unified-group object id (workspace settings →
+   * "Teams and SharePoint" / M365 tab). Set when the workspace is linked to
+   * (or creates) an M365 group; the group's SharePoint document library is
+   * the workspace's OneLake-adjacent file collaboration surface in Fabric.
+   * Optional — the Azure-native workspace works without it.
+   */
+  m365GroupId?: string;
+  /** SharePoint site URL of the linked M365 group (from Graph site root webUrl). */
+  m365SiteUrl?: string;
+  /** Display name of the linked M365 group (cached for the settings UI). */
+  m365GroupName?: string;
+  /** Dedicated backing Azure resource group provisioned for this workspace, when requested. */
+  backingRgName?: string;
+  /** Outcome of the optional post-create backing-RG ARM provision. */
+  backingRgProvision?: {
+    status: 'provisioned' | 'failed';
+    rgName?: string;
+    error?: string;
+    at?: string;
+  };
   /** Bound Power BI / Fabric group id (created lazily on first PBI-backed artifact). */
   fabricGroupId?: string;
   /**
