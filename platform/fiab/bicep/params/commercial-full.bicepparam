@@ -120,6 +120,12 @@ param appGatewayEnabled = true
 // surfaces LOOM_AML_WORKSPACE/RG/REGION to the console. No Fabric dependency.
 param mlWorkspaceEnabled = true
 
+// BI stack — Azure Analysis Services + Direct Lake shim are opt-in on the
+// admin-plane (modules/admin-plane/main.bicep params aasEnabled, aasSkuName,
+// loomBiBackend, loomDirectLakeShimEnabled). Top-level top-level main.bicep
+// keeps the defaults conservative; flip the admin-plane params directly when
+// opting in. Azure-native, no Fabric / Power BI workspace dependency.
+
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource
 // in ANY resource group / subscription instead of provisioning a new one. When set,

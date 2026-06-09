@@ -118,6 +118,14 @@ var databases = [
 //   single-partition query would only ever return the admin's own workspaces.
 //   The same Cosmos DB Built-in Data Contributor role at account scope (above)
 //   authorises the fan-out; no extra RBAC grant is needed for the admin route.
+//   copilot-sessions (PK /sessionId, defaultTtl=2419200 — 28-day TTL set by
+//     cosmos-client.ts ensure() on create AND via a one-time container
+//     replace() upgrade for pre-existing containers; chat sessions expire
+//     automatically so "Clear chat" + the 28-day retention need no purge job)
+//   copilot-feedback (PK /sessionId, NO TTL)  ← permanent audit log of the
+//     per-message thumbs up/down written by PATCH /api/copilot/sessions/[id]
+//     (Feedback + clear-chat + history feature). No extra RBAC beyond the
+//     UAMI's existing Cosmos DB Built-in Data Contributor at account scope.
 
 
 // Databases — one per workload

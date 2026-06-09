@@ -1,6 +1,14 @@
 // FedRAMP Compliance Tracker bundle — NIST 800-53 control scorecard + Sentinel/ADX-backed
 // compliance-events KQL dashboard. Sourced from examples/cybersecurity/.
-import type { AppBundle } from './types';
+import type { AppBundle, StatusRule } from './types';
+
+// Shared per-family status rules: On Track ≥ 90% controls implemented, At Risk
+// ≥ 75%, otherwise Behind. Applied to each control family; the parent rolls up
+// via worst-child (Min) aggregation.
+const NIST_FAMILY_STATUS_RULES: StatusRule[] = [
+  { operator: '>=', threshold: 90, metricKind: 'value', status: 'on-track' },
+  { operator: '>=', threshold: 75, metricKind: 'value', status: 'at-risk' },
+];
 
 const bundle: AppBundle = {
   appId: 'app-fedramp-tracker',
@@ -40,6 +48,20 @@ const bundle: AppBundle = {
         kind: 'scorecard',
         okrs: [
           {
+            id: 'nist-overall',
+            name: 'NIST 800-53 Overall Compliance',
+            description:
+              'Aggregate FedRAMP Moderate compliance score rolled up from all 13 NIST 800-53 control families using worst-child (Min) aggregation — the parent reflects the weakest-link family, the standard compliance-scorecard semantic. Status: On Track ≥ 90, At Risk ≥ 75, otherwise Behind.',
+            metric: '% controls implemented',
+            target: 100,
+            rollupMethod: 'min',
+            statusRules: [
+              { operator: '>=', threshold: 90, metricKind: 'value', status: 'on-track' },
+              { operator: '>=', threshold: 75, metricKind: 'value', status: 'at-risk' },
+            ],
+            otherwiseStatus: 'behind',
+          },
+          {
             id: 'nist-AC',
             name: 'AC — Access Control',
             description:
@@ -47,6 +69,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 92,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-AU',
@@ -56,6 +81,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 88,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-AT',
@@ -65,6 +93,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 95,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-CM',
@@ -74,6 +105,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 84,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-CP',
@@ -83,6 +117,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 81,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-IA',
@@ -92,6 +129,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 90,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-IR',
@@ -101,6 +141,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 86,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-MP',
@@ -110,6 +153,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 93,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-RA',
@@ -119,6 +165,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 79,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-SA',
@@ -128,6 +177,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 82,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-SC',
@@ -137,6 +189,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 87,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-SI',
@@ -146,6 +201,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 89,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
           {
             id: 'nist-SR',
@@ -155,6 +213,9 @@ const bundle: AppBundle = {
             metric: '% controls implemented',
             target: 100,
             current: 78,
+            parentId: 'nist-overall',
+            statusRules: NIST_FAMILY_STATUS_RULES,
+            otherwiseStatus: 'behind',
           },
         ],
       },

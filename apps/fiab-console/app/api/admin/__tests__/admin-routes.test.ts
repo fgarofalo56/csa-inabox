@@ -98,13 +98,35 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 
 // Purview — default to NOT configured (honest gate path)
 const listBusinessDomainsMock = vi.fn();
+const queryAuditLogMock = vi.fn();
 class FakePurviewNotConfigured extends Error {
   hint: any;
   constructor() { super('Purview not configured'); this.hint = { missingEnvVar: 'LOOM_PURVIEW_ACCOUNT' }; }
 }
+class FakePurviewError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, body?: unknown, message?: string) {
+    super(message || `Purview call failed (${status})`);
+    this.status = status;
+    this.body = body;
+  }
+}
 vi.mock('@/lib/azure/purview-client', () => ({
   listBusinessDomains: () => listBusinessDomainsMock(),
+  queryAuditLog: (...args: any[]) => queryAuditLogMock(...args),
   PurviewNotConfiguredError: FakePurviewNotConfigured,
+  PurviewError: FakePurviewError,
+}));
+
+// Monitor / Log Analytics — default to NOT configured (honest gate path)
+const queryLoomAppEventsMock = vi.fn();
+class FakeMonitorNotConfigured extends Error {
+  constructor(public missing: string[]) { super(`Monitor not configured: ${missing.join(', ')}`); }
+}
+vi.mock('@/lib/azure/monitor-client', () => ({
+  queryLoomAppEvents: (...args: any[]) => queryLoomAppEventsMock(...args),
+  MonitorNotConfiguredError: FakeMonitorNotConfigured,
 }));
 
 // feature-gate — let tests flip the gate result
@@ -131,6 +153,9 @@ beforeEach(() => {
   for (const c of Object.values(containers)) (c as any)._store.clear();
   getSessionMock.mockReturnValue({ claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
   listBusinessDomainsMock.mockImplementation(() => { throw new FakePurviewNotConfigured(); });
+  // F19 audit secondary sources default to their honest-gate (not configured).
+  queryAuditLogMock.mockRejectedValue(new FakePurviewNotConfigured());
+  queryLoomAppEventsMock.mockRejectedValue(new FakeMonitorNotConfigured(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']));
   enforceCapabilityMock.mockResolvedValue(null);
   isTenantAdminMock.mockReturnValue(true);
   delete process.env.LOOM_GRAPH_USERS_ENABLED;
@@ -315,12 +340,66 @@ describe('/api/admin/audit-logs', () => {
     const j = await r.json();
     expect(j.ok).toBe(true);
     expect(j.rows).toHaveLength(1);
+    expect(j.rows[0].source).toBe('cosmos');
     expect(j.kinds).toContain('tenant-settings.toggle');
     // top clamped to 1000
     const topParam = captured.parameters.find((p: any) => p.name === '@top');
     expect(topParam.value).toBe(1000);
     expect(captured.query).toMatch(/c\.kind = @kind/);
     expect(captured.query).toMatch(/c\.at >= @since/);
+  });
+
+  it('GET surfaces honest gates for Purview + Log Analytics when neither is configured', async () => {
+    containers.auditLog._setQuery(() => []);
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const j = await (await GET(req('/api/admin/audit-logs'))).json();
+    expect(j.ok).toBe(true);
+    expect(j.gates.purview).toMatch(/Purview audit unavailable/);
+    expect(j.gates.la).toMatch(/LOOM_LOG_ANALYTICS_WORKSPACE_ID/);
+  });
+
+  it('GET merges Cosmos + Purview + Log Analytics rows and sorts DESC by time', async () => {
+    containers.auditLog._setQuery(() => [
+      { id: 'c1', tenantId: 'tenant-oid', who: 'a@contoso.com', kind: 'item.save', itemId: 'it1', at: '2026-05-10T00:00:00Z' },
+    ]);
+    queryAuditLogMock.mockResolvedValue({
+      events: [{ id: 'p1', at: '2026-05-12T00:00:00Z', who: 'gov@contoso.com', kind: 'ClassificationAdded', itemId: 'guid-1', category: 'Asset', source: 'purview' }],
+      lastPage: true,
+    });
+    queryLoomAppEventsMock.mockResolvedValue([
+      { at: '2026-05-11T00:00:00Z', who: 'app@contoso.com', kind: 'login', itemId: '', message: 'signed in', source: 'loganalytics' },
+    ]);
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const j = await (await GET(req('/api/admin/audit-logs'))).json();
+    expect(j.ok).toBe(true);
+    expect(j.rows.map((r: any) => r.source)).toEqual(['purview', 'loganalytics', 'cosmos']);
+    expect(j.gates.purview).toBeUndefined();
+    expect(j.gates.la).toBeUndefined();
+    expect(j.kinds).toEqual(['ClassificationAdded', 'item.save', 'login']);
+  });
+
+  it('GET forwards user + itemId filters to Purview audit query', async () => {
+    containers.auditLog._setQuery(() => []);
+    queryAuditLogMock.mockResolvedValue({ events: [], lastPage: true });
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    await GET(req('/api/admin/audit-logs?user=bob@contoso.com&itemId=guid-9&type=EntityUpdated'));
+    expect(queryAuditLogMock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'bob@contoso.com',
+      guid: 'guid-9',
+      operationType: 'EntityUpdated',
+    }));
+    expect(queryLoomAppEventsMock).toHaveBeenCalledWith(expect.objectContaining({
+      user: 'bob@contoso.com',
+      itemId: 'guid-9',
+      eventType: 'EntityUpdated',
+    }));
+  });
+
+  it('GET still 500s when the primary Cosmos source fails', async () => {
+    containers.auditLog._setQuery(() => { throw new Error('cosmos down'); });
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const r = await GET(req('/api/admin/audit-logs'));
+    expect(r.status).toBe(500);
   });
 
   it('GET 401 when unauthenticated', async () => {

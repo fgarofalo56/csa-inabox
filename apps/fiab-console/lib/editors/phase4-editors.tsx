@@ -34,6 +34,8 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
 import { DataAgentResultViz } from './data-agent-result-viz';
+import { DataAgentConfigCopilotPanel } from './data-agent-config-copilot';
+import { mergeSuggestionIntoSources } from './_da-config-merge';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -1694,7 +1696,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     description: '',
     alias: '',
   });
-  const [tab, setTab] = useState<'build' | 'test' | 'publish' | 'inspect'>('build');
+  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect'>('build');
 
   // ---- source picker data (real Loom items) ----
   const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
@@ -1916,6 +1918,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       { label: 'Agent', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
         { label: 'Build', onClick: () => setTab('build') },
+        { label: 'Config Copilot', onClick: () => setTab('copilot') },
         { label: 'Test chat', onClick: () => setTab('test') },
         { label: 'Publish', onClick: () => setTab('publish') },
         { label: 'Run inspector', onClick: () => setTab('inspect') },
@@ -1929,6 +1932,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="build">Build ({sources.length}/5 sources)</Tab>
+            <Tab value="copilot">Config Copilot</Tab>
             <Tab value="test">Test chat</Tab>
             <Tab value="publish">Publish</Tab>
             <Tab value="inspect">Run inspector</Tab>
@@ -2046,6 +2050,28 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 }
               />
             </>
+          )}
+
+          {tab === 'copilot' && (
+            <DataAgentConfigCopilotPanel
+              id={id}
+              sources={sources}
+              ensureSaved={async () => { if (dirty) await save(); }}
+              onApply={async (sourceId, suggestion) => {
+                // Server already persisted; mirror into local state so Build + Test
+                // reflect the applied examples/descriptions immediately, then re-save
+                // the exact merged snapshot (idempotent — keeps local + Cosmos identical
+                // without a stale-state overwrite).
+                const mergedSources = mergeSuggestionIntoSources(
+                  arr<DaSource>(state.sources) as unknown as Record<string, unknown>[],
+                  sourceId,
+                  suggestion,
+                ) as unknown as DaSource[];
+                const nextState = { ...state, sources: mergedSources };
+                setState(() => nextState);
+                await save(nextState);
+              }}
+            />
           )}
 
           {tab === 'test' && (

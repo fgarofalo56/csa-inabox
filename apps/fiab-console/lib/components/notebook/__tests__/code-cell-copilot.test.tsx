@@ -132,4 +132,86 @@ describe('CodeCell in-cell Copilot', () => {
     expect(await screen.findByText(/AOAI not configured/i)).toBeInTheDocument();
     expect(onInsertBelow).not.toHaveBeenCalled();
   });
+
+  it('/comments proposes an in-place edit (approval-diff); Accept replaces the cell source, not insert-below', async () => {
+    const onInsertBelow = vi.fn();
+    const onChange = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        mode: 'comments',
+        result: '# read the bronze orders Delta table\ndf = spark.read.table(\'bronze.orders\')\ndf.show(5)',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <CodeCell cell={baseCell()} onChange={onChange} notebookId="nb-1" workspaceId="ws-1" onInsertBelow={onInsertBelow} />
+      </FluentProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText('In-cell Copilot'));
+    const input = await screen.findByLabelText('Copilot prompt');
+    fireEvent.change(input, { target: { value: '/comments' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.mode).toBe('comments');
+    expect(sent.workspaceId).toBe('ws-1');
+
+    // Approval-diff panel renders; nothing applied yet.
+    expect(await screen.findByText(/Proposed change/i)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onInsertBelow).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    const updated = onChange.mock.calls[0][0] as NotebookCell;
+    expect(updated.source).toContain('# read the bronze orders Delta table');
+    expect(updated.output).toBeUndefined();
+    expect(onInsertBelow).not.toHaveBeenCalled();
+  });
+
+  it('free-form "convert to a function" proposes an in-place edit (generate → propose-edit)', async () => {
+    const onInsertBelow = vi.fn();
+    const onChange = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        mode: 'generate',
+        result: "def load_orders(spark):\n    return spark.read.table('bronze.orders')",
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <CodeCell cell={baseCell()} onChange={onChange} notebookId="nb-1" onInsertBelow={onInsertBelow} />
+      </FluentProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText('In-cell Copilot'));
+    const input = await screen.findByLabelText('Copilot prompt');
+    fireEvent.change(input, { target: { value: 'convert to a function' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.mode).toBe('generate');
+
+    expect(await screen.findByText(/Proposed change/i)).toBeInTheDocument();
+    expect(onInsertBelow).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    const updated = onChange.mock.calls[0][0] as NotebookCell;
+    expect(updated.source).toContain('def load_orders');
+    expect(onInsertBelow).not.toHaveBeenCalled();
+  });
 });
