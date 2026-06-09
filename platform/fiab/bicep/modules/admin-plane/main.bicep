@@ -640,18 +640,12 @@ param loomSemanticBackend string = 'loom-native'
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
 
-@description('AAS tabular model (database) name on which DirectQuery partitions are bound by the semantic-model DirectQuery source binder.')
-param loomAasModel string = 'LoomModel'
-
 @description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. B1=Basic (cheapest with SLA), S0=Standard, D1=Developer (no SLA). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
 @allowed(['B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'D1'])
 param loomAasSku string = 'B1'
 
 @description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
 param loomAasServerUrl string = ''
-
-@description('Azure Analysis Services XMLA endpoint base URL (no /xmla or /refreshes suffix), e.g. https://eastus2.asazure.windows.net/servers/loom-aas/models/FiabModel. Required only when loomSemanticBackend=analysis-services to enable the incremental-refresh / hybrid-table surface. GCC-High / IL5 / DoD must use the asazure.usgovcloudapi.net suffix. AAS is Azure-native (NOT Microsoft Fabric); the semantic-model default stays loom-native, so leaving this empty is fully supported.')
-param loomAasXmlaEndpoint string = ''
 
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
@@ -752,8 +746,10 @@ module analysisServices 'analysis-services.bicep' = if (deployAas) {
   name: 'analysis-services'
   params: {
     location: location
-    uamiClientId: identity.outputs.uamiConsoleClientId
-    sku: loomAasSku
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    aasAdminUpn: ''
+    skuName: loomAasSku
+    skipRoleGrants: skipRoleGrants
     tags: complianceTags
   }
 }
@@ -1603,7 +1599,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // SPN secret is wired separately as the KV secretRef 'loom-aas-client-secret'
           // → LOOM_AAS_CLIENT_SECRET (operator step, see v3-tenant-bootstrap.md).
           aasEnabled ? [
-            { name: 'LOOM_AAS_SERVER', value: aas.outputs.aasServerFullName }
+            { name: 'LOOM_AAS_SERVER', value: aas.outputs.serverFullName }
             { name: 'LOOM_AAS_TENANT_ID', value: tenant().tenantId }
             { name: 'LOOM_AAS_CLIENT_ID', value: aasSpnClientId }
           ] : [],
