@@ -115,7 +115,13 @@ function validateRelationships(relationships: any[], columnIndex: Set<string>, s
   return valid;
 }
 
-function buildTmsl(content: any, displayName: string, steps: string[]): string {
+/**
+ * Build the canonical TMSL (model.bim JSON) for a semantic model's content.
+ * Exported so the deployment-pipeline compare engine can serialize a
+ * semantic-model item's definition deterministically and diff two stages
+ * (no Fabric / Power BI dependency — pure transform of the bundle content).
+ */
+export function buildTmsl(content: any, displayName: string, steps: string[]): string {
   const tables = Array.isArray(content?.tables) ? content.tables : [];
   const measures = Array.isArray(content?.measures) ? content.measures : [];
   const allRelationships = Array.isArray(content?.relationships) ? content.relationships : [];

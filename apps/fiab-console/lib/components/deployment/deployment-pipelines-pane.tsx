@@ -216,26 +216,42 @@ function stageVisual(order: number, displayName?: string) {
   return { color: 'var(--loom-accent-violet)', Icon: Server20Regular };                                                  // extra stages — purple
 }
 
-type TabKey = 'pipelines' | 'git' | 'infra';
+type TabKey = 'pipelines' | 'loom' | 'git' | 'infra';
 
 export function DeploymentPipelinesPane() {
   const styles = useStyles();
-  const [tab, setTab] = useState<TabKey>('pipelines');
+  const [tab, setTab] = useState<TabKey>('loom');
   const [unauth, setUnauth] = useState(false);
 
   return (
     <div>
       {unauth && <SignInRequired subject="deployment pipelines" />}
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabKey)} className={styles.gap}>
-        <Tab value="pipelines" icon={<Rocket20Regular />}>Deployment pipelines</Tab>
+        <Tab value="loom" icon={<Rocket20Regular />}>Loom-native pipelines</Tab>
+        <Tab value="pipelines" icon={<Rocket20Regular />}>Fabric pipelines</Tab>
         <Tab value="git" icon={<Branch20Regular />}>Git integration</Tab>
         <Tab value="infra" icon={<Server20Regular />}>Infra deployments (ARM)</Tab>
       </TabList>
+      {tab === 'loom' && <LoomPipelinesTab />}
       {tab === 'pipelines' && <PipelinesTab onUnauth={() => setUnauth(true)} />}
       {tab === 'git' && <GitTab onUnauth={() => setUnauth(true)} />}
       {tab === 'infra' && <InfraTab onUnauth={() => setUnauth(true)} />}
     </div>
   );
+}
+
+// ---- shared: Loom workspace picker hook ------------------------------------
+
+function useLoomWorkspaces(): WorkspaceOpt[] | null {
+  const [list, setList] = useState<WorkspaceOpt[] | null>(null);
+  useEffect(() => {
+    fetch('/api/workspaces').then(async (r) => {
+      const j = await r.json().catch(() => null);
+      if (Array.isArray(j)) setList(j.map((w: any) => ({ id: w.id, name: w.name })));
+      else setList([]);
+    }).catch(() => setList([]));
+  }, []);
+  return list;
 }
 
 // ---- shared: Fabric workspace picker hook ----------------------------------
@@ -1491,5 +1507,679 @@ function OperationsDialog({ deployment }: { deployment: ArmDeployment }) {
         </DialogBody>
       </DialogSurface>
     </Dialog>
+  );
+}
+
+// ===========================================================================
+// LOOM-NATIVE DEPLOYMENT PIPELINES
+// Azure-native parity (no Fabric / Power BI). Stages bound to Loom workspaces;
+// compare = content diff over serialized item defs; selective deploy =
+// re-provision chosen items into the next stage with that stage's data-source /
+// parameter rules applied. Backed by /api/deployment-pipelines/loom/**.
+// ===========================================================================
+
+interface LoomStage { id: string; displayName: string; order: number; workspaceId: string; workspaceName?: string }
+interface LoomPipe { id: string; displayName: string; description?: string; stages: LoomStage[] }
+interface LoomDiffPair {
+  itemType: string;
+  sourceItemId?: string; sourceItemDisplayName?: string;
+  targetItemId?: string; targetItemDisplayName?: string;
+  status: CompareStatus; diffSummary?: string;
+}
+interface LoomDiffResult {
+  sourceStageId: string; targetStageId: string;
+  pairs: LoomDiffPair[];
+  summary: { same: number; different: number; onlyInSource: number; notInSource: number };
+}
+interface LoomRule { itemType: string; itemDisplayName?: string; kind: 'datasource' | 'parameter'; key: string; value: string }
+interface LoomHistoryRecord {
+  id: string; sourceStageId: string; targetStageId: string;
+  status: 'running' | 'succeeded' | 'partial' | 'failed';
+  note?: string; deployedItemIds: string[]; startedAt: string; startedBy: string;
+}
+
+const DATASOURCE_KEYS = ['warehouseServer', 'warehouseDatabase', 'adlsAccount', 'adlsContainer', 'synapseWorkspace', 'kustoClusterUri', 'kustoDatabase', 'aiSearchService'];
+const PARAMETER_KEYS = ['synapseWorkspace', 'adlsAccount', 'warehouseServer', 'warehouseDatabase'];
+const RULE_ITEM_TYPES = ['*', 'semantic-model', 'report', 'paginated-report', 'scorecard', 'notebook', 'data-pipeline', 'lakehouse', 'warehouse'];
+
+function loomStatusBadge(status: LoomHistoryRecord['status']) {
+  switch (status) {
+    case 'succeeded': return <Badge color="success" appearance="filled">Succeeded</Badge>;
+    case 'partial': return <Badge color="warning" appearance="filled">Partial</Badge>;
+    case 'failed': return <Badge color="danger" appearance="filled">Failed</Badge>;
+    default: return <Badge color="brand" appearance="filled">Running</Badge>;
+  }
+}
+
+function LoomPipelinesTab() {
+  const styles = useStyles();
+  const [pipelines, setPipelines] = useState<LoomPipe[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>('');
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    setPipelines(null); setErr(null);
+    fetch('/api/deployment-pipelines/loom').then(async (r) => {
+      if (r.status === 401) { setErr('Sign in to manage deployment pipelines.'); setPipelines([]); return; }
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to load pipelines'); setPipelines([]); return; }
+      const list: LoomPipe[] = j.data.pipelines || [];
+      setPipelines(list);
+      setSelected((cur) => cur || (list[0]?.id ?? ''));
+    }).catch((e) => { setErr(String(e)); setPipelines([]); });
+  }, [tick]);
+
+  if (pipelines === null) return <Spinner label="Loading deployment pipelines…" />;
+
+  const selectedPipeline = pipelines.find((p) => p.id === selected);
+
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <strong>Loom-native deployment pipelines</strong> promote content across Dev → Test → Prod
+          stages, each bound to a Loom workspace. <strong>Compare</strong> diffs the serialized item
+          definitions (TMSL for semantic models, JSON for reports / scorecards); <strong>selective
+          deploy</strong> re-provisions the chosen items into the next stage with that stage's
+          data-source / parameter <strong>rules</strong> applied. No Microsoft Fabric or Power BI
+          workspace required.
+        </MessageBarBody>
+      </MessageBar>
+      <div className={styles.toolbar}>
+        <Dropdown
+          aria-label="Deployment pipeline"
+          placeholder="Select a deployment pipeline"
+          value={selectedPipeline ? selectedPipeline.displayName : ''}
+          selectedOptions={selected ? [selected] : []}
+          onOptionSelect={(_, d) => d.optionValue && setSelected(d.optionValue)}
+          style={{ minWidth: 320 }}
+          disabled={pipelines.length === 0}
+        >
+          {pipelines.map((p) => <Option key={p.id} value={p.id} text={p.displayName}>{p.displayName}</Option>)}
+        </Dropdown>
+        <LoomCreatePipelineDialog onCreated={(id) => { setSelected(id); setTick((t) => t + 1); }} />
+        <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
+      </div>
+
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+      {pipelines.length === 0 && !err && (
+        <div className={styles.empty}>
+          No deployment pipelines yet.<br />
+          Create one with <strong>New pipeline</strong> — pick a workspace for each stage
+          (Development, Test, Production), then compare + deploy between them.
+        </div>
+      )}
+
+      {selectedPipeline && (
+        <LoomPipelineDetail
+          key={selectedPipeline.id}
+          pipeline={selectedPipeline}
+          onDeleted={() => { setSelected(''); setTick((t) => t + 1); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => void }) {
+  const styles = useStyles();
+  const workspaces = useLoomWorkspaces();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [stages, setStages] = useState<Array<{ displayName: string; workspaceId: string }>>([
+    { displayName: 'Development', workspaceId: '' },
+    { displayName: 'Test', workspaceId: '' },
+    { displayName: 'Production', workspaceId: '' },
+  ]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+
+  const setStage = (i: number, patch: Partial<{ displayName: string; workspaceId: string }>) =>
+    setStages((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const addStage = () => setStages((prev) => (prev.length >= 10 ? prev : [...prev, { displayName: '', workspaceId: '' }]));
+  const removeStage = (i: number) => setStages((prev) => (prev.length <= 2 ? prev : prev.filter((_, idx) => idx !== i)));
+
+  const create = useCallback(async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const clean = stages.map((s) => ({ displayName: s.displayName.trim(), workspaceId: s.workspaceId }));
+      if (!name.trim()) { setMsg({ kind: 'error', text: 'Pipeline name is required.' }); setBusy(false); return; }
+      if (clean.length < 2) { setMsg({ kind: 'error', text: 'At least 2 stages are required.' }); setBusy(false); return; }
+      if (clean.some((s) => !s.displayName)) { setMsg({ kind: 'error', text: 'Every stage needs a name.' }); setBusy(false); return; }
+      if (clean.some((s) => !s.workspaceId)) { setMsg({ kind: 'error', text: 'Every stage needs a bound workspace.' }); setBusy(false); return; }
+      const r = await fetch('/api/deployment-pipelines/loom', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: clean }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Create failed' }); return; }
+      setMsg({ kind: 'success', text: 'Pipeline created.' });
+      onCreated(j.data.pipeline.id);
+      setTimeout(() => setOpen(false), 700);
+    } catch (e) { setMsg({ kind: 'error', text: String(e) }); } finally { setBusy(false); }
+  }, [name, description, stages, onCreated]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="primary" icon={<Add20Regular />}>New pipeline</Button>
+      </DialogTrigger>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Create deployment pipeline</DialogTitle>
+          <DialogContent>
+            <div className={styles.formGrid}>
+              <Field label="Pipeline name" required>
+                <Input value={name} onChange={(_, d) => setName(d.value.slice(0, 256))} placeholder="e.g. Sales analytics CI/CD" />
+              </Field>
+              <Field label="Description">
+                <Input value={description} onChange={(_, d) => setDescription(d.value.slice(0, 1024))} />
+              </Field>
+              <Text weight="semibold">Stages (2–10, order is permanent)</Text>
+              {workspaces && workspaces.length === 0 && (
+                <MessageBar intent="warning"><MessageBarBody>No Loom workspaces found — create a workspace first.</MessageBarBody></MessageBar>
+              )}
+              {stages.map((s, i) => {
+                const wsName = workspaces?.find((w) => w.id === s.workspaceId)?.name || '';
+                return (
+                  <div key={i} className={styles.assignRow}>
+                    <Field label={`Stage ${i + 1} name`} style={{ flex: 1 }}>
+                      <Input value={s.displayName} onChange={(_, d) => setStage(i, { displayName: d.value.slice(0, 256) })} />
+                    </Field>
+                    <Field label="Workspace" style={{ flex: 1 }}>
+                      <Dropdown
+                        aria-label={`Stage ${i + 1} workspace`}
+                        placeholder={workspaces === null ? 'Loading…' : 'Select a workspace'}
+                        value={wsName}
+                        selectedOptions={s.workspaceId ? [s.workspaceId] : []}
+                        onOptionSelect={(_, d) => d.optionValue && setStage(i, { workspaceId: d.optionValue })}
+                        disabled={!workspaces || workspaces.length === 0}
+                      >
+                        {(workspaces || []).map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Button appearance="subtle" icon={<Delete20Regular />} disabled={stages.length <= 2} onClick={() => removeStage(i)} aria-label={`Remove stage ${i + 1}`} />
+                  </div>
+                );
+              })}
+              <Button appearance="subtle" icon={<Add20Regular />} disabled={stages.length >= 10} onClick={addStage}>Add stage</Button>
+              {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={create} disabled={busy}>{busy ? 'Creating…' : 'Create'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function LoomPipelineDetail({ pipeline, onDeleted }: { pipeline: LoomPipe; onDeleted: () => void }) {
+  const styles = useStyles();
+  const [tick, setTick] = useState(0);
+  const reload = useCallback(() => setTick((t) => t + 1), []);
+  const stages = [...pipeline.stages].sort((a, b) => a.order - b.order);
+
+  return (
+    <div className={styles.section}>
+      <Section
+        title="Stages"
+        actions={<DeletePipelineButton pipelineId={pipeline.id} name={pipeline.displayName} onDeleted={onDeleted} />}
+      >
+        <div className={styles.stageFlow}>
+          {stages.map((st, i) => {
+            const next = stages[i + 1];
+            const { color, Icon } = stageVisual(st.order ?? i, st.displayName);
+            return (
+              <div key={st.id} style={{ display: 'contents' }}>
+                <div className={styles.stageCol}>
+                  <div className={styles.stageCard} style={{ borderTopColor: color }}>
+                    <div className={styles.stageHead}>
+                      <span className={styles.stageChip} style={{ backgroundColor: `${color}1f`, color }} aria-hidden>
+                        <Icon style={{ width: 20, height: 20, color }} />
+                      </span>
+                      <span className={styles.stageName}>{st.displayName}</span>
+                    </div>
+                    <div className={styles.stageMeta}>
+                      Workspace: <strong>{st.workspaceName || `${st.workspaceId.slice(0, 8)}…`}</strong>
+                    </div>
+                    <div className={styles.stageActions}>
+                      <LoomRulesDialog pipelineId={pipeline.id} stage={st} />
+                    </div>
+                    {next && (
+                      <div className={styles.deployRow}>
+                        <LoomDeployDialog pipelineId={pipeline.id} source={st} target={next} onDeployed={reload} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {next && <div className={styles.connector} aria-hidden><ChevronRight24Regular /></div>}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Compare / sync status">
+        {stages.length < 2 ? (
+          <div className={styles.stageMeta}>Add at least two stages to compare.</div>
+        ) : (
+          <LoomStageCompare pipelineId={pipeline.id} stages={stages} tick={tick} />
+        )}
+      </Section>
+
+      <Section title="Deployment history">
+        <LoomHistoryPanel pipelineId={pipeline.id} stages={stages} tick={tick} />
+      </Section>
+    </div>
+  );
+}
+
+function DeletePipelineButton({ pipelineId, name, onDeleted }: { pipelineId: string; name: string; onDeleted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const del = useCallback(async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Delete failed'); return; }
+      setOpen(false); onDeleted();
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  }, [pipelineId, onDeleted]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="subtle" size="small" icon={<Delete20Regular />}>Delete pipeline</Button>
+      </DialogTrigger>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Delete pipeline “{name}”?</DialogTitle>
+          <DialogContent>
+            <MessageBar intent="warning">
+              <MessageBarBody>This removes the pipeline definition, its stage deployment rules, and stops new deploys.
+                Items already deployed into the stage workspaces are left in place.</MessageBarBody>
+            </MessageBar>
+            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+            <Button appearance="primary" icon={<Delete20Regular />} onClick={del} disabled={busy}>{busy ? 'Deleting…' : 'Delete'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function LoomStageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages: LoomStage[]; tick: number }) {
+  const styles = useStyles();
+  const [targetId, setTargetId] = useState(stages[1]?.id || '');
+  const target = stages.find((s) => s.id === targetId) || stages[1] || stages[0];
+  const targetIndex = stages.findIndex((s) => s.id === target?.id);
+  const source = stages[targetIndex - 1];
+
+  const [result, setResult] = useState<LoomDiffResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!source || !target) { setResult(null); return; }
+    setLoading(true); setErr(null); setResult(null);
+    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+      .then(async (r) => {
+        const j = await r.json();
+        if (!j.ok) { setErr(j.error || 'Compare failed'); return; }
+        setResult(j.data);
+      })
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoading(false));
+  }, [pipelineId, source?.id, target?.id, tick]);
+
+  if (!source || !target) return <div className={styles.stageMeta}>Select a non-first stage to compare against its source.</div>;
+  const anyDiff = result ? (result.summary.different + result.summary.onlyInSource + result.summary.notInSource) > 0 : false;
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.assignRow} style={{ marginBottom: 8 }}>
+        <Field label="Compare stage">
+          <Dropdown value={target.displayName} selectedOptions={[target.id]} onOptionSelect={(_, d) => d.optionValue && setTargetId(d.optionValue)} style={{ minWidth: 200 }}>
+            {stages.slice(1).map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
+          </Dropdown>
+        </Field>
+        <Text size={300} style={{ paddingBottom: 6 }}>against source <strong>{source.displayName}</strong></Text>
+      </div>
+
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {loading && <Spinner size="tiny" label="Comparing stages…" />}
+
+      {result && (
+        <>
+          <div className={styles.compareSummary}>
+            <span className={styles.syncDot}>
+              {anyDiff
+                ? <><Warning20Filled style={{ color: tokens.colorStatusWarningForeground1 }} /> Stages differ</>
+                : <><CheckmarkCircle20Filled style={{ color: tokens.colorStatusSuccessForeground1 }} /> In sync</>}
+            </span>
+            <Badge color="success" appearance="tint">Same {result.summary.same}</Badge>
+            <Badge color="warning" appearance="tint">Different {result.summary.different}</Badge>
+            <Badge color="brand" appearance="tint">Only in source {result.summary.onlyInSource}</Badge>
+            <Badge color="subtle" appearance="outline">Not in source {result.summary.notInSource}</Badge>
+          </div>
+          {result.pairs.length === 0 ? (
+            <div className={styles.stageMeta}>No items in either stage.</div>
+          ) : (
+            <Table aria-label={`Compare ${source.displayName} to ${target.displayName}`} size="small">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>{source.displayName} (source item)</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>{target.displayName} (target item)</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>What differs</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.pairs.map((p, idx) => (
+                  <TableRow key={`${p.itemType}-${p.sourceItemId || p.targetItemId}-${idx}`}>
+                    <TableCell>{p.sourceItemDisplayName || <em style={{ color: tokens.colorNeutralForeground3 }}>(none)</em>}</TableCell>
+                    <TableCell><span className={styles.itemType}>{p.itemType}</span></TableCell>
+                    <TableCell>{p.targetItemDisplayName || <em style={{ color: tokens.colorNeutralForeground3 }}>(none)</em>}</TableCell>
+                    <TableCell>{statusBadge(p.status)}</TableCell>
+                    <TableCell><Text size={200}>{p.diffSummary || '—'}</Text></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipelineId: string; source: LoomStage; target: LoomStage; onDeployed: () => void }) {
+  const styles = useStyles();
+  const [open, setOpen] = useState(false);
+  const [pairs, setPairs] = useState<LoomDiffPair[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [selective, setSelective] = useState(false);
+  const [chosen, setChosen] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+  const [receipt, setReceipt] = useState<{ status: string; deployedItemIds: string[] } | null>(null);
+
+  // Source items (those with a sourceItemId in the compare result) are the deploy candidates.
+  const sourceItems = useMemo(() => (pairs || []).filter((p) => p.sourceItemId), [pairs]);
+
+  useEffect(() => {
+    if (!open) return;
+    setPairs(null); setLoadErr(null); setReceipt(null); setMsg(null);
+    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+      .then(async (r) => {
+        const j = await r.json();
+        if (!j.ok) { setLoadErr(j.error || 'Failed to load source items'); setPairs([]); return; }
+        setPairs(j.data.pairs || []);
+      })
+      .catch((e) => { setLoadErr(String(e)); setPairs([]); });
+  }, [open, pipelineId, source.id, target.id]);
+
+  const chosenList = useMemo(
+    () => sourceItems.filter((it) => chosen[it.sourceItemId!]).map((it) => ({ sourceItemId: it.sourceItemId!, itemType: it.itemType })),
+    [sourceItems, chosen],
+  );
+
+  const deploy = useCallback(async () => {
+    setBusy(true); setMsg(null); setReceipt(null);
+    try {
+      const body: any = { sourceStageId: source.id, targetStageId: target.id };
+      if (note.trim()) body.note = note.trim();
+      if (selective) {
+        if (chosenList.length === 0) { setMsg({ kind: 'error', text: 'Select at least one item, or switch off selective deploy.' }); setBusy(false); return; }
+        body.items = chosenList;
+      }
+      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/deploy`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Deployment failed' }); return; }
+      setReceipt({ status: j.data.status, deployedItemIds: j.data.deployedItemIds || [] });
+      setMsg({ kind: 'success', text: `Deploy ${j.data.status}: ${(j.data.deployedItemIds || []).length} item(s) re-provisioned into ${target.displayName}.` });
+      onDeployed();
+    } catch (e) { setMsg({ kind: 'error', text: String(e) }); } finally { setBusy(false); }
+  }, [pipelineId, source.id, target.id, note, selective, chosenList, target.displayName, onDeployed]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="primary" icon={<Rocket20Regular />} title={`Deploy ${source.displayName} → ${target.displayName}`}>
+          Deploy to {target.displayName}
+        </Button>
+      </DialogTrigger>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Deploy <ArrowRight20Regular style={{ verticalAlign: 'middle' }} /> {source.displayName} → {target.displayName}</DialogTitle>
+          <DialogContent>
+            <Text block>
+              Content from <strong>{source.displayName}</strong> is re-provisioned into{' '}
+              <strong>{target.displayName}</strong> with that stage's deployment rules applied. Paired
+              items (same type + name) are updated in place; new items are created.
+            </Text>
+
+            {loadErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
+
+            <div style={{ marginTop: 12 }}>
+              <Checkbox label="Selective deploy (choose specific items)" checked={selective} onChange={(_, d) => setSelective(!!d.checked)} />
+            </div>
+
+            {selective && (
+              <div className={styles.dialogItems}>
+                {pairs === null ? <Spinner size="tiny" label="Loading source items…" />
+                  : sourceItems.length === 0 ? <Text size={200}>No items in the source stage.</Text>
+                  : sourceItems.map((it) => (
+                    <Checkbox
+                      key={it.sourceItemId}
+                      label={`${it.sourceItemDisplayName} · ${it.itemType}${it.status === 'Different' ? ' (changed)' : it.status === 'OnlyInSource' ? ' (new)' : ''}`}
+                      checked={!!chosen[it.sourceItemId!]}
+                      onChange={(_, d) => setChosen((prev) => ({ ...prev, [it.sourceItemId!]: !!d.checked }))}
+                    />
+                  ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 12 }}>
+              <Textarea aria-label="Deployment note" placeholder="Deployment note (optional, max 1024 chars)" value={note}
+                onChange={(_, d) => setNote(d.value.slice(0, 1024))} rows={3} resize="vertical" style={{ width: '100%' }} />
+            </div>
+
+            {msg && <div style={{ marginTop: 12 }}><MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar></div>}
+            {receipt && receipt.deployedItemIds.length > 0 && (
+              <div style={{ marginTop: 8 }} className={styles.mono}>
+                Deployed item ids: {receipt.deployedItemIds.join(', ')}
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Close</Button></DialogTrigger>
+            <Button appearance="primary" icon={<Rocket20Regular />} onClick={deploy} disabled={busy}>
+              {busy ? 'Deploying…' : selective ? 'Deploy selected' : 'Deploy all'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: LoomStage }) {
+  const styles = useStyles();
+  const [open, setOpen] = useState(false);
+  const [rules, setRules] = useState<LoomRule[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setRules(null); setMsg(null);
+    fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`).then(async (r) => {
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Failed to load rules' }); setRules([]); return; }
+      setRules(j.data.rules || []);
+    }).catch((e) => { setMsg({ kind: 'error', text: String(e) }); setRules([]); });
+  }, [open, pipelineId, stage.id]);
+
+  const setRule = (i: number, patch: Partial<LoomRule>) =>
+    setRules((prev) => (prev || []).map((r, idx) => {
+      if (idx !== i) return r;
+      const merged = { ...r, ...patch };
+      // When kind changes, reset key to the first valid key for that kind.
+      if (patch.kind && !(merged.kind === 'datasource' ? DATASOURCE_KEYS : PARAMETER_KEYS).includes(merged.key)) {
+        merged.key = (merged.kind === 'datasource' ? DATASOURCE_KEYS : PARAMETER_KEYS)[0];
+      }
+      return merged;
+    }));
+  const addRule = () => setRules((prev) => [...(prev || []), { itemType: '*', kind: 'datasource', key: DATASOURCE_KEYS[0], value: '' }]);
+  const removeRule = (i: number) => setRules((prev) => (prev || []).filter((_, idx) => idx !== i));
+
+  const save = useCallback(async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const clean = (rules || []).map((r) => ({ ...r, value: (r.value || '').trim(), itemDisplayName: r.itemDisplayName?.trim() || undefined }));
+      if (clean.some((r) => !r.value)) { setMsg({ kind: 'error', text: 'Every rule needs a value.' }); setBusy(false); return; }
+      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: clean }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Save failed' }); return; }
+      setMsg({ kind: 'success', text: 'Deployment rules saved. They apply on the next deploy into this stage.' });
+    } catch (e) { setMsg({ kind: 'error', text: String(e) }); } finally { setBusy(false); }
+  }, [rules, pipelineId, stage.id]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="subtle" size="small" icon={<BranchFork20Regular />}>Deployment rules</Button>
+      </DialogTrigger>
+      <DialogSurface style={{ maxWidth: 920 }}>
+        <DialogBody>
+          <DialogTitle>Deployment rules — {stage.displayName}</DialogTitle>
+          <DialogContent>
+            <Text block size={200} style={{ marginBottom: 8 }}>
+              When content is deployed INTO <strong>{stage.displayName}</strong>, each matching rule
+              overrides a data-source or parameter on the re-provisioned item — so the model/report
+              binds to this stage's warehouse, ADLS account, or Synapse workspace.
+            </Text>
+            {rules === null ? <Spinner size="tiny" label="Loading rules…" /> : (
+              <>
+                <Table aria-label="Deployment rules" size="small">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Item type</TableHeaderCell>
+                      <TableHeaderCell>Item name (optional)</TableHeaderCell>
+                      <TableHeaderCell>Kind</TableHeaderCell>
+                      <TableHeaderCell>Key</TableHeaderCell>
+                      <TableHeaderCell>Value (this stage)</TableHeaderCell>
+                      <TableHeaderCell style={{ width: 40 }} />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rules.length === 0 ? (
+                      <TableRow><TableCell colSpan={6}><Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>No rules — content deploys with the platform's default data sources. Add a rule to rebind per stage.</Text></TableCell></TableRow>
+                    ) : rules.map((r, i) => {
+                      const keys = r.kind === 'datasource' ? DATASOURCE_KEYS : PARAMETER_KEYS;
+                      return (
+                        <TableRow key={i}>
+                          <TableCell>
+                            <Dropdown aria-label="Item type" value={r.itemType} selectedOptions={[r.itemType]} onOptionSelect={(_, d) => d.optionValue && setRule(i, { itemType: d.optionValue })} style={{ minWidth: 150 }}>
+                              {RULE_ITEM_TYPES.map((t) => <Option key={t} value={t} text={t === '*' ? 'All types' : t}>{t === '*' ? 'All types' : t}</Option>)}
+                            </Dropdown>
+                          </TableCell>
+                          <TableCell>
+                            <Input aria-label="Item name" value={r.itemDisplayName || ''} placeholder="(all)" onChange={(_, d) => setRule(i, { itemDisplayName: d.value })} style={{ minWidth: 120 }} />
+                          </TableCell>
+                          <TableCell>
+                            <Dropdown aria-label="Kind" value={r.kind} selectedOptions={[r.kind]} onOptionSelect={(_, d) => d.optionValue && setRule(i, { kind: d.optionValue as LoomRule['kind'] })} style={{ minWidth: 120 }}>
+                              <Option value="datasource" text="Data source">Data source</Option>
+                              <Option value="parameter" text="Parameter">Parameter</Option>
+                            </Dropdown>
+                          </TableCell>
+                          <TableCell>
+                            <Dropdown aria-label="Key" value={r.key} selectedOptions={[r.key]} onOptionSelect={(_, d) => d.optionValue && setRule(i, { key: d.optionValue })} style={{ minWidth: 160 }}>
+                              {keys.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                            </Dropdown>
+                          </TableCell>
+                          <TableCell>
+                            <Input aria-label="Value" value={r.value} placeholder="e.g. test-wh.database.windows.net" onChange={(_, d) => setRule(i, { value: d.value })} style={{ minWidth: 200 }} />
+                          </TableCell>
+                          <TableCell>
+                            <Button appearance="subtle" size="small" icon={<Delete20Regular />} onClick={() => removeRule(i)} aria-label={`Remove rule ${i + 1}`} />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+                <div style={{ marginTop: 10 }}>
+                  <Button appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
+                </div>
+              </>
+            )}
+            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: 10 }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Close</Button></DialogTrigger>
+            <Button appearance="primary" icon={<BranchFork20Regular />} onClick={save} disabled={busy || rules === null}>{busy ? 'Saving…' : 'Save rules'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function LoomHistoryPanel({ pipelineId, stages, tick }: { pipelineId: string; stages: LoomStage[]; tick: number }) {
+  const [records, setRecords] = useState<LoomHistoryRecord[] | null>(null);
+  useEffect(() => {
+    setRecords(null);
+    fetch(`/api/deployment-pipelines/loom/${pipelineId}/history`).then(async (r) => {
+      const j = await r.json();
+      setRecords(j.ok ? (j.data.records || []) : []);
+    }).catch(() => setRecords([]));
+  }, [pipelineId, tick]);
+
+  const stageName = (id: string) => stages.find((s) => s.id === id)?.displayName || id;
+
+  const cols: LoomColumn<LoomHistoryRecord>[] = [
+    {
+      key: 'startedAt', label: 'Started', sortable: true, filterable: false, width: 180,
+      getValue: (o) => o.startedAt ? new Date(o.startedAt).getTime() : 0,
+      render: (o) => o.startedAt ? new Date(o.startedAt).toLocaleString() : '—',
+    },
+    {
+      key: 'route', label: 'From → To', sortable: true, filterable: true, width: 220,
+      getValue: (o) => `${stageName(o.sourceStageId)} → ${stageName(o.targetStageId)}`,
+      render: (o) => <>{stageName(o.sourceStageId)} <ArrowRight20Regular style={{ verticalAlign: 'middle', width: 14, height: 14 }} /> {stageName(o.targetStageId)}</>,
+    },
+    { key: 'status', label: 'Status', sortable: true, filterable: true, width: 120, getValue: (o) => o.status, render: (o) => loomStatusBadge(o.status) },
+    { key: 'count', label: 'Items', sortable: true, filterable: false, width: 90, getValue: (o) => o.deployedItemIds?.length || 0, render: (o) => String(o.deployedItemIds?.length || 0) },
+    { key: 'startedBy', label: 'By', sortable: true, filterable: true, width: 180, render: (o) => o.startedBy || '—' },
+    { key: 'note', label: 'Note', sortable: false, filterable: true, width: 220, render: (o) => o.note || '—' },
+  ];
+
+  if (records === null) return <Spinner size="tiny" label="Loading deployment history…" />;
+  return (
+    <LoomDataTable
+      ariaLabel="Loom deployment history"
+      columns={cols}
+      rows={records}
+      getRowId={(o) => o.id}
+      empty="No deploys recorded for this pipeline yet."
+    />
   );
 }
