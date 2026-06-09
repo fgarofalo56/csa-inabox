@@ -2,8 +2,10 @@
 # Idempotently grant the Console UAMI the Microsoft Graph app-roles it needs
 # for read-only Entra user enrichment in /admin/users:
 #
-#   - Directory.Read.All  → required for display name + department + license
-#   - User.Read.All       → required for /users/{upn}?$select=...
+#   - Directory.Read.All  → required for display name + department + the
+#                           /subscribedSkus tenant license roll-up (F17)
+#   - User.Read.All       → required for /users?$select=...,assignedLicenses
+#                           (per-user license assignments + accountEnabled, F17)
 #
 # Optional (for the Help-Copilot widget + Security & Governance surfaces):
 #   - InformationProtectionPolicy.Read.All → sensitivity label catalog

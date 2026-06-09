@@ -40,6 +40,9 @@ export interface StoredMeasure {
   schema?: string;
   expression: string;
   kind: MeasureKind;
+  /** Business-friendly description. Authored by the DAX Copilot (dax_save_descriptions)
+   *  or by hand; persisted Azure-native in Cosmos — no Power BI / Fabric dependency. */
+  description?: string;
   createdAt: string;
   updatedAt: string;
 }

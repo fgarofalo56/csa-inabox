@@ -25,6 +25,64 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.28.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.27.0...csa-inabox-v0.28.0) (2026-06-09)
+
+
+### Features
+
+* **csa-loom:** AI functions in T-SQL — sentiment/classify/translate/summarize/extract ([#933](https://github.com/fgarofalo56/csa-inabox/issues/933)) ([8c6a778](https://github.com/fgarofalo56/csa-inabox/commit/8c6a778f831d5c47f43e1b151762835fd31ec504))
+* **csa-loom:** Azure SQL Compute & Storage scale tab (vCore/DTU/serverless) ([#948](https://github.com/fgarofalo56/csa-inabox/issues/948)) ([b5d25b1](https://github.com/fgarofalo56/csa-inabox/commit/b5d25b172d130d6f02190a0d8e4f44b30c43874e))
+* **csa-loom:** cancel running SQL query + background continuation + completion toast ([#943](https://github.com/fgarofalo56/csa-inabox/issues/943)) ([8b83fcb](https://github.com/fgarofalo56/csa-inabox/commit/8b83fcbe444f6872c6e6e64828c55bbe84f35814))
+* **csa-loom:** column-level + row-level security in the Permissions surface ([#937](https://github.com/fgarofalo56/csa-inabox/issues/937)) ([5d14de7](https://github.com/fgarofalo56/csa-inabox/commit/5d14de792a2ae46008129b53a2273e54f67947de))
+* **csa-loom:** Connect-tab connection strings (ADO.NET/JDBC/ODBC/PHP/Go), cloud-aware ([#940](https://github.com/fgarofalo56/csa-inabox/issues/940)) ([77640a7](https://github.com/fgarofalo56/csa-inabox/commit/77640a7a70f854606ff75d21405816de5b7fa307))
+* **csa-loom:** connection details panel for SQL warehouse + Synapse pools ([#939](https://github.com/fgarofalo56/csa-inabox/issues/939)) ([32e5fe5](https://github.com/fgarofalo56/csa-inabox/commit/32e5fe54a4ee8f590a55a26e2d7cbfc24dccd656))
+* **csa-loom:** Copilot quick-actions in the SQL editor (Fix / Explain / inline / NL→T-SQL) ([#949](https://github.com/fgarofalo56/csa-inabox/issues/949)) ([149bb84](https://github.com/fgarofalo56/csa-inabox/commit/149bb84cd873a22e4e25d1c56cb070309a2d18e2))
+* **csa-loom:** Cosmos container CRUD wizard + editable Scale & Settings (throughput/indexing/TTL) ([#944](https://github.com/fgarofalo56/csa-inabox/issues/944)) ([f4532b8](https://github.com/fgarofalo56/csa-inabox/commit/f4532b803c5e77c3bf2cd41fd0d573969bacfbb2))
+* **csa-loom:** Cosmos DB keys / connection strings Connect panel ([#956](https://github.com/fgarofalo56/csa-inabox/issues/956)) ([7271613](https://github.com/fgarofalo56/csa-inabox/commit/7271613e3cb1d5bf65b90873761b85ff8a8fa205))
+* **csa-loom:** Cosmos DB Metrics tab — RU/s, storage, 429 throttling ([#957](https://github.com/fgarofalo56/csa-inabox/issues/957)) ([5223af8](https://github.com/fgarofalo56/csa-inabox/commit/5223af88ebcaadbd6fd4521ffddf6e6a537807e7))
+* **csa-loom:** Cosmos Gremlin graph explorer canvas + addV/addE + cloud-aware endpoint ([#952](https://github.com/fgarofalo56/csa-inabox/issues/952)) ([e648378](https://github.com/fgarofalo56/csa-inabox/commit/e6483788e1426ec139868fce20c78f359cb31737))
+* **csa-loom:** CTAS + clone + SELECT INTO for Databricks & Synapse SQL ([#925](https://github.com/fgarofalo56/csa-inabox/issues/925)) ([225c08b](https://github.com/fgarofalo56/csa-inabox/commit/225c08b99655a4528c323b62dfb35ddb81641e31))
+* **csa-loom:** Explorer views/SPs/functions + row counts + script-out (SQL family) ([#923](https://github.com/fgarofalo56/csa-inabox/issues/923)) ([1177178](https://github.com/fgarofalo56/csa-inabox/commit/11771788b92b65983042a2c26cb1c02e52ba116a))
+* **csa-loom:** export results CSV/JSON + Open-in-Excel (.iqy) for Databricks + Synapse Serverless ([#919](https://github.com/fgarofalo56/csa-inabox/issues/919)) ([df8912a](https://github.com/fgarofalo56/csa-inabox/commit/df8912aa99080df7f6b8c6f7b006145cba29c661))
+* **csa-loom:** external shortcut connectors (S3/GCS/ADLS/Dataverse) with KV-only creds + live browse ([#928](https://github.com/fgarofalo56/csa-inabox/issues/928)) ([e04ee71](https://github.com/fgarofalo56/csa-inabox/commit/e04ee713ece3f0e2e49050f6a968ce82f4c05e11))
+* **csa-loom:** Get-data ribbon → ADF Copy/pipeline/dataflow deep-links (SQL DB sink) ([#941](https://github.com/fgarofalo56/csa-inabox/issues/941)) ([ddaca75](https://github.com/fgarofalo56/csa-inabox/commit/ddaca7532cdc2f1af649e30d04a590bcdf13a192))
+* **csa-loom:** in-Loom chart visualize + injection-safe query parameters (W13/W15) ([#931](https://github.com/fgarofalo56/csa-inabox/issues/931)) ([9c5e649](https://github.com/fgarofalo56/csa-inabox/commit/9c5e6492f3eb46f853d87760abe463916a240237))
+* **csa-loom:** internal lakehouse shortcuts — item-scoped CRUD + live Test + Broken status ([#929](https://github.com/fgarofalo56/csa-inabox/issues/929)) ([1f2a303](https://github.com/fgarofalo56/csa-inabox/commit/1f2a303d6c7a798e94b2272ec6b9a698f387cdb8))
+* **csa-loom:** item-level Share + Git source-control gate for Azure SQL databases ([#955](https://github.com/fgarofalo56/csa-inabox/issues/955)) ([000a173](https://github.com/fgarofalo56/csa-inabox/commit/000a1738bb85630d90c5f365cec5e121d28a1365))
+* **csa-loom:** item-to-item lineage drawer (OneLake, Azure-native per boundary) ([#921](https://github.com/fgarofalo56/csa-inabox/issues/921)) ([c749760](https://github.com/fgarofalo56/csa-inabox/commit/c74976046ccd0cc941eb4b4302906c432c13542c))
+* **csa-loom:** mirrored-database replication monitor + stop/start/restart lifecycle ([#958](https://github.com/fgarofalo56/csa-inabox/issues/958)) ([ab90e5c](https://github.com/fgarofalo56/csa-inabox/commit/ab90e5ce9672ced2c20a5684e3147b2695caad13))
+* **csa-loom:** mirrored-DB wizard + multi-source connectors + table selection ([#961](https://github.com/fgarofalo56/csa-inabox/issues/961)) ([dfa916f](https://github.com/fgarofalo56/csa-inabox/commit/dfa916fdf763901ae1a8a1f4b80d92741634282e))
+* **csa-loom:** Model view canvas — relationships + measures (no Power BI dependency) ([#934](https://github.com/fgarofalo56/csa-inabox/issues/934)) ([a40bd89](https://github.com/fgarofalo56/csa-inabox/commit/a40bd89cc2b94a0e997bda6627b568a7e28d9d58))
+* **csa-loom:** My Queries / Shared Queries folders + bulk delete for the SQL editor ([#954](https://github.com/fgarofalo56/csa-inabox/issues/954)) ([ab44a96](https://github.com/fgarofalo56/csa-inabox/commit/ab44a96c26863d6eae5e6df12eec9f629c9493a8))
+* **csa-loom:** OneLake card endorsement badge + owner avatar + domain badge ([#915](https://github.com/fgarofalo56/csa-inabox/issues/915)) ([600e16b](https://github.com/fgarofalo56/csa-inabox/commit/600e16b950e75e919c629a92f7b77501669a35e6))
+* **csa-loom:** OneLake catalog Govern tab — Azure-native governance score ([#918](https://github.com/fgarofalo56/csa-inabox/issues/918)) ([02b9650](https://github.com/fgarofalo56/csa-inabox/commit/02b9650c03759040ffdf5ff999bff468004da432))
+* **csa-loom:** OneLake catalog Secure tab — Azure-native access matrix ([#920](https://github.com/fgarofalo56/csa-inabox/issues/920)) ([b70dc02](https://github.com/fgarofalo56/csa-inabox/commit/b70dc02a264f9230c779cf003496f3cc848b4db2))
+* **csa-loom:** OneLake lifecycle-management rules editor + workspace storage binding ([#924](https://github.com/fgarofalo56/csa-inabox/issues/924)) ([883af03](https://github.com/fgarofalo56/csa-inabox/commit/883af03bf11ff8f26c0122ea8f45bba2cb1dd71f))
+* **csa-loom:** OneLake path/URI model + ItemTile overflow menu + Connect snippets ([#916](https://github.com/fgarofalo56/csa-inabox/issues/916)) ([3d73fa7](https://github.com/fgarofalo56/csa-inabox/commit/3d73fa72c45ac44261974c3358038dafc47c009d))
+* **csa-loom:** OneLake soft-delete / restore (Recycle bin) ([#930](https://github.com/fgarofalo56/csa-inabox/issues/930)) ([399693b](https://github.com/fgarofalo56/csa-inabox/commit/399693b11cc79fbc7ad151b0c02684b3c857522b))
+* **csa-loom:** OneLake storage-tier (Hot/Cool/Cold) management ([#922](https://github.com/fgarofalo56/csa-inabox/issues/922)) ([2c1a100](https://github.com/fgarofalo56/csa-inabox/commit/2c1a1005f2c807f98de67114839154a28a4b0a40))
+* **csa-loom:** open mirroring — push Parquet → managed Delta (Azure-native) ([#959](https://github.com/fgarofalo56/csa-inabox/issues/959)) ([859d935](https://github.com/fgarofalo56/csa-inabox/commit/859d9357ae9806d58b3d823f949788a66f1bbb48))
+* **csa-loom:** paired SQL analytics endpoint over the mirror (Azure-native) ([#962](https://github.com/fgarofalo56/csa-inabox/issues/962)) ([b85b28f](https://github.com/fgarofalo56/csa-inabox/commit/b85b28f917eedcbfa572fb4e47ff41515b50cbd3))
+* **csa-loom:** query-history profile drawer (Databricks) + DMV history (Synapse) ([#927](https://github.com/fgarofalo56/csa-inabox/issues/927)) ([9c300c9](https://github.com/fgarofalo56/csa-inabox/commit/9c300c9018b34d103b6f7b4e7276523eea1bdc5e))
+* **csa-loom:** sensitivity label chip on OneLake card + set-label action ([#917](https://github.com/fgarofalo56/csa-inabox/issues/917)) ([ee63da2](https://github.com/fgarofalo56/csa-inabox/commit/ee63da2471a4f55f659013e93545625a3031b34f))
+* **csa-loom:** SQL DB advanced create options (collation / ZR / backup-redundancy / maintenance window) ([#935](https://github.com/fgarofalo56/csa-inabox/issues/935)) ([5f7980e](https://github.com/fgarofalo56/csa-inabox/commit/5f7980ef56fe360cda77b2815a09cfb8291f7417))
+* **csa-loom:** SQL editor parity — run-selection + cancel + multi-tab + schema IntelliSense + cross-DB picker ([#947](https://github.com/fgarofalo56/csa-inabox/issues/947)) ([74750a3](https://github.com/fgarofalo56/csa-inabox/commit/74750a3314aa2e9b6332b915f417b4aaf5029d93))
+* **csa-loom:** SQL Object Explorer parity — indexes, data preview, full context menus ([#960](https://github.com/fgarofalo56/csa-inabox/issues/960)) ([b8d2b50](https://github.com/fgarofalo56/csa-inabox/commit/b8d2b5092a631928fb93630fdb0092b8777cb518))
+* **csa-loom:** SQL performance dashboard over Query Store (QPI parity) ([#938](https://github.com/fgarofalo56/csa-inabox/issues/938)) ([b8556a6](https://github.com/fgarofalo56/csa-inabox/commit/b8556a67dab58c4004ff945ba15c253e3538a189))
+* **csa-loom:** SQL results pane parity — 10k rows, Messages tab, multi-result-set, XLSX/copy/search ([#951](https://github.com/fgarofalo56/csa-inabox/issues/951)) ([c4f9ddd](https://github.com/fgarofalo56/csa-inabox/commit/c4f9ddd19a79090cfbe891b68c69393e4d0b4afc))
+* **csa-loom:** Statistics manager + OPTIMIZE/ANALYZE + V-Order honest gate ([#953](https://github.com/fgarofalo56/csa-inabox/issues/953)) ([0b9d465](https://github.com/fgarofalo56/csa-inabox/commit/0b9d465d30d5e5a5e157a88b36a1a2e1e1e340cf))
+* **csa-loom:** T-SQL query editor Fabric parity — templates, snippets, IntelliSense, run-selection ([#936](https://github.com/fgarofalo56/csa-inabox/issues/936)) ([e80f651](https://github.com/fgarofalo56/csa-inabox/commit/e80f6518248d52e13b137cadcbf3ba6326d2f2a2))
+* **csa-loom:** visual (no-code) query editor — Power-Query canvas + SQL compiler ([#932](https://github.com/fgarofalo56/csa-inabox/issues/932)) ([c56fc15](https://github.com/fgarofalo56/csa-inabox/commit/c56fc152d49be1ca114d1d750508a7f5b879609f))
+* **csa-loom:** Warehouse Copilot — NL→SQL + Explain + Fix on Azure-native warehouses ([#945](https://github.com/fgarofalo56/csa-inabox/issues/945)) ([e989f7d](https://github.com/fgarofalo56/csa-inabox/commit/e989f7d6d864cc6e1259f50373eb1426cc022c68))
+* **csa-loom:** warehouse create + delete + $/hr estimate (lifecycle complete) ([#926](https://github.com/fgarofalo56/csa-inabox/issues/926)) ([c1202a0](https://github.com/fgarofalo56/csa-inabox/commit/c1202a053bc1cffa1b629a8a70f53cfcb85b0da3))
+* **csa-loom:** warehouse Monitoring tab — running-clusters + query-load chart ([#942](https://github.com/fgarofalo56/csa-inabox/issues/942)) ([1692105](https://github.com/fgarofalo56/csa-inabox/commit/16921054a2858b80340a547cd12b49909413facb))
+* **csa-loom:** warehouse query-result Alerts editor (query + condition + schedule + destination) ([#946](https://github.com/fgarofalo56/csa-inabox/issues/946)) ([d3640ec](https://github.com/fgarofalo56/csa-inabox/commit/d3640ecfd755f3db97ed851cf1319f19f7ee9408))
+
+
+### Bug Fixes
+
+* **csa-loom:** auto-mirror is Azure-native by default + land Bronze from SQL DB editor ([#950](https://github.com/fgarofalo56/csa-inabox/issues/950)) ([0c2f0d4](https://github.com/fgarofalo56/csa-inabox/commit/0c2f0d495704b8167021c10273f83bacdd849544))
+
 ## [0.27.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.26.0...csa-inabox-v0.27.0) (2026-06-08)
 
 

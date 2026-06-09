@@ -103,3 +103,55 @@ fake success, and the tree does not show a delete affordance for those types.
 - Functional walk requires a Power BI tenant with the UAMI SP authorized; in a
   deployment without that authorization the navigator renders the honest 401/403
   remediation MessageBar (not an empty fake list). No mock data anywhere.
+
+## Semantic model — Automatic aggregations (XMLA `alternateOf`)
+
+Source UI: Power BI Desktop / Tabular Editor "Manage aggregations" — an
+aggregation table whose columns each carry an `alternateOf`
+(BaseTable / BaseColumn + Summarization: GroupBy | Sum | Count | Min | Max).
+The Analysis Services engine automatically rewrites queries that match the agg
+grain to the small, hidden, Import-mode agg table and falls through to the
+DirectQuery detail table otherwise (requires model compatibility level 1460+).
+Learn: <https://learn.microsoft.com/power-bi/transform-model/aggregations-advanced>,
+`AlternateOf` / `SummarizationType`
+(<https://learn.microsoft.com/dotnet/api/microsoft.analysisservices.tabular.alternateof>).
+
+| Capability | Loom surface | Backend |
+|---|---|---|
+| Define agg table name + Import partition (M) | `SemanticModelEditor` → Aggregations tab | `buildAggTableTmsl()` (TMSL `createOrReplace`, `isHidden:true`, `mode:'import'`) |
+| Per-column mapping (agg col, type, summarization, detail table+column) | guided grid (dropdowns; no raw JSON) | `altMapToTmsl()` emits `alternateOf` (`baseTable`/`baseColumn`/`summarization`) |
+| Seed mappings from a table's columns | "Seed from first table" button | client-side heuristic (numeric→Sum, key→GroupBy); fully editable |
+| Apply to the model | `POST /api/items/semantic-model/{id}/model` | `getDataset()` (resolve XMLA catalog) → `executeTmsl()` SOAP `Execute` over XMLA |
+| Verify a hit (probe) | optional Probe DAX | `executeDatasetQueries()` runs the probe at agg grain; rows returned ⇒ engine answers it |
+| Query-plan ground truth | MessageBar instructions | SQL Profiler / SSMS XEvents "Aggregate Table Rewrite Query" → `matchingResult=matchFound` |
+
+### Backend per control
+
+- `aas-client.ts` — XMLA write client. `xmlaConfigGate()` honest gate;
+  `xmlaScope()` sovereign-cloud audience (`analysis.windows.net` vs
+  `analysis.usgovcloudapi.net`); `buildAggTableTmsl()`/`altMapToTmsl()` pure
+  TMSL builders; `executeTmsl()` real SOAP `Execute` POST + fault surfacing.
+- Endpoint: `LOOM_POWERBI_XMLA_ENDPOINT`. **Azure-native default = Azure
+  Analysis Services** (`https://<server>.asazure.windows.net/xmla`); a Power BI
+  Premium / Fabric capacity XMLA endpoint is opt-in **by URL only** — the client
+  never hard-codes a Fabric host, so there is no Fabric dependency
+  (no-fabric-dependency.md). Auth reuses the Console UAMI bearer token (same
+  identity as the Power BI REST calls); no new ARM role assignment is required.
+
+### Honest gates
+
+- No `LOOM_POWERBI_XMLA_ENDPOINT` → the route returns `200 { ok:false,
+  xmlaUnavailable:true, missing, detail }` and the Aggregations tab renders the
+  full builder plus a warning MessageBar naming the env var (no fake success,
+  no empty tab — no-vaporware.md).
+- Push datasets cannot be written over XMLA → the tab shows a warning and
+  disables Create when `targetStorageMode === 'Push'`.
+
+### Verification
+
+- `npx vitest run lib/azure/__tests__/aas-client.test.ts app/api/items/__tests__/aggregation-route.test.ts`
+  — 21 passing (TMSL shape, `isHidden`/Import partition, `alternateOf`
+  summarization+refs, SOAP envelope + SOAPAction header + Catalog, fault →
+  `AasError`, route auth/validation/honest-gate/happy-path).
+- Live functional walk requires a configured XMLA endpoint + the UAMI as a
+  workspace Member/Contributor; without it the tab honest-gates.

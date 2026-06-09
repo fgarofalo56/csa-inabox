@@ -90,6 +90,15 @@ allowed config-only state per `no-vaporware.md` — authoring is always live.
 The Function renderer has **zero cloud-specific code**. Cosmos is not required
 to render (the definition arrives in the request body).
 
+List, detail, and dataset refresh (when Power BI opt-in is enabled) use Power BI REST; the sovereign host is resolved by `cloud-endpoints.ts`. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | List + metadata + dataset-backed refresh work; in-place embed/format-export honest-gated to the pbi-paginated SDK. |
+| GCC | `api.powerbigov.us` | Same coverage as Commercial; the pbi-paginated-SDK honest-gate is unchanged. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Same coverage. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Same coverage. |
+
 ## Verification
 
 Acceptance receipt (this PR): a tablix report authored against a dataset,

@@ -35,3 +35,14 @@ Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` -> `DashboardEditor`
 - Tile authoring (pin visual, new tile, theme) lives in Power BI Web; the info MessageBar discloses this. Drill-to-report uses a deep link rather than an in-place report embed swap (Power BI's own tile click also navigates to the report).
 
 Grade: A — list/embed/tiles/drill all live REST; authoring honestly routed to Power BI Web.
+
+## Per-cloud notes
+
+List, tiles, embed token, and drill use Power BI REST; the sovereign host is resolved by `cloud-endpoints.ts`. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | Full coverage — list, embed, tiles, drill-to-report. Tile authoring honest-gated to Power BI Web. |
+| GCC | `api.powerbigov.us` | Same coverage; tile-authoring honest-gate unchanged. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Same coverage. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Same coverage. |

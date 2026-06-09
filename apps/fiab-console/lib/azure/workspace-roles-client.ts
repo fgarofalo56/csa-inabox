@@ -507,6 +507,32 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
 }
 
 /**
+ * List ALL workspace-role assignments across a set of workspace IDs (Cosmos
+ * system-of-record). Used by GET /api/admin/users to build the per-user
+ * role-expansion view without iterating workspaces individually.
+ *
+ * This is a cross-partition query (no partitionKey option) — acceptable for the
+ * admin-console path where the workspace count is bounded (~50–500 for a typical
+ * tenant). Results are grouped by principalId on the caller side. Returns an
+ * empty array when `workspaceIds` is empty.
+ */
+export async function listAllWorkspaceRolesForWorkspaces(
+  workspaceIds: string[],
+): Promise<WorkspaceRoleAssignment[]> {
+  if (!workspaceIds.length) return [];
+  const c = await workspaceRolesContainer();
+  const { resources } = await c.items
+    .query<WorkspaceRoleAssignment>({
+      query:
+        'SELECT c.id, c.workspaceId, c.principalId, c.principalType, c.displayName, c.role ' +
+        'FROM c WHERE ARRAY_CONTAINS(@wids, c.workspaceId)',
+      parameters: [{ name: '@wids', value: workspaceIds }],
+    })
+    .fetchAll(); // cross-partition — no partitionKey argument
+  return resources;
+}
+
+/**
  * Probe whether the Console UAMI can write role assignments on the DLZ RG.
  * A 403 on a zero-cost list means the RBAC-admin grant is missing — the route
  * surfaces the returned `detail` as an honest-gate MessageBar.
