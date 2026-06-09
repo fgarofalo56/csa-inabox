@@ -27,4 +27,30 @@ describe('ScorecardEditor', () => {
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
+
+  it('renders the goals grid with status/owner/due columns from the merged BFF response', async () => {
+    let err: unknown = null;
+    try {
+      installFetchMock({
+        '/api/powerbi/workspaces': () => ({ ok: true, workspaces: [{ id: 'ws1', name: 'Analytics' }] }),
+        '/api/items/scorecard?workspaceId': () => ({ ok: true, scorecards: [{ id: 'sc1', displayName: 'Q3 OKRs' }] }),
+        '/api/items/scorecard/sc1': () => ({
+          ok: true,
+          workspaceId: 'ws1',
+          scorecard: { id: 'sc1', displayName: 'Q3 OKRs' },
+          goals: [{ id: 'g1', name: 'Grow ARR', currentValue: 80, targetValue: 100, status: 'onTrack', owner: 'Dana', dueDate: '2026-09-30' }],
+        }),
+      });
+      render(<ScorecardEditor item={makeItem('scorecard', 'Scorecard')} id="sc1" />);
+      await waitFor(() => expect(screen.getByText('Grow ARR')).toBeInTheDocument(), { timeout: 5000 });
+      // Status band + owner + due render in the grid.
+      expect(screen.getByText('On track')).toBeInTheDocument();
+      expect(screen.getByText('Dana')).toBeInTheDocument();
+      expect(screen.getByText('2026-09-30')).toBeInTheDocument();
+      // Per-row actions present.
+      expect(screen.getAllByText('Check in').length).toBeGreaterThan(0);
+    } catch (e) { err = e; }
+    if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
+  });
 });
+

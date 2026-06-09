@@ -28,7 +28,9 @@ import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos
 import {
   listBusinessDomains,
   createBusinessDomain,
+  updateBusinessDomain,
   deleteBusinessDomain,
+  domainCollectionName,
   isPurviewConfigured,
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
@@ -237,7 +239,14 @@ export async function POST(req: NextRequest) {
     let purviewMirror: { ok: boolean; id?: string; error?: string } | undefined;
     if (isPurviewConfigured()) {
       try {
-        const mirrored = await createBusinessDomain({ id, name, description: newItem.description });
+        // A subdomain mirrors as a CHILD collection under its parent's
+        // collection (Fabric/Purview parity). The parent's ≤36-char collection
+        // referenceName is derived deterministically from the parent's Loom id,
+        // so it resolves even if the parent was mirrored in an earlier request.
+        const mirrored = await createBusinessDomain({
+          id, name, description: newItem.description,
+          parentId: newItem.parentId ? domainCollectionName(newItem.parentId) : undefined,
+        });
         newItem.purviewDomainId = mirrored.id;
         purviewMirror = { ok: true, id: mirrored.id };
       } catch (e: any) {
@@ -340,7 +349,29 @@ export async function PATCH(req: NextRequest) {
     doc.items[idx] = domain;
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domain });
+
+    // Best-effort: mirror name/description edits to the Purview classic
+    // collection (PUT /collections is an idempotent create-or-update — there is
+    // no PATCH for collections). Re-asserts the parent so a subdomain's mirror
+    // keeps its place in the collection hierarchy. Never blocks the Cosmos write
+    // (Purview is optional); a grant/auth error surfaces in `purviewMirror`.
+    let purviewMirror: { ok: boolean; error?: string } | undefined;
+    if (
+      isPurviewConfigured() && domain.purviewDomainId &&
+      (body?.name !== undefined || body?.description !== undefined)
+    ) {
+      try {
+        await updateBusinessDomain(domain.id, {
+          name: domain.name,
+          description: domain.description,
+          parentId: domain.parentId ? domainCollectionName(domain.parentId) : undefined,
+        });
+        purviewMirror = { ok: true };
+      } catch (e: any) {
+        purviewMirror = { ok: false, error: e?.message || String(e) };
+      }
+    }
+    return NextResponse.json({ ok: true, domain, purviewMirror });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }

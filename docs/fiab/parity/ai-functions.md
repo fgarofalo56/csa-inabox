@@ -86,3 +86,97 @@ GCC path executes Databricks' built-in `ai_*` SQL functions in-database; the Gov
 - Manual (Gov): same picker → Run → AOAI gpt-4o enrichment in the receipt.
 - Manual (Gov, no AOAI): the dialog renders the honest-gate `MessageBar` naming
   `LOOM_AOAI_ENDPOINT` instead of crashing.
+
+---
+
+## Notebook AI functions (Spark / pandas) — `loom-ai-functions`
+
+A second, distinct surface for the SAME Fabric capability: Fabric's AI functions
+are usable from **notebooks** over a Spark/pandas DataFrame, not only from the
+SQL/data surface. The `ai_functions` Python library (`apps/copilot/ai_functions/`,
+dist `loom-ai-functions`) brings that to Loom notebooks — an analyst writes
+`ai.classify(df['text'])` in a cell and gets real AOAI labels back. This is
+separate from the Console BFF path above (`ai-functions-client.ts` /
+`app/api/ai-functions/route.ts`), which powers the SQL-editor helper dialog.
+
+Source UI: Fabric AI functions in notebooks —
+https://learn.microsoft.com/fabric/data-science/ai-functions/overview (the
+`df.ai.summarize` / `ai.classify` DataFrame APIs). Azure-native engine: Azure
+OpenAI chat completions, called from the Spark executor under the pool MSI.
+
+### Loom coverage
+
+| Capability | Status | Notes |
+|------------|--------|-------|
+| `ai.summarize` on str / pandas Series / pyspark Column | built ✅ | scalar / thread-batched Series / vectorized `pandas_udf` |
+| `ai.classify(data, labels=[...])` | built ✅ | one label per row |
+| `ai.sentiment(data)` | built ✅ | positive / negative / neutral |
+| `ai.extract(data, fields=[...])` | built ✅ | JSON string per row |
+| `ai.translate(data, target_lang="fr")` | built ✅ | |
+| Managed-identity auth (Synapse MSI / Databricks AC MSI) | built ✅ | `azure-identity` ChainedTokenCredential; UAMI preferred |
+| API-key fallback (`LOOM_AOAI_KEY`) | built ✅ | api-key header bypasses token fetch |
+| Sovereign endpoint (GCC-High / IL5) | built ✅ | reads `LOOM_AOAI_AUDIENCE` / endpoint from pool env (`.openai.azure.us`) |
+| Retry on 429 | built ✅ | 3 attempts, exponential 2/4/8s |
+| Reasoning-model temperature fallback | built ✅ | mirrors `ai-functions-client.ts` |
+| Honest gate (`ai.check_reachable()`) | built ✅ | raises `AoaiBridgeConfigError`/`AoaiBridgeAuthError` naming the env var + role — never a silent empty df |
+| Batched concurrency | built ✅ | `ThreadPoolExecutor`, `LOOM_AI_FN_WORKERS` (default 8) |
+| Wheel baked into the Spark pool | built ✅ | `scripts/csa-loom/ai-functions-pool-setup.sh` |
+
+Zero ❌. No stub banners.
+
+### Backend per control
+
+| Control | Backend |
+|---------|---------|
+| `ai.*` on a str / Series / Column | `_client.call_chat` → live Azure OpenAI `/chat/completions` (sovereign host via `LOOM_AOAI_ENDPOINT`, audience via `LOOM_AOAI_AUDIENCE`) |
+| Token | `_auth.get_bearer_token` → `azure-identity` MSI/UAMI token for the pool identity (or `LOOM_AOAI_KEY`) |
+| `ai.check_reachable()` | one real `call_chat` probe; raises a typed, actionable error on failure |
+
+### Azure-native default
+
+No Fabric / Power BI / OneLake dependency. The library calls Azure OpenAI
+directly from the Spark executor and works with `LOOM_DEFAULT_FABRIC_WORKSPACE`
+unset. It never reaches `api.fabric.microsoft.com` / `api.powerbi.com` /
+`onelake.dfs.*`.
+
+### Bicep sync
+
+- `platform/fiab/bicep/modules/admin-plane/aoai-spark-rbac.bicep` — grants the
+  Synapse workspace MSI and the Databricks Access Connector MSI **Cognitive
+  Services OpenAI User** (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`, inference-only)
+  on the AOAI account. Deployed at the Admin Plane RG scope from the orchestrator
+  (`platform/fiab/bicep/main.bicep` → `singleDlzAoaiSparkRbac`) because the AOAI
+  account (admin plane) is created before the Spark identities (DLZ).
+- `admin-plane/main.bicep` — new output `aiServicesAccountName` (empty for the
+  existing/external-account path).
+- `landing-zone/main.bicep` — new outputs `synapseManagedIdentityPrincipalId`
+  and `databricksAccessConnectorPrincipalId` (the latter empty on GCC-High / IL5
+  where Databricks UC is unsupported, so that grant cleanly no-ops).
+- `LOOM_AOAI_ENDPOINT` / `LOOM_AOAI_DEPLOYMENT` / `LOOM_AOAI_AUDIENCE` — already
+  sovereign-aware in `admin-plane/main.bicep`; delivered onto the Spark pool by
+  `scripts/csa-loom/ai-functions-pool-setup.sh` (Spark conf `spark.loom.aoai.*`).
+
+### Per-cloud notes
+
+- **Commercial / GCC** — AOAI on `.openai.azure.com`, audience
+  `cognitiveservices.azure.com`. Both Synapse and Databricks MSI grants fire.
+- **GCC-High / IL5** — AOAI on `.openai.azure.us`, audience
+  `cognitiveservices.azure.us` (set by `main.bicep`). Databricks UC is
+  unsupported → `databricksAccessConnectorPrincipalId` is empty → only the
+  Synapse grant fires. The bootstrap script auto-derives
+  `dfs.core.usgovcloudapi.net` from `AZURE_CLOUD`.
+
+### Verification
+
+- `apps/copilot/ai_functions/tests/` — 38 pytest cases GREEN (config, auth,
+  client retry/error taxonomy, functions dispatch, batch order/empty-skip/
+  fail-loud, honest gate). `ruff check` clean.
+- `az bicep build platform/fiab/bicep/main.bicep` — clean with the new module +
+  outputs wired.
+- `python -m pip wheel apps/copilot/ai_functions` — builds
+  `loom_ai_functions-0.1.0-py3-none-any.whl` exposing `import ai_functions`.
+- Manual (live pool): open `docs/fiab/notebooks/ai_functions_demo.py` on a
+  Synapse Spark session → Cell 2 `check_reachable()` prints "AOAI reachable" →
+  Cell 3 `ai.classify(df['text'])` returns real gpt-4o labels over real rows →
+  Cell 6 clears `LOOM_AOAI_ENDPOINT` and shows `AoaiBridgeConfigError` (not a
+  silent empty df, not a Python `KeyError`).

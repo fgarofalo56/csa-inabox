@@ -34,8 +34,14 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { getPbiGovHost } from './cloud-endpoints';
 
-const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || 'https://api.powerbi.com/v1.0/myorg';
+// Power BI REST base. When LOOM_POWERBI_BASE is unset we resolve the
+// sovereign-cloud-aware host: Commercial / GCC → api.powerbi.com, GCC-High /
+// IL5 / DoD → api.powerbigov.us (the Azure-Government-backed Power BI REST
+// host — NOT a Fabric API host — so this is permitted per no-fabric-dependency).
+// Backwards-compatible: getPbiGovHost() returns api.powerbi.com in Commercial.
+const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || `${getPbiGovHost()}/v1.0/myorg`;
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 
 const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
@@ -658,6 +664,63 @@ export async function refreshDataset(
     body: body ?? { notifyOption: 'NoNotification' },
   });
   return { ok: true };
+}
+
+/**
+ * Enhanced (asynchronous) refresh body — the rich superset of `refreshDataset`.
+ * Supports commitMode, applyRefreshPolicy (drives the incremental-refresh
+ * partition apply for hybrid tables), effectiveDate, partition-level targeting
+ * and a timeout. Used by the semantic-model Incremental-refresh surface.
+ *
+ * Docs: https://learn.microsoft.com/power-bi/connect-data/asynchronous-refresh
+ */
+export interface EnhancedRefreshBody {
+  type?: 'full' | 'clearValues' | 'calculate' | 'dataOnly' | 'automatic' | 'defragment';
+  commitMode?: 'transactional' | 'partialBatch';
+  maxParallelism?: number;
+  retryCount?: number;
+  /** Applies the incremental refresh policy when true. NOT valid with partialBatch. */
+  applyRefreshPolicy?: boolean;
+  /** Overrides "today" for rolling-window calculation. ISO date e.g. "2025-06-08". */
+  effectiveDate?: string;
+  objects?: Array<{ table: string; partition?: string }>;
+  /** e.g. "02:00:00" (hh:mm:ss). */
+  timeout?: string;
+}
+
+/**
+ * Enhanced refresh — POST /groups/{ws}/datasets/{id}/refreshes with the full
+ * async-refresh body. Returns the requestId parsed from the 202 Location header
+ * so callers can poll GET /refreshes/{requestId} for status. Uses a raw fetch
+ * (not `call`) because the requestId lives in the response header, not the body.
+ */
+export async function enhancedRefreshDataset(
+  workspaceId: string,
+  datasetId: string,
+  body: EnhancedRefreshBody = {},
+): Promise<{ requestId: string }> {
+  const token = await getToken(POWERBI_SCOPE);
+  const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/refreshes`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ type: 'full', commitMode: 'transactional', ...body }),
+    cache: 'no-store',
+  });
+  if (res.status !== 202) {
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+    throw new PowerBiError(
+      json?.error?.message || json?.message || text || `enhancedRefresh failed ${res.status}`,
+      res.status,
+      json || text,
+      url,
+    );
+  }
+  const location = res.headers.get('location') || res.headers.get('Location') || '';
+  const requestId = location.split('/').pop() || '';
+  return { requestId };
 }
 
 export async function listRefreshHistory(
@@ -1337,4 +1400,96 @@ export async function setLabelsAsAdmin(
       },
     },
   );
+}
+
+// ============================================================
+// Calculation Groups + Field Parameters — TMSL shapes
+//
+// These types are shared by the BFF model route, the semantic-model
+// provisioner, the aas-client TMSL builders, and the SemanticModelEditor UI.
+// They mirror the TMSL / TOM object model exactly:
+//   https://learn.microsoft.com/analysis-services/tabular-models/calculation-groups
+//   https://learn.microsoft.com/power-bi/create-reports/power-bi-field-parameters
+// ============================================================
+
+export interface TmslCalcItem {
+  /** Calculation item name (becomes a slicer value, e.g. "YTD"). */
+  name: string;
+  /** DAX expression using SELECTEDMEASURE(). */
+  expression: string;
+  /** Optional dynamic format-string DAX (e.g. SELECTEDMEASUREFORMATSTRING()). */
+  formatStringDefinition?: string;
+  /** Display order (-1 = unordered, sorts by name). */
+  ordinal?: number;
+}
+
+export interface TmslCalcGroup {
+  /** Table name that also becomes the slicer column users see. */
+  name: string;
+  /** Integer precedence — higher = applied outermost when groups nest. */
+  precedence: number;
+  /** The calculation items in this group. */
+  items: TmslCalcItem[];
+}
+
+export interface FieldParamEntry {
+  /** Friendly label shown in the slicer (e.g. "Total Sales"). */
+  displayName: string;
+  /** NAMEOF-ready reference: 'Table'[Column] or 'Table'[Measure]. */
+  fieldRef: string;
+  /** Sort order of this entry in the parameter table. */
+  order: number;
+}
+
+export interface FieldParamDef {
+  /** Calculated-table name. Appears in the Fields pane + drives a slicer. */
+  name: string;
+  /** The fields the reader can switch between. */
+  fields: FieldParamEntry[];
+}
+
+/** Request body for POST /api/items/semantic-model/{id}/model. */
+export interface ModelWriteRequest {
+  calculationGroups?: TmslCalcGroup[];
+  fieldParameters?: FieldParamDef[];
+}
+
+// ============================================================
+// Fabric Semantic Model Definition (opt-in path only — no-fabric-dependency.md)
+//   GET  /v1/workspaces/{ws}/semanticModels/{id}/definition
+//   POST /v1/workspaces/{ws}/semanticModels/{id}/updateDefinition
+// Only reached when LOOM_SEMANTIC_BACKEND=fabric + a bound workspace.
+//   https://learn.microsoft.com/rest/api/fabric/semanticmodel/items/update-semantic-model-definition
+// ============================================================
+
+export interface FabricDefinitionPart {
+  path: string;
+  /** base64-encoded payload. */
+  payload: string;
+  payloadType: 'InlineBase64';
+}
+
+/** Read the current TMSL/TMDL definition parts of a Fabric semantic model. */
+export async function getFabricModelDefinition(
+  workspaceId: string,
+  modelId: string,
+  format: 'TMSL' | 'TMDL' = 'TMSL',
+): Promise<{ definition: { parts: FabricDefinitionPart[] } }> {
+  return call<{ definition: { parts: FabricDefinitionPart[] } }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/semanticModels/${encodeURIComponent(modelId)}/getDefinition`,
+    { api: 'fabric', method: 'POST', query: { format } },
+  );
+}
+
+/** Replace the definition parts of a Fabric semantic model (full TMSL push). */
+export async function updateFabricModelDefinition(
+  workspaceId: string,
+  modelId: string,
+  parts: FabricDefinitionPart[],
+): Promise<{ ok: true }> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/semanticModels/${encodeURIComponent(modelId)}/updateDefinition`,
+    { api: 'fabric', method: 'POST', body: { definition: { parts } } },
+  );
+  return { ok: true };
 }

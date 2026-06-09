@@ -1,10 +1,16 @@
 /**
- * GET /api/admin/workspaces — tenant-wide workspace inventory with
- * item counts, last activity, and capacity assignment. Cosmos-backed.
+ * GET /api/admin/workspaces — TENANT-WIDE workspace inventory with live item
+ * counts, last activity, capacity assignment, state, and resolved owners.
+ * Cosmos-backed (cross-partition scan; see lib/clients/workspaces-client.ts).
+ *
+ * Admin-only: every workspace in the tenant is visible regardless of owner, so
+ * the route is gated by isTenantAdmin (LOOM_TENANT_ADMIN_OID / _GROUP_ID). A
+ * non-admin caller gets a structured 403 rather than another user's workspaces.
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,39 +18,22 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const tenantId = s.claims.oid;
+  if (!isTenantAdmin(s)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'forbidden',
+        reason:
+          'Tenant-wide workspace inventory is admin-only. Become a tenant admin by ' +
+          'setting LOOM_TENANT_ADMIN_OID to your user OID (or LOOM_TENANT_ADMIN_GROUP_ID ' +
+          'to an Entra group you belong to) on the loom-console container app.',
+      },
+      { status: 403 },
+    );
+  }
   try {
-    const wsC = await workspacesContainer();
-    const itC = await itemsContainer();
-    const { resources: workspaces } = await wsC.items.query({
-      query: 'SELECT * FROM c WHERE c.tenantId = @t',
-      parameters: [{ name: '@t', value: tenantId }],
-    }, { partitionKey: tenantId }).fetchAll();
-
-    // For each workspace, count items + find latest activity.
-    const result = [];
-    for (const w of workspaces) {
-      const { resources: stats } = await itC.items.query({
-        query: 'SELECT COUNT(1) AS itemCount, MAX(c.updatedAt) AS lastActivity FROM c WHERE c.workspaceId = @w',
-        parameters: [{ name: '@w', value: w.id }],
-      }, { partitionKey: w.id }).fetchAll();
-      const s0 = stats[0] || {};
-      result.push({
-        id: w.id,
-        name: w.name,
-        description: w.description,
-        createdBy: w.createdBy,
-        createdAt: w.createdAt,
-        updatedAt: w.updatedAt,
-        capacity: w.capacity,
-        domain: w.domain,
-        itemCount: s0.itemCount || 0,
-        lastActivity: s0.lastActivity || w.updatedAt,
-        state: w.state || 'Active',
-      });
-    }
-
-    return NextResponse.json({ ok: true, total: result.length, workspaces: result });
+    const workspaces = await listAllWorkspacesAdmin();
+    return NextResponse.json({ ok: true, total: workspaces.length, workspaces });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }

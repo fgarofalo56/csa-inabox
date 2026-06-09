@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { removeWorkspaceRole } from '@/lib/azure/workspace-roles-client';
 
 export const runtime = 'nodejs';
@@ -26,9 +27,9 @@ export async function DELETE(
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
-    if (role !== 'admin') {
+    if (role !== 'admin' && !isTenantAdmin(s)) {
       return NextResponse.json(
-        { ok: false, error: 'Only the workspace owner or an Admin can remove members.', role },
+        { ok: false, error: 'Only the workspace owner, an Admin, or a tenant admin can remove members.', role },
         { status: 403 },
       );
     }
