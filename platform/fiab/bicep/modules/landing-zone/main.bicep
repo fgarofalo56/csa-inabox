@@ -367,6 +367,36 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
 }
 
 // =====================================================================
+// 8b. Azure Analysis Services (semantic layer) — OPT-IN, Commercial only
+//
+// Backs the semantic-model "Get data" (Power Query M) ingest path's AAS
+// refresh phase. Azure-native (no Fabric/Power BI capacity). NOT available in
+// Government clouds, so deployAas defaults false and must stay false in
+// GCC-High / DoD (the Console gates the AAS phase honestly there). The Console
+// UAMI must be listed in aasServerAdminMembers as `app:<clientId>@<tenantId>`.
+// =====================================================================
+
+@description('Provision Azure Analysis Services (opt-in semantic layer for the Power Query ingest path). Commercial only — leave false in Government clouds.')
+param deployAas bool = false
+
+@description('AAS server administrator identifiers (UPNs / `app:<clientId>@<tenantId>` SPNs). The Console UAMI must be included so its MI can call the refresh REST API. Required when deployAas=true.')
+param aasServerAdminMembers array = []
+
+@description('AAS SKU when deployAas=true.')
+param aasSku string = 'B1'
+
+module aas 'aas.bicep' = if (deployAas && !empty(aasServerAdminMembers)) {
+  name: 'dlz-aas'
+  params: {
+    location: location
+    domainName: domainName
+    sku: aasSku
+    serverAdminMembers: aasServerAdminMembers
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 9a. Approval Logic App (F25) — Consumption Logic App + O365 Outlook
 //
 // Backs the pipeline editor's Approval activity: an ADF/Synapse WebHook
@@ -495,3 +525,8 @@ output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty
 output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
 output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
 output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+// AAS (opt-in semantic layer) — empty when deployAas is false. The connection
+// string maps to LOOM_AAS_SERVER on the Console app; LOOM_AAS_MODEL is set per
+// deployed tabular model by the operator.
+output aasServerName string = (deployAas && !empty(aasServerAdminMembers)) ? aas!.outputs.aasServerName : ''
+output aasConnectionString string = (deployAas && !empty(aasServerAdminMembers)) ? aas!.outputs.aasConnectionString : ''
