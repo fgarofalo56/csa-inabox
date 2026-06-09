@@ -650,11 +650,10 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
-@description('Azure Analysis Services data-plane address for DAX tile / semantic execution when loomSemanticBackend=analysis-services. Form: <region>.<aasSuffix>/<serverName> e.g. westus2.asazure.windows.net/myserver (Gov: <region>.asazure.usgovcloudapi.net/<server>). Leave empty to keep the AAS gate active — the dashboard tile-query route then returns an honest gate naming this env var. One-time bootstrap: add the Console UAMI as an AAS server admin (az ams server admin add).')
-param loomAasServer string = ''
-
-@description('Azure Analysis Services tabular model (database) name for DAX execution. Must match the model deployed on loomAasServer.')
-param loomAasModel string = ''
+// NOTE: loomAasServer / loomAasModel are declared once earlier in this file
+// (semantic-model Power Query ingest refresh path). They are REUSED below by
+// the DAX tile / semantic execution path so a single set of env vars feeds
+// both flows. Re-declaring them here would produce BCP028.
 
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
