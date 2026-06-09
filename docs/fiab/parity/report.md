@@ -48,3 +48,14 @@ Embed: `apps/fiab-console/lib/components/embed/powerbi-embed.tsx`
 - Edit mode requires the embed token minted with accessLevel: Edit, which requires the UAMI to have Member/Contributor on the workspace; a 401/403 surfaces verbatim in the embed MessageBar.
 
 Grade: A — every inventory row built against the real Power BI REST API + embed JS API; backend contract tests in lib/azure/__tests__/powerbi-client-parity.test.ts + app/api/items/__tests__/powerbi-parity-routes.test.ts.
+
+## Per-cloud notes
+
+All capabilities use Power BI REST + the embed JS API; the sovereign host is resolved by `cloud-endpoints.ts`. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+| Cloud | Power BI REST host | Notes |
+|---|---|---|
+| Commercial | `api.powerbi.com` | Full coverage — render, pages, bookmarks, slideshow, refresh, view/edit, export (PDF/PPTX/PNG). |
+| GCC | `api.powerbigov.us` | Full coverage. `ExportTo` (PDF/PPTX/PNG) is available in GCC. Embed renders against the Gov embed host. |
+| GCC-High / IL4 | `api.high.powerbigov.us` | Full coverage. |
+| DoD / IL5 | `api.mil.powerbigov.us` | Full coverage. |
