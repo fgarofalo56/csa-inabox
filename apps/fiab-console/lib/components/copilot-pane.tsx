@@ -8,12 +8,14 @@
  * 503 (no deployment wired) per the no-vaporware contract.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Input, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
 } from '@fluentui/react-components';
 import { Send24Regular, Sparkle24Regular, Dismiss20Regular } from '@fluentui/react-icons';
+import { useCopilotContext } from '@/lib/copilot/use-copilot-context';
+import { getPersona } from '@/lib/azure/copilot-personas';
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -33,9 +35,8 @@ interface Msg {
   model?: string;
 }
 
-const SEED: Msg[] = [
-  { who: 'copilot', text: 'Hi! I can help you build pipelines, write KQL or T-SQL, summarize a report, or set up an Activator rule. What are we working on?' },
-];
+const SEED_TEXT =
+  'Hi! I can help you build pipelines, write KQL or T-SQL, summarize a report, or set up an Activator rule. What are we working on?';
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
@@ -72,6 +73,7 @@ const useStyles = makeStyles({
     paddingLeft: 4, marginTop: 4,
   },
   composer: { padding: 12, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', gap: 8 },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 4, marginTop: 4 },
 });
 
 function parseSse(buffer: string): { events: Array<{ event: string; data: string }>; remaining: string } {
@@ -92,13 +94,16 @@ function parseSse(buffer: string): { events: Array<{ event: string; data: string
 
 export function CopilotPane() {
   const s = useStyles();
+  const ctx = useCopilotContext();
+  const persona = useMemo(() => getPersona(ctx.slug), [ctx.slug]);
   const [open, setOpen] = useState(false);
-  const [msgs, setMsgs] = useState<Msg[]>(SEED);
+  const [msgs, setMsgs] = useState<Msg[]>([{ who: 'copilot', text: SEED_TEXT }]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const slugRef = useRef<string>(ctx.slug);
 
   useEffect(() => {
     const o = () => setOpen(true);
@@ -116,12 +121,24 @@ export function CopilotPane() {
     };
   }, []);
 
+  // Switching panes swaps the persona: reset the thread to the new persona's
+  // greeting and start a fresh session so warehouse history doesn't bleed into
+  // the notebook persona (and vice versa).
+  useEffect(() => {
+    if (slugRef.current === ctx.slug) return;
+    slugRef.current = ctx.slug;
+    if (busy) return; // don't yank a streaming reply mid-flight
+    sessionRef.current = null;
+    setGateError(null);
+    setMsgs([{ who: 'copilot', text: persona.greeting }]);
+  }, [ctx.slug, persona.greeting, busy]);
+
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs]);
 
-  async function send() {
-    const text = draft.trim();
+  async function send(override?: string) {
+    const text = (override ?? draft).trim();
     if (!text || busy) return;
     setDraft('');
     setGateError(null);
@@ -132,7 +149,12 @@ export function CopilotPane() {
       const res = await fetch('/api/copilot/orchestrate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: text, sessionId: sessionRef.current ?? undefined }),
+        body: JSON.stringify({
+          prompt: text,
+          sessionId: sessionRef.current ?? undefined,
+          contextSlug: ctx.slug,
+          contextPayload: ctx.payload,
+        }),
       });
 
       if (res.status === 503) {
@@ -192,7 +214,7 @@ export function CopilotPane() {
     <aside className={s.panel} aria-label="Copilot">
       <div className={s.header}>
         <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-        <Subtitle2>Copilot</Subtitle2>
+        <Subtitle2>{persona.title}</Subtitle2>
         <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
         <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setOpen(false)} aria-label="Close Copilot" />
       </div>
@@ -239,6 +261,21 @@ export function CopilotPane() {
             )}
           </div>
         ))}
+        {msgs.length <= 1 && !busy && persona.suggestedPrompts.length > 0 && (
+          <div className={s.chips} role="group" aria-label="Suggested prompts">
+            {persona.suggestedPrompts.map((p) => (
+              <Button
+                key={p}
+                appearance="subtle"
+                size="small"
+                onClick={() => send(p)}
+                disabled={busy}
+              >
+                {p}
+              </Button>
+            ))}
+          </div>
+        )}
       </div>
       <div className={s.composer}>
         <Input
@@ -246,11 +283,11 @@ export function CopilotPane() {
           value={draft}
           onChange={(_, d) => setDraft(d.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !busy) send(); }}
-          placeholder={busy ? 'Working…' : 'Ask Copilot…'}
+          placeholder={busy ? 'Working…' : `Ask ${persona.title}…`}
           disabled={busy}
-          aria-label="Message Copilot"
+          aria-label={`Message ${persona.title}`}
         />
-        <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" />
+        <Button appearance="primary" icon={<Send24Regular />} onClick={() => send()} disabled={busy} aria-label="Send message" />
       </div>
     </aside>
   );

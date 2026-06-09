@@ -24,6 +24,7 @@ import {
 
 import { listConnections } from './foundry-client';
 import { cogScope } from './cloud-endpoints';
+import { getPersona, type PersonaContextPayload } from './copilot-personas';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -227,9 +228,14 @@ export class LoomToolRegistry {
 
   get(name: string): ToolDef | undefined { return this.tools.get(name); }
 
-  /** OpenAI-compatible tools array for the AOAI chat-completions call. */
-  toAoaiTools(): unknown[] {
-    return this.list().map((t) => ({
+  /** OpenAI-compatible tools array for the AOAI chat-completions call.
+   *  Pass a non-empty `allow` allowlist of tool names to restrict the set to a
+   *  persona's tool catalog; an empty/undefined allowlist returns every tool. */
+  toAoaiTools(allow?: readonly string[]): unknown[] {
+    const list = allow && allow.length > 0
+      ? this.list().filter((t) => allow.includes(t.name))
+      : this.list();
+    return list.map((t) => ({
       type: 'function',
       function: {
         name: t.name,
@@ -678,6 +684,15 @@ export interface OrchestrateOptions {
   /** Tenant admin-selected Copilot config (account + chat deployment). When
    *  supplied it takes priority over env / discovery. */
   tenantConfig?: TenantCopilotConfig | null;
+  /** Pane context slug (e.g. 'warehouse', 'notebook'). Selects the persona
+   *  (system prompt + tool catalog + title) server-side via the persona
+   *  registry. Unknown / undefined → the cross-item 'default' persona. */
+  contextSlug?: string;
+  /** Raw editor state the persona's system prompt is composed from server-side
+   *  (active query, schema, workspace id, item id). The persona template
+   *  interpolates these into named slots — no free-form client string is
+   *  concatenated into the system prompt. */
+  contextPayload?: PersonaContextPayload;
 }
 
 interface ChatMessage {
@@ -688,11 +703,14 @@ interface ChatMessage {
   name?: string;
 }
 
-const SYSTEM_PROMPT = `You are CSA Loom Copilot — the assistant for CSA Loom, a self-contained data + AI platform that runs on Azure (Synapse, Databricks, ADF, APIM, Azure Data Explorer, AI Foundry, ADLS, Event Hubs, Azure Monitor). CSA Loom is its OWN product, NOT Microsoft Fabric. When you describe a feature, describe it as a CSA Loom feature (e.g. "the CSA Loom Real-Time hub", "a CSA Loom Eventstream", "the CSA Loom lakehouse") — never say "in Microsoft Fabric". You may name the underlying Azure services since those are the real backends.
+/**
+ * Legacy default system prompt. The cross-item ('default') persona in
+ * copilot-personas.ts carries this exact text. Kept exported for backward
+ * compatibility / direct callers; live orchestration now resolves the prompt
+ * per-pane via getPersona(opts.contextSlug).systemPrompt(opts.contextPayload).
+ */
+export const SYSTEM_PROMPT = getPersona('default').systemPrompt({});
 
-You decompose user requests into concrete tool calls against the registered CSA Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
-
-If a tool errors, surface the error clearly and either retry with corrected inputs or abandon that branch and explain why.`;
 
 /**
  * True when an AOAI 400 body is the "this model only supports the default
@@ -811,10 +829,20 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     const { buildMcpShim } = await import('./mcp-shim');
     await buildMcpShim(reg, userOid);
   } catch { /* MCP shim optional — continue with built-in tools */ }
-  const tools = reg.toAoaiTools();
+
+  // Resolve the per-pane persona (system prompt + tool catalog + title) from the
+  // context slug the editor pane emitted. Unknown / undefined → 'default'. The
+  // system prompt is composed SERVER-SIDE from the injected context payload
+  // (active query, schema, workspace id) — never a hard-coded reply.
+  const persona = getPersona(opts.contextSlug);
+  const resolvedSystemPrompt = persona.systemPrompt(opts.contextPayload ?? {});
+  // Filter tools to this persona's catalog (empty catalog = all tools, incl.
+  // any MCP-shim tools registered above). Focused personas only expose their
+  // relevant built-in tools so e.g. the warehouse pane reaches for SQL tools.
+  const tools = reg.toAoaiTools(persona.toolCatalog);
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: resolvedSystemPrompt },
     { role: 'user', content: prompt },
   ];
 

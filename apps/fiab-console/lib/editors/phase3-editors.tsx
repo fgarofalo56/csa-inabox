@@ -8279,7 +8279,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
   const [sqlText0] = useState(SAMPLE_SQL);
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
-    useSqlTabs<WHQueryResult>(sqlText0);
+    useSqlTabs<WHQueryResult>(sqlText0, {
+      slug: 'warehouse',
+      workspaceId: (itemQ.data as any)?.workspaceId,
+      itemId: id !== 'new' ? id : undefined,
+    });
   const sqlText = activeTab.sql;
   const setSqlText = setActiveSql;
   const result = activeTab.result;

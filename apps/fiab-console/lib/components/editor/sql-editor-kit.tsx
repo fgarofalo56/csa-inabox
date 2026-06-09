@@ -10,12 +10,13 @@
  *                  the full editor text (SSMS / Azure Data Studio behaviour)
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Tab, TabList, Button, Spinner, tokens,
 } from '@fluentui/react-components';
 import { Add16Regular, Dismiss12Regular } from '@fluentui/react-icons';
 import { getRunSql } from './sql-run-selection';
+import { registerCopilotContext, clearCopilotContext } from '@/lib/copilot/use-copilot-context';
 
 export { getRunSql };
 
@@ -27,6 +28,23 @@ function rid(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
   } catch { /* ignore */ }
   return `tab-${Date.now()}-${tabSeq++}`;
+}
+
+/**
+ * Opt-in Copilot persona wiring for a SQL editor. When passed to useSqlTabs the
+ * active tab's SQL is registered as the right-rail Copilot's `activeQuery`
+ * context under the given persona `slug` (e.g. 'warehouse'), so "Explain this
+ * query" produces a persona-flavored answer grounded in the real editor text.
+ */
+export interface SqlCopilotBinding {
+  /** ContextSlug from copilot-personas.ts, e.g. 'warehouse'. */
+  slug: string;
+  /** Loom workspace id (optional grounding). */
+  workspaceId?: string;
+  /** Loom item id (optional grounding). */
+  itemId?: string;
+  /** Table/column schema text (optional grounding). */
+  schema?: string;
 }
 
 export interface SqlTab<R = unknown> {
@@ -57,7 +75,7 @@ export interface SqlTabsApi<R = unknown> {
  * Multi-tab query state. The active tab's `sql` / `result` / `loading` replace
  * the editors' former single useState values one-for-one.
  */
-export function useSqlTabs<R = unknown>(defaultSql: string): SqlTabsApi<R> {
+export function useSqlTabs<R = unknown>(defaultSql: string, copilot?: SqlCopilotBinding): SqlTabsApi<R> {
   const [tabs, setTabs] = useState<SqlTab<R>[]>(() => [
     { id: 'q1', label: 'Query 1', sql: defaultSql, result: null, loading: false },
   ]);
@@ -66,6 +84,31 @@ export function useSqlTabs<R = unknown>(defaultSql: string): SqlTabsApi<R> {
   activeIdRef.current = activeTabId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+
+  // Register the active query as the right-rail Copilot context so the editor's
+  // persona ("Warehouse Copilot" etc.) can EXPLAIN / OPTIMIZE the EXACT text the
+  // user is editing. Clears back to the default persona on unmount.
+  const copilotSlug = copilot?.slug;
+  const copilotWorkspaceId = copilot?.workspaceId;
+  const copilotItemId = copilot?.itemId;
+  const copilotSchema = copilot?.schema;
+  const activeSql = activeTab?.sql ?? '';
+  useEffect(() => {
+    if (!copilotSlug) return;
+    registerCopilotContext({
+      slug: copilotSlug,
+      payload: {
+        activeQuery: activeSql,
+        ...(copilotSchema ? { schema: copilotSchema } : {}),
+        ...(copilotWorkspaceId ? { workspaceId: copilotWorkspaceId } : {}),
+        ...(copilotItemId ? { itemId: copilotItemId } : {}),
+      },
+    });
+  }, [copilotSlug, activeSql, copilotSchema, copilotWorkspaceId, copilotItemId]);
+  useEffect(() => {
+    if (!copilotSlug) return;
+    return () => clearCopilotContext();
+  }, [copilotSlug]);
 
   const patchTab = useCallback((id: string, patch: Partial<SqlTab<R>>) => {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));

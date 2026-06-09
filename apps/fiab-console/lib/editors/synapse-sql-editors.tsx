@@ -219,7 +219,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     `-- Synapse Serverless SQL — runs against the Loom workspace endpoint.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`,
   );
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
-    useSqlTabs<QueryResponse>(sqlText0);
+    useSqlTabs<QueryResponse>(sqlText0, { slug: 'lakehouse', itemId: id !== 'new' ? id : undefined });
   const sqlText = activeTab.sql;
   const setSqlText = setActiveSql;
   const result = activeTab.result;
@@ -560,7 +560,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     `-- Synapse Dedicated SQL pool — MPP T-SQL. Pool auto-pauses overnight; click Resume if Paused.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`,
   );
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
-    useSqlTabs<QueryResponse>(sqlText0);
+    useSqlTabs<QueryResponse>(sqlText0, { slug: 'warehouse', itemId: id !== 'new' ? id : undefined });
   const sqlText = activeTab.sql;
   const setSqlText = setActiveSql;
   const result = activeTab.result;
