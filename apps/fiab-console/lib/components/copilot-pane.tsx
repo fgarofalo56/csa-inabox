@@ -14,13 +14,15 @@ import {
   makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
 } from '@fluentui/react-components';
 import { Send24Regular, Sparkle24Regular, Dismiss20Regular } from '@fluentui/react-icons';
+import { CopilotResult } from '@/lib/components/copilot-result';
+import { tagResult } from '@/lib/components/copilot-result-tagger';
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
 type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; callId: string }
-  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
   | { kind: 'error'; error: string };
 
@@ -215,9 +217,14 @@ export function CopilotPane() {
               }
               if (step.kind === 'tool_result') {
                 return (
-                  <div key={j} className={s.stepRow}>
-                    {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
-                    {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                  <div key={j}>
+                    <div className={s.stepRow}>
+                      {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                      {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                    </div>
+                    {!step.error && step.result != null && (
+                      <CopilotResult result={tagResult(step.result, step.name)} toolName={step.name} />
+                    )}
                   </div>
                 );
               }
