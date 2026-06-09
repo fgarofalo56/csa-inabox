@@ -48,6 +48,7 @@ import {
 } from './synapse-sql-client';
 import * as synapseDev from './synapse-dev-client';
 import * as synapsePool from './synapse-pool-arm';
+import { registerWarehouseTools } from '../copilot/sql-tools';
 import * as databricks from './databricks-client';
 import * as apim from './apim-client';
 import * as adf from './adf-client';
@@ -930,6 +931,8 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       return { sql: stripSqlFences(raw) };
     },
   });
+  // -------- Warehouse Copilot (schema read / EXPLAIN plan / run) --------
+  registerWarehouseTools(r);
 
   return r;
 }
