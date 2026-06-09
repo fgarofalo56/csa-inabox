@@ -20,6 +20,10 @@ targetScope = 'resourceGroup'
 @description('Primary region')
 param location string
 
+@description('Cloud boundary — drives the Gremlin data-plane host suffix (gremlin.cosmos.azure.com vs gremlin.cosmos.azure.us).')
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+param boundary string = 'Commercial'
+
 @description('Domain name')
 param domainName string
 
@@ -280,8 +284,15 @@ resource vectorDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' =
 // Outputs (consumed by admin-plane main.bicep → Container Apps env vars)
 // =====================================================================
 
+// Gremlin data-plane host suffix is sovereign-cloud-specific: Commercial / GCC
+// run on the Commercial Azure environment (gremlin.cosmos.azure.com); GCC-High
+// and IL5 run on Azure US Government (gremlin.cosmos.azure.us). Hard-coding the
+// Commercial suffix silently breaks the Gremlin endpoint in Gov — mirror the
+// TypeScript `gremlinSuffix()` helper so the wired env var is correct per cloud.
+var gremlinSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
+
 output gremlinAccountName string = gremlinAccount.name
-output gremlinEndpoint string = 'wss://${gremlinAccount.name}.gremlin.cosmos.azure.com:443/'
+output gremlinEndpoint string = 'wss://${gremlinAccount.name}.${gremlinSuffix}:443/'
 output gremlinDatabase string = gremlinDb.name
 output gremlinGraph string = defaultGraph.name
 output vectorAccountName string = vectorAccount.name

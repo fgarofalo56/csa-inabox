@@ -105,6 +105,11 @@ var databases = [
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
 //   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
+//   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
+//     registry (Azure-native, no Fabric). Internal shortcuts need no extra
+//     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
+//     medallion ADLS account; external (s3/gcs/dataverse/delta_sharing) targets
+//     resolve a Key Vault credentialRef via the flat /api/lakehouse/shortcuts.
 
 
 // Databases — one per workload
