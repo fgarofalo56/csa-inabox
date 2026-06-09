@@ -74,6 +74,15 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Paginated-report (RDL) definitions — the Loom-native authoring document for
+// the paginated-report editor (data sources, datasets, tablixes, parameters).
+// One row per report (id = reportId, PK /workspaceId) so every per-report load
+// hits a single physical partition. Azure-native parity with a Power BI
+// Paginated Report .rdl — NO Fabric/Power BI workspace required to author or
+// export (export delegates to the paginated-report-renderer Azure Function).
+// Created lazily so a fresh environment needs no extra ARM/Bicep step beyond
+// the account+database.
+let _paginatedReportDefinitions: Container | null = null;
 let _ensured = false;
 
 /**
@@ -289,6 +298,10 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Paginated-report (RDL) definitions — Loom-native authoring doc per report.
+  // PK /workspaceId so the editor's per-report GET/PUT and the renderer's read
+  // hit a single physical partition. Azure-native; no Fabric/Power BI needed.
+  _paginatedReportDefinitions = await mk('paginated-report-definitions', '/workspaceId');
   _ensured = true;
 }
 
@@ -314,6 +327,8 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+/** Paginated-report (RDL) authoring definitions — PK /workspaceId. */
+export async function paginatedReportDefinitionsContainer(): Promise<Container> { await ensure(); return _paginatedReportDefinitions!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
