@@ -61,6 +61,7 @@ import {
   logAnalyticsResourceId,
   MonitorNotConfiguredError,
 } from '@/lib/azure/monitor-client';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 import type { Provisioner, ProvisionResult } from './types';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -279,7 +280,8 @@ const armCredential = (() => {
     : new DefaultAzureCredential();
 })();
 
-const ARM = process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com';
+// Sovereign-cloud aware ARM base (armBase() already honours LOOM_ARM_ENDPOINT).
+const ARM = armBase();
 
 async function armPut(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: any }> {
   const t = await armCredential.getToken(`${ARM}/.default`);

@@ -9,6 +9,7 @@ import { getMsalClient } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
+import { armBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
 
 export const runtime = 'nodejs';
@@ -17,8 +18,10 @@ export const dynamic = 'force-dynamic';
 const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read'];
 // Delegated Azure Resource Manager scope — used to obtain an ARM-audience token
 // for the user so the cross-subscription resource picker can query with the
-// user's own RBAC. Captured best-effort after the session token exchange.
-const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
+// user's own RBAC. Captured best-effort after the session token exchange. The
+// ARM host is sovereign-cloud aware via armBase() so the scope matches the
+// deployment's cloud (Commercial vs Gov).
+const ARM_SCOPE = `${armBase()}/user_impersonation`;
 
 /**
  * Best-effort capture of the user's ARM access token. Wrapped so that ANY
@@ -55,7 +58,7 @@ async function captureUserSqlToken(
   oid: string,
 ): Promise<void> {
   try {
-    const sqlHost = process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net';
+    const sqlHost = process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || getSqlSuffix();
     const tok = await client.acquireTokenSilent({
       account,
       scopes: [`https://${sqlHost}/user_impersonation`],

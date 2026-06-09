@@ -674,6 +674,18 @@ export function getPbiGovHost(): string {
 }
 
 /**
+ * Build the Azure Analysis Services XMLA/connection server URI from a region
+ * and server name, e.g. `asazure://eastus2.asazure.windows.net/myserver`
+ * (`asazure://usgovvirginia.asazure.usgovcloudapi.net/myserver` in Gov). This
+ * is the connection string an XMLA client (ADOMD/AMO/Tabular Object Model)
+ * targets for TMSL execute + model refresh. Uses `getAasSuffix()` so the
+ * `LOOM_AAS_DATA_PLANE_SUFFIX` override is honoured for sovereign clouds the
+ * matrix doesn't enumerate.
+ */
+export function aasServerUri(region: string, serverName: string): string {
+  return `asazure://${region}.${getAasSuffix()}/${serverName}`;
+}
+
 /**
  * Azure Analysis Services token scope for the XMLA / async-refresh REST surface
  * used by the semantic-model incremental-refresh client. The async-refresh REST

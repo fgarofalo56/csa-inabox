@@ -129,6 +129,13 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
   });
 
+  it('Azure Analysis Services helpers use asazure.windows.net (alias)', async () => {
+    const m = await load('AzureCloud');
+    const AAS_COM = J('asazure', 'windows', 'net');
+    expect(m.getAasSuffix()).toBe(AAS_COM);
+    expect(m.aasServerUri('eastus2', 'srv-loom')).toBe(`asazure://eastus2.${AAS_COM}/srv-loom`);
+  });
+
   it('Analysis Services + Power BI XMLA helpers (Commercial)', async () => {
     const m = await load('AzureCloud');
     const AAS_COM = J('asazure', 'windows', 'net');
@@ -222,6 +229,14 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
   });
 
+  it('Azure Analysis Services alias getAasSuffix() use asazure.usgovcloudapi.net', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.getAasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasServerUri('usgovvirginia', 'srv-loom')).toBe(
+      'asazure://usgovvirginia.asazure.usgovcloudapi.net/srv-loom',
+    );
+  });
+
   it('Analysis Services + Power BI XMLA helpers (Gov)', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
@@ -247,6 +262,8 @@ describe('cloud-endpoints — overrides + DoD', () => {
     expect(m.gremlinSuffix()).toBe('gremlin.cosmos.azure.us');
     // Synapse JDBC cert wildcard carries the Gov suffix in DoD too.
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+    // AAS in DoD uses the same Gov suffix as GCC-High / IL5.
+    expect(m.getAasSuffix()).toBe('asazure.usgovcloudapi.net');
   });
 
   it('LOGIC_APP_WORKFLOW_SCHEMA is the cloud-invariant schema namespace', async () => {
@@ -324,6 +341,10 @@ describe('cloud-matrix — warehouse alerts backend dispatch', () => {
     process.env.LOOM_CLOUD = 'GCC';
     expect(m.detectLoomCloud()).toBe('GCC');
     expect(m.isGovCloud()).toBe(false); // GCC is not a Gov data-plane → Databricks
+    // GCC keys off isGovCloud()===false → Commercial suffixes (AAS, Cosmos, SQL).
+    expect(m.getAasSuffix()).toBe('asazure.windows.net');
+    expect(m.getCosmosSuffix()).toBe('documents.azure.com');
+    expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.net');
   });
 
   it('GCC-High / IL5 (AzureUSGovernment) → Azure Monitor scheduled-query rule path', async () => {
