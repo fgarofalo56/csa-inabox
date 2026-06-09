@@ -337,7 +337,43 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
 }
 
 // =====================================================================
-// 9. Azure Data Factory — backs the data-pipeline / dataset / trigger editors
+// 8b. Azure Analysis Services — OPTIONAL azure-native semantic engine.
+//
+//     One AAS server backs BOTH the semantic-model "Model view" XMLA write
+//     path (relationships + drill hierarchies) AND the "Get data" (Power
+//     Query M) ingest refresh phase. Per no-fabric-dependency.md the
+//     semantic model works fully without this (Loom-native Cosmos backend is
+//     the default). AAS is the azure-native, no-Fabric option for a live
+//     tabular engine; opt in with enableAas=true and wire the xmlaEndpoint /
+//     aasConnectionString outputs into LOOM_AAS_XMLA_ENDPOINT / LOOM_AAS_SERVER.
+//
+//     Commercial only — AAS has no Government offering. Leave enableAas false
+//     in GCC-High / DoD (the Console gates the AAS phases honestly there). The
+//     Console UAMI must be listed in aasServerAdminMembers as
+//     `app:<clientId>@<tenantId>` so its MI can call the XMLA / refresh REST APIs.
+// =====================================================================
+
+@description('Provision an Azure Analysis Services server (opt-in). Backs the optional XMLA write path of the Loom semantic-model Model view AND the Power Query "Get data" ingest refresh phase. Default OFF — the Loom-native Cosmos backend works without it. Commercial only — leave false in Government clouds.')
+param enableAas bool = false
+
+@description('Analysis Services SKU. D1 = Developer (cheapest); B1/B2 = Basic; S0/S1 = Standard query pools.')
+param aasSkuName string = 'D1'
+
+@description('AAS server administrator identifiers (UPNs / `app:<clientId>@<tenantId>` SPNs). The Console UAMI must be included so its MI can call the XMLA write / refresh REST APIs. Empty = the editor honestly gates the live-engine write; the Loom-native Cosmos path still works.')
+param aasServerAdminMembers array = []
+
+module aas 'aas.bicep' = if (enableAas) {
+  name: 'dlz-aas'
+  params: {
+    name: toLower(take('aas${domainName}${uniqueString(resourceGroup().id)}', 63))
+    location: location
+    skuName: aasSkuName
+    serverAdminMembers: aasServerAdminMembers
+    complianceTags: complianceTags
+  }
+}
+
+
 //
 //    Per the 2026-05-27 no-cuts-sweep policy override, ADF is now wired
 //    into the DLZ orchestrator by default. Operators that don't run ADF
@@ -365,6 +401,12 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     adlsAccountName: storage.outputs.storageAccountName
   }
 }
+
+// =====================================================================
+// (Azure Analysis Services is provisioned by the unified `aas` module above
+//  — section 8b. The Power Query ingest refresh phase and the Model view XMLA
+//  write path share that single server. No separate AAS module here.)
+// =====================================================================
 
 // =====================================================================
 // 9a. Approval Logic App (F25) — Consumption Logic App + O365 Outlook
@@ -495,3 +537,10 @@ output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty
 output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
 output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
 output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+// CSA Loom semantic-model AAS (opt-in) — empty when enableAas is false. One
+// server backs both the Model view XMLA write path and the Power Query ingest
+// refresh. xmlaEndpoint → LOOM_AAS_XMLA_ENDPOINT; aasConnectionString →
+// LOOM_AAS_SERVER (LOOM_AAS_MODEL is set per deployed tabular model by the operator).
+output aasXmlaEndpoint string = enableAas ? aas!.outputs.xmlaEndpoint : ''
+output aasServerName string = enableAas ? aas!.outputs.serverName : ''
+output aasConnectionString string = enableAas ? aas!.outputs.aasConnectionString : ''
