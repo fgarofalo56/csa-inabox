@@ -33,6 +33,9 @@ import {
   Checkmark16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { CopilotChips } from '@/lib/components/copilot-chips';
+import type { CopilotContext } from '@/lib/azure/copilot-personas';
+import { CopilotDiff, type ProposedChange } from '@/lib/components/copilot-diff';
 
 interface AttachedSource {
   kind: 'lakehouse' | 'warehouse' | 'kql-database';
@@ -162,6 +165,9 @@ export function CopilotChatPane({
   const [slashIdx, setSlashIdx] = useState(0);
   const [showSessions, setShowSessions] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  // Pending Apply: holds the proposed change + the full block set so Keep can
+  // apply ALL blocks while the diff shows the active cell's before/after.
+  const [pendingApply, setPendingApply] = useState<{ change: ProposedChange; blocks: string[] } | null>(null);
   const sessionIdRef = useRef<string>(
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? `nbcopilot-${crypto.randomUUID()}`
@@ -174,6 +180,17 @@ export function CopilotChatPane({
   const slashMatches = useMemo(
     () => (slashOpen ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase())) : []),
     [slashOpen, input],
+  );
+
+  // Persona context for the suggested-prompt chips: notebook-flavoured prompts
+  // grounded in the real attached lakehouse names + active language.
+  const chipCtx: CopilotContext = useMemo(
+    () => ({
+      persona: 'notebook',
+      attachedSourceNames: attachedSources.map((src) => src.displayName),
+      defaultLang,
+    }),
+    [attachedSources, defaultLang],
   );
 
   useEffect(() => {
@@ -343,13 +360,47 @@ export function CopilotChatPane({
     [slashOpen, slashMatches, slashIdx, input, send],
   );
 
-  const applyBlocks = useCallback(
+  // Clicking "Apply to notebook" no longer mutates immediately — it opens the
+  // Keep/Undo diff modal showing the ACTIVE cell's real before/after. The cell
+  // is mutated ONLY on Keep. applyCells maps the last block onto the active
+  // cell (walking backwards for multi-block answers), so the diff's `after` is
+  // the block that lands on the active cell.
+  const openApplyDiff = useCallback(
     (blocks: string[]) => {
       if (!onApplyCells || blocks.length === 0) return;
-      onApplyCells(blocks.map((source) => ({ source })));
+      const idx = activeCellId ? cells.findIndex((c) => c.id === activeCellId) : -1;
+      let targetCell = idx >= 0 ? cells[idx] : undefined;
+      if (!targetCell) {
+        for (let i = cells.length - 1; i >= 0; i--) {
+          if (cells[i].type === 'code') { targetCell = cells[i]; break; }
+        }
+      }
+      if (!targetCell) targetCell = cells[cells.length - 1];
+      const before = targetCell?.source ?? '';
+      const after = blocks[blocks.length - 1];
+      const lang = (targetCell?.lang || defaultLang) as string;
+      setPendingApply({
+        blocks,
+        change: {
+          target: targetCell ? `notebook-cell:${targetCell.id}` : 'notebook-cell',
+          before,
+          after,
+          lang,
+          summary: blocks.length > 1
+            ? `${blocks.length} cells will be applied; the diff below shows the active cell.`
+            : undefined,
+        },
+      });
     },
-    [onApplyCells],
+    [onApplyCells, cells, activeCellId, defaultLang],
   );
+
+  // Keep: commit ALL proposed blocks via the notebook's applyCells callback.
+  const keepApply = useCallback(() => {
+    if (!pendingApply || !onApplyCells) { setPendingApply(null); return; }
+    onApplyCells(pendingApply.blocks.map((source) => ({ source })));
+    setPendingApply(null);
+  }, [pendingApply, onApplyCells]);
 
   return (
     <InlineDrawer open={open} position="end" separator className={s.drawer}>
@@ -393,8 +444,8 @@ export function CopilotChatPane({
                   )}
                   {onApplyCells && msg.codeBlocks && msg.codeBlocks.length > 0 && (
                     <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => applyBlocks(msg.codeBlocks!)}>
-                        {msg.codeBlocks.length > 1 ? `Apply ${msg.codeBlocks.length} cells to notebook` : 'Apply to notebook'}
+                      <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => openApplyDiff(msg.codeBlocks!)}>
+                        {msg.codeBlocks.length > 1 ? `Review ${msg.codeBlocks.length} cells` : 'Review & apply'}
                       </Button>
                       {msg.codeBlocks.length > 1 && (
                         <Badge appearance="outline" color="brand" size="small">diff · {msg.codeBlocks.length} blocks</Badge>
@@ -432,6 +483,9 @@ export function CopilotChatPane({
           )}
 
           <div className={s.inputRow}>
+            {messages.length === 0 && !streaming && (
+              <CopilotChips ctx={chipCtx} busy={streaming} onSelect={(prompt) => void send(prompt)} />
+            )}
             {slashOpen && slashMatches.length > 0 && (
               <div className={s.slashMenu} role="listbox" aria-label="Slash commands">
                 {slashMatches.map((c, i) => (
@@ -493,6 +547,11 @@ export function CopilotChatPane({
           )}
         </div>
       </DrawerBody>
+      <CopilotDiff
+        change={pendingApply?.change ?? null}
+        onKeep={keepApply}
+        onUndo={() => setPendingApply(null)}
+      />
     </InlineDrawer>
   );
 }

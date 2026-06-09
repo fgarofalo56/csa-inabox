@@ -566,6 +566,29 @@ export function synapseSqlJdbcHostCert(): string {
   return `*.${synapseSqlSuffix()}`;
 }
 
+/**
+ * Azure Analysis Services (AAS) data-plane server-name suffix (no leading dot).
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5   : asazure.usgovcloudapi.net
+ *   DoD              : asazure.usgovcloudapi.net (Gov AAS data-plane)
+ * Mirrors the Az PowerShell `AnalysisServicesEndpointSuffix` boundary mapping
+ * (`Get-AzEnvironment -Name AzureUSGovernment`). AAS is in the DoD IL5 PA scope:
+ *   https://learn.microsoft.com/azure/azure-government/documentation-government-overview-dod
+ * `LOOM_AAS_HOST_SUFFIX` overrides outright for any custom sovereign endpoint.
+ */
+export function aasSuffix(): string {
+  if (process.env.LOOM_AAS_HOST_SUFFIX) return process.env.LOOM_AAS_HOST_SUFFIX;
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * Full AAS connection URI (as it appears in SSMS / Power BI "Analysis Services"
+ * data source): `asazure://<region>.<suffix>/<serverName>`.
+ */
+export function aasConnectionUri(serverName: string, region: string): string {
+  return `asazure://${region}.${aasSuffix()}/${serverName}`;
+}
+
 /** Log Analytics query-API host (full URL with scheme). */
 export function getLogAnalyticsHost(): string {
   return isGovCloud() ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com';
@@ -588,6 +611,168 @@ export function getOpenAiSuffix(): string {
  */
 export function getPbiGovHost(): string {
   return isGovCloud() ? 'https://api.powerbigov.us' : 'https://api.powerbi.com';
+}
+
+/**
+/**
+ * Azure Analysis Services token scope for the XMLA / async-refresh REST surface
+ * used by the semantic-model incremental-refresh client. The async-refresh REST
+ * audience is the cloud-specific Power BI analysis audience.
+ * Commercial + GCC : https://analysis.windows.net/powerbi/api/.default
+ * GCC-High / DoD   : https://analysis.usgovcloudapi.net/.default
+ *
+ * (`pbiRestScope()` further down owns the 4-way Direct-Lake-shim scope split;
+ * this 2-way variant matches the existing HEAD test contract.)
+ *
+ * Docs: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+ */
+export function aasXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+/**
+ * Build the AAS HTTP REST base URL for a region + server + database. The AAS
+ * REST surface only exposes async *refresh* operations; full TMSL command
+ * execution (createOrReplace / alter) requires an XMLA TCP connection (TOM/AMO)
+ * which is not issuable from Node.js — that is why the composite-model apply
+ * path uses the Fabric updateDefinition REST API (which wraps XMLA) and falls
+ * back to returning the TMSL as an offline `Invoke-ASCmd` receipt.
+ *
+ * `aasSuffix()` / `aasScope()` are the canonical AAS data-plane helpers — they
+ * live in the "Azure Analysis Services (AAS) data plane" section below (the
+ * scope MUST carry the literal `*` subdomain per the AAS REST auth spec).
+ */
+export function aasRestBase(region: string, serverName: string, databaseName: string): string {
+  return `https://${region}.${aasSuffix()}/servers/${serverName}/models/${encodeURIComponent(databaseName)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Power BI / Azure Analysis Services XMLA (AAS) — Direct-Lake-shim refresh
+// ---------------------------------------------------------------------------
+//
+// The Direct-Lake-shim drives Power BI Premium *enhanced refresh* over the
+// Analysis Services (XMLA) data plane. The AAD audience for that token is the
+// `analysis.*/powerbi/api` resource — DISTINCT from the ARM/Graph/Storage
+// audiences — and it splits four ways across the sovereign boundaries.
+// Grounded in Microsoft Learn (verified, not from memory):
+//   - Commercial : https://analysis.windows.net/powerbi/api/.default
+//   - GCC        : https://analysis.usgovcloudapi.net/powerbi/api/.default
+//   - GCC High   : https://high.analysis.usgovcloudapi.net/powerbi/api/.default
+//   - DoD        : https://mil.analysis.usgovcloudapi.net/powerbi/api/.default
+// (power-bi/developer/embedded/embed-sample-for-customers-national-clouds —
+//  the GCC/DoDCON/DoD `scopeBase` values.) A client that hard-codes the
+// Commercial scope silently fails XMLA auth in every Gov boundary.
+
+/**
+ * AAD `.default` scope for the **Power BI REST / XMLA endpoint** token used by
+ * the Direct-Lake-shim enhanced-refresh client (`aas-client.ts`). This is the
+ * `analysis.* powerbi/api` audience — DISTINCT from the AAS data-plane audience
+ * `https://*.asazure.windows.net` returned by `aasScope()` below. 4-way
+ * sovereign split (Commercial / GCC / GCC-High / DoD). `LOOM_AAS_SCOPE`
+ * overrides outright for clouds we don't enumerate (e.g. China:
+ * `https://analysis.chinacloudapi.cn/powerbi/api/.default`).
+ */
+export function pbiRestScope(): string {
+  const explicit = process.env.LOOM_AAS_SCOPE;
+  if (explicit) return explicit;
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC-High':
+      return 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC':
+      return 'https://analysis.usgovcloudapi.net/powerbi/api/.default';
+    default:
+      return 'https://analysis.windows.net/powerbi/api/.default';
+  }
+}
+
+/**
+ * Power BI XMLA endpoint connection URL for a workspace id —
+ * `powerbi://{pbiHost}/v1.0/myorg/{workspaceId}`. This is the value persisted
+ * as `SemanticModelConfig.XmlaEndpoint` and handed to the C# shim's
+ * `TomRefreshClient.ConnectServer`. The host is the sovereign-correct Power BI
+ * REST host from `getPbiGovHost()` (no Fabric host on the default path).
+ */
+export function xmlaEndpointFromWorkspace(workspaceId: string): string {
+  const pbiHost = getPbiGovHost().replace(/^https?:\/\//, '');
+  return `powerbi://${pbiHost}/v1.0/myorg/${workspaceId}`;
+}
+
+// ---------------------------------------------------------------------------
+// Azure Analysis Services + Power BI XMLA (Analysis-Services tabular engine)
+// ---------------------------------------------------------------------------
+//
+// The RLS/OLS Security tab authors model roles (row filters + object
+// permissions) through the Analysis-Services XMLA protocol — either against an
+// Azure Analysis Services server (`asazure://…`) or a Power BI Premium / Fabric
+// capacity XMLA endpoint (`powerbi://…`). Both are Azure-native tabular engines
+// reached over XMLA-over-HTTP; neither requires a Fabric workspace on the
+// default path (the AAS path needs no Fabric/Power BI tenant at all). The
+// Power BI XMLA scope helper below keeps the sovereign-cloud split out of the
+// RLS/OLS aas-roles client. (aasSuffix() / aasScope() — the AAS host suffix +
+// REST scope — are defined once, further down, and reused here.)
+
+/**
+ * AAD `.default` token scope for the Power BI XMLA endpoint (the tabular-engine
+ * audience, distinct from the Power BI REST `analysis.windows.net/powerbi/api`
+ * scope only by sovereign host).
+ *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
+ *   GCC-High / IL5   : https://analysis.usgovcloudapi.net/powerbi/api/.default
+ * Source: the Gov scope already used by the Direct-Lake replacement path and
+ * the Commercial scope in powerbi-client.ts.
+ */
+export function pbiXmlaScope(): string {
+  return isGovCloud()
+    ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default'
+    : 'https://analysis.windows.net/powerbi/api/.default';
+}
+
+// (AAS data-plane suffix + scope live in the existing "Azure Analysis Services
+// (AAS) data plane — Loom-native report renderer" section below as aasSuffix()
+// + aasScope(). PR #976 layered a `getAasSuffix()` alias for new call sites —
+// kept here as a delegating alias so we have ONE source of truth per suffix.)
+
+/**
+ * AAS data-plane hostname suffix — alias of aasSuffix() with an
+ * LOOM_AAS_DATA_PLANE_SUFFIX override for sovereign clouds the matrix doesn't
+ * enumerate (e.g. air-gapped DoD). Kept for the env-pinned aas-server-client
+ * added by PR #976.
+ */
+export function getAasSuffix(): string {
+  const override = process.env.LOOM_AAS_DATA_PLANE_SUFFIX;
+  if (override) return override.replace(/^\./, '').replace(/\/+$/, '');
+  return aasSuffix();
+}
+
+
+/**
+ * Normalise an AAS connection-string or HTTP URL into a canonical HTTPS server
+ * base URL (no trailing slash). Accepts the three forms operators paste in:
+ *   asazure://westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   westus.asazure.windows.net/myserver
+ *     -> https://westus.asazure.windows.net/servers/myserver
+ *   https://westus.asazure.windows.net/servers/myserver  (already resolved)
+ *     -> https://westus.asazure.windows.net/servers/myserver   (passthrough)
+ * Returns '' for an empty / unparseable input so callers can gate honestly.
+ */
+export function aasServerBase(server: string): string {
+  if (!server) return '';
+  const trimmed = server.trim();
+  // Already an HTTPS base URL — strip any trailing slash and pass through.
+  if (/^https:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '');
+  // asazure:// connection string form.
+  const m = trimmed.match(/^asazure:\/\/([^/]+)\/(.+)$/i);
+  if (m) return `https://${m[1]}/servers/${m[2].replace(/\/+$/, '')}`;
+  // Bare "region.asazure.<suffix>/serverName" form.
+  const parts = trimmed.replace(/\/+$/, '').split('/');
+  if (parts.length === 2 && parts[0].includes('.')) {
+    return `https://${parts[0]}/servers/${parts[1]}`;
+  }
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -680,4 +865,63 @@ export function getArmEndpoint(): string {
 /** Kusto (ADX) cluster URI host suffix for the active cloud. Alias of kustoSuffix(). */
 export function getKustoSuffix(): string {
   return kustoSuffix();
+}
+
+// ---------------------------------------------------------------------------
+// Azure Analysis Services (AAS) data plane — Loom-native report renderer
+// ---------------------------------------------------------------------------
+//
+// Commercial / GCC : asazure.windows.net
+// GCC-High / IL5   : asazure.usgovcloudapi.net
+//
+// The AAD token scope is ALWAYS the literal string `https://*.asazure.windows.net`
+// (or `*.asazure.usgovcloudapi.net` for Gov). Per the AAS REST API auth spec
+// the `*` is NOT a wildcard — it is the required subdomain character. Using a
+// real subdomain (e.g. https://eastus2.asazure.windows.net) FAILS auth.
+// Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
+
+// aasSuffix() is declared once above (with LOOM_AAS_HOST_SUFFIX override
+// support) — re-using that single source of truth here.
+
+/**
+ * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
+ * `*` character must appear as the subdomain — it is NOT a wildcard:
+ *   "the audience must have the `*` character as the subdomain"
+ */
+export function aasScope(): string {
+  return `https://*.${aasSuffix()}`;
+}
+
+/**
+ * Parse a Loom `state.aasServer` value into `{ region, serverName }`.
+ *
+ * Accepts:
+ *   - XMLA URI: "asazure://eastus2.asazure.windows.net/my-server"
+ *   - FQDN:     "my-server.eastus2.asazure.windows.net"
+ *
+ * Returns null when the value cannot be parsed (e.g. a bare server name with
+ * no region — callers must then supply the region via env).
+ */
+export function parseAasServer(
+  raw: string,
+): { region: string; serverName: string } | null {
+  const s = (raw || '').trim();
+  if (!s) return null;
+  // XMLA URI form: asazure://<region>.asazure.{windows|usgovcloudapi}.net/<serverName>
+  const xmla = s.match(/^asazure:\/\/([^.]+)\.asazure\.(?:windows|usgovcloudapi)\.net\/(.+)$/i);
+  if (xmla) return { region: xmla[1], serverName: xmla[2] };
+  // FQDN form: <serverName>.<region>.asazure.{windows|usgovcloudapi}.net
+  const fqdn = s.match(/^([^.]+)\.([^.]+)\.asazure\.(?:windows|usgovcloudapi)\.net$/i);
+  if (fqdn) return { serverName: fqdn[1], region: fqdn[2] };
+  // Bare name — region unknown.
+  return null;
+}
+
+/**
+ * Build the AAS data-plane REST base URL for a given server + model, e.g.
+ * https://eastus2.asazure.windows.net/servers/my-server/models/AdventureWorks
+ * (no trailing slash).
+ */
+export function aasModelUrl(region: string, serverName: string, modelName: string): string {
+  return `https://${region}.${aasSuffix()}/servers/${encodeURIComponent(serverName)}/models/${encodeURIComponent(modelName)}`;
 }
