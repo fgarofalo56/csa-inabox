@@ -75,6 +75,9 @@ param loomDlpEnabled bool = false
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false
 
+@description('HTTPS XMLA endpoint for semantic-model authoring surfaces that need the XMLA write surface (Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint is an opt-in alternative selected by URL. Empty = the Aggregations surface honest-gates (no Fabric dependency).')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
 param loomIdentityPickerEnabled bool = false
 
@@ -431,6 +434,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
+    loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
     loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
@@ -488,6 +492,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
@@ -543,6 +548,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     consoleUamiName: adminPlane.outputs.uamiConsoleName
+    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
     synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
     catalogEndpoint: adminPlane.outputs.catalogEndpoint

@@ -133,6 +133,19 @@ param adxEnabled bool = false
 @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
 param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 
+@description('Deploy an Azure Analysis Services (AAS) Standard server — the Azure-native semantic-model backend (no Fabric/Power BI). Hosts Import-mode tabular databases for refresh-now / scheduled-refresh. Default off.')
+param aasEnabled bool = false
+
+@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+param aasSkuName string = 'S1'
+
+@description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
+param existingAasServerName string = ''
+
+@description('Region of a reused existing AAS server (existingAasServerName). Empty defaults to the deployment location.')
+param existingAasServerRegion string = ''
+
 @description('Deploy the read-only Workspace-Monitoring ADX database + Azure Monitor diagnostic-export pipeline (Fabric workspace-monitoring parity). Requires adxEnabled (new cluster). Default off.')
 param workspaceMonitorEnabled bool = false
 
@@ -187,6 +200,9 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Direct Lake warm-cache TTL in seconds. Semantic-model "Direct Lake query" requests within this window are served from the Power BI in-memory VertiPaq cache; older queries fall back transparently to Synapse Serverless OPENROWSET over the Gold Delta files. 0 = always Serverless. Default 3600 (1 hour).')
+param loomDlCacheTtlSeconds int = 3600
+
 @description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
 param loomOnelakeSecurityEnabled bool = false
 
@@ -222,6 +238,12 @@ param loomPostgresAadUser string = ''
 
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
+
+@description('Azure Analysis Services connection string (asazure://<region>.asazure.windows.net/<server>) backing the semantic-model Power Query ingest refresh. Empty = the AAS refresh phase is honestly gated (Delta still lands; query via Synapse Serverless). Set from landing-zone aas.bicep output aasConnectionString when deployAas=true. AAS is unavailable in Government clouds — leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
+param loomAasModel string = ''
 
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
@@ -354,8 +376,26 @@ param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+@description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
+param loomAasXmlaEndpoint string = ''
+
+@description('Semantic-model write backend selector. Set to \'fabric\' to OPT INTO the Fabric REST write path (per no-fabric-dependency.md, strictly opt-in). Any other value keeps the azure-native default (Cosmos + optional AAS XMLA).')
+param loomSemanticModelBackend string = ''
+
 @description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
 param loomDatabricksSqlWarehouseId string = ''
+
+@description('Enable the Direct-Lake-shim (Azure-native parity for Fabric Direct Lake). When true, the shim app gets its Cosmos/Service Bus/Event Grid env, the Console exposes the Direct Lake (shim) tab as active, and aas.bicep deploys the Service Bus queue + Event Grid system topic. Requires a Power BI Premium / PPU workspace + XMLA endpoint. Opt-in (default false) per no-fabric-dependency.md.')
+param loomDirectLakeShimEnabled bool = false
+
+@description('Service Bus namespace name hosting the Direct-Lake-shim queue. Empty defaults to sb-loom-dlshim-<location>.')
+param loomDirectLakeShimSbNamespace string = ''
+
+@description('Service Bus queue name for Delta _delta_log BlobCreated events (Direct-Lake-shim).')
+param loomDirectLakeShimQueue string = 'loom-dl-shim-events'
+
+@description('AAS / Power BI Premium service-principal object id — granted Storage Blob Data Reader on the DLZ ADLS account so the warm-cache model can read Delta Parquet. Empty skips that grant (the shim UAMI grant still applies).')
+param loomAasMiPrincipalId string = ''
 
 // ---------------------------------------------------------------------------
 // Standalone Azure Machine Learning workspace — backs aml-client.ts
@@ -437,6 +477,16 @@ var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGrou
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
 var kustoSuffix = boundary == 'GCC-High' || boundary == 'IL5' ? 'kusto.usgovcloudapi.net' : 'kusto.windows.net'
+
+// Direct-Lake-shim derived values (Service Bus + Cosmos endpoint). The shim
+// queue lives in the DLZ RG alongside the ADLS Delta source. These are vars
+// (not module outputs) so the shim/Console app env can reference them even
+// when the aasShim module is skipped (loomDirectLakeShimEnabled=false).
+var dlShimSbNamespaceName = !empty(loomDirectLakeShimSbNamespace) ? loomDirectLakeShimSbNamespace : 'sb-loom-dlshim-${location}'
+var dlShimSbSuffix = environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'servicebus.usgovcloudapi.net' : 'servicebus.windows.net'
+var dlShimSbFqdn = '${dlShimSbNamespaceName}.${dlShimSbSuffix}'
+var dlShimQueueId = '${subscription().id}/resourceGroups/${loomDlzRg}/providers/Microsoft.ServiceBus/namespaces/${dlShimSbNamespaceName}/queues/${loomDirectLakeShimQueue}'
+var loomCosmosEndpointVal = !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
 
 // CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
 // orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
@@ -568,9 +618,39 @@ param loomMirrorBackend string = 'adf-cdc'
 @allowed(['adls', 'fabric'])
 param loomLakehouseBackend string = 'adls'
 
-@description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
-@allowed(['loom-native', 'analysis-services', 'powerbi'])
+@description('Semantic model backend selector. Default: loom-native (calc groups + field parameters stored with the item, emitted in TMSL at provision time — NO Fabric/Power BI dependency). Alternatives (opt-in): aas (Azure Analysis Services, writes calc groups + field parameters to a live model over XMLA — Commercial/GCC only), fabric (Fabric updateDefinition), powerbi.')
+@allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
+
+@description('Azure Analysis Services XMLA endpoint base URL (no /xmla or /refreshes suffix), e.g. https://eastus2.asazure.windows.net/servers/loom-aas/models/FiabModel. Required only when loomSemanticBackend=analysis-services to enable the incremental-refresh / hybrid-table surface. GCC-High / IL5 / DoD must use the asazure.usgovcloudapi.net suffix. AAS is Azure-native (NOT Microsoft Fabric); the semantic-model default stays loom-native, so leaving this empty is fully supported.')
+param loomAasXmlaEndpoint string = ''
+
+@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
+param loomPowerbiXmlaEndpoint string = ''
+
+@description('Azure Analysis Services server URI (asazure://{region}.asazure.windows.net/{server}) for the opt-in aas semantic backend. Empty = the AAS path is honest-gated; calc groups + field parameters still work on the loom-native default. Requires loomSemanticBackend=aas.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services database/model name (also the XMLA Catalog property for the incremental-refresh surface). Required alongside loomAasServer for the aas backend, and the platform-level default model database for the Loom-native report renderer (loomBiBackend). Defaults to the last path segment of loomAasXmlaEndpoint when empty for the incremental-refresh path.')
+param loomAasDatabase string = ''
+
+@description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
+param loomAasResourceGroup string = ''
+
+@description('Deploy an Azure Analysis Services server. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on to opt into a standalone composite-model host AND/OR the RLS/OLS Security tab backend; both use the same AAS server over XMLA. When false, the Security + Aggregations tabs show an honest config-gate and the opt-in Power BI XMLA path (loomPowerbiXmlaEndpoint) still works.')
+param aasEnabled bool = false
+
+@description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
+param aasSpnClientId string = ''
+
+@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). B/S = Basic/Standard (prod).')
+@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+param aasSku string = 'D1'
+
+@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
+@allowed(['', 'powerbi'])
+param loomBiBackend string = ''
+
 
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
@@ -771,7 +851,29 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
-// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// 8a-bis. Azure Analysis Services (opt-in composite-model host)
+// Hosts a COMPOSITE tabular model mixing Import / DirectQuery / Dual
+// storage modes. Off by default — the semantic-model item's default is the
+// Loom-native tabular layer (no AAS required). See analysis-services.bicep.
+// =====================================================================
+
+module aas 'analysis-services.bicep' = if (aasEnabled) {
+  name: 'aas'
+  params: {
+    location: location
+    serverName: 'aasloom${uniqueString(resourceGroup().id)}'
+    skuName: aasSku
+    skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
+    aasDatabase: 'LoomComposite'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // RLS/OLS Security tab: when an operator supplies a dedicated SPN it becomes
+    // the AAS data-plane admin (LOOM_AAS_CLIENT_ID authors roles over XMLA).
+    // Otherwise the Console UAMI is the sole admin (composite-model path).
+    aasAdminUpn: !empty(aasSpnClientId) ? 'app:${aasSpnClientId}@${tenant().tenantId}' : 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
+    skipRoleGrants: skipRoleGrants
+    tags: complianceTags
+  }
+}
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
@@ -868,6 +970,28 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
     ehNamespaceName: loomEventHubNamespace
     ehNamespaceRg: !empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg
+  }
+}
+
+// =====================================================================
+// Azure Analysis Services (AAS) — Azure-native semantic-model backend.
+// Hosts Import-mode tabular databases for the SemanticModelEditor's Storage
+// Mode + Refresh surfaces (no Fabric / Power BI dependency). Skipped when
+// reusing an existing server (existingAasServerName) or aasEnabled is false.
+// =====================================================================
+module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerName)) {
+  name: 'aas-server'
+  params: {
+    location: location
+    skuName: aasSkuName
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
+    // Console UAMI: client id → AAS server-admin (app:{clientId}@{tenantId});
+    // principal id → Reader (ARM list/get databases + schedule tag).
+    consolePrincipalClientId: identity.outputs.uamiConsoleClientId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    tenantId: tenant().tenantId
   }
 }
 
@@ -1023,6 +1147,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // AAS resource group for the datamart-migration server (aas.bicep
+            // deploys it into the DLZ RG). The migrate route falls back to
+            // LOOM_DLZ_RG / LOOM_ADMIN_RG when unset.
+            { name: 'LOOM_AAS_RG', value: loomDlzRg }
             // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
             // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
             // shortcut examples resolve to a non-existent host (ENOTFOUND).
@@ -1056,6 +1184,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Direct Lake warm-cache TTL (seconds). Semantic-model queries within
+            // this window are served from the Power BI in-memory VertiPaq cache;
+            // older queries fall back transparently to Synapse Serverless
+            // OPENROWSET over the Gold Delta files. 0 = always Serverless.
+            { name: 'LOOM_DL_CACHE_TTL_SECONDS', value: string(loomDlCacheTtlSeconds) }
             // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA
             // DDL via Livy, and the sovereign-cloud dev-endpoint DNS suffix.
             { name: 'LOOM_DEFAULT_SPARK_POOL', value: loomDefaultSparkPool }
@@ -1097,6 +1230,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in Azure Analysis Services semantic layer — backs the
+            // semantic-model "Get data" (Power Query M) ingest refresh phase.
+            // Empty values honestly gate the AAS phase (Delta still lands; query
+            // via Synapse Serverless). Unavailable in Government clouds.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
             // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
             // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
             // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
@@ -1210,6 +1349,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // uses domain "default" → loomdb-default. For a reused cluster the real
             // default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // ----------------------------------------------------------------
+            // Azure Analysis Services (AAS) — Azure-native semantic-model
+            // backend (lib/azure/aas-client.ts). When set, the SemanticModel
+            // editor renders the AAS Storage-mode + Refresh surface and the
+            // refresh routes dispatch to AAS by default (NEXT_PUBLIC_LOOM_BI_
+            // BACKEND=aas). Prefer a reused server; else the provisioned module.
+            // Empty when neither → editor shows the honest config-gate.
+            // ----------------------------------------------------------------
+            { name: 'LOOM_AAS_SERVER_NAME', value: !empty(existingAasServerName) ? existingAasServerName : (aasEnabled ? aasServer!.outputs.serverName : '') }
+            { name: 'LOOM_AAS_REGION', value: !empty(existingAasServerName) ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location) : (aasEnabled ? aasServer!.outputs.serverRegion : '') }
+            // Default BI backend for the SemanticModelEditor + refresh routes.
+            // 'aas' when an AAS server is present (Azure-native default, per
+            // no-fabric-dependency.md); 'powerbi' is the opt-in Fabric-family
+            // path. Read client-side as NEXT_PUBLIC_*; server routes also honor
+            // LOOM_BI_BACKEND (mirrored below).
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
+            { name: 'LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
             // Workspace-monitoring read-only ADX DB (Azure Monitor diag-export
             // parity for Fabric workspace monitoring). Set only when deployed so
             // the provisioner + dashboard target the real DB; '' → honest gate.
@@ -1268,6 +1424,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
+            // When enabled, the semantic-model "Direct Lake (shim)" tab is active
+            // and the BFF can wire the Event Grid → Service Bus subscription at
+            // runtime via LOOM_DIRECT_LAKE_SHIM_QUEUE_ID. Empty when opt-out →
+            // the tab shows the honest setup MessageBar.
+            { name: 'LOOM_DIRECT_LAKE_SHIM_ENABLED', value: loomDirectLakeShimEnabled ? 'true' : '' }
+            { name: 'LOOM_DIRECT_LAKE_SHIM_QUEUE_ID', value: loomDirectLakeShimEnabled ? dlShimQueueId : '' }
             // Govern tab data-owner view (F3) — on-open posture refresh Function.
             // Empty → honest gate; the owner view still computes posture live.
             { name: 'LOOM_POSTURE_FUNCTION_URL', value: loomPostureFunctionUrl }
@@ -1301,6 +1464,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // Report editor BI backend. Empty (default) → Loom-native renderer
+            // that queries the bound AAS model with DAX (no Power BI / Fabric).
+            // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
+            // the client editor branch without a round-trip. (no-fabric-dependency.md)
+            { name: 'LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
             // Microsoft Fabric / Purview-unified-catalog dependency). Set to
@@ -1325,6 +1496,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomPurviewUnifiedAccount) ? [
             { name: 'LOOM_PURVIEW_UNIFIED_ACCOUNT', value: loomPurviewUnifiedAccount }
           ] : [],
+          // Azure Analysis Services XMLA endpoint backing the semantic-model
+          // incremental-refresh / hybrid-table surface (opt-in:
+          // loomSemanticBackend=analysis-services). Only emitted when set;
+          // absence makes the /refresh-policy route serve an honest 503 gate
+          // naming LOOM_AAS_XMLA_ENDPOINT rather than fabricated partitions.
+          // AAS is Azure-native, NOT Microsoft Fabric — the default
+          // loom-native semantic backend works with this unset. GCC-High/IL5
+          // must point the endpoint at asazure.usgovcloudapi.net AND grant
+          // the Console UAMI the AAS Server Administrator role on the model.
+          !empty(loomAasXmlaEndpoint) ? [
+            { name: 'LOOM_AAS_XMLA_ENDPOINT', value: loomAasXmlaEndpoint }
+          ] : [],
+          // Azure Analysis Services — opt-in semantic backend for writing
+          // calculation groups + field parameters to a LIVE model over XMLA.
+          // LOOM_AAS_SERVER / LOOM_AAS_DATABASE are emitted unconditionally
+          // above (shared with the Loom-native report renderer); only the
+          // resource group (ARM server picker) is conditional here. Absence
+          // keeps the AAS path honest-gated while the loom-native default
+          // (Cosmos + TMSL) still works.
+          !empty(loomAasResourceGroup) ? [
+            { name: 'LOOM_AAS_RG', value: loomAasResourceGroup }
+          ] : [],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
@@ -1335,6 +1528,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Surfaced to the Govern owner-view refresh BFF, never to the browser.
           !empty(loomPostureFunctionUrl) ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
+          ] : [],
+          // Analysis Services — RLS/OLS Security tab backend (Azure-native).
+          // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
+          // AAS module. LOOM_AAS_CLIENT_ID is the SPN appId (not secret). The
+          // SPN secret is wired separately as the KV secretRef 'loom-aas-client-secret'
+          // → LOOM_AAS_CLIENT_SECRET (operator step, see v3-tenant-bootstrap.md).
+          aasEnabled ? [
+            { name: 'LOOM_AAS_SERVER', value: aas.outputs.aasServerFullName }
+            { name: 'LOOM_AAS_TENANT_ID', value: tenant().tenantId }
+            { name: 'LOOM_AAS_CLIENT_ID', value: aasSpnClientId }
+          ] : [],
+          // Opt-in Power BI Premium / Fabric capacity XMLA endpoint (alternative
+          // Security-tab backend). Only emitted when set; absence falls through
+          // to AAS / the honest config-gate.
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
@@ -1454,6 +1663,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomPowerBiAdminLabels ? [
             { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
           ] : [],
+          // XMLA endpoint for semantic-model authoring that needs the XMLA write
+          // surface (Automatic aggregations). Azure-native default = Azure
+          // Analysis Services; Premium/Fabric XMLA is opt-in by URL. Empty →
+          // the Aggregations tab renders but honest-gates (no Fabric dependency).
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
+          ] : [],
           // Identity Picker (Entra user/group/SPN search + transitive nested
           // groups) — gated on the Console UAMI's Graph User.Read.All +
           // Group.Read.All + Application.Read.All grants. When false the BFF
@@ -1484,6 +1700,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           [
             { name: 'LOOM_CLOUD_BOUNDARY', value: boundary }
             { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
+            // Power BI REST base — Azure-Government-backed Power BI host in
+            // GCC-High / IL5 (api.powerbigov.us), Commercial host elsewhere.
+            // This is a Power BI REST host (NOT a Fabric API host), so it is
+            // permitted on the default path per no-fabric-dependency.md. Used by
+            // the report Visual Designer's executeQueries calls + measure
+            // validation. GCC runs on the Commercial api.powerbi.com host.
+            { name: 'LOOM_POWERBI_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.powerbigov.us/v1.0/myorg' : 'https://api.powerbi.com/v1.0/myorg' }
+            // Semantic-model Model view — OPTIONAL Azure Analysis Services XMLA
+            // write endpoint (azure-native, no Fabric). Empty by default: the
+            // Loom-native Cosmos backend works without it. Set to the DLZ
+            // aas.bicep `xmlaEndpoint` output to enable XMLA writes.
+            { name: 'LOOM_AAS_XMLA_ENDPOINT', value: loomAasXmlaEndpoint }
+            // Semantic-model backend selector. 'fabric' opts INTO the Fabric REST
+            // write path (per no-fabric-dependency.md, strictly opt-in); any other
+            // value keeps the azure-native default.
+            { name: 'LOOM_SEMANTIC_MODEL_BACKEND', value: loomSemanticModelBackend }
             { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
             // F5 Manage Access — Fabric role mirroring is OPT-IN and never at IL5
             // (Fabric is not IL5-authorized). Unset → Azure-native only.
@@ -1514,6 +1746,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            // Semantic-model backend + opt-in Azure Analysis Services composite
+            // host. The semantic-model item defaults to the Loom-native tabular
+            // layer (no AAS needed); these only populate when aasEnabled. The
+            // per-table storage-mode picker builds composite TMSL regardless.
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -1618,6 +1857,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
           ]
         )
         secrets: concat(
@@ -1694,13 +1936,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         name: 'loom-direct-lake-shim'
         image: 'loom-direct-lake-shim:${appImageTags.directLake}'
         uamiId: identity.outputs.uamiDirectLakeId
-        uamiClientId: identity.outputs.uamiDirectLakeId
+        uamiClientId: identity.outputs.uamiDirectLakeClientId
         ingressPort: 8080
         external: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
         minReplicas: 1
         maxReplicas: 2
+        env: [
+          // Cosmos config store the shim reads its per-model refresh policy from
+          // (direct-lake-config.refresh-policies). Same account as the Console
+          // (the shim UAMI holds Cosmos DB Built-in Data Contributor).
+          { name: 'COSMOS_ENDPOINT', value: loomCosmosEndpointVal }
+          { name: 'COSMOS_DATABASE', value: 'direct-lake-config' }
+          { name: 'COSMOS_CONTAINER', value: 'refresh-policies' }
+          { name: 'AZURE_CLIENT_ID', value: identity.outputs.uamiDirectLakeClientId }
+          // Service Bus queue the Event Grid system topic delivers _delta_log
+          // BlobCreated events to. Empty when the shim is disabled → the
+          // BackgroundService idles (honest, see DeltaLogEventHandler).
+          { name: 'SERVICEBUS_NAMESPACE', value: loomDirectLakeShimEnabled ? dlShimSbFqdn : '' }
+          { name: 'EVENTGRID_QUEUE', value: loomDirectLakeShimEnabled ? loomDirectLakeShimQueue : '' }
+          { name: 'LOOM_DIRECT_LAKE_SHIM_ENABLED', value: loomDirectLakeShimEnabled ? 'true' : '' }
+        ]
       }
     ]
   }
@@ -1846,6 +2103,30 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
   }
 }
 
+// =====================================================================
+// Direct-Lake-shim — Azure-native parity for Fabric Direct Lake. Deploys the
+// Service Bus queue + Event Grid system topic on the DLZ ADLS account and
+// grants the shim UAMI (+ optional AAS MI) Storage Blob Data Reader, so the
+// shim can keep a warm AAS / Power BI Premium XMLA cache fresh from Delta
+// `_delta_log` change events. Opt-in (loomDirectLakeShimEnabled) + requires the
+// DLZ storage account; otherwise skipped (the semantic-model editor stays fully
+// functional, showing the honest setup MessageBar in the Direct Lake tab).
+// =====================================================================
+module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && !empty(loomStorageAccount)) {
+  name: 'aas-direct-lake-shim'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    location: location
+    storageAccountName: loomStorageAccount
+    serviceBusNamespaceName: dlShimSbNamespaceName
+    serviceBusQueueName: loomDirectLakeShimQueue
+    shimMiPrincipalId: identity.outputs.uamiDirectLakePrincipalId
+    aasMiPrincipalId: loomAasMiPrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
 // Item-level Share — constrained RBAC-Admin on the SQL server's RG so the
 // per-database Share dialog can assign Reader/Contributor/SQL DB Contributor
 // at the Microsoft.Sql/servers/databases scope (ABAC-limited to those roles).
@@ -1940,6 +2221,7 @@ output acrLoginServer string = registry.outputs.acrLoginServer
 output uamiConsoleId string = identity.outputs.uamiConsoleId
 output uamiConsolePrincipalId string = identity.outputs.uamiConsolePrincipalId
 output uamiConsoleName string = identity.outputs.uamiConsoleName
+output uamiConsoleClientId string = identity.outputs.uamiConsoleClientId
 output uamiOrchestratorId string = identity.outputs.uamiOrchestratorId
 output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId

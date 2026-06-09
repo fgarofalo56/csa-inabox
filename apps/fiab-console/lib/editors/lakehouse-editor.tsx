@@ -914,6 +914,28 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setSchemasBusy(false); }
   }, [shortcutLakehouseId, loadSchemas]);
 
+  // ---- listing helpers ------------------------------------------------
+  // NOTE: declared here (before submitMoveTable / the auto-load effect) so the
+  // const is initialized before any hook references it on first render.
+  // Referencing it later in the body would be a temporal-dead-zone crash.
+  const cacheKey = useCallback((container: string, prefix: string) => `${container}::${prefix}`, []);
+
+  const loadPaths = useCallback(async (container: string, prefix: string) => {
+    const key = cacheKey(container, prefix);
+    setOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
+    try {
+      const qs = new URLSearchParams({ container, prefix });
+      const r = await fetch(`/api/lakehouse/paths?${qs.toString()}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'List paths');
+      setOpenPrefixes((p) => ({
+        ...p,
+        [key]: j.ok ? (j.paths as PathEntry[]) : { error: j.error || `HTTP ${r.status}` },
+      }));
+    } catch (e: any) {
+      setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
+    }
+  }, [cacheKey]);
+
   const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
     setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
     setMoveTableTo(''); setMoveTableError(null); setMoveTableStatus(null);
@@ -1431,23 +1453,8 @@ export function LakehouseEditor({ item, id }: Props) {
   }, []);
 
   // ---- listing helpers ------------------------------------------------
-  const cacheKey = useCallback((container: string, prefix: string) => `${container}::${prefix}`, []);
-
-  const loadPaths = useCallback(async (container: string, prefix: string) => {
-    const key = cacheKey(container, prefix);
-    setOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
-    try {
-      const qs = new URLSearchParams({ container, prefix });
-      const r = await fetch(`/api/lakehouse/paths?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'List paths');
-      setOpenPrefixes((p) => ({
-        ...p,
-        [key]: j.ok ? (j.paths as PathEntry[]) : { error: j.error || `HTTP ${r.status}` },
-      }));
-    } catch (e: any) {
-      setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
-    }
-  }, [cacheKey]);
+  // (cacheKey + loadPaths are declared earlier in the component body, above
+  // submitMoveTable, to avoid a temporal-dead-zone reference on first render.)
 
   // Auto-load root listing when active container changes.
   useEffect(() => {
