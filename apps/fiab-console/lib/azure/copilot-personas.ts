@@ -398,3 +398,55 @@ export const PERSONAS: PersonaDef[] = [AGENT_CONFIG_COPILOT];
 export function getPersona(name: string): PersonaDef | undefined {
   return PERSONAS.find((p) => p.name === name);
 }
+
+/**
+ * Ops Admin Copilot persona (operational infra actions on the Azure-native
+ * backend CSA Loom runs on). Kept under dedicated `Ops*` symbol names so it
+ * coexists with the cross-item Copilot persona registry above without colliding
+ * on `CopilotPersona` / `COPILOT_PERSONAS`. Consumed by the
+ * /api/admin/ops-copilot BFF routes; pure data/types (no Azure calls) so it is
+ * safe to import from both the route and the client pane.
+ */
+export interface OpsCopilotPersona {
+  id: string;
+  displayName: string;
+  description: string;
+  systemPrompt: string;
+  /** Tool names the persona may use. 'all' = the full default registry. */
+  toolFilter: string[] | 'all';
+  /** When set, the caller must be a member of the Entra group whose OID is in
+   *  this env var. Empty/unset env → any signed-in admin (same default as the
+   *  rest of the admin pane). */
+  requiredGroupEnvVar?: string;
+  /** Azure RBAC actions the executing UAMI needs for this persona's writes —
+   *  surfaced verbatim in the honest-gate when ARM returns 403. */
+  requiredArmActions?: string[];
+}
+
+export const OPS_PERSONA_ID = 'ops-admin';
+
+export const OPS_COPILOT_PERSONAS: Record<string, OpsCopilotPersona> = {
+  [OPS_PERSONA_ID]: {
+    id: OPS_PERSONA_ID,
+    displayName: 'Ops Admin Copilot',
+    description:
+      'Scale capacity, toggle the Synapse outbound-access policy, and create workspaces from natural language — each behind an approval diff and an RBAC gate.',
+    systemPrompt: `You are CSA Loom Ops Admin Copilot. You help tenant admins perform operational actions on the Azure-native infrastructure CSA Loom runs on. You ONLY classify a request into exactly one ops_* tool call. You NEVER claim an action was executed — execution happens only after the admin approves the diff in the UI.
+
+Rules:
+- Always include the resource name and the target value. Do not invent current values; the tool reads those.
+- Valid Synapse dedicated SQL pool SKUs look like DW100c, DW200c, DW500c, DW1000c … DW30000c. Pass the SKU exactly as the user said it (normalize "DW 200 c" → "DW200c").
+- For the outbound-access policy (OAP), enable=true means "allow trusted Azure services to access the workspace"; enable=false disables it.
+- For workspace creation, pass the literal name the user gave.
+- If the user's request is ambiguous or names a resource that isn't configured, ask a brief clarifying question via ops_clarify instead of guessing.
+
+CSA Loom is Azure-native. NEVER mention Microsoft Fabric or Power BI. Use the terms "Synapse dedicated SQL pool", "Azure Data Explorer cluster", "Synapse workspace outbound-access policy", and "Loom workspace".`,
+    toolFilter: ['ops_scale_sql_pool', 'ops_scale_adx', 'ops_toggle_oap', 'ops_workspace_create', 'ops_clarify'],
+    requiredGroupEnvVar: 'LOOM_OPS_ADMIN_ENTRA_GROUP',
+    requiredArmActions: [
+      'Microsoft.Synapse/workspaces/sqlPools/write',
+      'Microsoft.Synapse/workspaces/write',
+      'Microsoft.Kusto/clusters/write',
+    ],
+  },
+};
