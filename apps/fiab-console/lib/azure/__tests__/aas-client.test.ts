@@ -1,246 +1,384 @@
 /**
- * aas-client unit tests — pure SOAP/TMSL builders + DAX validator + config
- * gate. No network, no Azure SDK calls (the credential chain is never reached
- * because every tested function is pure or env-only).
+ * Contract tests for aas-client.ts — covers BOTH:
+ *   1) the XMLA TMSL write client behind the Semantic Model "Automatic
+ *      aggregations" surface (xmlaConfigGate / xmlaScope / buildAggTableTmsl /
+ *      altMapToTmsl / buildSoapExecuteEnvelope / parseXmlaFault / executeAggTmsl),
+ *      stubbing @azure/identity + global.fetch — no live AAS / Premium capacity;
+ *   2) the pure TMSL builders for the Model view (relationships + hierarchies,
+ *      from ../aas-tmsl) and the Loom-native report-renderer helpers (../aas-dax).
+ * Per no-vaporware, the tests exercise the actual code path.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
-// Mock the credential chain so importing aas-client (which pulls @azure/identity)
-// resolves under the vitest ESM/pnpm setup. None of the tested functions reach a
-// real token request — they are pure builders / env-only.
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'TOK', expiresOnTimestamp: Date.now() + 3600_000 }; } }
-  return {
-    DefaultAzureCredential: Cred,
-    ManagedIdentityCredential: Cred,
-    ChainedTokenCredential: Cred,
-    ClientSecretCredential: Cred,
-  };
+  return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
 
 import {
-  buildExecuteEnvelope,
-  buildDiscoverEnvelope,
-  parseDiscoverRows,
-  extractSoapFault,
-  buildRoleTmsl,
-  buildSetRolesTmsl,
-  validateRlsDax,
-  parseAasServer,
-  resolveBackend,
-  aasConfigGate,
-  type AasRole,
+  xmlaConfigGate,
+  xmlaScope,
+  buildAggTableTmsl,
+  altMapToTmsl,
+  buildSoapExecuteEnvelope,
+  parseXmlaFault,
+  executeAggTmsl,
+  AasError,
+  type AltMap,
 } from '../aas-client';
+import {
+  buildCreateOrReplaceRelationshipTmsl,
+  buildDeleteRelationshipTmsl,
+  buildAlterTableHierarchyTmsl,
+  buildModelBimTmsl,
+  type TmslRelationship,
+} from '../aas-tmsl';
+
+const realFetch = global.fetch;
+function mockFetch(handler: (url: string, init?: RequestInit) => any) {
+  global.fetch = vi.fn(async (url: any, init?: any) => {
+    const out = await handler(String(url), init);
+    if (out instanceof Response) return out;
+    const status = out?._status || 200;
+    const ct = out?._contentType || 'text/xml';
+    return new Response(out?._body ?? '', { status, headers: { 'content-type': ct } });
+  }) as any;
+}
+afterEach(() => { global.fetch = realFetch; });
+
+const ENV = process.env.LOOM_POWERBI_XMLA_ENDPOINT;
+const CLOUD = process.env.LOOM_CLOUD;
+const AZCLOUD = process.env.AZURE_CLOUD;
+beforeEach(() => {
+  delete process.env.LOOM_POWERBI_XMLA_ENDPOINT;
+  delete process.env.LOOM_CLOUD;
+  delete process.env.AZURE_CLOUD;
+});
+afterEach(() => {
+  if (ENV === undefined) delete process.env.LOOM_POWERBI_XMLA_ENDPOINT; else process.env.LOOM_POWERBI_XMLA_ENDPOINT = ENV;
+  if (CLOUD === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = CLOUD;
+  if (AZCLOUD === undefined) delete process.env.AZURE_CLOUD; else process.env.AZURE_CLOUD = AZCLOUD;
+});
+
+describe('xmlaConfigGate', () => {
+  it('returns null when LOOM_POWERBI_XMLA_ENDPOINT is set', () => {
+    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'https://srv.asazure.windows.net/xmla';
+    expect(xmlaConfigGate()).toBeNull();
+  });
+  it('returns a structured gate (with the env-var name) when unset', () => {
+    const gate = xmlaConfigGate();
+    expect(gate).not.toBeNull();
+    expect(gate!.missing).toBe('LOOM_POWERBI_XMLA_ENDPOINT');
+    expect(gate!.detail).toMatch(/asazure|XMLA/i);
+  });
+});
+
+describe('xmlaScope', () => {
+  it('uses the Commercial Analysis Services audience by default', () => {
+    expect(xmlaScope()).toBe('https://analysis.windows.net/powerbi/api/.default');
+  });
+  it('uses the Gov Analysis Services audience in GCC-High', () => {
+    process.env.LOOM_CLOUD = 'GCC-High';
+    expect(xmlaScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
+  });
+});
+
+describe('altMapToTmsl', () => {
+  it('emits baseTable + baseColumn for a column-level Sum mapping', () => {
+    const m: AltMap = { aggColumn: 'SalesAmount', dataType: 'double', summarization: 'Sum', detailTable: 'FactSales', detailColumn: 'SalesAmount' };
+    expect(altMapToTmsl(m)).toEqual({ summarization: 'Sum', baseTable: 'FactSales', baseColumn: 'SalesAmount' });
+  });
+  it('emits baseTable only for a Count-of-rows mapping (no detail column)', () => {
+    const m: AltMap = { aggColumn: 'RowCount', dataType: 'int64', summarization: 'Count', detailTable: 'FactSales' };
+    expect(altMapToTmsl(m)).toEqual({ summarization: 'Count', baseTable: 'FactSales' });
+  });
+});
+
+describe('buildAggTableTmsl', () => {
+  const params = {
+    database: 'SalesModel',
+    aggTableName: 'SalesAgg',
+    partitionExpression: 'let Source = Sql.Database("s","db") in Source',
+    altMaps: [
+      { aggColumn: 'CustomerKey', dataType: 'int64', summarization: 'GroupBy', detailTable: 'FactSales', detailColumn: 'CustomerKey' },
+      { aggColumn: 'SalesAmount', dataType: 'double', summarization: 'Sum', detailTable: 'FactSales', detailColumn: 'SalesAmount' },
+    ] as AltMap[],
+  };
+
+  it('produces a createOrReplace table that is hidden and Import-mode', () => {
+    const tmsl = JSON.parse(buildAggTableTmsl(params));
+    expect(tmsl.createOrReplace.object).toEqual({ database: 'SalesModel', table: 'SalesAgg' });
+    expect(tmsl.createOrReplace.table.isHidden).toBe(true);
+    expect(tmsl.createOrReplace.table.partitions[0].mode).toBe('import');
+    expect(tmsl.createOrReplace.table.partitions[0].source.type).toBe('m');
+  });
+
+  it('emits alternateOf with the correct summarization + references per column', () => {
+    const tmsl = JSON.parse(buildAggTableTmsl(params));
+    const cols = tmsl.createOrReplace.table.columns;
+    const sum = cols.find((c: any) => c.name === 'SalesAmount');
+    expect(sum.alternateOf).toEqual({ summarization: 'Sum', baseTable: 'FactSales', baseColumn: 'SalesAmount' });
+    const grp = cols.find((c: any) => c.name === 'CustomerKey');
+    expect(grp.alternateOf.summarization).toBe('GroupBy');
+    expect(grp.alternateOf.baseColumn).toBe('CustomerKey');
+  });
+});
+
+describe('buildSoapExecuteEnvelope', () => {
+  it('wraps the TMSL in an Execute envelope with the Catalog', () => {
+    const env = buildSoapExecuteEnvelope('SalesModel', '{"createOrReplace":{}}');
+    expect(env).toContain('urn:schemas-microsoft-com:xml-analysis');
+    expect(env).toContain('<Catalog>SalesModel</Catalog>');
+    expect(env).toContain('<Statement>');
+  });
+});
+
+describe('parseXmlaFault', () => {
+  it('extracts a SOAP faultstring', () => {
+    expect(parseXmlaFault('<Envelope><Body><Fault><faultstring>Table already exists</faultstring></Fault></Body></Envelope>'))
+      .toBe('Table already exists');
+  });
+  it('returns null when there is no fault', () => {
+    expect(parseXmlaFault('<return xmlns="urn:schemas-microsoft-com:xml-analysis"><root/></return>')).toBeNull();
+  });
+});
+
+describe('executeAggTmsl', () => {
+  it('POSTs the SOAP Execute to the configured endpoint with the SOAPAction header', async () => {
+    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'https://srv.asazure.windows.net/xmla';
+    let url = ''; let method = ''; let headers: any = {}; let body = '';
+    mockFetch((u, init) => {
+      url = u; method = (init?.method as string) || 'GET'; headers = init?.headers || {}; body = String(init?.body || '');
+      return { _body: '<return><root/></return>' };
+    });
+    const r = await executeAggTmsl('SalesModel', '{"createOrReplace":{}}');
+    expect(r).toEqual({ ok: true });
+    expect(url).toBe('https://srv.asazure.windows.net/xmla');
+    expect(method).toBe('POST');
+    expect(String(headers['soapaction'])).toContain('Execute');
+    expect(body).toContain('<Catalog>SalesModel</Catalog>');
+  });
+
+  it('throws AasError when the SOAP response embeds a faultstring (HTTP 200)', async () => {
+    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'https://srv.asazure.windows.net/xmla';
+    mockFetch(() => ({ _body: '<Envelope><Body><Fault><faultstring>Table already exists</faultstring></Fault></Body></Envelope>' }));
+    await expect(executeAggTmsl('SalesModel', '{}')).rejects.toThrowError(/Table already exists/);
+  });
+
+  it('throws AasError on an HTTP error response', async () => {
+    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'https://srv.asazure.windows.net/xmla';
+    mockFetch(() => ({ _status: 401, _body: 'Unauthorized' }));
+    await expect(executeAggTmsl('SalesModel', '{}')).rejects.toBeInstanceOf(AasError);
+  });
+
+  it('throws when no endpoint is configured', async () => {
+    await expect(executeAggTmsl('SalesModel', '{}')).rejects.toThrowError(/LOOM_POWERBI_XMLA_ENDPOINT/);
+  });
+});
+
+// ── Model view: pure TMSL builders (relationships + hierarchies) ────────────
+// Assert the exact TMSL shapes written for relationships (incl. the
+// isActive=false role-playing case used by USERELATIONSHIP), relationship
+// deletes, and multi-level drill hierarchies, plus the full model.bim preview.
+// No network — builders are pure.
+
+const baseRel: TmslRelationship = {
+  name: 'rel_ship',
+  fromTable: 'FactSales', fromColumn: 'ShipDateKey',
+  toTable: 'DimDate', toColumn: 'DateKey',
+  fromCardinality: 'many', toCardinality: 'one',
+  crossFilteringBehavior: 'oneDirection', isActive: false,
+};
+
+describe('buildCreateOrReplaceRelationshipTmsl', () => {
+  it('emits a single-column relationship with isActive=false', () => {
+    const obj = JSON.parse(buildCreateOrReplaceRelationshipTmsl('MyModel', baseRel));
+    expect(obj.createOrReplace.object.database).toBe('MyModel');
+    expect(obj.createOrReplace.object.relationship).toBe('rel_ship');
+    const r = obj.createOrReplace.relationship;
+    expect(r.fromTable).toBe('FactSales');
+    expect(r.fromColumn).toBe('ShipDateKey');
+    expect(r.toTable).toBe('DimDate');
+    expect(r.toColumn).toBe('DateKey');
+    expect(r.fromCardinality).toBe('many');
+    expect(r.toCardinality).toBe('one');
+    expect(r.crossFilteringBehavior).toBe('oneDirection');
+    expect(r.isActive).toBe(false);
+  });
+
+  it('omits isActive when the relationship is active (TMSL default true)', () => {
+    const obj = JSON.parse(buildCreateOrReplaceRelationshipTmsl('M', { ...baseRel, isActive: true }));
+    expect('isActive' in obj.createOrReplace.relationship).toBe(false);
+  });
+
+  it('emits bothDirections for a both-direction cross filter', () => {
+    const obj = JSON.parse(buildCreateOrReplaceRelationshipTmsl('M', { ...baseRel, crossFilteringBehavior: 'bothDirections' }));
+    expect(obj.createOrReplace.relationship.crossFilteringBehavior).toBe('bothDirections');
+  });
+});
+
+describe('buildDeleteRelationshipTmsl', () => {
+  it('targets the named relationship in the database', () => {
+    const obj = JSON.parse(buildDeleteRelationshipTmsl('MyModel', 'rel_ship'));
+    expect(obj.delete.object.database).toBe('MyModel');
+    expect(obj.delete.object.relationship).toBe('rel_ship');
+  });
+});
+
+describe('buildAlterTableHierarchyTmsl', () => {
+  it('serializes a 3-level hierarchy with correct ordinals + columns', () => {
+    const obj = JSON.parse(buildAlterTableHierarchyTmsl('MyModel', 'DimDate', {
+      name: 'Date',
+      levels: [
+        { ordinal: 0, name: 'Year', column: 'CalYear' },
+        { ordinal: 1, name: 'Quarter', column: 'Quarter' },
+        { ordinal: 2, name: 'Month', column: 'MonthNum' },
+      ],
+    }));
+    expect(obj.alter.object.database).toBe('MyModel');
+    expect(obj.alter.object.table).toBe('DimDate');
+    const h = obj.alter.table.hierarchies[0];
+    expect(h.name).toBe('Date');
+    expect(h.levels).toHaveLength(3);
+    expect(h.levels[0]).toMatchObject({ ordinal: 0, name: 'Year', column: 'CalYear' });
+    expect(h.levels[2]).toMatchObject({ ordinal: 2, name: 'Month', column: 'MonthNum' });
+  });
+
+  it('sorts levels by ordinal even when supplied out of order', () => {
+    const obj = JSON.parse(buildAlterTableHierarchyTmsl('M', 'T', {
+      name: 'H',
+      levels: [
+        { ordinal: 2, name: 'C', column: 'c' },
+        { ordinal: 0, name: 'A', column: 'a' },
+        { ordinal: 1, name: 'B', column: 'b' },
+      ],
+    }));
+    expect(obj.alter.table.hierarchies[0].levels.map((l: any) => l.column)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('buildModelBimTmsl', () => {
+  it('produces a model.bim with tables, hierarchies, and an inactive relationship', () => {
+    const tmsl = buildModelBimTmsl(
+      'Sales Model',
+      [
+        { name: 'FactSales', columns: [{ name: 'ShipDateKey', dataType: 'int64' }, { name: 'Amount', dataType: 'double' }] },
+        { name: 'DimDate', columns: [{ name: 'DateKey', dataType: 'int64' }, { name: 'CalYear', dataType: 'int64' }, { name: 'Quarter', dataType: 'string' }, { name: 'MonthNum', dataType: 'int64' }] },
+      ],
+      [baseRel],
+      [{ name: 'Date Drill', table: 'DimDate', levels: [
+        { ordinal: 0, name: 'Year', column: 'CalYear' },
+        { ordinal: 1, name: 'Quarter', column: 'Quarter' },
+        { ordinal: 2, name: 'Month', column: 'MonthNum' },
+      ] }],
+    );
+    const obj = JSON.parse(tmsl);
+    expect(obj.name).toBe('Sales Model');
+    expect(obj.compatibilityLevel).toBe(1567);
+    const dim = obj.model.tables.find((t: any) => t.name === 'DimDate');
+    expect(dim.hierarchies[0].levels).toHaveLength(3);
+    expect(dim.hierarchies[0].levels[2].column).toBe('MonthNum');
+    const rel = obj.model.relationships[0];
+    expect(rel.isActive).toBe(false);
+    expect(rel.fromTable).toBe('FactSales');
+    // FactSales carries no hierarchies → property omitted.
+    const fact = obj.model.tables.find((t: any) => t.name === 'FactSales');
+    expect('hierarchies' in fact).toBe(false);
+  });
+});
+
+/*
+ * aas-client — unit tests for the pure (no-network) helpers used by the
+ * Loom-native report renderer: DAX synthesis, row flattening, and binding
+ * resolution. The fetch-driven executeAasQuery is covered by the BFF route
+ * + the live E2E receipt; these tests lock the deterministic logic.
+ */
 
 const SAVED = { ...process.env };
-afterEach(() => {
-  process.env = { ...SAVED };
-});
-beforeEach(() => {
-  // Clean slate — remove every var the client reads.
-  for (const k of [
-    'LOOM_AAS_SERVER',
-    'LOOM_AAS_DB',
-    'LOOM_AAS_CLIENT_ID',
-    'LOOM_AAS_CLIENT_SECRET',
-    'LOOM_POWERBI_XMLA_ENDPOINT',
-    'LOOM_CLOUD',
-    'AZURE_CLOUD',
-    'LOOM_CLOUD_BOUNDARY',
-  ]) {
-    delete process.env[k];
-  }
-});
 
-describe('buildExecuteEnvelope', () => {
-  it('embeds the TMSL statement + catalog and omits impersonation when not asked', () => {
-    const env = buildExecuteEnvelope('{"refresh":{}}', 'MyDb');
-    expect(env).toContain('<Statement>{&quot;refresh&quot;:{}}</Statement>');
-    expect(env).toContain('<Catalog>MyDb</Catalog>');
-    expect(env).not.toContain('<EffectiveUserName>');
-    expect(env).not.toContain('<Roles>');
-    expect(env).toContain('urn:schemas-microsoft-com:xml-analysis');
+async function load(cloud?: string) {
+  vi.resetModules();
+  delete process.env.AZURE_CLOUD;
+  delete process.env.LOOM_AAS_SERVER;
+  delete process.env.LOOM_AAS_DATABASE;
+  if (cloud) process.env.AZURE_CLOUD = cloud;
+  return import('../aas-dax');
+}
+
+afterEach(() => { process.env = { ...SAVED }; });
+
+describe('buildDaxFromVisual', () => {
+  let m: typeof import('../aas-dax');
+  beforeEach(async () => { m = await load('AzureCloud'); });
+
+  it('passes through an explicit EVALUATE expression', () => {
+    expect(m.buildDaxFromVisual({ type: 'table', field: 'EVALUATE Sales' })).toBe('EVALUATE Sales');
+    // case-insensitive
+    expect(m.buildDaxFromVisual({ type: 'table', field: 'evaluate Sales' })).toBe('evaluate Sales');
   });
 
-  it('adds EffectiveUserName + Roles when impersonating', () => {
-    const env = buildExecuteEnvelope('EVALUATE Sales', 'MyDb', {
-      effectiveUserName: 'u@contoso.com',
-      roles: 'Sales East',
+  it('wraps a measure/column in ROW for a card visual', () => {
+    expect(m.buildDaxFromVisual({ type: 'card', field: '[Total Sales]' })).toBe('EVALUATE ROW("Value", [Total Sales])');
+  });
+
+  it('wraps a measure/column in TOPN(ROW) for a non-card visual', () => {
+    expect(m.buildDaxFromVisual({ type: 'bar', field: 'Sales[Amount]' })).toBe('EVALUATE TOPN(100, ROW("Value", Sales[Amount]))');
+  });
+
+  it('TOPN-guards a bare table name', () => {
+    expect(m.buildDaxFromVisual({ type: 'table', field: 'Customers' })).toBe('EVALUATE TOPN(100, Customers)');
+  });
+
+  it('returns null for an empty field', () => {
+    expect(m.buildDaxFromVisual({ type: 'card', field: '' })).toBeNull();
+    expect(m.buildDaxFromVisual({ type: 'card' })).toBeNull();
+  });
+});
+
+describe('flattenAasRows', () => {
+  let m: typeof import('../aas-dax');
+  beforeEach(async () => { m = await load('AzureCloud'); });
+
+  it('strips the [Table].[Column] prefix', () => {
+    const rows = m.flattenAasRows({
+      results: [{ tables: [{ rows: [{ '[Sales].[Amount]': 10, '[Sales].[Region]': 'East' }] }] }],
     });
-    expect(env).toContain('<EffectiveUserName>u@contoso.com</EffectiveUserName>');
-    expect(env).toContain('<Roles>Sales East</Roles>');
+    expect(rows).toEqual([{ Amount: 10, Region: 'East' }]);
+  });
+
+  it('strips a bare [Column] prefix', () => {
+    const rows = m.flattenAasRows({ results: [{ tables: [{ rows: [{ '[Value]': 42 }] }] }] });
+    expect(rows).toEqual([{ Value: 42 }]);
+  });
+
+  it('returns [] for an empty / shapeless result', () => {
+    expect(m.flattenAasRows({ results: [] })).toEqual([]);
+    expect(m.flattenAasRows({ results: [{ tables: [] }] })).toEqual([]);
   });
 });
 
-describe('buildDiscoverEnvelope', () => {
-  it('emits the DMV request type and catalog', () => {
-    const env = buildDiscoverEnvelope('TMSCHEMA_ROLES', 'MyDb');
-    expect(env).toContain('<RequestType>TMSCHEMA_ROLES</RequestType>');
-    expect(env).toContain('<Catalog>MyDb</Catalog>');
-  });
-});
+describe('resolveAasBinding', () => {
+  let m: typeof import('../aas-dax');
+  beforeEach(async () => { m = await load('AzureCloud'); });
 
-describe('parseDiscoverRows', () => {
-  it('extracts multiple rows with namespace-stripped keys', () => {
-    const soap =
-      '<root><row><ID>1</ID><Name>Sales</Name></row>' +
-      '<row><ID>2</ID><Name>HR</Name></row></root>';
-    const rows = parseDiscoverRows(soap);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ ID: '1', Name: 'Sales' });
-    expect(rows[1].Name).toBe('HR');
-  });
-});
-
-describe('extractSoapFault', () => {
-  it('detects a SOAP faultstring', () => {
-    const soap =
-      '<Envelope><Body><Fault><faultstring>bad TMSL</faultstring></Fault></Body></Envelope>';
-    expect(extractSoapFault(soap)).toBe('bad TMSL');
-  });
-  it('detects an inline AS Error Description', () => {
-    const soap = '<return><Error ErrorCode="1" Description="Role exists" /></return>';
-    expect(extractSoapFault(soap)).toBe('Role exists');
-  });
-  it('returns null for a clean response', () => {
-    expect(extractSoapFault('<return><root/></return>')).toBeNull();
-  });
-});
-
-describe('validateRlsDax', () => {
-  it('accepts a static membership boolean', () => {
-    expect(validateRlsDax('[Region] = "East"').ok).toBe(true);
-  });
-  it('accepts BLANK()', () => {
-    expect(validateRlsDax('BLANK()').ok).toBe(true);
-  });
-  it('accepts a dynamic USERPRINCIPALNAME filter', () => {
-    expect(validateRlsDax('USERPRINCIPALNAME() = [UserEmail]').ok).toBe(true);
-  });
-  it('rejects empty', () => {
-    expect(validateRlsDax('').ok).toBe(false);
-  });
-  it('rejects a query-shaped expression', () => {
-    expect(validateRlsDax('EVALUATE Sales').ok).toBe(false);
-  });
-  it('rejects a semicolon', () => {
-    expect(validateRlsDax('[A]=1; [B]=2').ok).toBe(false);
-  });
-  it('rejects unbalanced parens', () => {
-    expect(validateRlsDax('([Region] = "East"').ok).toBe(false);
-  });
-});
-
-describe('buildRoleTmsl', () => {
-  it('emits filterExpression + table OLS + column OLS', () => {
-    const role: AasRole = {
-      name: 'East',
-      modelPermission: 'read',
-      tablePermissions: [
-        { name: 'Sales', filterExpression: '[Region] = "East"' },
-        { name: 'Secret', metadataPermission: 'none' },
-        {
-          name: 'Customer',
-          columnPermissions: [
-            { name: 'SSN', metadataPermission: 'none' },
-            { name: 'Name', metadataPermission: 'read' },
-          ],
-        },
-      ],
-    };
-    const tmsl = buildRoleTmsl(role) as any;
-    expect(tmsl.name).toBe('East');
-    expect(tmsl.modelPermission).toBe('read');
-    const tp = tmsl.tablePermissions;
-    expect(tp).toHaveLength(3);
-    expect(tp[0]).toEqual({ name: 'Sales', filterExpression: '[Region] = "East"' });
-    expect(tp[1]).toEqual({ name: 'Secret', metadataPermission: 'none' });
-    // Only the 'none' column survives (read is the default, not serialized).
-    expect(tp[2].columnPermissions).toEqual([{ name: 'SSN', metadataPermission: 'none' }]);
-  });
-
-  it('drops a table permission that grants nothing special (full access)', () => {
-    const role: AasRole = {
-      name: 'All',
-      modelPermission: 'read',
-      tablePermissions: [{ name: 'Sales', filterExpression: '   ', metadataPermission: 'read' }],
-    };
-    const tmsl = buildRoleTmsl(role) as any;
-    expect(tmsl.tablePermissions).toBeUndefined();
-  });
-});
-
-describe('buildSetRolesTmsl', () => {
-  it('wraps roles in a createOrReplace database command', () => {
-    const tmsl = buildSetRolesTmsl('MyDb', [
-      { name: 'East', modelPermission: 'read', tablePermissions: [{ name: 'Sales', filterExpression: '[R]="E"' }] },
-    ]) as any;
-    expect(tmsl.createOrReplace.object.database).toBe('MyDb');
-    expect(tmsl.createOrReplace.database.name).toBe('MyDb');
-    expect(tmsl.createOrReplace.database.roles).toHaveLength(1);
-    expect(tmsl.createOrReplace.database.roles[0].name).toBe('East');
-  });
-});
-
-describe('parseAasServer', () => {
-  it('parses region + server from an asazure URL', () => {
-    expect(parseAasServer('asazure://eastus.asazure.windows.net/myserver')).toEqual({
-      region: 'eastus',
-      serverName: 'myserver',
+  it('resolves from per-item state', () => {
+    expect(m.resolveAasBinding('asazure://eastus2.asazure.windows.net/my-server', 'AdventureWorks')).toEqual({
+      region: 'eastus2', serverName: 'my-server', database: 'AdventureWorks',
     });
   });
-  it('returns null on garbage', () => {
-    expect(parseAasServer('not-a-url')).toBeNull();
-    expect(parseAasServer(undefined)).toBeNull();
-  });
-});
 
-describe('resolveBackend', () => {
-  it('prefers AAS and derives the XMLA endpoint + scope', () => {
-    process.env.LOOM_AAS_SERVER = 'asazure://eastus.asazure.windows.net/myserver';
-    process.env.LOOM_AAS_CLIENT_ID = 'spn';
-    const rb = resolveBackend();
-    expect(rb.backend).toBe('aas');
-    expect(rb.endpointUrl).toBe('https://eastus.asazure.windows.net/xmla');
-    expect(rb.defaultCatalog).toBe('myserver');
-    expect(rb.scope).toBe('https://eastus.asazure.windows.net/.default');
+  it('falls back to env defaults', async () => {
+    process.env.LOOM_AAS_SERVER = 'asazure://eastus2.asazure.windows.net/env-server';
+    process.env.LOOM_AAS_DATABASE = 'EnvModel';
+    const m2 = await import('../aas-dax');
+    expect(m2.resolveAasBinding(undefined, undefined)).toEqual({
+      region: 'eastus2', serverName: 'env-server', database: 'EnvModel',
+    });
   });
 
-  it('falls back to the Power BI XMLA endpoint', () => {
-    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'powerbi://api.powerbi.com/v1.0/myorg/Sales';
-    const rb = resolveBackend();
-    expect(rb.backend).toBe('powerbi-xmla');
-    expect(rb.endpointUrl).toBe('https://api.powerbi.com/v1.0/myorg/Sales/xmla');
-    expect(rb.scope).toContain('/powerbi/api/.default');
-  });
-
-  it('throws 501 when nothing is configured', () => {
-    expect(() => resolveBackend()).toThrowError(/No Analysis-Services/);
-  });
-});
-
-describe('aasConfigGate', () => {
-  it('gates when no backend is set', () => {
-    const gate = aasConfigGate();
-    expect(gate?.missing).toBe('LOOM_AAS_SERVER');
-  });
-  it('gates the AAS path when the SPN client id is missing', () => {
-    process.env.LOOM_AAS_SERVER = 'asazure://eastus.asazure.windows.net/srv';
-    expect(aasConfigGate()?.missing).toBe('LOOM_AAS_CLIENT_ID');
-  });
-  it('returns null when the Power BI XMLA endpoint is set', () => {
-    process.env.LOOM_POWERBI_XMLA_ENDPOINT = 'powerbi://api.powerbi.com/v1.0/myorg/Sales';
-    expect(aasConfigGate()).toBeNull();
-  });
-  it('returns null when AAS server + SPN are both set', () => {
-    process.env.LOOM_AAS_SERVER = 'asazure://eastus.asazure.windows.net/srv';
-    process.env.LOOM_AAS_CLIENT_ID = 'spn';
-    expect(aasConfigGate()).toBeNull();
-  });
-  it('always gates in the DoD boundary', () => {
-    process.env.LOOM_CLOUD = 'DoD';
-    process.env.LOOM_AAS_SERVER = 'asazure://usdodeast.asazure.usgovcloudapi.net/srv';
-    process.env.LOOM_AAS_CLIENT_ID = 'spn';
-    expect(aasConfigGate()?.detail).toMatch(/DoD/);
+  it('returns null when nothing is bound', () => {
+    expect(m.resolveAasBinding(undefined, undefined)).toBeNull();
+    expect(m.resolveAasBinding('asazure://eastus2.asazure.windows.net/my-server', undefined)).toBeNull();
+    expect(m.resolveAasBinding('not-a-server', 'Model')).toBeNull();
   });
 });

@@ -1,89 +1,100 @@
-// CSA Loom — Azure Analysis Services server for the semantic-model RLS/OLS
-// Security tab (Azure-native default backend; no Fabric workspace required).
+// CSA Loom — Azure Analysis Services server (opt-in).
 //
-// The Security tab authors model roles (row-level DAX filters + object-level
-// table/column permissions) and runs test-as-role probes through the
-// Analysis-Services XMLA endpoint. This module deploys the AAS server and wires
-// its admin identity. Two facts drive the design (verified on Microsoft Learn):
+// Hosts a COMPOSITE tabular model that mixes Import / DirectQuery / Dual
+// storage modes (the semantic-model editor's per-table storage-mode picker).
+// DISABLED by default (aasEnabled=false in the orchestrator) — the
+// semantic-model item's Azure-native DEFAULT is the Loom-native tabular layer,
+// which needs no AAS server (see .claude/rules/no-fabric-dependency.md). AAS is
+// only provisioned when an operator opts into a standalone composite-model host.
 //
-//   1. AAS does NOT support managed identities as server admins or role members,
-//      so the server admin is a dedicated service principal (aasSpnClientId),
-//      formatted `app:{clientId}@{tenantId}` in asAdministrators.members.
-//   2. The Console UAMI gets ARM Reader on the server so the management plane can
-//      discover the server FQDN; the data-plane XMLA auth uses the SPN
-//      (LOOM_AAS_CLIENT_ID / LOOM_AAS_CLIENT_SECRET), not the UAMI.
+// SKU guidance:
+//   D1 (Developer, no SLA) — non-prod / test composite models
+//   S1 (Standard)          — prod, ≤100 QPU, 25 GB
+//   S2 / S4                — higher QPU + memory
 //
-// When this module is NOT deployed, the Security tab renders an honest
-// MessageBar (aasConfigGate) naming LOOM_AAS_SERVER — no fabricated roles. The
-// editor's full surface still renders. Power BI Premium / Fabric XMLA
-// (LOOM_POWERBI_XMLA_ENDPOINT) is the opt-in alternative backend; it needs no
-// AAS server.
+// Apply path: full TMSL (createOrReplace / per-partition mode) is issued via
+// XMLA (Invoke-ASCmd / TOM) or the Fabric updateDefinition REST API — the AAS
+// REST surface itself only exposes async refresh. The Console UAMI is added to
+// the AAS server-admin list so it can issue those XMLA commands; an ARM Reader
+// grant gives it control-plane visibility.
+//
+// Env vars wired by main.bicep into the Console container (only when enabled):
+//   LOOM_AAS_ENDPOINT  = serverFullName (asazure://<region>.asazure.windows.net/<server>)
+//   LOOM_AAS_DATABASE  = aasDatabase
+//
+// Sovereign notes:
+//   Commercial / GCC → asazure.windows.net           (Dual via Premium/Fabric)
+//   GCC-High / IL5   → asazure.usgovcloudapi.net      (Dual NOT supported in
+//                      standalone AAS; the BFF rejects Dual at Gov boundaries)
 
 targetScope = 'resourceGroup'
 
-@description('Location for the AAS server.')
-param location string = resourceGroup().location
+@description('Azure region')
+param location string
 
-@description('AAS server name (3-63 lowercase alphanumerics; must be globally unique within the region).')
-param serverName string
+@description('AAS server name (3–63 chars, lowercase letters/numbers)')
+@minLength(3)
+@maxLength(63)
+param serverName string = 'aasloom'
 
-@description('AAS SKU. Default D1 (Developer tier; suspends to $0 when idle).')
+@description('AAS SKU name')
 @allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param sku string = 'D1'
+param skuName string = 'D1'
 
-@description('Entra tenant id used to format the AAS server-admin SPN (app:{clientId}@{tenantId}).')
-param tenantId string = tenant().tenantId
+@description('SKU tier')
+@allowed(['Development', 'Basic', 'Standard'])
+param skuTier string = 'Development'
 
-@description('Service-principal client id (appId) granted AAS server-admin. REQUIRED — a managed identity cannot be an AAS admin. Empty = no admin wired (the server still deploys but is not usable until an admin is set out-of-band).')
-param aasSpnClientId string
+@description('AAS database / model name wired into LOOM_AAS_DATABASE')
+param aasDatabase string = 'LoomComposite'
 
-@description('Console UAMI principalId — granted ARM Reader on the AAS server for management-plane discovery. Empty = skip.')
-param consolePrincipalId string = ''
+@description('Console UAMI principal id (object id) — granted ARM Reader on the AAS server.')
+param consolePrincipalId string
 
-@description('When true, skip the role grant (re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
+@description('AAS server-administrator identity (UPN, or app:<clientId>@<tenantId> for an SP). Listed in asAdministrators so it can issue XMLA TMSL commands.')
+param aasAdminUpn string
+
+@description('Skip role-assignment grants — set true when re-provisioning to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
-@description('Compliance / cost tags applied to the AAS server.')
-param complianceTags object = {}
-
-var tier = sku == 'D1' ? 'Development' : (startsWith(sku, 'B') ? 'Basic' : 'Standard')
+@description('Compliance tags')
+param tags object = {}
 
 resource aasServer 'Microsoft.AnalysisServices/servers@2017-08-01' = {
   name: serverName
   location: location
   sku: {
-    name: sku
-    tier: tier
+    name: skuName
+    tier: skuTier
+    capacity: 1
   }
-  tags: complianceTags
+  tags: tags
   properties: {
-    asAdministrators: empty(aasSpnClientId) ? {
-      members: []
-    } : {
+    asAdministrators: {
+      // AAS admin list — the Console identity must be here to issue TMSL via
+      // XMLA (Invoke-ASCmd / TOM). SP format: 'app:<clientId>@<tenantId>'.
       members: [
-        'app:${aasSpnClientId}@${tenantId}'
+        aasAdminUpn
       ]
     }
     querypoolConnectionMode: 'All'
   }
 }
 
-// ARM Reader on the AAS server — the Console UAMI can read the server's
-// serverFullName / state for the management-plane discovery the Security tab
-// uses to confirm the engine is reachable. (Reader: acdd72a7-3385-48ef-bd42-f606fba81ae7)
-resource aasReaderGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
-  name: guid(aasServer.id, consolePrincipalId, 'loom-aas-reader-v1')
+// ARM Reader for the Console UAMI (control-plane visibility; the AAS admin list
+// above grants the data-plane XMLA rights).
+resource aasReaderRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(consolePrincipalId)) {
+  name: guid(aasServer.id, consolePrincipalId, 'reader')
   scope: aasServer
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7') // Reader
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
-    description: 'Loom Console UAMI: ARM Reader on the AAS server (RLS/OLS Security tab management-plane discovery).'
   }
 }
 
-@description('AAS server resource name.')
-output aasServerName string = aasServer.name
+@description('AAS serverFullName for LOOM_AAS_ENDPOINT (asazure://…)')
+output serverFullName string = aasServer.properties.serverFullName
 
-@description('AAS server full data-plane name (asazure://<region>.<suffix>/<server>) for LOOM_AAS_SERVER.')
-output aasServerFullName string = aasServer.properties.serverFullName
+@description('AAS database name for LOOM_AAS_DATABASE')
+output database string = aasDatabase

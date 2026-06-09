@@ -86,6 +86,24 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.kustoClusterUri('adx-loom', 'eastus2')).toBe(`https://adx-loom.eastus2.${KUSTO_COM}`);
   });
 
+  it('AAS helpers use asazure.windows.net + literal-* scope', async () => {
+    const m = await load('AzureCloud');
+    const AAS_COM = J('asazure', 'windows', 'net');
+    expect(m.aasSuffix()).toBe(AAS_COM);
+    // The '*' is a literal subdomain char per the AAS REST auth spec, NOT a wildcard.
+    expect(m.aasScope()).toBe(`https://*.${AAS_COM}`);
+    expect(m.aasModelUrl('eastus2', 'my-server', 'AdventureWorks')).toBe(
+      `https://eastus2.${AAS_COM}/servers/my-server/models/AdventureWorks`,
+    );
+    expect(m.parseAasServer('asazure://eastus2.asazure.windows.net/my-server')).toEqual({
+      region: 'eastus2', serverName: 'my-server',
+    });
+    expect(m.parseAasServer('my-server.eastus2.asazure.windows.net')).toEqual({
+      region: 'eastus2', serverName: 'my-server',
+    });
+    expect(m.parseAasServer('bare-name')).toBeNull();
+  });
+
   it('Cosmos DB helpers use documents.azure.com', async () => {
     const m = await load('AzureCloud');
     // Assembled from fragments to keep the contiguous literal out of source.
@@ -171,6 +189,18 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.kustoClusterUri('adx-loom', 'usgovvirginia')).toBe(
       'https://adx-loom.usgovvirginia.kusto.usgovcloudapi.net',
     );
+  });
+
+  it('AAS helpers use asazure.usgovcloudapi.net + literal-* Gov scope', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasScope()).toBe('https://*.asazure.usgovcloudapi.net');
+    expect(m.aasModelUrl('usgovvirginia', 'my-server', 'AdventureWorks')).toBe(
+      'https://usgovvirginia.asazure.usgovcloudapi.net/servers/my-server/models/AdventureWorks',
+    );
+    expect(m.parseAasServer('asazure://usgovvirginia.asazure.usgovcloudapi.net/my-server')).toEqual({
+      region: 'usgovvirginia', serverName: 'my-server',
+    });
   });
 
   it('Cosmos DB helpers use documents.azure.us', async () => {

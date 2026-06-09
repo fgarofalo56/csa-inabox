@@ -31,7 +31,7 @@ import {
   AasError,
   type AasRole,
   type AasRoleTablePermission,
-} from '@/lib/azure/aas-client';
+} from '@/lib/azure/aas-roles';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
