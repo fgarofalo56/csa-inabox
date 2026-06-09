@@ -23,6 +23,8 @@ import {
   ThumbLike20Regular, ThumbDislike20Regular,
   History20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
+import { CopilotChips } from '@/lib/components/copilot-chips';
+import type { CopilotContext } from '@/lib/azure/copilot-personas';
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -59,12 +61,21 @@ const SEED: Msg[] = [
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
+const EVT_CONTEXT = 'csaloom:copilot-context';
 
 export function openCopilot() {
   window.dispatchEvent(new Event(EVT_OPEN));
 }
 export function toggleCopilot() {
   window.dispatchEvent(new Event(EVT_TOGGLE));
+}
+/**
+ * Editors dispatch their persona + live context (table names, attached
+ * lakehouses, defaultLang) so the global Copilot pane can surface
+ * context-aware suggested-prompt chips grounded in real symbols.
+ */
+export function setCopilotContext(ctx: CopilotContext) {
+  window.dispatchEvent(new CustomEvent<CopilotContext>(EVT_CONTEXT, { detail: ctx }));
 }
 
 const useStyles = makeStyles({
@@ -97,6 +108,7 @@ const useStyles = makeStyles({
     padding: '10px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     cursor: 'pointer', borderRadius: 6,
   },
+  chipsBar: { borderTop: `1px solid ${tokens.colorNeutralStroke3}` },
 });
 
 function parseSse(buffer: string): { events: Array<{ event: string; data: string }>; remaining: string } {
@@ -127,6 +139,7 @@ export function CopilotPane() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [copilotCtx, setCopilotCtx] = useState<CopilotContext>({ persona: 'default' });
   const sessionRef = useRef<string | null>(null);
   const msgIndexRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -134,15 +147,21 @@ export function CopilotPane() {
   useEffect(() => {
     const o = () => setOpen(true);
     const t = () => setOpen((x) => !x);
+    const onCtx = (e: Event) => {
+      const detail = (e as CustomEvent<CopilotContext>).detail;
+      if (detail) setCopilotCtx(detail);
+    };
     const k = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); t(); }
     };
     window.addEventListener(EVT_OPEN, o);
     window.addEventListener(EVT_TOGGLE, t);
+    window.addEventListener(EVT_CONTEXT, onCtx);
     window.addEventListener('keydown', k);
     return () => {
       window.removeEventListener(EVT_OPEN, o);
       window.removeEventListener(EVT_TOGGLE, t);
+      window.removeEventListener(EVT_CONTEXT, onCtx);
       window.removeEventListener('keydown', k);
     };
   }, []);
@@ -151,8 +170,8 @@ export function CopilotPane() {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs]);
 
-  async function send() {
-    const text = draft.trim();
+  async function sendText(rawText: string) {
+    const text = rawText.trim();
     if (!text || busy) return;
     setDraft('');
     setGateError(null);
@@ -306,6 +325,10 @@ export function CopilotPane() {
     }
   }
 
+  function send() {
+    void sendText(draft);
+  }
+
   if (!open) return null;
 
   return (
@@ -404,6 +427,11 @@ export function CopilotPane() {
             </div>
           ))}
         </div>
+        {msgs.length <= 1 && (
+          <div className={s.chipsBar}>
+            <CopilotChips ctx={copilotCtx} busy={busy} onSelect={(prompt) => void sendText(prompt)} />
+          </div>
+        )}
         <div className={s.composer}>
           <Input
             style={{ flex: 1 }}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Title2,
   Body1,
@@ -13,6 +13,8 @@ import {
   Spinner,
 } from '@fluentui/react-components';
 import { Play24Filled } from '@fluentui/react-icons';
+import { setCopilotContext } from '@/lib/components/copilot-pane';
+import { extractSqlTableNames } from '@/lib/azure/copilot-personas';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' },
@@ -57,6 +59,17 @@ export function WarehousePane() {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Feed the global Copilot pane warehouse-persona context so its suggested
+  // prompts reference the real tables in the live SQL draft (e.g. "Preview
+  // gold.sales") rather than generic placeholders.
+  useEffect(() => {
+    setCopilotContext({
+      persona: 'warehouse',
+      tableNames: extractSqlTableNames(sql),
+      currentSqlSnippet: sql.slice(0, 200),
+    });
+  }, [sql]);
 
   async function run() {
     setRunning(true);
