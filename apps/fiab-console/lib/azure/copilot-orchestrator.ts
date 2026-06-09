@@ -45,6 +45,8 @@ import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 import type { AuditReport } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
+import { buildActivatorTools } from '@/lib/copilot/activator-tools';
+import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -767,6 +769,15 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     },
   });
 
+  // -------- Activator Copilot (persona tools) --------
+  // Real Azure Monitor scheduled-query-alert authoring (author → suggest
+  // threshold from real historical data → create after confirm → list →
+  // history). Registered in the MAIN registry so cross-cutting tools (e.g.
+  // loom_self_audit) remain available when the activator persona is active.
+  // ACTIVATOR_PERSONA.allowedTools (copilot-personas.ts) gates which tools the
+  // model sees per turn. No Fabric dependency — see activator-tools.ts.
+  for (const t of buildActivatorTools()) r.register(t);
+
   return r;
 }
 
@@ -809,6 +820,13 @@ export interface OrchestrateOptions {
   registryOverride?: LoomToolRegistry;
   /** Per-surface system prompt (paired with registryOverride). */
   systemPromptOverride?: string;
+  /** Optional persona id (e.g. 'activator') — narrows the system prompt + the
+   *  exposed tool set to the matching CopilotPersonaDef (copilot-personas.ts).
+   *  When unset/unknown the full cross-item Copilot is used. */
+  persona?: string | null;
+  /** Per-surface context injected as an extra system message (e.g. the
+   *  activator id + existing rule names the user is working with). */
+  personaContext?: Record<string, unknown> | null;
 }
 
 interface ChatMessage {
@@ -946,12 +964,36 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       await buildMcpShim(reg, userOid);
     } catch { /* MCP shim optional — continue with built-in tools */ }
   }
-  const tools = reg.toAoaiTools();
 
+  // Persona switch: when a known persona id is supplied, override the system
+  // prompt and narrow the exposed tool set to the persona's allowedTools (+ any
+  // persona-local extraTools). Unknown/absent persona → full cross-item Copilot.
+  const persona: CopilotPersonaDef | null = resolvePersona(opts.persona);
+  if (persona?.extraTools?.length) for (const t of persona.extraTools) reg.register(t);
+  let tools: unknown[];
+  if (persona?.allowedTools?.length) {
+    const allow = new Set(persona.allowedTools);
+    if (persona.extraTools) for (const t of persona.extraTools) allow.add(t.name);
+    tools = reg.list()
+      .filter((t) => allow.has(t.name))
+      .map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  } else {
+    tools = reg.toAoaiTools();
+  }
+
+  const systemPrompt = persona?.systemPrompt || SYSTEM_PROMPT;
   const messages: ChatMessage[] = [
-    { role: 'system', content: opts.systemPromptOverride ?? SYSTEM_PROMPT },
-    { role: 'user', content: prompt },
+    { role: 'system', content: opts.systemPromptOverride ?? systemPrompt },
   ];
+  // Inject per-surface context (e.g. the activator id + existing rule names) as
+  // a second system message so the model grounds its draft in the live editor.
+  if (opts.personaContext && Object.keys(opts.personaContext).length) {
+    messages.push({
+      role: 'system',
+      content: `Current editor context (JSON): ${JSON.stringify(opts.personaContext).slice(0, 4000)}`,
+    });
+  }
+  messages.push({ role: 'user', content: prompt });
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
 

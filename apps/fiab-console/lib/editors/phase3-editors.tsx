@@ -68,6 +68,7 @@ import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-s
 import { ItemEditorChrome } from './item-editor-chrome';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
+import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
 import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
@@ -7762,12 +7763,33 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setRuleOpen(true);
   }, []);
 
+  // Activator Copilot — open the Copilot pane bound to the 'activator' persona,
+  // pre-loaded with this reflex's context (id, workspace, existing rule names)
+  // so the model can author a real Azure Monitor scheduled-query alert rule from
+  // plain English, suggest a threshold from real history, and create it.
+  const openActivatorCopilot = useCallback(() => {
+    const reflex = (activators || []).find((a) => a.id === selectedId);
+    openCopilotWithPersona({
+      persona: 'activator',
+      personaContext: {
+        activatorId: selectedId,
+        activatorName: reflex?.displayName,
+        workspaceId,
+        existingRuleNames: rules.map((r) => r.azureRuleName || r.name).filter(Boolean),
+      },
+      prefillPrompt: 'Alert me when failed logins exceed normal.',
+    });
+  }, [activators, selectedId, workspaceId, rules]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Rules', actions: [
         { label: 'New rule', onClick: canNewRule ? () => setRuleOpen(true) : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
         { label: reflexBusy === 'start' ? 'Starting…' : 'Start', onClick: canNewRule && !reflexBusy ? () => startStop('start') : undefined, disabled: !canNewRule || !!reflexBusy },
         { label: reflexBusy === 'stop' ? 'Stopping…' : 'Stop', onClick: canNewRule && !reflexBusy ? () => startStop('stop') : undefined, disabled: !canNewRule || !!reflexBusy },
+      ]},
+      { label: 'Copilot', actions: [
+        { label: 'Author rule with Copilot', onClick: canNewRule ? openActivatorCopilot : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : 'Describe an alert in plain English — Copilot drafts the KQL, suggests a threshold from real history, and creates the Azure Monitor rule after you approve.' },
       ]},
       { label: 'Actions', actions: [
         { label: 'Email', onClick: canNewRule ? () => openTemplate('Email') : undefined, disabled: !canNewRule },
@@ -7780,7 +7802,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Power Automate', onClick: canNewRule ? () => openTemplate('PowerAutomate') : undefined, disabled: !canNewRule },
       ]},
     ]},
-  ], [canNewRule, reflexBusy, startStop, openTemplate]);
+  ], [canNewRule, reflexBusy, startStop, openTemplate, openActivatorCopilot]);
 
   // On /new there is no reflex selected yet, so every rule/action button is
   // gated. Mirror the PR #438 NewItemGate pattern: show an ENABLED create
