@@ -163,6 +163,8 @@ jobs:
             ctx: ./apps/fiab-mirroring-engine
           - app: loom-direct-lake-shim
             ctx: ./apps/fiab-direct-lake-shim
+          - app: loom-copilot-maf
+            ctx: ./apps/copilot-maf
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
