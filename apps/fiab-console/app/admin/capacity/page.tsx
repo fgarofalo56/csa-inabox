@@ -13,6 +13,7 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
+import { ScaleManageDrawer } from '@/lib/panes/scale-manage';
 
 function portalUrl(id: string): string {
   // Azure portal deep-link to the resource Overview blade.
@@ -101,6 +102,7 @@ export default function CapacityPage() {
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
   const [provider, setProvider] = useState('');
+  const [selectedResource, setSelectedResource] = useState<AzureRes | null>(null);
 
   useEffect(() => {
     // Timeout so a slow/hung ARM enumeration can't leave the page spinning
@@ -260,10 +262,16 @@ export default function CapacityPage() {
               columns={columns}
               rows={visibleResources}
               getRowId={(r) => r.id}
+              onRowClick={(r) => setSelectedResource(r)}
               empty="No resources match the current filters."
               ariaLabel="Azure resources"
             />
           </Section>
+
+          <ScaleManageDrawer
+            resource={selectedResource}
+            onClose={() => setSelectedResource(null)}
+          />
 
           <MessageBar intent="info">
             <MessageBarTitle>Cost &amp; utilization deferred</MessageBarTitle>
