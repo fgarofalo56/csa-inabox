@@ -855,15 +855,22 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             temperature=0.3,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
             stream=True,
+            # Ask AOAI to emit a final usage-only chunk so we get the REAL
+            # prompt/completion split (not just total) for per-persona metering.
+            stream_options={"include_usage": True},
         )
 
         reply_parts: list[str] = []
         total_tokens = 0
+        prompt_tokens = 0
+        completion_tokens = 0
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 reply_parts.append(chunk.choices[0].delta.content)
             if hasattr(chunk, "usage") and chunk.usage:
-                total_tokens = chunk.usage.total_tokens
+                total_tokens = chunk.usage.total_tokens or total_tokens
+                prompt_tokens = chunk.usage.prompt_tokens or prompt_tokens
+                completion_tokens = chunk.usage.completion_tokens or completion_tokens
 
         reply = "".join(reply_parts)
 
@@ -914,6 +921,8 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "conversation_id": conversation_id,
                     "latency_ms": latency_ms,
                     "tokens_used": tokens_used,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
                     "grounding_count": len(grounding_docs),
                     "citation_count": len(cited_sources),
                     "ms_learn_used": ms_learn_used,
@@ -922,6 +931,30 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "uncovered": is_uncovered,
                     "page_url": str(page_context.get("url", ""))[:500],
                     "page_title": str(page_context.get("title", ""))[:200],
+                },
+            )
+
+            # Per-persona usage receipt for the Admin → Copilot usage panel.
+            # Same `copilot.usage` event name + property schema the Console
+            # orchestrator emits, so a single KQL query rolls both personas up.
+            # Tokens are the REAL prompt/completion split from the AOAI
+            # usage-only chunk (stream_options.include_usage); when the model
+            # didn't return a usage chunk they are 0 and the panel shows the
+            # call under total-only. persona="help-chat" distinguishes the
+            # help widget from the cross-item orchestrator.
+            telemetry.track_event(
+                "copilot.usage",
+                {
+                    "persona": "help-chat",
+                    "model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens or tokens_used,
+                    "aoai_calls": 1,
+                    "tool_calls": 0,
+                    "user_oid_hash": ip_hashed,
+                    "session_id": session_id,
+                    "boundary": os.environ.get("CSA_LOOM_BOUNDARY", "Commercial"),
                 },
             )
 

@@ -1169,8 +1169,94 @@ export async function persistStep(sessionId: string, userOid: string, step: Orch
   }
 }
 
+// ── App Insights usage telemetry (write path) ────────────────────────────────
+// Emits one `copilot.usage` custom event per completed orchestration carrying
+// the REAL prompt/completion token counts from the AOAI `usage` field. Parses
+// APPLICATIONINSIGHTS_CONNECTION_STRING directly and POSTs the App Insights
+// track envelope to its ingestion endpoint — no SDK dependency for one call.
+//
+// The connection string already contains the correct sovereign ingestion host
+// (Bicep provisions the right regional App Insights per boundary), so this
+// write path is cloud-agnostic. When the connection string is unset (App
+// Insights not configured) the helper no-ops — honest gate, never throws.
+//
+// Connection-string format:
+//   InstrumentationKey=<guid>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/;...
+function _parseAiConnStr(s: string): { iKey: string; endpoint: string } | null {
+  const kv: Record<string, string> = {};
+  for (const seg of s.split(';')) {
+    const eq = seg.indexOf('=');
+    if (eq > 0) kv[seg.slice(0, eq).trim().toLowerCase()] = seg.slice(eq + 1).trim();
+  }
+  const iKey = kv['instrumentationkey'];
+  const endpoint = (kv['ingestionendpoint'] || '').replace(/\/+$/, '');
+  return iKey && endpoint ? { iKey, endpoint } : null;
+}
+
+/**
+ * Fire-and-forget App Insights receipt for a completed Copilot turn. `persona`
+ * identifies the Copilot surface (e.g. `cross-item`, `notebook`) so the admin
+ * panel can break token consumption out per persona. Never awaited on the hot
+ * path; never throws.
+ */
+export async function emitCopilotUsage(
+  usage: OrchestratorUsage,
+  model: string,
+  sessionId: string,
+  userOid: string,
+  persona: string,
+): Promise<void> {
+  const connStr = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+  if (!connStr) return; // honest gate — App Insights unconfigured → no-op
+  const ai = _parseAiConnStr(connStr);
+  if (!ai) return;
+  // Don't emit empty receipts (e.g. AOAI resolution failed before any call).
+  if (usage.totalTokens <= 0 && usage.aoaiCalls <= 0) return;
+  try {
+    const { createHash } = await import('crypto');
+    const userHash = createHash('sha256').update(String(userOid)).digest('hex').slice(0, 16);
+    await fetch(`${ai.endpoint}/v2/track`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Microsoft.ApplicationInsights.Event',
+        time: new Date().toISOString(),
+        iKey: ai.iKey,
+        tags: {
+          'ai.cloud.role': 'loom-console',
+          'ai.cloud.roleInstance': 'copilot-orchestrator',
+        },
+        data: {
+          baseType: 'EventData',
+          baseData: {
+            ver: 2,
+            name: 'copilot.usage',
+            properties: {
+              persona,
+              model,
+              prompt_tokens: String(usage.promptTokens),
+              completion_tokens: String(usage.completionTokens),
+              total_tokens: String(usage.totalTokens),
+              aoai_calls: String(usage.aoaiCalls),
+              tool_calls: String(usage.toolCalls),
+              user_oid_hash: userHash,
+              session_id: sessionId,
+              boundary: process.env.CSA_LOOM_BOUNDARY || 'Commercial',
+            },
+          },
+        },
+      }),
+    });
+  } catch {
+    // Telemetry must never break the orchestrator stream.
+  }
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
+  // Copilot surface tag for per-persona usage metering (string, defaults to
+  // `cross-item`). Distinct from the resolved CopilotPersonaDef below.
+  const personaTag = opts.persona || 'cross-item';
   const maxIter = opts.maxIterations ?? 10;
   // Identity passed to every tool handler so build-assist tools create/configure
   // items OWNED by this user (not the broken tenantId:'default' shells).
@@ -1276,6 +1362,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
+      // Fire-and-forget App Insights receipt — real token counts, never awaited.
+      emitCopilotUsage(usage, target.deployment, sessionId, userOid, personaTag).catch(() => {});
       return;
     }
     usage.toolCalls += toolCalls.length;
@@ -1384,6 +1472,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   };
   await persistStep(sessionId, userOid, maxedStep);
   yield maxedStep;
+  // Fire-and-forget App Insights receipt — real token counts, never awaited.
+  emitCopilotUsage(usage, target.deployment, sessionId, userOid, personaTag).catch(() => {});
 }
 
 // ---------- Session helpers ----------

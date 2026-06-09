@@ -44,6 +44,7 @@ import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
 
 // ---- types mirrored from monitor-client ------------------------------------
 
@@ -1363,6 +1364,10 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by region.' : 'No cost recorded.'}
           ariaLabel="Cost by region" />
       </Section>
+
+      {/* Copilot token consumption rolls into the cost context — real App
+          Insights metering, honest-gated when unconfigured. */}
+      <CopilotUsageInline />
     </div>
   );
 }
