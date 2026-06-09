@@ -9117,7 +9117,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'refresh' | 'config' | 'direct-lake' | 'direct-lake-query' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'config' | 'direct-lake' | 'direct-lake-query' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -9173,6 +9173,93 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
 
+  // matching queries to the small agg table and falls through to the DirectQuery
+  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
+  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
+  const AGG_SUMMARIZATIONS = ['GroupBy', 'Sum', 'Count', 'Min', 'Max'] as const;
+  const AGG_DATATYPES = ['int64', 'double', 'decimal', 'dateTime', 'string', 'boolean'] as const;
+  type AggSummarization = typeof AGG_SUMMARIZATIONS[number];
+  type AltMap = { aggColumn: string; dataType: typeof AGG_DATATYPES[number]; summarization: AggSummarization; detailTable: string; detailColumn: string };
+  const [aggTableName, setAggTableName] = useState('');
+  const [aggPartitionExpr, setAggPartitionExpr] = useState('');
+  const [aggAltMaps, setAggAltMaps] = useState<AltMap[]>([]);
+  const [aggProbeQuery, setAggProbeQuery] = useState('');
+  const [aggBusy, setAggBusy] = useState(false);
+  const [aggMsg, setAggMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [aggProbeResult, setAggProbeResult] = useState<Array<Record<string, unknown>> | null>(null);
+
+  const addAltMap = useCallback(() => {
+    setAggAltMaps((prev) => [...prev, { aggColumn: '', dataType: 'double', summarization: 'Sum', detailTable: detail?.tables?.[0]?.name || '', detailColumn: '' }]);
+  }, [detail?.tables]);
+  const updateAltMap = useCallback((i: number, patch: Partial<AltMap>) => {
+    setAggAltMaps((prev) => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m));
+  }, []);
+  const removeAltMap = useCallback((i: number) => {
+    setAggAltMaps((prev) => prev.filter((_, idx) => idx !== i));
+  }, []);
+
+  // Seed a starter set of mappings from the first table's columns: numeric
+  // columns → Sum, the first column → GroupBy grain. A UI convenience only —
+  // every value stays editable; nothing is applied until Create is clicked.
+  const seedAltMapsFromTable = useCallback(() => {
+    const t = detail?.tables?.[0];
+    if (!t) return;
+    const cols = t.columns || [];
+    const numeric = (dt?: string) => /int|double|decimal|number|currency/i.test(dt || '');
+    const seeded: AltMap[] = [];
+    cols.forEach((c, idx) => {
+      const isNum = numeric(c.dataType);
+      seeded.push({
+        aggColumn: c.name,
+        dataType: isNum ? 'double' : 'string',
+        summarization: (idx === 0 || !isNum) ? 'GroupBy' : 'Sum',
+        detailTable: t.name,
+        detailColumn: c.name,
+      });
+    });
+    setAggAltMaps(seeded);
+    if (!aggTableName) setAggTableName(`${t.name}_Agg`);
+  }, [detail?.tables, aggTableName]);
+
+  const createAggregation = useCallback(async () => {
+    if (!workspaceId || !datasetId || !aggTableName.trim() || aggAltMaps.length === 0) return;
+    setAggBusy(true); setAggMsg(null); setAggProbeResult(null);
+    try {
+      const r = await fetch(
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'aggregation',
+            aggTableName: aggTableName.trim(),
+            partitionExpression: aggPartitionExpr.trim(),
+            altMaps: aggAltMaps.map((m) => ({
+              aggColumn: m.aggColumn.trim(), dataType: m.dataType, summarization: m.summarization,
+              detailTable: m.detailTable.trim(), detailColumn: m.detailColumn.trim() || undefined,
+            })),
+            probeQuery: aggProbeQuery.trim() || undefined,
+          }),
+        },
+      );
+      const j = await r.json();
+      if (j.xmlaUnavailable) {
+        setAggMsg({ ok: false, text: `XMLA endpoint not configured. ${j.detail || 'Set LOOM_POWERBI_XMLA_ENDPOINT to enable aggregation authoring.'}` });
+        return;
+      }
+      if (!j.ok) { setAggMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      const probeNote = j.probeError ? ` Probe query failed: ${j.probeError}` : (j.probeResult ? ' Probe query returned data — the engine answers the agg-grain query.' : '');
+      setAggMsg({ ok: true, text: `Aggregation table "${aggTableName.trim()}" registered on model "${j.catalog}".${probeNote}` });
+      if (j.probeResult?.rows) setAggProbeResult(j.probeResult.rows);
+    } catch (e: any) { setAggMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setAggBusy(false); }
+  }, [workspaceId, datasetId, aggTableName, aggPartitionExpr, aggAltMaps, aggProbeQuery]);
+
+  // --- Automatic aggregations builder (XMLA TMSL alternateOf) --------------
+  // Defines a hidden, Import-mode aggregation table whose columns each carry an
+  // alternateOf (BaseTable/BaseColumn + Summarization) so the AS engine routes
+  // matching queries to the small agg table and falls through to the DirectQuery
+  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
+  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
   // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
   // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
   // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
@@ -9672,6 +9759,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
+      { label: 'Aggregations', actions: [
+        { label: 'Manage aggregations', onClick: datasetId ? () => setTab('aggregations') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Define an automatic-aggregation table (alternateOf) so the engine routes matching queries to a small pre-aggregated cache' },
+      ]},
       { label: 'Advanced', actions: [
         { label: 'Calc groups', onClick: datasetId ? () => setTab('calcGroups') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Author calculation groups (SELECTEDMEASURE patterns) — switch a visual’s aggregation via a slicer' },
         { label: 'Field parameters', onClick: datasetId ? () => setTab('fieldParams') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Build field-parameter calculated tables (NAMEOF) — swap a visual’s measure via a slicer' },
@@ -9861,6 +9951,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
+                  <Tab value="aggregations">Aggregations ({aggAltMaps.length})</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
                   <Tab value="direct-lake">Direct Lake (shim)</Tab>
@@ -10136,6 +10227,123 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (
                       <Caption1>No DAX measures returned (or the dataset hasn't exposed its model definition).</Caption1>
                     )}
+                  </>
+                )}
+                {tab === 'aggregations' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Automatic aggregations</MessageBarTitle>
+                        Define a hidden, Import-mode <strong>aggregation table</strong> whose columns each map (via
+                        <code> alternateOf</code>) to a column in a DirectQuery <strong>detail table</strong> with a
+                        summarization (GroupBy for grain keys; Sum / Count / Min / Max for measures). The Analysis Services
+                        engine then automatically rewrites queries that match the agg grain to this small table and falls
+                        through to the detail table otherwise. Requires the model at compatibility level 1460+ and an XMLA
+                        endpoint (<code>LOOM_POWERBI_XMLA_ENDPOINT</code> — Azure Analysis Services by default; a Power BI
+                        Premium / Fabric capacity XMLA endpoint is opt-in by URL). Verify a query-plan hit with SQL Profiler /
+                        SSMS XEvents → the <strong>Aggregate Table Rewrite Query</strong> event reports
+                        <code> matchingResult=matchFound</code>.
+                      </MessageBarBody>
+                    </MessageBar>
+                    {detail?.dataset?.targetStorageMode === 'Push' && (
+                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Push datasets do not support XMLA aggregations</MessageBarTitle>
+                          This model is a push dataset; aggregation tables are written over the XMLA endpoint, which push
+                          datasets don&rsquo;t expose. Build the model in Import / DirectQuery mode to author aggregations.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12, maxWidth: 920 }}>
+                      <Field label="Aggregation table name" required style={{ maxWidth: 420 }}>
+                        <Input value={aggTableName} onChange={(_, d) => setAggTableName(d.value)} placeholder="Sales_Agg" />
+                      </Field>
+                      <Field label="Partition source (Power Query / M expression)" hint='The query that produces the pre-aggregated rows, e.g. Value.NativeQuery over a "SELECT CustomerKey, SUM(SalesAmount) AS SalesAmount FROM FactSales GROUP BY CustomerKey". Import-mode partition.'>
+                        <MonacoTextarea value={aggPartitionExpr} onChange={setAggPartitionExpr} language="plaintext" height={120} ariaLabel="Aggregation partition M expression" />
+                      </Field>
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Subtitle2>Column mappings ({aggAltMaps.length})</Subtitle2>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <Button size="small" appearance="outline" onClick={seedAltMapsFromTable} disabled={!detail?.tables?.length} title="seed starter mappings from the first table's columns (editable)">Seed from first table</Button>
+                          <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addAltMap}>Add mapping</Button>
+                        </div>
+                      </div>
+                      {aggAltMaps.length === 0 ? (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No mappings yet. Add a GroupBy mapping for each grain key and a Sum/Count/Min/Max mapping for each measure.</Caption1>
+                      ) : (
+                        <div className={s.tableWrap}>
+                          <Table aria-label="Aggregation column mappings" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Agg column</TableHeaderCell>
+                              <TableHeaderCell>Data type</TableHeaderCell>
+                              <TableHeaderCell>Summarization</TableHeaderCell>
+                              <TableHeaderCell>Detail table</TableHeaderCell>
+                              <TableHeaderCell>Detail column</TableHeaderCell>
+                              <TableHeaderCell />
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {aggAltMaps.map((m, i) => (
+                                <TableRow key={i}>
+                                  <TableCell><Input size="small" value={m.aggColumn} onChange={(_, d) => updateAltMap(i, { aggColumn: d.value })} placeholder="SalesAmount" /></TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.dataType} onChange={(_, d) => updateAltMap(i, { dataType: d.value as AltMap['dataType'] })}>
+                                      {AGG_DATATYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.summarization} onChange={(_, d) => updateAltMap(i, { summarization: d.value as AggSummarization })}>
+                                      {AGG_SUMMARIZATIONS.map((su) => <option key={su} value={su}>{su}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.detailTable} onChange={(_, d) => updateAltMap(i, { detailTable: d.value })}>
+                                      <option value="">— select —</option>
+                                      {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Input size="small" value={m.detailColumn} onChange={(_, d) => updateAltMap(i, { detailColumn: d.value })} placeholder={m.summarization === 'Count' ? '(rows — optional)' : 'SalesAmount'} />
+                                  </TableCell>
+                                  <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeAltMap(i)} title="remove mapping" /></TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      <Field label="Probe DAX (optional)" hint={'Runs after the agg table is applied to prove the engine answers a query at the agg grain, e.g. EVALUATE SUMMARIZECOLUMNS(\'FactSales\'[CustomerKey], "Total", SUM(\'FactSales\'[SalesAmount])). Confirm the actual query-plan hit in SQL Profiler’s Aggregate Table Rewrite Query event.'}>
+                        <MonacoTextarea value={aggProbeQuery} onChange={setAggProbeQuery} language="sql" height={90} ariaLabel="Probe DAX query" />
+                      </Field>
+
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Button appearance="primary" icon={<Save20Regular />}
+                          onClick={createAggregation}
+                          disabled={aggBusy || !datasetId || !aggTableName.trim() || !aggPartitionExpr.trim() || aggAltMaps.length === 0 || detail?.dataset?.targetStorageMode === 'Push'}>
+                          {aggBusy ? 'Applying…' : 'Create aggregation table'}
+                        </Button>
+                        {!datasetId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Select a model first.</Caption1>}
+                      </div>
+                      {aggMsg && <MessageBar intent={aggMsg.ok ? 'success' : (aggMsg.text.includes('XMLA endpoint not configured') ? 'warning' : 'error')}><MessageBarBody>{aggMsg.text}</MessageBarBody></MessageBar>}
+                      {aggProbeResult && aggProbeResult.length > 0 && (
+                        <div className={s.tableWrap}>
+                          <Subtitle2 style={{ marginBottom: 4 }}>Probe result ({aggProbeResult.length} row{aggProbeResult.length === 1 ? '' : 's'})</Subtitle2>
+                          <Table aria-label="Probe result" size="small">
+                            <TableHeader><TableRow>
+                              {Object.keys(aggProbeResult[0]).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {aggProbeResult.slice(0, 20).map((row, ri) => (
+                                <TableRow key={ri}>
+                                  {Object.keys(aggProbeResult[0]).map((k) => <TableCell key={k} className={s.cell}>{String(row[k] ?? '')}</TableCell>)}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
                 {tab === 'refresh' && (

@@ -606,6 +606,9 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'aas', 'analysis-services', 'fabric', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations surface renders but shows an honest MessageBar gate (no Fabric dependency). The Console UAMI must be a Member/Contributor of the workspace (or an AAS administrator); no extra Azure role assignment is needed — XMLA reuses the same UAMI bearer token as the Power BI REST calls.')
+param loomPowerbiXmlaEndpoint string = ''
+
 @description('Azure Analysis Services server URI (asazure://{region}.asazure.windows.net/{server}) for the opt-in aas semantic backend. Empty = the AAS path is honest-gated; calc groups + field parameters still work on the loom-native default. Requires loomSemanticBackend=aas.')
 param loomAasServer string = ''
 
@@ -1562,6 +1565,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           loomPowerBiAdminLabels ? [
             { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
+          ] : [],
+          // XMLA endpoint for semantic-model authoring that needs the XMLA write
+          // surface (Automatic aggregations). Azure-native default = Azure
+          // Analysis Services; Premium/Fabric XMLA is opt-in by URL. Empty →
+          // the Aggregations tab renders but honest-gates (no Fabric dependency).
+          !empty(loomPowerbiXmlaEndpoint) ? [
+            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
           // Identity Picker (Entra user/group/SPN search + transitive nested
           // groups) — gated on the Console UAMI's Graph User.Read.All +
