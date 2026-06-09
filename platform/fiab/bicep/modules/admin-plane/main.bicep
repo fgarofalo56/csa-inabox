@@ -586,10 +586,7 @@ param aasSku string = 'D1'
 @allowed(['', 'powerbi'])
 param loomBiBackend string = ''
 
-@description('Azure Analysis Services server XMLA URI — platform-level default for the Loom-native report renderer. Format: asazure://{region}.asazure.windows.net/{serverName} (gov: asazure.usgovcloudapi.net). Leave empty to require a per-item state.aasServer binding. The Console UAMI must be a server admin on this AAS instance.')
-param loomAasServer string = ''
-
-@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer. Leave empty to require a per-item state.aasDatabase binding.')
+@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer (declared above). Leave empty to require a per-item state.aasDatabase binding.')
 param loomAasDatabase string = ''
 
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')

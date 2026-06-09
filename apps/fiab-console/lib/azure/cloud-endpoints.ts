@@ -591,33 +591,16 @@ export function getPbiGovHost(): string {
 }
 
 /**
- * Azure Analysis Services data-plane hostname suffix (no leading dot, no
- * region prefix).
- *
- *   Commercial / GCC  : asazure.windows.net
- *   GCC-High / IL5/DoD: asazure.usgovcloudapi.net
- *
- * AAS is the opt-in Azure-native backend that can host a composite (mixed
- * Import / DirectQuery / Dual) tabular model. The Loom-native tabular layer
- * remains the default — no AAS server is required for the semantic-model item
- * to function (see no-fabric-dependency.md).
- */
-export function aasSuffix(): string {
-  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
-}
-
-/** AAD `.default` scope for Azure Analysis Services data-plane tokens. */
-export function aasScope(): string {
-  return `https://${aasSuffix()}/.default`;
-}
-
-/**
  * Build the AAS HTTP REST base URL for a region + server + database. The AAS
  * REST surface only exposes async *refresh* operations; full TMSL command
  * execution (createOrReplace / alter) requires an XMLA TCP connection (TOM/AMO)
  * which is not issuable from Node.js — that is why the composite-model apply
  * path uses the Fabric updateDefinition REST API (which wraps XMLA) and falls
  * back to returning the TMSL as an offline `Invoke-ASCmd` receipt.
+ *
+ * `aasSuffix()` / `aasScope()` are the canonical AAS data-plane helpers — they
+ * live in the "Azure Analysis Services (AAS) data plane" section below (the
+ * scope MUST carry the literal `*` subdomain per the AAS REST auth spec).
  */
 export function aasRestBase(region: string, serverName: string, databaseName: string): string {
   return `https://${region}.${aasSuffix()}/servers/${serverName}/models/${encodeURIComponent(databaseName)}`;

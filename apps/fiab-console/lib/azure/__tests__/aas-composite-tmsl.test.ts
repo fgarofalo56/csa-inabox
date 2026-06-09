@@ -105,7 +105,7 @@ describe('AAS data-plane cloud matrix', () => {
   it('Commercial → asazure.windows.net + Commercial scope', async () => {
     const m = await loadEndpoints('AzureCloud');
     expect(m.aasSuffix()).toBe('asazure.windows.net');
-    expect(m.aasScope()).toBe('https://asazure.windows.net/.default');
+    expect(m.aasScope()).toBe('https://*.asazure.windows.net');
     expect(m.aasRestBase('westus2', 'aasloom', 'LoomComposite')).toBe(
       'https://westus2.asazure.windows.net/servers/aasloom/models/LoomComposite',
     );
@@ -114,7 +114,7 @@ describe('AAS data-plane cloud matrix', () => {
   it('GCC-High (AzureUSGovernment) → asazure.usgovcloudapi.net + Gov scope', async () => {
     const m = await loadEndpoints('AzureUSGovernment');
     expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
-    expect(m.aasScope()).toBe('https://asazure.usgovcloudapi.net/.default');
+    expect(m.aasScope()).toBe('https://*.asazure.usgovcloudapi.net');
   });
 
   it('DoD (AzureDOD) → Gov AAS suffix', async () => {
