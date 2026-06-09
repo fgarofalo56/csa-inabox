@@ -111,7 +111,7 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   }
 }
 
-var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports']
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs

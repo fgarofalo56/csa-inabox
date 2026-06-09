@@ -1191,6 +1191,22 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
   }
 }
 
+// F22 + F23 — Console UAMI data-plane grants on the org-visuals Blob container:
+// Storage Blob Data Contributor (container scope: upload/read/delete bundles +
+// embed manifests) + Storage Blob Delegator (account scope: getUserDelegationKey
+// for the embed-code SAS). Scoped to the DLZ RG (the lake account usually lives
+// outside the admin RG). Skipped (honest gate in the panes) when loomStorageAccount
+// is unset. No Fabric/Power BI dependency.
+module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount)) {
+  name: 'org-visuals-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // Workspace-monitoring ADX database + Azure Monitor diagnostic-export pipeline.
 // Read-only telemetry store (Fabric workspace-monitoring parity, no Fabric).
 // Console UAMI gets Admin (provisioner seeds tables); admin group gets Viewer.
@@ -1806,6 +1822,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // container is created in landing-zone/storage.bicep; the Console UAMI
             // already holds Storage Blob Data Contributor on the account.
             { name: 'LOOM_CSV_IMPORTS_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/csv-imports' }
+            // LOOM_ORG_VISUALS_URL backs Embed codes (F22) + Organizational
+            // visuals (F23): the Console BFF stores custom-visual bundles +
+            // embed-manifest blobs in the org-visuals Blob container and mints
+            // read-only user-delegation SAS embed URLs over it. Uses the .blob
+            // endpoint (block-blob + SAS), unlike the .dfs lake URLs above. The
+            // container is created in landing-zone/storage.bicep; the Console
+            // UAMI is granted Storage Blob Data Contributor (container) + Storage
+            // Blob Delegator (account) by org-visuals-rbac.bicep. Only emitted
+            // when an ADLS account is configured; otherwise the panes show their
+            // honest gate. No Fabric/Power BI dependency.
+            { name: 'LOOM_ORG_VISUALS_URL', value: 'https://${loomStorageAccount}.blob.${environment().suffixes.storage}/org-visuals' }
             // LOOM_RECYCLE_RETENTION_DAYS — OneLake Recycle bin restore window.
             // Mirrors the storage account's blob soft-delete deleteRetentionPolicy
             // (landing-zone/storage.bicep recycleRetentionDays) so the recycle-bin
