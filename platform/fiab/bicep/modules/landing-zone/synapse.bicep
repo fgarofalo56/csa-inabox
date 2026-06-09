@@ -323,6 +323,9 @@ param grantSynapseStorageRole bool = true
 @description('Shared ADX cluster system-assigned MI principal id. When set, granted Storage Blob Data Reader on the lakehouse storage account so the Eventhouse Delta-endpoint (.create external table kind=delta) can read this lakehouse over managed identity. Empty = skip.')
 param adxClusterPrincipalId string = ''
 
+@description('OPTIONAL — separate ADLS Gen2 account hosting the mirror Bronze container (split-DLZ topology). When set, the Synapse workspace MSI is granted Storage Blob Data Reader on it so the mirror-paired Serverless SQL analytics endpoint can OPENROWSET mirrored CSV. Empty = skip (mirror Bronze == default SA is already Contributor-granted).')
+param mirrorBronzeStorageAccountName string = ''
+
 @description('Grant the Console UAMI Storage Blob Data Contributor on the lakehouse SA so the built-in mirrored-database engine can write Bronze snapshot CSV (no-Fabric default). Defaults true.')
 param consolePrincipalNeedsContributor bool = true
 
@@ -341,6 +344,10 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // F7 — when OneLake Security is enabled, the Console UAMI also gets Storage
     // Blob Data Owner so the Security tab can set ACLs on behalf of role members.
     consolePrincipalNeedsOwner: loomOnelakeSecurityEnabled
+    // Mirror-paired SQL analytics endpoint — only needed in the split-DLZ
+    // topology (separate mirror Bronze account); empty = skip (common topology
+    // is already covered by the default-SA Contributor grant above).
+    mirrorBronzeStorageAccountName: mirrorBronzeStorageAccountName
     // Mirrored-database engine writes Bronze snapshot CSV as the Console UAMI
     // (no-Fabric default backend) → needs Storage Blob Data Contributor.
     consolePrincipalNeedsContributor: skipRoleGrants ? false : consolePrincipalNeedsContributor
