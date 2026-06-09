@@ -591,6 +591,57 @@ export function getPbiGovHost(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Power BI / Azure Analysis Services XMLA (AAS) — Direct-Lake-shim refresh
+// ---------------------------------------------------------------------------
+//
+// The Direct-Lake-shim drives Power BI Premium *enhanced refresh* over the
+// Analysis Services (XMLA) data plane. The AAD audience for that token is the
+// `analysis.*/powerbi/api` resource — DISTINCT from the ARM/Graph/Storage
+// audiences — and it splits four ways across the sovereign boundaries.
+// Grounded in Microsoft Learn (verified, not from memory):
+//   - Commercial : https://analysis.windows.net/powerbi/api/.default
+//   - GCC        : https://analysis.usgovcloudapi.net/powerbi/api/.default
+//   - GCC High   : https://high.analysis.usgovcloudapi.net/powerbi/api/.default
+//   - DoD        : https://mil.analysis.usgovcloudapi.net/powerbi/api/.default
+// (power-bi/developer/embedded/embed-sample-for-customers-national-clouds —
+//  the GCC/DoDCON/DoD `scopeBase` values.) A client that hard-codes the
+// Commercial scope silently fails XMLA auth in every Gov boundary.
+
+/**
+ * AAD `.default` scope for the Power BI / Azure Analysis Services XMLA endpoint
+ * token used by the Direct-Lake-shim enhanced-refresh client (`aas-client.ts`).
+ * 4-way sovereign split (Commercial / GCC / GCC-High / DoD). `LOOM_AAS_SCOPE`
+ * overrides outright for clouds we don't enumerate (e.g. China:
+ * `https://analysis.chinacloudapi.cn/powerbi/api/.default`).
+ */
+export function aasScope(): string {
+  const explicit = process.env.LOOM_AAS_SCOPE;
+  if (explicit) return explicit;
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC-High':
+      return 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC':
+      return 'https://analysis.usgovcloudapi.net/powerbi/api/.default';
+    default:
+      return 'https://analysis.windows.net/powerbi/api/.default';
+  }
+}
+
+/**
+ * Power BI XMLA endpoint connection URL for a workspace id —
+ * `powerbi://{pbiHost}/v1.0/myorg/{workspaceId}`. This is the value persisted
+ * as `SemanticModelConfig.XmlaEndpoint` and handed to the C# shim's
+ * `TomRefreshClient.ConnectServer`. The host is the sovereign-correct Power BI
+ * REST host from `getPbiGovHost()` (no Fabric host on the default path).
+ */
+export function xmlaEndpointFromWorkspace(workspaceId: string): string {
+  const pbiHost = getPbiGovHost().replace(/^https?:\/\//, '');
+  return `powerbi://${pbiHost}/v1.0/myorg/${workspaceId}`;
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 
