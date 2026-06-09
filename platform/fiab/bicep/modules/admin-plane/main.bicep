@@ -391,6 +391,9 @@ param loomAmlRegion string = ''
 @description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true.')
 param loomAzureOpenAiEndpoint string = ''
 
+@description('Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION) used by the Copilot / data-agent orchestrators. Default 2024-10-21; advance to 2025-01-01-preview or later for o-series reasoning models. Cloud-invariant — the data-plane HOST is derived per-boundary from environment() (openai.azure.us vs openai.azure.com).')
+param loomAoaiApiVersion string = '2024-10-21'
+
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
 //
@@ -1587,6 +1590,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
             { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // AOAI Chat Completions API version. resolveAoaiTarget() reads
+            // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
+            // here lets operators advance the version (e.g. for o-series reasoning
+            // models) without a code change. Cloud-invariant — only the data-plane
+            // host differs per boundary, derived above from environment().
+            { name: 'LOOM_AOAI_API_VERSION',       value: loomAoaiApiVersion }
             // AOAI token audience by cloud (public: cognitiveservices.azure.com,
             // Gov: cognitiveservices.azure.us). Derived from the ARM environment()
             // built-in so no new parameter is needed. Read by the NL2KQL + Notebook

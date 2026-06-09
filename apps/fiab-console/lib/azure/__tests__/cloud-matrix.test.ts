@@ -244,3 +244,58 @@ describe('cloud-matrix — warehouse alerts backend dispatch', () => {
     expect(m.detectLoomCloud()).toBe('DoD');
   });
 });
+
+/**
+ * AOAI data-plane endpoint + token audience across all four sovereign
+ * boundaries. The Copilot / data-agent orchestrators resolve the Azure OpenAI
+ * host from getOpenAiSuffix() and mint the bearer with cogScope(); a drift back
+ * to a Commercial-only literal would 401 every Gov AOAI call. This is the
+ * regression gate the "verify + harden AOAI across 4 clouds" task requires.
+ *
+ * Cloud mapping:
+ *   Commercial (AzureCloud)            → openai.azure.com  + cognitiveservices.azure.com
+ *   GCC        (AzureCloud, LOOM=GCC)  → openai.azure.com  + cognitiveservices.azure.com
+ *   GCC-High   (AzureUSGovernment)     → openai.azure.us   + cognitiveservices.azure.us
+ *   IL5        (LOOM_CLOUD=il5→GCC-High) → openai.azure.us + cognitiveservices.azure.us
+ */
+describe('cloud-matrix — AOAI data-plane endpoint + token audience (4 clouds)', () => {
+  it('Commercial → openai.azure.com + cognitiveservices.azure.com scope', async () => {
+    const m = await load('AzureCloud');
+    delete process.env.LOOM_CLOUD;
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.com');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.com/.default');
+    expect(m.isGovCloud()).toBe(false);
+    expect(m.detectLoomCloud()).toBe('Commercial');
+  });
+
+  it('GCC (runs on Commercial Azure AOAI endpoints) → openai.azure.com', async () => {
+    // GCC tenants use the same AzureCloud AOAI data-plane as Commercial; only
+    // detectLoomCloud() distinguishes them for badge purposes.
+    const m = await load('AzureCloud');
+    process.env.LOOM_CLOUD = 'GCC';
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.com');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.com/.default');
+    expect(m.isGovCloud()).toBe(false);
+    expect(m.detectLoomCloud()).toBe('GCC');
+  });
+
+  it('GCC-High (AzureUSGovernment) → openai.azure.us + cognitiveservices.azure.us scope', async () => {
+    const m = await load('AzureUSGovernment');
+    delete process.env.LOOM_CLOUD;
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.us');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.us/.default');
+    expect(m.isGovCloud()).toBe(true);
+    expect(m.detectLoomCloud()).toBe('GCC-High');
+  });
+
+  it('IL5 (LOOM_CLOUD=il5 aliases to GCC-High) → openai.azure.us', async () => {
+    // In bicep IL5 deployments arrive as LOOM_CLOUD='GCC-High'; detectLoomCloud()
+    // also accepts the raw 'il5' alias and resolves it to GCC-High.
+    const m = await load('AzureUSGovernment');
+    process.env.LOOM_CLOUD = 'il5';
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.us');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.us/.default');
+    expect(m.isGovCloud()).toBe(true);
+    expect(m.detectLoomCloud()).toBe('GCC-High');
+  });
+});
