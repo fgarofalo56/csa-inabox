@@ -1,29 +1,42 @@
 /**
- * Azure Analysis Services (AAS) async-refresh REST client.
+ * Azure Analysis Services (AAS) client — two complementary backends:
  *
- * This is the **semantic-layer refresh** backend for the Loom Power Query (M)
- * ingest path: after an authored M mashup materialises a Delta table in ADLS
- * Gen2 (via ADF WranglingDataFlow → MappingDataFlow), the AAS tabular model —
- * whose partition source already points at that Delta path — is refreshed so
- * the table becomes queryable. The refresh is invoked through the AAS
- * asynchronous-refresh REST API (no long-running HTTP connection):
+ * 1. **Async-refresh** (semantic-layer refresh for the Power Query (M) ingest
+ *    path): after an authored M mashup materialises a Delta table in ADLS Gen2
+ *    (via ADF WranglingDataFlow → MappingDataFlow), the AAS tabular model —
+ *    whose partition source already points at that Delta path — is refreshed so
+ *    the table becomes queryable. Invoked through the AAS asynchronous-refresh
+ *    REST API (no long-running HTTP connection):
  *
- *   POST https://<region>.asazure.windows.net/servers/<server>/models/<model>/refreshes
- *   GET  https://<region>.asazure.windows.net/servers/<server>/models/<model>/refreshes/<id>
+ *      POST https://<region>.asazure.windows.net/servers/<server>/models/<model>/refreshes
+ *      GET  https://<region>.asazure.windows.net/servers/<server>/models/<model>/refreshes/<id>
+ *
+ * 2. **Data-plane DAX query** (Loom-native default for the Report editor,
+ *    LOOM_BI_BACKEND unset): the Azure-native report renderer backend (no Power
+ *    BI / Fabric workspace required, per no-fabric-dependency.md). The Report
+ *    editor queries the bound AAS tabular model with DAX and renders the rows:
+ *
+ *      POST https://{region}.asazure.windows.net/servers/{server}/models/{db}/query
+ *      Body: { queries: [{ query }], serializerSettings: { includeNulls: true } }
  *
  * Auth: ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID),
  * DefaultAzureCredential), requesting the AAS audience. Per Microsoft Learn the
  * token audience must be **exactly** `https://*.asazure.windows.net` — the `*`
- * is literal, not a wildcard — so the scope is `https://*.asazure.windows.net/.default`.
+ * is a LITERAL character, not a wildcard — so the scope is
+ * `https://*.asazure.windows.net/.default` (Commercial / GCC) or the
+ * usgovcloudapi.net equivalent (GCC-High / IL5 / DoD), derived via aasScope().
  * The Console UAMI must hold the **server administrator** role on the AAS server
  * (set via `Microsoft.AnalysisServices/servers.properties.asAdministrators.members[]`,
- * NOT an Azure RBAC role assignment — see aas.bicep).
+ * NOT an Azure RBAC role assignment — see aas.bicep). Database-role membership
+ * alone is insufficient for the REST query endpoint.
  *
- * Sovereign clouds: **Azure Analysis Services has no Azure Government offering.**
- * There is no `asazure.usgovcloudapi.net` endpoint, so in GCC-High / DoD this
- * client returns an honest gate (`AAS_NOT_IN_GOV`) BEFORE any token/network
- * call; the ingest route then directs the operator to query the Delta table via
- * Synapse Serverless `OPENROWSET(... FORMAT='DELTA')` instead.
+ * Sovereign clouds: **Azure Analysis Services has no Azure Government offering
+ * for the refresh ingest path** — aasConfigGate() returns an honest gate
+ * (`AAS_NOT_IN_GOV`) BEFORE any token/network call and the ingest route directs
+ * the operator to query the Delta table via Synapse Serverless
+ * `OPENROWSET(... FORMAT='DELTA')` instead. The DAX-query path derives its
+ * endpoint/scope from aasScope()/aasModelUrl() (isGovCloud-aware) so it uses
+ * the correct suffix wherever AAS is available.
  *
  * No mocks. Real AAS REST only.
  *
@@ -37,11 +50,30 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { detectLoomCloud } from './cloud-endpoints';
+import { detectLoomCloud, aasScope, aasModelUrl } from './cloud-endpoints';
+import {
+  type AasRow,
+  type AasTable,
+  type AasQueryResult,
+  resolveAasBinding,
+  buildDaxFromVisual,
+  flattenAasRows,
+} from './aas-dax';
+
+// Re-export the pure helpers so existing call sites can keep importing from
+// aas-client. The pure logic lives in aas-dax (no @azure/identity) so it stays
+// unit-testable without the credential chain.
+export {
+  resolveAasBinding,
+  buildDaxFromVisual,
+  flattenAasRows,
+};
+export type { AasRow, AasTable, AasQueryResult };
 
 // The audience MUST be the literal `https://*.asazure.windows.net` (the `*` is
 // not a placeholder). `.default` requests an app-level token whose `aud` claim
-// resolves to exactly that audience.
+// resolves to exactly that audience. Used by the async-refresh path; the DAX
+// query path derives its (gov-aware) scope from aasScope() at call time.
 const AAS_SCOPE = 'https://*.asazure.windows.net/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -215,4 +247,68 @@ export async function getAasRefreshStatus(refreshId: string): Promise<AasRefresh
     type: j.type,
     error: errMsg || undefined,
   };
+}
+
+export class AasError extends Error {
+  status: number;
+  body?: unknown;
+  endpoint?: string;
+  constructor(message: string, status: number, body?: unknown, endpoint?: string) {
+    super(message);
+    this.name = 'AasError';
+    this.status = status;
+    this.body = body;
+    this.endpoint = endpoint;
+  }
+}
+
+async function getAasToken(): Promise<string> {
+  const scope = aasScope();
+  const t = await credential.getToken(scope);
+  if (!t?.token) throw new AasError(`Failed to acquire AAD token for AAS (scope: ${scope})`, 401);
+  return t.token;
+}
+
+/**
+ * Execute a DAX query against an AAS model and return the raw result envelope.
+ *
+ * @param region     - Azure region of the AAS server (e.g. "eastus2")
+ * @param serverName - Short server name (e.g. "my-server")
+ * @param database   - Model / database name (e.g. "AdventureWorks")
+ * @param daxQuery   - DAX query string (EVALUATE expression)
+ */
+export async function executeAasQuery(
+  region: string,
+  serverName: string,
+  database: string,
+  daxQuery: string,
+): Promise<AasQueryResult> {
+  const token = await getAasToken();
+  const url = `${aasModelUrl(region, serverName, database)}/query`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({
+      queries: [{ query: daxQuery }],
+      serializerSettings: { includeNulls: true },
+    }),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (
+      json?.error?.message ||
+      json?.message ||
+      text ||
+      'AAS query failed'
+    ).toString();
+    throw new AasError(msg, res.status, json || text, url);
+  }
+  return (json as AasQueryResult) ?? { results: [] };
 }

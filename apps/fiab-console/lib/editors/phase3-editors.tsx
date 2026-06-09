@@ -9891,6 +9891,43 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 // in-Desktop launcher. Each editor (Report, Dashboard, Scorecard) builds
 // an honest inline ribbon (no decorative disabled buttons) below.
 
+/**
+ * Built-in Power BI report themes (parity with the Power BI service
+ * "View → Themes" gallery). Each entry is a valid Power BI report-theme JSON
+ * object — applied at runtime via `report.applyTheme({ themeJson })` and at
+ * load time via the embed config `theme`. Kept as TypeScript constants (not a
+ * freeform JSON config file) per loom-no-freeform-config: the user picks a
+ * named preset from a dropdown, or pastes a custom theme into the editor.
+ * Format reference: https://learn.microsoft.com/power-bi/create-reports/desktop-report-themes#report-theme-json-file-format
+ */
+const PRESET_THEMES: Array<{ key: string; label: string; theme: Record<string, unknown> }> = [
+  {
+    key: 'loom-light', label: 'Loom Light',
+    theme: {
+      name: 'Loom Light',
+      dataColors: ['#0F6CBD', '#13A10E', '#C19C00', '#D13438', '#8764B8', '#038387', '#CA5010', '#5C2E91'],
+      background: '#FFFFFF', foreground: '#242424', tableAccent: '#0F6CBD',
+    },
+  },
+  {
+    key: 'loom-dark', label: 'Loom Dark',
+    theme: {
+      name: 'Loom Dark',
+      dataColors: ['#479EF5', '#54B054', '#E6B400', '#F1707B', '#B393E0', '#3FC5C9', '#F08A4B', '#A47BD4'],
+      background: '#1B1A19', foreground: '#F3F2F1', tableAccent: '#479EF5',
+      visualStyles: { '*': { '*': { background: [{ color: { solid: { color: '#252423' } } }] } } },
+    },
+  },
+  {
+    key: 'high-contrast', label: 'High Contrast',
+    theme: {
+      name: 'High Contrast',
+      dataColors: ['#000000', '#FFFFFF', '#FFFF00', '#00FFFF', '#FF00FF', '#00FF00', '#FF0000', '#0000FF'],
+      background: '#000000', foreground: '#FFFFFF', tableAccent: '#FFFF00',
+    },
+  },
+];
+
 interface ReportLite {
   id: string; name: string; embedUrl?: string; webUrl?: string; datasetId?: string;
   modifiedDateTime?: string; modifiedBy?: string; reportType?: string;
@@ -9923,6 +9960,19 @@ function ReportLikeEditor({
   const [bookmarks, setBookmarks] = useState<Array<{ name: string; displayName: string }>>([]);
   const [editMode, setEditMode] = useState(false);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
+  // Drill-through / cross-highlight / theme / format-pane state (Power BI
+  // report viewer parity). drillContext = the filter context carried onto the
+  // active page after a drill-through navigation; lastSelection = the most
+  // recent cross-highlight / hierarchy drill selection from the embed.
+  const [drillContext, setDrillContext] = useState<any[] | null>(null);
+  const [lastSelection, setLastSelection] = useState<{ visualName?: string; pageDisplayName?: string; filterCount: number; pointCount: number } | null>(null);
+  const [showThemeDialog, setShowThemeDialog] = useState(false);
+  const [themePreset, setThemePreset] = useState<string>(PRESET_THEMES[0].key);
+  const [themeJson, setThemeJson] = useState(() => JSON.stringify(PRESET_THEMES[0].theme, null, 2));
+  const [themeApplying, setThemeApplying] = useState(false);
+  const [themeErr, setThemeErr] = useState<string | null>(null);
+  const [themeMsg, setThemeMsg] = useState<string | null>(null);
+  const [showFormatPane, setShowFormatPane] = useState(false);
   const embedRef = useRef<any>(null);
   // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
   // metadata by default; expose embed/refresh/export only when configured.
@@ -10103,14 +10153,86 @@ function ReportLikeEditor({
     catch (e: any) { setViewerErr(e?.message || String(e)); }
   }, [editMode]);
 
-  // Mirror the active page when the user navigates inside the embed.
+  // Apply a Power BI report theme at runtime (parity with the service
+  // "View → Themes" picker). Real powerbi-client API: report.applyTheme.
+  // Accepts a preset key, a raw JSON string, or a theme object.
+  const applyTheme = useCallback(async (input: string | object) => {
+    setThemeErr(null); setThemeMsg(null); setThemeApplying(true);
+    try {
+      let themeObj: any;
+      if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!trimmed) throw new Error('Paste a Power BI theme JSON or pick a preset.');
+        themeObj = JSON.parse(trimmed);
+      } else { themeObj = input; }
+      await embedRef.current?.applyTheme?.({ themeJson: themeObj });
+      setThemeMsg(`Applied theme "${themeObj?.name || 'custom'}".`);
+    } catch (e: any) { setThemeErr(e?.message || String(e)); }
+    finally { setThemeApplying(false); }
+  }, []);
+
+  // Reset the report to its authored theme (report.resetTheme).
+  const resetTheme = useCallback(async () => {
+    setThemeErr(null); setThemeMsg(null);
+    try { await embedRef.current?.resetTheme?.(); setThemeMsg('Reset to the report’s authored theme.'); }
+    catch (e: any) { setThemeErr(e?.message || String(e)); }
+  }, []);
+
+  // Show/hide the Power BI visualizations + fields panes (parity with the
+  // service edit-mode formatting pane). Real API: report.updateSettings.
+  const toggleFormatPane = useCallback(async () => {
+    const next = !showFormatPane;
+    setShowFormatPane(next); setViewerErr(null);
+    try {
+      await embedRef.current?.updateSettings?.({
+        panes: {
+          visualizations: { visible: next, expanded: next },
+          fields: { visible: next, expanded: false },
+          filters: { visible: true, expanded: false },
+        },
+      });
+    } catch (e: any) { setViewerErr(e?.message || String(e)); setShowFormatPane(!next); }
+  }, [showFormatPane]);
+
+  // Mirror the active page when the user navigates inside the embed, and read
+  // the drill-through filter context carried onto the newly-active page.
   const onEmbedded = useCallback((embed: any) => {
     embedRef.current = embed;
     try {
       embed?.on?.('loaded', () => { reloadBookmarks(); });
-      embed?.on?.('pageChanged', (ev: any) => {
+      embed?.on?.('pageChanged', async (ev: any) => {
         const name = ev?.detail?.newPage?.name;
         if (name) setActivePage(name);
+        // Drill-through carries source-page filters onto the target page; read
+        // them off the now-active page so the viewer can show what arrived.
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          const filters = await pg?.getFilters?.();
+          setDrillContext(Array.isArray(filters) && filters.length ? filters : null);
+        } catch { setDrillContext(null); }
+      });
+      // Native bookmarks pane / programmatic apply → re-sync the Loom list +
+      // the active page (a bookmark can navigate pages).
+      embed?.on?.('bookmarkApplied', async () => {
+        reloadBookmarks();
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          if (pg?.name) setActivePage(pg.name);
+        } catch { /* best-effort */ }
+      });
+      // Cross-highlight + hierarchy drill selection surface (dataSelected fires
+      // on visual selection and drill-down node clicks).
+      embed?.on?.('dataSelected', (ev: any) => {
+        const d = ev?.detail || {};
+        const filters = Array.isArray(d.filters) ? d.filters : [];
+        const dataPoints = Array.isArray(d.dataPoints) ? d.dataPoints : [];
+        if (!dataPoints.length && !filters.length) { setLastSelection(null); return; }
+        setLastSelection({
+          visualName: d?.visual?.name,
+          pageDisplayName: d?.page?.displayName,
+          filterCount: filters.length,
+          pointCount: dataPoints.length,
+        });
       });
     } catch { /* event wiring best-effort */ }
   }, [reloadBookmarks]);
@@ -10136,9 +10258,14 @@ function ReportLikeEditor({
         { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
         { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
         { label: slideshow ? 'Stop slideshow' : 'Play bookmarks', onClick: hasReport ? toggleSlideshow : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'play the report bookmarks as a slideshow (bookmarksManager.play)' },
+        { label: showFormatPane ? 'Hide format pane' : 'Show format pane', onClick: hasReport && editMode ? toggleFormatPane : undefined, disabled: !hasReport || !editMode, title: !hasReport ? 'select a report first' : (!editMode ? 'switch to Edit mode first to author visuals' : 'show/hide the Power BI visualizations + fields panes (report.updateSettings)') },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'Theme', actions: [
+        { label: 'Apply theme', onClick: hasReport ? () => setShowThemeDialog(true) : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'apply a built-in or custom JSON theme to the embedded report (report.applyTheme)' },
+        { label: 'Reset theme', onClick: hasReport ? resetTheme : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reset the report to its authored theme (report.resetTheme)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -10298,9 +10425,44 @@ function ReportLikeEditor({
                         <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
                       </div>
                     </div>
+                    <div className={s.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Subtitle2>Selection</Subtitle2>
+                        <Button size="small" appearance="outline" onClick={() => setShowThemeDialog(true)} title="apply a report theme (report.applyTheme)">Theme…</Button>
+                      </div>
+                      {lastSelection ? (
+                        <>
+                          <Caption1 style={{ display: 'block' }}>
+                            Cross-highlight: <strong>{lastSelection.visualName || 'visual'}</strong>
+                            {lastSelection.pageDisplayName ? ` on ${lastSelection.pageDisplayName}` : ''}
+                          </Caption1>
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                            {lastSelection.pointCount} point(s){lastSelection.filterCount > 0 ? ` · ${lastSelection.filterCount} filter(s)` : ''}
+                          </Caption1>
+                          <Button size="small" appearance="subtle" onClick={() => setLastSelection(null)} style={{ marginTop: 4 }}>Clear</Button>
+                        </>
+                      ) : (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a data point to cross-highlight; use a hierarchy axis to drill down/up.</Caption1>
+                      )}
+                    </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                     {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    {drillContext && drillContext.length > 0 && (
+                      <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Drill-through context · {drillContext.length} filter{drillContext.length > 1 ? 's' : ''} carried</MessageBarTitle>
+                          {drillContext.slice(0, 6).map((f: any, i: number) => (
+                            <Caption1 key={i} style={{ display: 'block' }}>
+                              {(f?.target?.table ?? '?')}.{(f?.target?.column ?? f?.target?.hierarchy ?? f?.target?.measure ?? '?')}: {JSON.stringify(f?.values ?? f?.conditions ?? f?.operator ?? '—')}
+                            </Caption1>
+                          ))}
+                        </MessageBarBody>
+                        <MessageBarActions>
+                          <Button size="small" appearance="subtle" onClick={() => setDrillContext(null)}>Dismiss</Button>
+                        </MessageBarActions>
+                      </MessageBar>
+                    )}
                     <PowerBIEmbedFrame
                       embedType="report"
                       id={embed.reportId}
@@ -10310,6 +10472,7 @@ function ReportLikeEditor({
                       edit={editMode}
                       pageName={activePage || undefined}
                       onEmbedded={onEmbedded}
+                      paneOverrides={{ bookmarks: { visible: true }, selection: { visible: true } }}
                     />
                   </div>
                 </div>
@@ -10318,6 +10481,244 @@ function ReportLikeEditor({
               )}
             </>
           )}
+          <Dialog open={showThemeDialog} onOpenChange={(_, d) => setShowThemeDialog(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Apply report theme</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Pick a built-in Loom theme or paste a Power BI theme JSON. Applied live to the embedded
+                      report via <code>report.applyTheme</code> — the same engine the Power BI service uses.
+                    </Caption1>
+                    <Field label="Preset theme">
+                      <Dropdown
+                        value={PRESET_THEMES.find((t) => t.key === themePreset)?.label || 'Custom'}
+                        selectedOptions={[themePreset]}
+                        onOptionSelect={(_, d) => {
+                          const key = d.optionValue || '';
+                          setThemePreset(key);
+                          const preset = PRESET_THEMES.find((t) => t.key === key);
+                          if (preset) setThemeJson(JSON.stringify(preset.theme, null, 2));
+                        }}
+                      >
+                        {PRESET_THEMES.map((t) => <Option key={t.key} value={t.key} text={t.label}>{t.label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Theme JSON (editable)" hint="leave as a preset, or paste a custom Power BI report-theme JSON">
+                      <Textarea
+                        value={themeJson}
+                        onChange={(_, d) => setThemeJson(d.value)}
+                        placeholder={'{\n  "name": "My theme",\n  "dataColors": ["#0F6CBD", "#13A10E"]\n}'}
+                        rows={12}
+                        style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                      />
+                    </Field>
+                    {themeErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Theme failed to apply</MessageBarTitle>{themeErr}</MessageBarBody></MessageBar>}
+                    {themeMsg && <MessageBar intent="success"><MessageBarBody>{themeMsg}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={resetTheme}>Reset to authored</Button>
+                  <Button
+                    appearance="primary"
+                    disabled={themeApplying}
+                    onClick={() => {
+                      const preset = PRESET_THEMES.find((t) => t.key === themePreset);
+                      const src = themeJson.trim() ? themeJson : (preset ? JSON.stringify(preset.theme) : '');
+                      applyTheme(src);
+                    }}
+                  >{themeApplying ? 'Applying…' : 'Apply theme'}</Button>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button appearance="subtle">Close</Button>
+                  </DialogTrigger>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
+  );
+}
+
+// ── Loom-native report renderer (Azure Analysis Services, default backend) ──
+//
+// no-fabric-dependency.md: the Report editor's DEFAULT path renders visuals by
+// querying the bound AAS tabular model with DAX (POST /query) — NO Power BI /
+// Fabric workspace required. Power BI embed is strictly opt-in via
+// NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (see ReportEditor below).
+type LoomVisualDef = { type: string; title?: string; field?: string; config?: any };
+type LoomReportPage = { name: string; displayName?: string; order?: number; visuals?: LoomVisualDef[] };
+type LoomReportDetail = {
+  report: { id: string; name: string; reportType?: string };
+  aasServer: string | null;
+  aasDatabase: string | null;
+  pages: LoomReportPage[];
+};
+type VisualState = { rows: Array<Record<string, unknown>>; loading: boolean; err: string | null };
+
+/** Render a single visual's AAS query result (card = big value, else table). */
+function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualState }) {
+  if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
+  if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
+  const rows = state.rows;
+  if (visual.type === 'card' && rows.length >= 1) {
+    const val = Object.values(rows[0])[0];
+    return (
+      <div>
+        <Caption1>{visual.title || '(untitled)'}</Caption1>
+        <div style={{ fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold }}>
+          {val == null ? '—' : String(val)}
+        </div>
+      </div>
+    );
+  }
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
+      {visual.type !== 'table' && visual.type !== 'card' && (
+        <MessageBar intent="info" style={{ margin: '4px 0' }}>
+          <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
+        </MessageBar>
+      )}
+      {rows.length === 0 ? <Caption1>No rows returned.</Caption1> : (
+        <Table size="small">
+          <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+          <TableBody>
+            {rows.slice(0, 100).map((row, ri) => (
+              <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{row[c] == null ? '—' : String(row[c])}</TableCell>)}</TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+/** Config-only visual preview shown when no AAS model is bound yet. */
+function LoomVisualDefinition({ visual }: { visual: LoomVisualDef }) {
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled visual)'}</strong></Caption1>
+      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        type: {visual.type} · field: {visual.field || '—'}
+      </Caption1>
+    </div>
+  );
+}
+
+function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [detail, setDetail] = useState<LoomReportDetail | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activePage, setActivePage] = useState(0);
+  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true); setDetailErr(null); setVisualRows({});
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.ok) {
+        setDetail({ report: j.report, aasServer: j.aasServer ?? null, aasDatabase: j.aasDatabase ?? null, pages: j.pages || [] });
+        setActivePage(0);
+      } else setDetailErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  const bound = !!(detail?.aasServer && detail?.aasDatabase);
+  const pages = useMemo(() => detail?.pages || [], [detail]);
+  const page = pages[activePage];
+
+  const runVisual = useCallback(async (key: string, visual: LoomVisualDef) => {
+    if (!visual.field) { setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: 'visual has no field binding' } })); return; }
+    setVisualRows((p) => ({ ...p, [key]: { rows: p[key]?.rows || [], loading: true, err: null } }));
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: { type: visual.type, field: visual.field } }),
+      });
+      const j = await r.json();
+      if (j.ok) setVisualRows((p) => ({ ...p, [key]: { rows: j.rows || [], loading: false, err: null } }));
+      else setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+    } catch (e: any) {
+      setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: e?.message || String(e) } }));
+    }
+  }, [id]);
+
+  // When the bound page changes, fire a DAX query per visual (real AAS rows).
+  useEffect(() => {
+    if (!bound || !page) return;
+    (page.visuals || []).forEach((v, i) => { runVisual(`${activePage}:${i}`, v); });
+  }, [bound, activePage, page, runVisual]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Refresh', onClick: loadDetail, title: 'reload the report definition and re-run all visual queries' },
+      ]},
+      { label: 'View', actions: pages.map((p, i) => ({
+        label: p.displayName || p.name, onClick: () => setActivePage(i), title: 'show this report page',
+      })) },
+    ]},
+  ], [loadDetail, pages]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Pages ({pages.length})</Subtitle2>
+          {pages.length === 0 && !loading && <Caption1>No pages defined.</Caption1>}
+          <Tree aria-label="Report pages">
+            {pages.map((p, i) => (
+              <TreeItem key={p.name || i} itemType="leaf" value={String(i)} onClick={() => setActivePage(i)}>
+                <TreeItemLayout>{activePage === i ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Report · Loom-native (Azure Analysis Services)</Badge>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadDetail}>Refresh</Button>
+          </div>
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {loading && <Spinner label="Loading report…" />}
+          {!bound && detail && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Bind an Azure Analysis Services model</MessageBarTitle>
+                This report renders visuals by querying a bound AAS tabular model with DAX — no Power BI workspace required.
+                Set <strong>state.aasServer</strong> (XMLA URI, e.g. <code>asazure://eastus2.asazure.windows.net/my-server</code>)
+                and <strong>state.aasDatabase</strong> on this item, or configure <strong>LOOM_AAS_SERVER</strong> + <strong>LOOM_AAS_DATABASE</strong>
+                {' '}(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detail && page && (
+            <div className={s.card}>
+              <Subtitle2 style={{ marginBottom: 8 }}>{page.displayName || page.name}</Subtitle2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+                {(page.visuals || []).map((v, i) => (
+                  <div key={i} className={s.card}>
+                    {bound
+                      ? <LoomVisual visual={v} state={visualRows[`${activePage}:${i}`]} />
+                      : <LoomVisualDefinition visual={v} />}
+                  </div>
+                ))}
+                {(page.visuals || []).length === 0 && <Caption1>This page has no visuals.</Caption1>}
+              </div>
+            </div>
+          )}
+          {detail && pages.length === 0 && !loading && <Caption1>This report has no pages defined.</Caption1>}
         </div>
       }
     />
@@ -10325,7 +10726,13 @@ function ReportLikeEditor({
 }
 
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  // no-fabric-dependency.md: Loom-native AAS renderer is the DEFAULT. Power BI
+  // embed is opt-in only via NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi.
+  const biBackend = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase();
+  if (biBackend === 'powerbi') {
+    return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  }
+  return <LoomNativeReportEditor item={item} id={id} />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
