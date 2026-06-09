@@ -114,9 +114,50 @@ export interface MirroredDatabaseContent {
   source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[] };
 }
 
+/**
+ * Scorecard rollup + status-rule model — Power BI / Fabric Metrics parity.
+ *
+ * Rollup ("subgoal rollup" in Fabric): a parent goal's value is aggregated
+ * from its child goals. SUM / AVERAGE / MIN / MAX. MIN is the "worst-child"
+ * aggregation used for compliance scorecards (parent reflects the weakest
+ * subgoal). Status rules are ordered per-goal conditions (value or % of
+ * target compared to a threshold → a status color), first match wins, with an
+ * "Otherwise" fallback. These are authoring-only in Power BI Web (not exposed
+ * by the preview Fabric Metrics REST), so Loom stores + applies them
+ * server-side in the BFF (Azure-native default — no Fabric dependency).
+ */
+export type RollupMethod = 'sum' | 'avg' | 'min' | 'max';
+export type StatusColor = 'on-track' | 'at-risk' | 'behind' | 'completed' | 'not-started';
+export type StatusOperator = '>=' | '<=' | '>' | '<' | '=';
+export type StatusMetricKind = 'value' | 'percent-of-target';
+
+export interface StatusRule {
+  operator: StatusOperator;
+  threshold: number;
+  metricKind: StatusMetricKind; // 'value' | 'percent-of-target'
+  status: StatusColor;
+}
+
+export interface ScorecardOkr {
+  id: string;
+  name: string;
+  description?: string;
+  metric: string;
+  target: number | string;
+  current?: number | string;
+  /** Child's pointer to its parent OKR id (defines the rollup hierarchy). */
+  parentId?: string;
+  /** Parent goal only — how child values aggregate. Ignored on leaves. */
+  rollupMethod?: RollupMethod;
+  /** Ordered status rules; first match wins. */
+  statusRules?: StatusRule[];
+  /** Fallback status when no rule fires. */
+  otherwiseStatus?: StatusColor;
+}
+
 export interface ScorecardContent {
   kind: 'scorecard';
-  okrs: { id: string; name: string; description?: string; metric: string; target: number | string; current?: number | string }[];
+  okrs: ScorecardOkr[];
 }
 
 export interface DataProductContent {
