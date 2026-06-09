@@ -13,11 +13,21 @@
  * the engine and is validated against the SQL-warehouse allow-list below — any
  * other item type 400s.
  *
- * Three modes, all grounded in the LIVE warehouse schema so generated SQL
+ * Five modes, all grounded in the LIVE warehouse schema so generated SQL
  * references real tables/columns:
  *   - generate : NL description           → a single runnable SQL statement
  *   - explain  : a SQL query              → a plain-language summary
  *   - fix      : a SQL query + error text → a corrected SQL query
+ *   - comments : a SQL query              → the same SQL with inline comments
+ *   - optimize : a SQL query              → a rewritten, faster SQL query, with a
+ *                                           REAL EXPLAIN plan folded into the
+ *                                           prompt where the engine exposes one
+ *                                           (SET SHOWPLAN_TEXT for Synapse T-SQL,
+ *                                           EXPLAIN for Databricks Spark SQL).
+ *
+ * These five modes are the SQL-warehouse surface of the Loom slash commands
+ * (/explain /fix /comments /optimize) — see lib/copilot/slash-commands.ts and
+ * lib/azure/copilot-personas.ts (persona 'sql-warehouse').
  *
  * Real backend (per no-vaporware.md): every call hits AOAI chat-completions
  * with an AAD bearer (cognitiveservices scope) — no mocks, no canned strings.
@@ -55,7 +65,7 @@ import {
 } from '@/lib/azure/synapse-sql-client';
 import { executeStatement } from '@/lib/azure/databricks-client';
 
-type AssistMode = 'generate' | 'explain' | 'fix';
+type AssistMode = 'generate' | 'explain' | 'fix' | 'comments' | 'optimize';
 type Engine =
   | 'warehouse'
   | 'synapse-dedicated-sql-pool'
@@ -174,6 +184,55 @@ async function databricksSchemaContext(
   }
 }
 
+// ---------- EXPLAIN plan grounding for /optimize (soft-fail, never blocks) ----------
+// A real query plan lets the model target the ACTUAL operators (scans, joins,
+// shuffles) instead of guessing. Synapse SQL exposes the estimated plan via
+// SET SHOWPLAN_TEXT ON (the same mechanism SQL Server documents); Databricks
+// Spark SQL exposes it via EXPLAIN. Both are best-effort with a short timeout —
+// a paused pool / cold warehouse / parse error just yields '' and /optimize
+// still rewrites the SQL from the schema alone.
+async function synapseExplainPlan(serverless: boolean, db: string, sqlText: string): Promise<string> {
+  const stmt = sqlText.trim().replace(/;+\s*$/, '');
+  if (!stmt) return '';
+  try {
+    const target = serverless ? serverlessTarget(db || 'master') : dedicatedTarget();
+    // SHOWPLAN_TEXT returns the estimated plan as rows of StmtText; the batch
+    // must contain only the wrapped statement (no extra batches).
+    const res = await executeQuery(
+      target,
+      `SET SHOWPLAN_TEXT ON;\nGO\n${stmt};\nGO\nSET SHOWPLAN_TEXT OFF;`,
+      10_000,
+    );
+    const lines = res.rows
+      .map((r) => (Array.isArray(r) ? String(r[0] ?? '') : ''))
+      .filter((t) => t.trim());
+    const plan = lines.join('\n').trim();
+    return plan.length > 4000 ? `${plan.slice(0, 4000)}\n…(plan truncated)` : plan;
+  } catch {
+    return '';
+  }
+}
+
+async function databricksExplainPlan(
+  warehouseId: string,
+  catalog: string,
+  schema: string,
+  sqlText: string,
+): Promise<string> {
+  const stmt = sqlText.trim().replace(/;+\s*$/, '');
+  if (!warehouseId || !stmt) return '';
+  try {
+    const res = await executeStatement(warehouseId, `EXPLAIN ${stmt}`, catalog || undefined, schema || undefined);
+    const plan = res.rows
+      .map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')).join(' ') : String(r ?? '')))
+      .join('\n')
+      .trim();
+    return plan.length > 4000 ? `${plan.slice(0, 4000)}\n…(plan truncated)` : plan;
+  } catch {
+    return '';
+  }
+}
+
 // ---------- Per-mode system + user messages ----------
 function buildMessages(
   mode: AssistMode,
@@ -182,6 +241,7 @@ function buildMessages(
   prompt: string,
   errorText: string,
   schema: string,
+  explainPlan = '',
 ): { role: 'system' | 'user'; content: string }[] {
   const schemaSection = schema.trim()
     ? `\n\nWarehouse schema (ground your SQL in these tables/columns, do not invent names):\n${schema}`
@@ -218,6 +278,49 @@ function buildMessages(
       { role: 'user', content: `${dialect} query:\n\`\`\`\n${sqlText}\n\`\`\`` },
     ];
   }
+  if (mode === 'comments') {
+    return [
+      {
+        role: 'system',
+        content:
+          `You are a ${dialect} documentation assistant for the CSA Loom platform. ` +
+          `Return the SAME query, UNCHANGED in logic, with a concise inline comment ` +
+          `above every non-trivial clause (CTEs, joins, filters, aggregations, window ` +
+          `functions) explaining its intent. Preserve the EXACT table and column names. ` +
+          `Use ${dialect} comment syntax (-- for line comments). Return ONLY the commented ` +
+          `SQL — no markdown fences, no prose outside the SQL, no leading language tag.` +
+          schemaSection,
+      },
+      { role: 'user', content: `${dialect} query:\n\`\`\`\n${sqlText}\n\`\`\`` },
+    ];
+  }
+  if (mode === 'optimize') {
+    const planSection = explainPlan.trim()
+      ? `\n\nActual query plan (target these operators — scans, joins, shuffles, ` +
+        `partitioning):\n${explainPlan}`
+      : '';
+    return [
+      {
+        role: 'system',
+        content:
+          `You are a ${dialect} performance engineer for the CSA Loom platform. Rewrite ` +
+          `the query to run faster using ${dialect}-specific optimizer techniques, keeping ` +
+          `the result set IDENTICAL and preserving the exact table/column names. ` +
+          `For T-SQL / Synapse: prefer set-based logic, sargable predicates, the right ` +
+          `JOIN order, OPTION (LABEL/HASH JOIN/MAXDOP) hints, columnstore-friendly ` +
+          `projections, and avoid SELECT *, scalar UDFs and row-by-row cursors. ` +
+          `For Spark SQL / Databricks: rely on Adaptive Query Execution, predicate and ` +
+          `projection pushdown, Delta Z-ordering / partition pruning, broadcast-join ` +
+          `hints for small dimensions, and avoid collect(), cross joins and Python UDFs. ` +
+          `If a real query plan is provided, target its costly operators specifically. ` +
+          `Return ONLY the rewritten SQL — no markdown fences, no commentary, no leading ` +
+          `language tag.` +
+          schemaSection +
+          planSection,
+      },
+      { role: 'user', content: `${dialect} query to optimize:\n\`\`\`\n${sqlText}\n\`\`\`` },
+    ];
+  }
   // mode === 'fix'
   return [
     {
@@ -252,9 +355,9 @@ export async function POST(
 
   const body = await _req.json().catch(() => ({}));
   const mode = body?.mode as AssistMode | undefined;
-  if (!mode || !['generate', 'explain', 'fix'].includes(mode)) {
+  if (!mode || !['generate', 'explain', 'fix', 'comments', 'optimize'].includes(mode)) {
     return NextResponse.json(
-      { ok: false, error: 'mode must be generate | explain | fix' },
+      { ok: false, error: 'mode must be generate | explain | fix | comments | optimize' },
       { status: 400 },
     );
   }
@@ -275,9 +378,9 @@ export async function POST(
       { status: 400 },
     );
   }
-  if ((mode === 'explain' || mode === 'fix') && !sqlText.trim()) {
+  if ((mode === 'explain' || mode === 'fix' || mode === 'comments' || mode === 'optimize') && !sqlText.trim()) {
     return NextResponse.json(
-      { ok: false, error: 'sql is required for explain/fix modes' },
+      { ok: false, error: 'sql is required for explain/fix/comments/optimize modes' },
       { status: 400 },
     );
   }
@@ -321,8 +424,24 @@ export async function POST(
     }
   }
 
+  // For /optimize, fetch a real EXPLAIN plan to ground the rewrite (soft-fail).
+  let explainPlan = '';
+  if (mode === 'optimize') {
+    if (engine === 'databricks-sql-warehouse') {
+      explainPlan = await databricksExplainPlan(
+        String(body?.warehouseId || ''),
+        String(body?.catalog || ''),
+        String(body?.schema || ''),
+        sqlText,
+      );
+    } else {
+      const serverless = engine === 'synapse-serverless-sql-pool';
+      explainPlan = await synapseExplainPlan(serverless, String(body?.db || body?.database || ''), sqlText);
+    }
+  }
+
   const dialect = dialectFor(engine);
-  const messages = buildMessages(mode, dialect, sqlText, prompt, errorText, schema);
+  const messages = buildMessages(mode, dialect, sqlText, prompt, errorText, schema, explainPlan);
 
   try {
     const token = await aoaiToken();

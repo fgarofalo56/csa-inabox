@@ -34,6 +34,7 @@ import type {
   ReportContent,
   ScorecardContent,
 } from '@/lib/apps/content-bundles/types';
+import { computeRollups, type ComputedGoal } from '../scorecard/rollup';
 
 /** Prefix that marks a synthetic, Cosmos-backed (not-yet-in-PBI) entry. */
 export const LOOM_ID_PREFIX = 'loom:';
@@ -241,19 +242,33 @@ export function scorecardListEntry(item: WorkspaceItem) {
 }
 
 /**
- * Build scorecard goals from ScorecardContent OKRs. The editor's Goals table
- * reads `{ id, name, description, currentValue, targetValue }`.
+ * Build scorecard goals from ScorecardContent OKRs, applying the rollup +
+ * status-rule engine. The editor's Goals table reads `{ id, name, description,
+ * currentValue, computedValue, targetValue, status, ... }`. Parent goals carry
+ * a rolled-up `computedValue`; every goal carries a resolved `status`.
  */
-export function scorecardGoalsFromContent(item: WorkspaceItem) {
+export function scorecardGoalsFromContent(item: WorkspaceItem): ComputedGoal[] | null {
   const content = contentOf<ScorecardContent>(item, 'scorecard');
   if (!content) return null;
-  return (content.okrs || []).map((o) => ({
-    id: o.id,
-    name: o.name,
-    description: o.description || o.metric,
-    currentValue: typeof o.current === 'number' ? o.current : Number(o.current) || undefined,
-    targetValue: typeof o.target === 'number' ? o.target : Number(o.target) || undefined,
-  }));
+  const okrs = content.okrs || [];
+  const computed = computeRollups(okrs);
+  // Re-attach extended fields the bundle can author inline (owner/dueDate/
+  // subGoalIds/status) that the rollup engine drops; the editor's Goals table
+  // expects them alongside the computed status/value.
+  const byId = new Map(okrs.map((o) => [o.id, o]));
+  return computed.map((g) => {
+    const src = byId.get(g.id);
+    if (!src) return g;
+    return {
+      ...g,
+      // Prefer the rollup engine's resolved status; fall back to bundle-authored
+      // status when the engine couldn't resolve one (e.g. no rules + no value).
+      status: g.status ?? (src.status as any),
+      owner: src.owner,
+      dueDate: src.dueDate,
+      subGoalIds: src.subGoalIds,
+    } as ComputedGoal & { owner?: string; dueDate?: string; subGoalIds?: string[] };
+  });
 }
 
 export function scorecardMetaFromContent(item: WorkspaceItem) {

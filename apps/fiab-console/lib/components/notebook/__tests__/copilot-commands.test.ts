@@ -30,6 +30,14 @@ describe('parseCopilotCommand', () => {
       prompt: 'count rows in silver.sales',
     });
   });
+
+  it('maps /comments to comments mode', () => {
+    expect(parseCopilotCommand('/comments')).toEqual({ mode: 'comments', prompt: '' });
+  });
+
+  it('maps /optimize to optimize mode', () => {
+    expect(parseCopilotCommand('/optimize')).toEqual({ mode: 'optimize', prompt: '' });
+  });
 });
 
 describe('copilotResultCell', () => {
@@ -52,5 +60,19 @@ describe('copilotResultCell', () => {
     expect(cell.type).toBe('code');
     expect(cell.lang).toBe('pyspark');
     expect(cell.source).toContain('bronze.orders');
+  });
+
+  it('builds a code cell in the source language for comments', () => {
+    const cell = copilotResultCell('comments', 'pyspark', '# read orders\ndf = spark.read.table("t")');
+    expect(cell.type).toBe('code');
+    expect(cell.lang).toBe('pyspark');
+    expect(cell.source).toContain('# read orders');
+  });
+
+  it('builds a code cell in the source language for optimize', () => {
+    const cell = copilotResultCell('optimize', 'sparksql', 'SELECT * FROM gold.kpi');
+    expect(cell.type).toBe('code');
+    expect(cell.lang).toBe('sparksql');
+    expect(cell.source).toBe('SELECT * FROM gold.kpi');
   });
 });

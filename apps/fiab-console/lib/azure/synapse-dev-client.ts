@@ -499,6 +499,83 @@ export async function getPipelineRun(runId: string): Promise<PipelineRun> {
 }
 
 /**
+ * Per-activity output for a single Synapse pipeline run (dev endpoint
+ * `/pipelineruns/{runId}/queryActivityruns`). The Pipeline Copilot's error
+ * assistant filters these to status==='Failed' to explain the REAL failure
+ * (errorCode + message), the Synapse sibling of adf-client.listActivityRuns.
+ */
+export interface SynapseActivityRun {
+  activityRunId: string;
+  activityName: string;
+  activityType: string;
+  pipelineName?: string;
+  pipelineRunId?: string;
+  status?: 'Queued' | 'InProgress' | 'Succeeded' | 'Failed' | 'Cancelled' | 'Skipped';
+  activityRunStart?: string;
+  activityRunEnd?: string;
+  durationInMs?: number;
+  input?: unknown;
+  output?: unknown;
+  error?: { errorCode?: string; message?: string; failureType?: string };
+}
+
+export async function listActivityRuns(
+  runId: string,
+  windowDays = 1,
+): Promise<SynapseActivityRun[]> {
+  const now = new Date();
+  const start = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  const r = await callDev(
+    `/pipelineruns/${encodeURIComponent(runId)}/queryActivityruns?api-version=${DEV_API}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        lastUpdatedAfter: start.toISOString(),
+        lastUpdatedBefore: now.toISOString(),
+      }),
+    },
+  );
+  const body = await jsonOrThrow<{ value: SynapseActivityRun[] }>(r, `listActivityRuns(${runId})`);
+  return body.value || [];
+}
+
+// ============================================================
+// Linked services + datasets (dev endpoint) — backs the Pipeline Copilot
+// `/` source/dest completion + connection-grounded generation. Same surface
+// the Manage hub uses, distinct host from ADF.
+// ============================================================
+
+export interface SynapseLinkedService {
+  id?: string;
+  name: string;
+  type?: string;
+  properties: { type: string; description?: string; typeProperties?: Record<string, unknown> };
+}
+
+export async function listLinkedServices(): Promise<SynapseLinkedService[]> {
+  const r = await callDev(`/linkedservices?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapseLinkedService[] }>(r, 'listLinkedServices');
+  return body.value || [];
+}
+
+export interface SynapseDataset {
+  id?: string;
+  name: string;
+  type?: string;
+  properties: {
+    type: string;
+    linkedServiceName?: { referenceName: string; type: string };
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listDatasets(): Promise<SynapseDataset[]> {
+  const r = await callDev(`/datasets?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapseDataset[] }>(r, 'listDatasets');
+  return body.value || [];
+}
+
+/**
  * Debug a Synapse Pipeline — creates a run with `isRecovery=false`
  * and `?isDebugRun=true`, which Synapse Studio uses to evaluate
  * activities against the in-memory edited spec rather than the saved

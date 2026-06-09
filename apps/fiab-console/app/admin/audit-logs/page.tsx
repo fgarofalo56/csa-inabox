@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Button, Dropdown, Option, Field,
+  Spinner, Badge, Caption1, Body1, Button, Dropdown, Option, Field, Input,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -20,6 +20,8 @@ import { ArrowSync24Regular, ArrowDownload24Regular } from '@fluentui/react-icon
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+
+type AuditSource = 'cosmos' | 'purview' | 'loganalytics';
 
 interface AuditRow {
   id: string;
@@ -31,8 +33,30 @@ interface AuditRow {
   key?: string;
   from?: unknown;
   to?: unknown;
+  source: AuditSource;
+  category?: string;
+  message?: string;
   [k: string]: unknown;
 }
+
+interface AuditResponse {
+  ok: boolean;
+  error?: string;
+  rows?: AuditRow[];
+  kinds?: string[];
+  gates?: { purview?: string; la?: string };
+}
+
+const SOURCE_LABEL: Record<AuditSource, string> = {
+  cosmos: 'Cosmos',
+  purview: 'Purview',
+  loganalytics: 'Log Analytics',
+};
+const SOURCE_COLOR: Record<AuditSource, 'subtle' | 'informative' | 'success'> = {
+  cosmos: 'subtle',
+  purview: 'informative',
+  loganalytics: 'success',
+};
 
 const useStyles = makeStyles({
   intro: {
@@ -80,11 +104,11 @@ function describeChange(r: AuditRow): string {
 }
 
 function toCsv(rows: AuditRow[]): string {
-  const header = ['at', 'who', 'kind', 'itemId', 'key', 'from', 'to'];
+  const header = ['at', 'who', 'kind', 'source', 'itemId', 'key', 'from', 'to', 'category'];
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const out = [header.join(',')];
   for (const r of rows) {
-    out.push([r.at, r.who, r.kind, r.itemId, r.key, r.from, r.to].map(esc).join(','));
+    out.push([r.at, r.who, r.kind, r.source, r.itemId, r.key, r.from, r.to, r.category].map(esc).join(','));
   }
   return out.join('\n');
 }
@@ -98,6 +122,9 @@ export default function AuditLogsPage() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [since, setSince] = useState('');
+  const [user, setUser] = useState('');
+  const [itemId, setItemId] = useState('');
+  const [gates, setGates] = useState<{ purview?: string; la?: string }>({});
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -106,16 +133,19 @@ export default function AuditLogsPage() {
       if (q) params.set('q', q);
       if (kind) params.set('type', kind);
       if (since) params.set('since', since);
+      if (user) params.set('user', user);
+      if (itemId) params.set('itemId', itemId);
       params.set('top', '500');
       const r = await fetch(`/api/admin/audit-logs?${params.toString()}`);
-      const j = await r.json();
+      const j: AuditResponse = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setRows(j.rows || []);
       setKinds(j.kinds || []);
+      setGates(j.gates || {});
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
-  }, [q, kind, since]);
+  }, [q, kind, since, user, itemId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -141,6 +171,17 @@ export default function AuditLogsPage() {
       label: 'Kind',
       width: 220,
       render: (r) => <Badge appearance="outline" size="small">{r.kind}</Badge>,
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      width: 130,
+      getValue: (r) => SOURCE_LABEL[r.source],
+      render: (r) => (
+        <Badge appearance="filled" color={SOURCE_COLOR[r.source]} size="small">
+          {SOURCE_LABEL[r.source]}
+        </Badge>
+      ),
     },
     {
       key: 'itemId',
@@ -173,8 +214,10 @@ export default function AuditLogsPage() {
   return (
     <AdminShell sectionTitle="Audit logs">
       <Body1 className={s.intro}>
-        Every tenant-settings change, item save, share grant, app install, and admin action lands here.
-        Backed by the Cosmos <code>audit-log</code> container.
+        Every tenant-settings change, item save, share grant, app install, Purview
+        governance event, and platform operation lands here. Sources: Cosmos
+        (Loom events), Purview Data Map (governance), and Log Analytics
+        (Loom-app operations).
       </Body1>
 
       {error && (
@@ -182,6 +225,24 @@ export default function AuditLogsPage() {
           <MessageBarBody>
             <MessageBarTitle>Could not load audit logs</MessageBarTitle>
             {error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {gates.purview && (
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+          <MessageBarBody>
+            <MessageBarTitle>Purview audit partial</MessageBarTitle>
+            {gates.purview}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {gates.la && (
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+          <MessageBarBody>
+            <MessageBarTitle>Log Analytics audit partial</MessageBarTitle>
+            {gates.la}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -226,6 +287,24 @@ export default function AuditLogsPage() {
                     <Option key={o.value || 'all'} value={o.value}>{o.label}</Option>
                   ))}
                 </Dropdown>
+              </Field>
+              <Field label="User (UPN)">
+                <Input
+                  value={user}
+                  onChange={(_, d) => setUser(d.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
+                  placeholder="user@contoso.com"
+                  style={{ minWidth: 200 }}
+                />
+              </Field>
+              <Field label="Item / Asset ID">
+                <Input
+                  value={itemId}
+                  onChange={(_, d) => setItemId(d.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
+                  placeholder="guid or item id"
+                  style={{ minWidth: 200 }}
+                />
               </Field>
             </div>
           }

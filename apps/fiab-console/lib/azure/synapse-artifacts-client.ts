@@ -36,8 +36,25 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { detectLoomCloud } from './cloud-endpoints';
 
-const DEV_SCOPE = 'https://dev.azuresynapse.net/.default';
+// The Synapse Studio data-plane host + token scope are sovereign-cloud aware.
+// Commercial / GCC run on `dev.azuresynapse.net`; GCC-High / IL5 / DoD run on
+// the Azure Government host `dev.azuresynapse.usgovcloudapi.net`. Without this
+// split the dev-plane calls hit the wrong audience and 401 in Government.
+function synapseDfsSuffix(): string {
+  const cloud = detectLoomCloud();
+  return cloud === 'GCC-High' || cloud === 'DoD'
+    ? 'dev.azuresynapse.usgovcloudapi.net'
+    : 'dev.azuresynapse.net';
+}
+
+const DEV_SCOPE = (() => {
+  const cloud = detectLoomCloud();
+  return cloud === 'GCC-High' || cloud === 'DoD'
+    ? 'https://dev.azuresynapse.usgovcloudapi.net/.default'
+    : 'https://dev.azuresynapse.net/.default';
+})();
 const DEV_API = '2020-12-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -57,7 +74,7 @@ function required(k: string): string {
 function ws(): string { return required('LOOM_SYNAPSE_WORKSPACE'); }
 
 export function devBase(): string {
-  return `https://${ws()}.dev.azuresynapse.net`;
+  return `https://${ws()}.${synapseDfsSuffix()}`;
 }
 
 /**
@@ -369,4 +386,65 @@ export interface SynapseSparkConfiguration extends SynapseArtifact {
 
 export async function listSparkConfigurations(): Promise<SynapseSparkConfiguration[]> {
   return listAll<SynapseSparkConfiguration>('sparkconfigurations', 'listSparkConfigurations');
+}
+
+// ============================================================
+// Pipelines  (workspaces/.../pipelines)
+//
+// A Synapse pipeline is the orchestration unit that invokes a MappingDataFlow
+// via an `ExecuteDataFlow` activity (the Synapse equivalent of ADF's pipeline).
+// The Loom semantic-model ingest path uses this to run the Parquet→Delta
+// MappingDataFlow on the Synapse Spark IR when LOOM_SYNAPSE_WORKSPACE is set
+// (the opt-in alternative to the default ADF MappingDataFlow path).
+//
+// Dev-plane REST (api-version 2020-12-01):
+//   PUT  https://<ws>.dev.azuresynapse.net/pipelines/<name>?api-version=…
+//   POST https://<ws>.dev.azuresynapse.net/pipelines/<name>/createRun?api-version=…
+//   Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/pipeline
+// ============================================================
+
+export interface SynapsePipeline extends SynapseArtifact {
+  properties: {
+    description?: string;
+    activities: unknown[];
+    parameters?: Record<string, { type: string; defaultValue?: unknown }>;
+    variables?: Record<string, { type: string; defaultValue?: unknown }>;
+    annotations?: unknown[];
+    folder?: { name: string };
+    concurrency?: number;
+  };
+}
+
+export async function listPipelines(): Promise<SynapsePipeline[]> {
+  return listAll<SynapsePipeline>('pipelines', 'listPipelines');
+}
+
+export async function upsertPipeline(name: string, spec: SynapsePipeline): Promise<SynapsePipeline> {
+  const r = await callDev(`/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: spec.name || name, properties: spec.properties }),
+  });
+  return jsonOrThrow<SynapsePipeline>(r, `upsertPipeline(${name})`);
+}
+
+export async function deletePipeline(name: string): Promise<void> {
+  const r = await callDev(`/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deletePipeline failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Trigger a pipeline run. POST /pipelines/{name}/createRun returns `{ runId }`.
+ * Optional `params` are passed as the request body's pipeline parameters.
+ */
+export async function runPipeline(
+  name: string,
+  params?: Record<string, unknown>,
+): Promise<{ runId: string }> {
+  const r = await callDev(`/pipelines/${encodeURIComponent(name)}/createRun?api-version=${DEV_API}`, {
+    method: 'POST',
+    body: JSON.stringify(params || {}),
+  });
+  return jsonOrThrow<{ runId: string }>(r, `runPipeline(${name})`);
 }

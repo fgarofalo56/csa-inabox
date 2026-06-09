@@ -16,6 +16,7 @@ import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { LOOM_DISPLAY_MIME } from '@/lib/types/notebook-cell';
 import type { LoomDisplayPayload } from '@/lib/types/notebook-cell';
 import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
+import { inCellResultAction } from '@/lib/copilot/notebook-tools';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
 import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
@@ -200,6 +201,10 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
   const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const [copilotHint, setCopilotHint] = useState<string | null>(null);
+  // Approval-diff: the AOAI-proposed cell source for a code-MODIFYING command
+  // (/fix, /comments, /optimize, free-form refactor). Reviewed before it applies
+  // in place — parity with the Fabric in-cell Copilot "review & accept" flow.
+  const [proposedCode, setProposedCode] = useState<string | null>(null);
   const copilotEnabled = !!notebookId && !!onInsertBelow;
 
   const locked = !!cell.locked;
@@ -298,17 +303,15 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
     const { mode, prompt } = parseCopilotCommand(copilotDraft);
     setCopilotError(null);
     setCopilotHint(null);
+    setProposedCode(null);
 
     if (mode === 'generate' && !prompt) {
       setCopilotError('Add a description after /generate, or type a free-text prompt.');
       return;
     }
-    if (mode === 'explain' && !cell.source.trim()) {
-      setCopilotError('/explain requires cell source code.');
-      return;
-    }
-    if (mode === 'fix' && !cell.source.trim()) {
-      setCopilotError('/fix requires cell source code.');
+    // explain / fix / comments / optimize all operate on the current cell source.
+    if (mode !== 'generate' && !cell.source.trim()) {
+      setCopilotError(`/${mode} requires cell source code.`);
       return;
     }
 
@@ -317,15 +320,15 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
       const errorText = mode === 'fix'
         ? [cell.output?.ename, cell.output?.evalue, ...(cell.output?.traceback ?? [])].filter(Boolean).join('\n')
         : '';
-      if (mode === 'fix' && !errorText.trim()) {
-        setCopilotError('/fix needs an error in the cell output — run the cell first.');
-        setCopilotBusy(false);
-        return;
-      }
       const res = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/assist`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode, lang: cell.lang || 'pyspark', source: cell.source, prompt, errorText }),
+        body: JSON.stringify({
+          mode, lang: cell.lang || 'pyspark', source: cell.source, prompt, errorText,
+          // workspaceId lets the route pull the REAL last error from the live
+          // Livy session for /fix when the cell has no cached error output.
+          workspaceId: workspaceId || '',
+        }),
       });
       const j = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
       if (!j.ok) {
@@ -333,6 +336,12 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
         else setCopilotError(j.error || `HTTP ${res.status}`);
         return;
       }
+      if (inCellResultAction(mode, prompt) === 'propose-edit') {
+        // Code-modifying result → review in the approval-diff, apply in place on Accept.
+        setProposedCode(j.result);
+        return;
+      }
+      // insert-below: /explain prose (markdown) or a free-form new code cell.
       const newCell: NotebookCell = copilotResultCell(mode, cell.lang || 'pyspark', j.result);
       onInsertBelow(newCell);
       setInCellOpen(false);
@@ -342,7 +351,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
     } finally {
       setCopilotBusy(false);
     }
-  }, [notebookId, cell, copilotDraft, onInsertBelow]);
+  }, [notebookId, cell, copilotDraft, onInsertBelow, workspaceId]);
 
   const setLang = (lang: NotebookCellLang) => onChange({ ...cell, lang });
   const setSource = (source: string) => onChange({ ...cell, source });
@@ -429,7 +438,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
         {copilotEnabled && (
           <Popover
             open={inCellOpen}
-            onOpenChange={(_, d) => { if (!copilotBusy) setInCellOpen(d.open); }}
+            onOpenChange={(_, d) => { if (!copilotBusy) { setInCellOpen(d.open); if (!d.open) { setProposedCode(null); setCopilotError(null); } } }}
             positioning="below-start"
             trapFocus
           >
@@ -454,33 +463,67 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
                 <Caption1 style={{ fontWeight: 600 }}>In-cell Copilot</Caption1>
               </div>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                /explain · /fix · /generate &lt;description&gt; · or type a free-form prompt
+                /explain · /fix · /comments · /optimize · /generate &lt;description&gt; · or a free-form prompt
               </Caption1>
               <Input
                 value={copilotDraft}
                 onChange={(_, d) => setCopilotDraft(d.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !copilotBusy) { e.preventDefault(); handleCopilot(); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !copilotBusy && proposedCode === null) { e.preventDefault(); handleCopilot(); } }}
                 placeholder="e.g. /explain"
-                disabled={copilotBusy}
+                disabled={copilotBusy || proposedCode !== null}
                 contentBefore={copilotBusy ? <Spinner size="tiny" /> : undefined}
                 style={{ width: '100%' }}
                 aria-label="Copilot prompt"
                 autoFocus
               />
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Button size="small" appearance="subtle" disabled={copilotBusy}
+                <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
                   onClick={() => setCopilotDraft('/explain')}>/explain</Button>
-                <Button size="small" appearance="subtle" disabled={copilotBusy || cell.output?.status !== 'error'}
+                <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
                   onClick={() => setCopilotDraft('/fix')}>/fix</Button>
-                <Button size="small" appearance="subtle" disabled={copilotBusy}
+                <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
+                  onClick={() => setCopilotDraft('/comments')}>/comments</Button>
+                <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
+                  onClick={() => setCopilotDraft('/optimize')}>/optimize</Button>
+                <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
                   onClick={() => setCopilotDraft('/generate ')}>/generate</Button>
                 <div style={{ flex: 1 }} />
                 <Button size="small" appearance="primary"
-                  disabled={copilotBusy || !copilotDraft.trim()}
+                  disabled={copilotBusy || !copilotDraft.trim() || proposedCode !== null}
                   onClick={handleCopilot}>
                   {copilotBusy ? 'Working…' : 'Run'}
                 </Button>
               </div>
+              {proposedCode !== null && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Caption1 style={{ fontWeight: 600, color: tokens.colorBrandForeground1 }}>
+                    Proposed change — review before applying:
+                  </Caption1>
+                  <pre style={{
+                    fontFamily: 'Consolas, monospace', fontSize: 12, margin: 0, maxHeight: 240,
+                    overflow: 'auto', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap',
+                    backgroundColor: tokens.colorNeutralBackground3,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  }}>
+                    {proposedCode}
+                  </pre>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button size="small" appearance="primary"
+                      onClick={() => {
+                        onChange({ ...cell, source: proposedCode, output: undefined, executionCount: undefined });
+                        setProposedCode(null);
+                        setInCellOpen(false);
+                        setCopilotDraft('');
+                      }}>
+                      Accept
+                    </Button>
+                    <Button size="small" appearance="subtle"
+                      onClick={() => { setProposedCode(null); setCopilotDraft(''); }}>
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              )}
               {copilotHint && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
