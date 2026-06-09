@@ -432,6 +432,18 @@ export function kustoClusterUri(clusterName: string, region: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (AAS) — data plane for the DirectQuery semantic
+// model backend. AAS is the Azure-native managed tabular engine; it is NOT
+// Microsoft Fabric / Power BI (no-fabric-dependency.md), so binding a
+// DirectQuery source through AAS requires no Fabric capacity or workspace.
+//
+// NOTE: The canonical aasSuffix() / aasScope() helpers live further down in
+// this file (with LOOM_AAS_HOST_SUFFIX override + the literal `*` subdomain
+// audience). The DirectQuery binder (aas-client.ts) builds its server-base
+// URL inline via `aasSuffix()` to avoid signature collisions.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Azure Cosmos DB (data plane — documents endpoint)
 // ---------------------------------------------------------------------------
 

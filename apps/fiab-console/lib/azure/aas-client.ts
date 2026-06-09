@@ -2268,3 +2268,186 @@ export async function readModel(database?: string): Promise<ColEditorModelTable[
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
+
+// ===========================================================================
+// DirectQuery source binder (PR #989) — wires a Loom semantic model into
+// DirectQuery mode against an Azure-native source (Synapse Serverless /
+// Dedicated, Azure SQL, or Azure Data Explorer) via AAS XMLA TMSL commands.
+// Renamed primitives (dq*) to avoid colliding with the async-refresh /
+// column-editor / aggregations / measure surfaces declared above which share
+// shorter names (aasConfigGate, command).
+// ===========================================================================
+
+import { aasSuffix as dqAasSuffix } from './cloud-endpoints';
+
+/** The four Azure-native DirectQuery source families the binder supports. */
+export type DqSourceType = 'synapse-serverless' | 'synapse-dedicated' | 'azure-sql' | 'adx';
+
+export interface DqSourceConfig {
+  sourceType: DqSourceType;
+  server: string;
+  database: string;
+  secretRef?: string;
+  tables: string[];
+  appliedAt?: string;
+}
+
+/**
+ * Honest config gate for the DirectQuery binder. Returns `{missing, detail}`
+ * when LOOM_AAS_SERVER / LOOM_AAS_REGION / LOOM_AAS_MODEL are absent, else
+ * null. Distinct from `aasConfigGate()` above (the asazure:// connection
+ * string form used by the async-refresh path).
+ */
+export function dqSourceConfigGate(): { missing: string; detail: string } | null {
+  if (!process.env.LOOM_AAS_SERVER) return {
+    missing: 'LOOM_AAS_SERVER',
+    detail: 'Set LOOM_AAS_SERVER (bare server name, e.g. "loom-aas"), LOOM_AAS_REGION (e.g. "eastus2") and LOOM_AAS_MODEL to enable DirectQuery source binding via Azure Analysis Services. The Console UAMI must also be an Analysis Services server administrator on that server.',
+  };
+  if (!process.env.LOOM_AAS_REGION) return {
+    missing: 'LOOM_AAS_REGION',
+    detail: 'Set LOOM_AAS_REGION (Azure region of the AAS server, e.g. "eastus2") alongside LOOM_AAS_SERVER.',
+  };
+  if (!process.env.LOOM_AAS_MODEL) return {
+    missing: 'LOOM_AAS_MODEL',
+    detail: 'Set LOOM_AAS_MODEL (the tabular model / database name on the AAS server).',
+  };
+  return null;
+}
+
+function dqServerBase(): string {
+  const server = process.env.LOOM_AAS_SERVER!;
+  const region = process.env.LOOM_AAS_REGION!;
+  return `https://${region}.${dqAasSuffix()}/servers/${server}`;
+}
+
+function dqModelBase(): string {
+  return `${dqServerBase()}/models/${encodeURIComponent(process.env.LOOM_AAS_MODEL!)}`;
+}
+
+async function dqGetToken(): Promise<string> {
+  const t = await credential.getToken(aasScope());
+  if (!t?.token) throw new AasError('Failed to acquire AAD token for Azure Analysis Services', 401);
+  return t.token;
+}
+
+function dqEscapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Send one TMSL command to the AAS XMLA endpoint via a SOAP `Execute` envelope.
+ * Distinct from `executeTmsl(serverUri,...)` and `command(statement,...)` above:
+ * uses the LOOM_AAS_SERVER + REGION + MODEL trio directly.
+ */
+export async function executeDqCommand(tmsl: object): Promise<void> {
+  const gate = dqSourceConfigGate();
+  if (gate) {
+    const e = new AasError(gate.detail, 503);
+    (e as any).code = 'not_configured';
+    (e as any).missing = gate.missing;
+    throw e;
+  }
+
+  const model = process.env.LOOM_AAS_MODEL!;
+  const token = await dqGetToken();
+  const stmt = JSON.stringify(tmsl);
+
+  const soapBody = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"',
+    '  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+    '  xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
+    '  <SOAP-ENV:Body>',
+    '    <Execute xmlns="urn:schemas-microsoft-com:xml-analysis">',
+    '      <Command>',
+    `        <Statement>${dqEscapeXml(stmt)}</Statement>`,
+    '      </Command>',
+    '      <Properties>',
+    '        <PropertyList>',
+    `          <Catalog>${dqEscapeXml(model)}</Catalog>`,
+    '        </PropertyList>',
+    '      </Properties>',
+    '    </Execute>',
+    '  </SOAP-ENV:Body>',
+    '</SOAP-ENV:Envelope>',
+  ].join('\n');
+
+  const res = await fetch(`${dqModelBase()}/xmla`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'text/xml; charset=utf-8',
+      soapaction: '"urn:schemas-microsoft-com:xml-analysis:Execute"',
+    },
+    body: soapBody,
+    cache: 'no-store',
+  });
+
+  const text = await res.text();
+  if (!res.ok || /<(\w+:)?fault/i.test(text) || /<Error\b/i.test(text)) {
+    const fault =
+      text.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i)?.[1] ||
+      text.match(/<Error[^>]*\bDescription="([^"]*)"/i)?.[1] ||
+      text.slice(0, 400);
+    throw new AasError(`AAS XMLA command failed: ${fault}`, res.ok ? 500 : res.status, text);
+  }
+}
+
+/**
+ * Build the TMSL command sequence that puts the given tables into DirectQuery
+ * mode against a single source. Pure function — no I/O — so unit-testable.
+ */
+export function buildDqTmsl(
+  server: string,
+  database: string,
+  tables: string[],
+  sourceType: DqSourceType,
+): object[] {
+  const model = process.env.LOOM_AAS_MODEL || 'LoomModel';
+  const dsName = 'LoomDQSource';
+  const isAdx = sourceType === 'adx';
+
+  const datasourceCommand = {
+    createOrReplace: {
+      parentObject: { database: model },
+      dataSource: {
+        name: dsName,
+        type: 'structured',
+        connectionDetails: {
+          protocol: isAdx ? 'kusto' : 'tds',
+          address: { server, database },
+        },
+        credential: { AuthenticationKind: 'ServiceAccount', kind: 'OAuth2' },
+      },
+    },
+  };
+
+  const partitionCommands = tables.map((table) => ({
+    createOrReplace: {
+      parentObject: { database: model, table },
+      partition: {
+        name: table,
+        mode: 'directQuery',
+        dataView: 'full',
+        source: {
+          type: 'query',
+          query: isAdx ? table : `SELECT * FROM [dbo].[${table}]`,
+          dataSource: dsName,
+        },
+      },
+    },
+  }));
+
+  return [datasourceCommand, ...partitionCommands];
+}
+
+/**
+ * Apply DirectQuery source binding to the configured AAS model: createOrReplace
+ * the DataSource, then each table partition in DirectQuery mode.
+ */
+export async function applyDqSource(config: DqSourceConfig): Promise<void> {
+  const commands = buildDqTmsl(config.server, config.database, config.tables, config.sourceType);
+  for (const cmd of commands) {
+    await executeDqCommand(cmd);
+  }
+}

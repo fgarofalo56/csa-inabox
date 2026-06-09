@@ -64,6 +64,7 @@ import { PbiModelViewPanel } from './components/pbi-model-view-panel';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
+import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
@@ -9810,7 +9811,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -10850,6 +10851,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const focusModel = useCallback(() => setTab('model'), []);
 
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  // DirectQuery models are live against the source — never refreshable (the
+  // Power BI REST `isRefreshable` already returns false for DQ datasets). When
+  // the model is in DirectQuery storage mode we surface the Source binder tab
+  // and disable Refresh with an honest "no data to import" reason.
+  const isDqMode = (detail?.dataset?.targetStorageMode || '').toLowerCase() === 'directquery';
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
       window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
@@ -10885,13 +10891,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Add calc. table', onClick: (datasetId && modelTables) ? () => { setCalcMsg(null); setCalcTableDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated tables' : 'Create a calculated table (DAX)' },
       ]},
       { label: 'Source', actions: [
-        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
+        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: (canRefresh && !isDqMode) ? refreshNow : undefined, disabled: !canRefresh || isDqMode, title: isDqMode ? 'DirectQuery model is live — no data to import. Use the DirectQuery source tab to rebind.' : (detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined)) },
+        { label: 'DirectQuery source', onClick: isDqMode ? () => setTab('datasource') : undefined, disabled: !isDqMode, title: isDqMode ? 'Bind a live Azure source for this DirectQuery model' : 'available for DirectQuery storage-mode models' },
       ]},
       { label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
 
   return (
     <>
@@ -11072,6 +11079,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="build">Build model</Tab>
                   <Tab value="aggregations">Aggregations ({aggAltMaps.length})</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
+                  {isDqMode && <Tab value="datasource">DirectQuery source</Tab>}
                   <Tab value="incremental">Incremental refresh</Tab>
                   <Tab value="config">Configuration</Tab>
                   <Tab value="security">Security (RLS/OLS)</Tab>
@@ -12110,6 +12118,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </>
                     )}
                   </div>
+                )}
+                {tab === 'datasource' && isDqMode && datasetId && (
+                  <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

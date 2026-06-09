@@ -579,3 +579,160 @@ describe('PR #984 command (XMLA transport)', () => {
     await expect(executeXmlaCommand(buildAlterColumnTmsl('db', 'T', { name: 'C', dataType: 'string' }))).rejects.toMatchObject({ status: 412 });
   });
 });
+
+// ===========================================================================
+// DirectQuery source binder (PR #989) — buildDqTmsl / dqSourceConfigGate /
+// executeDqCommand / applyDqSource.
+// ===========================================================================
+
+import {
+  buildDqTmsl,
+  dqSourceConfigGate,
+  executeDqCommand,
+  applyDqSource,
+} from '../aas-client';
+
+const DQ_AAS_ENV = ['LOOM_AAS_SERVER', 'LOOM_AAS_REGION', 'LOOM_AAS_MODEL', 'LOOM_CLOUD', 'AZURE_CLOUD'];
+function dqClearEnv() {
+  for (const k of DQ_AAS_ENV) delete process.env[k];
+}
+function dqSetConfigured() {
+  process.env.LOOM_AAS_SERVER = 'loom-aas';
+  process.env.LOOM_AAS_REGION = 'eastus2';
+  process.env.LOOM_AAS_MODEL = 'LoomModel';
+}
+
+describe('buildDqTmsl — DirectQuery TMSL command sequence', () => {
+  beforeEach(dqClearEnv);
+  afterEach(dqClearEnv);
+
+  it('emits one DataSource (LoomDQSource) followed by one partition per table', () => {
+    process.env.LOOM_AAS_MODEL = 'SalesModel';
+    const cmds = buildDqTmsl(
+      'ws-ondemand.sql.azuresynapse.net',
+      'master',
+      ['Orders', 'Customers'],
+      'synapse-serverless',
+    );
+    expect(cmds).toHaveLength(3);
+    const ds = (cmds[0] as any).createOrReplace.dataSource;
+    expect(ds.name).toBe('LoomDQSource');
+    expect(ds.connectionDetails.protocol).toBe('tds');
+    expect(ds.connectionDetails.address.server).toBe('ws-ondemand.sql.azuresynapse.net');
+    expect((cmds[0] as any).createOrReplace.parentObject.database).toBe('SalesModel');
+  });
+
+  it('sets every partition to directQuery / full / LoomDQSource with a SELECT source', () => {
+    const cmds = buildDqTmsl('srv', 'db', ['Orders'], 'azure-sql');
+    const p = (cmds[1] as any).createOrReplace.partition;
+    expect(p.mode).toBe('directQuery');
+    expect(p.dataView).toBe('full');
+    expect(p.source.type).toBe('query');
+    expect(p.source.dataSource).toBe('LoomDQSource');
+    expect(p.source.query).toBe('SELECT * FROM [dbo].[Orders]');
+  });
+
+  it('uses the kusto protocol + native table reference for ADX sources', () => {
+    const cmds = buildDqTmsl('adx.eastus2.kusto.windows.net', 'loomdb', ['Events'], 'adx');
+    expect((cmds[0] as any).createOrReplace.dataSource.connectionDetails.protocol).toBe('kusto');
+    expect((cmds[1] as any).createOrReplace.partition.source.query).toBe('Events');
+  });
+});
+
+describe('dqSourceConfigGate — honest gate per missing env var', () => {
+  beforeEach(dqClearEnv);
+  afterEach(dqClearEnv);
+
+  it('gates on LOOM_AAS_SERVER first', () => {
+    expect(dqSourceConfigGate()?.missing).toBe('LOOM_AAS_SERVER');
+  });
+  it('gates on LOOM_AAS_REGION when only server is set', () => {
+    process.env.LOOM_AAS_SERVER = 'loom-aas';
+    expect(dqSourceConfigGate()?.missing).toBe('LOOM_AAS_REGION');
+  });
+  it('gates on LOOM_AAS_MODEL when server+region set', () => {
+    process.env.LOOM_AAS_SERVER = 'loom-aas';
+    process.env.LOOM_AAS_REGION = 'eastus2';
+    expect(dqSourceConfigGate()?.missing).toBe('LOOM_AAS_MODEL');
+  });
+  it('returns null when fully configured', () => {
+    dqSetConfigured();
+    expect(dqSourceConfigGate()).toBeNull();
+  });
+});
+
+describe('executeDqCommand — XMLA Execute SOAP envelope', () => {
+  const realFetchDq = global.fetch;
+  beforeEach(dqClearEnv);
+  afterEach(() => {
+    global.fetch = realFetchDq;
+    dqClearEnv();
+  });
+
+  it('throws not_configured AasError when AAS env is missing (no fetch)', async () => {
+    const spy = vi.fn();
+    global.fetch = spy as any;
+    await expect(executeDqCommand({ createOrReplace: {} })).rejects.toMatchObject({
+      code: 'not_configured',
+      missing: 'LOOM_AAS_SERVER',
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs the TMSL statement inside an XMLA Execute envelope', async () => {
+    dqSetConfigured();
+    let captured: { url: string; init: any } | null = null;
+    global.fetch = vi.fn(async (url: any, init?: any) => {
+      captured = { url: String(url), init };
+      return new Response(
+        '<return xmlns="urn:schemas-microsoft-com:xml-analysis"><root/></return>',
+        { status: 200 },
+      );
+    }) as any;
+
+    await executeDqCommand({ createOrReplace: { parentObject: { database: 'LoomModel' } } });
+    expect(captured!.url).toContain('/servers/loom-aas/models/LoomModel/xmla');
+    expect(captured!.init.headers.soapaction).toContain('Execute');
+    expect(captured!.init.body).toContain('<Statement>');
+    expect(captured!.init.body).toContain('<Catalog>LoomModel</Catalog>');
+    expect(captured!.init.body).toContain('createOrReplace');
+  });
+
+  it('raises AasError on a SOAP fault', async () => {
+    dqSetConfigured();
+    global.fetch = vi.fn(async () =>
+      new Response(
+        '<SOAP-ENV:Fault><faultstring>model not found</faultstring></SOAP-ENV:Fault>',
+        { status: 200 },
+      ),
+    ) as any;
+    await expect(executeDqCommand({ createOrReplace: {} })).rejects.toBeInstanceOf(AasError);
+  });
+});
+
+describe('applyDqSource — sends DataSource then partitions in order', () => {
+  const realFetchDq2 = global.fetch;
+  beforeEach(dqClearEnv);
+  afterEach(() => {
+    global.fetch = realFetchDq2;
+    dqClearEnv();
+  });
+
+  it('issues one XMLA POST per TMSL command', async () => {
+    dqSetConfigured();
+    const calls: string[] = [];
+    global.fetch = vi.fn(async (_url: any, init?: any) => {
+      calls.push(String(init?.body || ''));
+      return new Response('<return/>', { status: 200 });
+    }) as any;
+    await applyDqSource({
+      sourceType: 'synapse-serverless',
+      server: 'srv',
+      database: 'master',
+      tables: ['A', 'B'],
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('dataSource');
+    expect(calls[1]).toContain('directQuery');
+  });
+});
