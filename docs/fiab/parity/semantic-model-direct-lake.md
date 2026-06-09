@@ -1,11 +1,89 @@
-# semantic-model-direct-lake — parity with Fabric Direct Lake (semantic model storage mode)
+# semantic-model-direct-lake — parity with Fabric Direct Lake
+
+Loom delivers Fabric Direct Lake parity through **two complementary Azure-native
+surfaces** on the same `/api/items/semantic-model/[id]/direct-lake` route, both
+100% functional without a Fabric capacity:
+
+1. **Direct Lake query (DirectQuery fallback)** — `POST` — query a table and get
+   rows from the warm Power BI cache when fresh, else transparently from Synapse
+   Serverless `OPENROWSET` over the same Gold Delta files.
+2. **Direct-Lake-shim (freshness)** — `GET`/`PUT` — keep a warm AAS (Power BI
+   Premium XMLA) cache fresh from an ADLS Gen2 Delta source via `_delta_log`
+   Event Grid notifications.
+
+Source UI: Power BI / Fabric Direct Lake storage mode + DirectQuery fallback, and
+the Power BI service Scheduled refresh / refresh history pane.
+- https://learn.microsoft.com/fabric/fundamentals/direct-lake-overview
+- https://learn.microsoft.com/power-bi/enterprise/directlake-overview (fallback behaviour)
+- https://learn.microsoft.com/power-bi/connect-data/asynchronous-refresh (enhanced refresh)
+- Azure-native backend grounding: https://learn.microsoft.com/azure/synapse-analytics/sql/query-delta-lake-format
+
+---
+
+## Part 1 — Direct Lake query with DirectQuery fallback (POST)
+
+### What Direct Lake fallback is in Fabric
+
+Direct Lake loads a semantic model's columns straight from Delta/Parquet files in
+OneLake into the VertiPaq in-memory engine on demand. When a query cannot be
+served from that warm cache — guardrails exceeded, a SQL view is touched, or the
+model has not been framed/loaded — the engine *transparently falls back to
+DirectQuery* against the Lakehouse SQL analytics endpoint, reading the same Delta
+files. The user gets correct rows either way; only the serving path changes.
+
+### Loom Azure-native realization (no Fabric capacity required)
+
+| Fabric concept                | Loom Azure-native default                                                                 |
+|-------------------------------|-------------------------------------------------------------------------------------------|
+| Warm VertiPaq cache           | Power BI Import/Premium model in-memory cache (opt-in; only when a workspace is bound)     |
+| "cache fresh?" check          | last **Completed** dataset refresh within `LOOM_DL_CACHE_TTL_SECONDS` (default 3600, 0=always Serverless) |
+| DirectQuery fallback          | **Synapse Serverless `OPENROWSET(BULK '<gold>/Tables/<t>', FORMAT='DELTA')`** over the same Gold Delta files on ADLS Gen2 |
+| Lakehouse SQL analytics endpt | `{LOOM_SYNAPSE_WORKSPACE}-ondemand.<sql-suffix>` (sovereign-aware via `cloud-endpoints`)   |
+
+The **default** path is 100% Azure-native: with no Power BI workspace bound (or
+the cache stale), every query is served from Synapse Serverless over the Gold
+Delta files. The warm-cache path is strictly opt-in (Power BI workspace + a
+recent refresh).
+
+### Feature inventory → Loom coverage
+
+| Capability                                                  | Status | Backend per control |
+|-------------------------------------------------------------|--------|---------------------|
+| Pick a table and run a Direct Lake query                    | built ✅ | `POST /api/items/semantic-model/[id]/direct-lake` |
+| Serve from warm cache when fresh                            | built ✅ | Power BI `executeQueries` REST (`EVALUATE TOPN`) — opt-in |
+| Transparent fallback to Serverless when stale/unbuilt       | built ✅ | `executeQuery(serverlessTarget, OPENROWSET DELTA)` |
+| "Serving from: warm cache \| fallback (Serverless)" badge   | built ✅ | `dlResult.servingFrom` (derived from real runtime path) |
+| Show endpoint + Delta path + last-refresh + TTL             | built ✅ | response fields surfaced as `Caption1` |
+| Result grid (columns + rows, truncation badge, ms)          | built ✅ | `QueryResult` from the TDS client |
+| Max-rows control (1–5000, capped)                           | built ✅ | `maxRows` clamped client + server |
+| Raw-SQL passthrough (always Serverless)                     | built ✅ | `{ sql }` body branch |
+| Honest gate when Synapse unconfigured                       | gate ⚠️ | 503 naming `LOOM_SYNAPSE_WORKSPACE` |
+| Honest gate when Gold container unconfigured                | gate ⚠️ | 503 naming `LOOM_GOLD_URL` |
+| Cold-start 504 with retry guidance                          | built ✅ | timeout branch in the route |
+
+UI surface: SemanticModelEditor → **Direct Lake query** tab. Zero ❌, zero stub banners.
+
+### Acceptance (no-Fabric, no-vaporware)
+
+With `LOOM_DEFAULT_FABRIC_WORKSPACE` unset and no Power BI workspace bound,
+`POST {table:'fact_sales', maxRows:10}` returns real Gold Delta rows via Synapse
+Serverless and `servingFrom:'serverless-fallback'`; the editor badge reads
+**"Serving from: fallback (Serverless)"**. Invalidating / ageing-out the warm
+cache (or setting `LOOM_DL_CACHE_TTL_SECONDS=0`) forces the Serverless path while
+still returning correct rows — the definition of transparent fallback.
+
+Bicep: `LOOM_DL_CACHE_TTL_SECONDS` wired in `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+RBAC: reuses the existing Console-UAMI Storage Blob Data Reader grant on the Gold
+container (same identity `adls-client` already uses) — no new role assignment.
+
+---
+
+## Part 2 — Direct-Lake-shim (freshness via enhanced refresh + Event Grid)
 
 Source UI: Microsoft Fabric — semantic model **Storage mode → Direct Lake**, and the
 Power BI service **Scheduled refresh / refresh history** pane.
-Learn: https://learn.microsoft.com/fabric/fundamentals/direct-lake-overview ·
-https://learn.microsoft.com/power-bi/connect-data/asynchronous-refresh
 
-## Why a shim (no-fabric-dependency.md)
+### Why a shim (no-fabric-dependency.md)
 
 True Direct Lake — VertiPaq reading Delta/Parquet directly from OneLake with
 sub-second framing — requires a **Fabric F-SKU**, which is **not available in
@@ -18,7 +96,7 @@ notifications. Freshness is 5–30 s (partition-scoped), not sub-second — disc
 honestly in the UI. The shim is strictly **opt-in** (`LOOM_DIRECT_LAKE_SHIM_ENABLED`);
 the editor is fully functional without it.
 
-## Fabric/Power BI feature inventory  (Direct Lake storage mode surface)
+### Fabric/Power BI feature inventory  (Direct Lake storage mode surface)
 
 | # | Capability (Fabric / Power BI) | Notes |
 |---|--------------------------------|-------|
@@ -29,7 +107,7 @@ the editor is fully functional without it.
 | 5 | Refresh history / run log | Power BI refresh-history pane (requestId, status, start, duration). |
 | 6 | Change-driven (event-based) framing | Source commit triggers reframe. |
 
-## Loom coverage
+### Loom coverage
 
 | # | Capability | Status | Loom surface |
 |---|-----------|--------|--------------|
@@ -42,7 +120,7 @@ the editor is fully functional without it.
 
 Zero ❌. The only non-functional state is the documented infra gate.
 
-## Backend per control
+### Backend per control
 
 | Control | Backend |
 |---------|---------|
@@ -51,7 +129,7 @@ Zero ❌. The only non-functional state is the documented infra gate.
 | Run log | Power BI **enhanced refresh** REST `GET /groups/{ws}/datasets/{id}/refreshes` via `aas-client`, sovereign-correct host (`getPbiGovHost`) + audience (`aasScope`). |
 | Honest gate | `aas-client.shimEnabled()` (env `LOOM_DIRECT_LAKE_SHIM_ENABLED`) drives the MessageBar; `LOOM_DIRECT_LAKE_SHIM_QUEUE_ID` gates the Event Grid wiring. |
 
-## Runtime topology (deployed by aas.bicep)
+### Runtime topology (deployed by aas.bicep)
 
 ```
 ADLS Gen2 Delta write → _delta_log/<n>.json (BlobCreated)
@@ -62,7 +140,7 @@ ADLS Gen2 Delta write → _delta_log/<n>.json (BlobCreated)
    → warm AAS cache reflects new rows within the SLA (5–30 s)
 ```
 
-## Sovereign matrix (verified against Microsoft Learn)
+### Sovereign matrix (verified against Microsoft Learn)
 
 | | Commercial | GCC | GCC-High | DoD |
 |--|-----------|-----|----------|-----|
@@ -75,14 +153,15 @@ ADLS Gen2 Delta write → _delta_log/<n>.json (BlobCreated)
 (power-bi/developer/embedded/embed-sample-for-customers-national-clouds — the
 GCC / DoDCON / DoD `scopeBase` values.)
 
-## Verification
+### Verification
 
 - `lib/azure/__tests__/direct-lake-shim.test.ts` — 19 green (sovereign scope/XMLA
   matrix, ADLS URI parse/build round-trip, shim gate, policy-enum mirror).
+- `lib/azure/__tests__/direct-lake-fallback.test.ts` — query/fallback path coverage.
 - `npx tsc --noEmit` — clean on all touched files.
 - `az bicep build` — `aas.bicep` + `main.bicep` compile clean.
 
-## Acceptance (live receipt, operator-run)
+### Acceptance (live receipt, operator-run)
 
 1. Set `LOOM_DIRECT_LAKE_SHIM_ENABLED=true`; deploy `aas.bicep` (queue + system topic).
 2. Point the tab at a real Delta table (e.g. `abfss://gold@<acct>.dfs…/fact_sales`),
