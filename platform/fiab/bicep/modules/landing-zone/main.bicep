@@ -160,6 +160,22 @@ module databricks 'databricks.bicep' = {
 }
 
 // =====================================================================
+// 3a. Databricks Access Connector MI → Storage Blob Data Contributor on the
+//     lakehouse ADLS account. Powers OPTIMIZE / ANALYZE / write-back on Unity
+//     Catalog external Delta tables (statistics + maintenance). Connector
+//     principalId is empty on GCC-High / IL5 (UC unsupported) → grant no-ops.
+// =====================================================================
+
+module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
+  name: 'dlz-databricks-storage-rbac'
+  params: {
+    storageAccountName: storage.outputs.storageAccountName
+    accessConnectorPrincipalId: databricks.outputs.accessConnectorPrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
 // 4. Synapse workspace (Serverless SQL pool)
 // =====================================================================
 

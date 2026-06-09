@@ -35,6 +35,7 @@ import {
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import { AiFunctionsHelper } from './components/ai-functions-helper';
@@ -706,6 +707,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [aiTable, setAiTable] = useState<string>('');
   // Visual (no-code) query canvas — Power-Query diagram-view parity (Spark SQL).
   const [vqOpen, setVqOpen] = useState(false);
+
+  // Statistics & maintenance dialog (ANALYZE / OPTIMIZE) for a selected table.
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTarget, setStatsTarget] = useState<{ catalog: string; schema: string; table: string } | null>(null);
 
   const [sqlText0] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -1437,8 +1442,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Alerts', actions: [
         { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Databricks SQL Alerts)' },
       ]},
+      { label: 'Maintenance', actions: [
+        {
+          label: 'Statistics & maintenance',
+          onClick: statsTarget ? () => setStatsOpen(true) : undefined,
+          disabled: !statsTarget,
+          title: statsTarget
+            ? `ANALYZE / OPTIMIZE ${statsTarget.catalog}.${statsTarget.schema}.${statsTarget.table}`
+            : 'Select a table in the catalog tree first',
+        },
+      ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget]);
 
   return (
     <ItemEditorChrome
@@ -1516,6 +1531,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 value={`t-${c}.${sch}.${t}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setStatsTarget({ catalog: c, schema: sch, table: t });
                                   setAiTable(`\`${c}\`.\`${sch}\`.\`${t}\``);
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                   void cacheColumns(c, sch, t);
@@ -2250,6 +2266,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
           />
 
+          {statsTarget && (
+            <StatsMaintenanceDialog
+              open={statsOpen}
+              onOpenChange={setStatsOpen}
+              engine="databricks-sql-warehouse"
+              itemId={id}
+              catalog={statsTarget.catalog}
+              schema={statsTarget.schema}
+              tableName={statsTarget.table}
+              warehouseId={warehouseId}
+            />
+          )}
           <WarehouseAlerts
             engine="databricks-sql-warehouse"
             id={id}

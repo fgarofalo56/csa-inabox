@@ -66,6 +66,7 @@ import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-s
 import { ItemEditorChrome } from './item-editor-chrome';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
+import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
@@ -8418,6 +8419,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
   const [secOpen, setSecOpen] = useState(false);
 
+  // Statistics manager (CREATE / UPDATE / DROP STATISTICS) for a selected table.
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTarget, setStatsTarget] = useState<{ schema: string; table: string } | null>(null);
+
   const newSql = useCallback(() => {
     // Open a fresh tab (multi-tab is wired via the tab bar + "+" control).
     addTab();
@@ -8564,6 +8569,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // workspace Git settings (honest navigation, not a stub).
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
       ]},
+      { label: 'Statistics', actions: [
+        {
+          label: 'Manage statistics',
+          onClick: statsTarget ? () => setStatsOpen(true) : undefined,
+          disabled: !statsTarget,
+          title: statsTarget
+            ? `CREATE / UPDATE / DROP STATISTICS on [${statsTarget.schema}].[${statsTarget.table}]`
+            : 'Select a table in the explorer first',
+        },
+      ]},
       { label: 'Alerts', actions: [
         { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Azure Monitor scheduled-query rule)' },
       ]},
@@ -8573,7 +8588,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
-  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, callAssist]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, callAssist]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -8658,7 +8673,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           key={t.table}
                           itemType="leaf"
                           value={`t-${schemaName}.${t.table}`}
-                          onClick={() => { setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}
+                          onClick={() => { setStatsTarget({ schema: schemaName, table: t.table }); setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}
                         >
                           <TreeItemLayout
                             iconBefore={<DocumentTable20Regular />}
@@ -8993,6 +9008,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             </DialogSurface>
           </Dialog>
 
+          {statsTarget && (
+            <StatsMaintenanceDialog
+              open={statsOpen}
+              onOpenChange={setStatsOpen}
+              engine="warehouse"
+              itemId={id}
+              schema={statsTarget.schema}
+              tableName={statsTarget.table}
+            />
+          )}
           <WarehouseAlerts engine="warehouse" id={id} open={alertsOpen} onOpenChange={setAlertsOpen} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
