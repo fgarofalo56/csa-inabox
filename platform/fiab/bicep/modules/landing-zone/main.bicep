@@ -41,6 +41,15 @@ param consolePrincipalId string = ''
 @description('Loom Console UAMI name — used for the SQL admin login (must match the UAMI resource).')
 param consoleUamiName string = ''
 
+@description('Loom Console UAMI application/client id — stamped as the AAS admin SP (app:<appId>@<tenantId>) for datamart-migration targets.')
+param consoleUamiAppId string = ''
+
+@description('Deploy an Azure Analysis Services server as the datamart-migration semantic-model target. Default true for full feature parity.')
+param deployAas bool = true
+
+@description('AAS SKU for the datamart-migration server.')
+param aasSku string = 'B1'
+
 @description('Admin Plane spoke private DNS zone ID for privatelink.sql.azuresynapse.net. Required for the Synapse SQL PE to register DNS.')
 param synapseSqlPrivateDnsZoneId string = ''
 
@@ -194,6 +203,26 @@ module synapse 'synapse.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
     adxClusterPrincipalId: adxClusterPrincipalId
+  }
+}
+
+// =====================================================================
+// 4a1b. Azure Analysis Services — datamart-migration semantic-model target.
+//       Datamarts are deprecated; the migrate route provisions a Synapse
+//       Serverless DB + this AAS server as the Azure-native replacement.
+//       No Fabric / Power BI capacity required.
+// =====================================================================
+
+module aas 'aas.bicep' = if (deployAas) {
+  name: 'dlz-aas'
+  params: {
+    location: location
+    domainName: domainName
+    aasSku: aasSku
+    consolePrincipalId: consolePrincipalId
+    consoleUamiAppId: consoleUamiAppId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
   }
 }
 

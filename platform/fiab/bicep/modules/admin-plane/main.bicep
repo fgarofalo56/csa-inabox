@@ -1140,6 +1140,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // AAS resource group for the datamart-migration server (aas.bicep
+            // deploys it into the DLZ RG). The migrate route falls back to
+            // LOOM_DLZ_RG / LOOM_ADMIN_RG when unset.
+            { name: 'LOOM_AAS_RG', value: loomDlzRg }
             // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
             // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
             // shortcut examples resolve to a non-existent host (ENOTFOUND).
@@ -2192,6 +2196,7 @@ output acrLoginServer string = registry.outputs.acrLoginServer
 output uamiConsoleId string = identity.outputs.uamiConsoleId
 output uamiConsolePrincipalId string = identity.outputs.uamiConsolePrincipalId
 output uamiConsoleName string = identity.outputs.uamiConsoleName
+output uamiConsoleClientId string = identity.outputs.uamiConsoleClientId
 output uamiOrchestratorId string = identity.outputs.uamiOrchestratorId
 output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId

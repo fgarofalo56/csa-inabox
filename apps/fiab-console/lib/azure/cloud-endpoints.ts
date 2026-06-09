@@ -566,6 +566,29 @@ export function synapseSqlJdbcHostCert(): string {
   return `*.${synapseSqlSuffix()}`;
 }
 
+/**
+ * Azure Analysis Services (AAS) data-plane server-name suffix (no leading dot).
+ *   Commercial / GCC : asazure.windows.net
+ *   GCC-High / IL5   : asazure.usgovcloudapi.net
+ *   DoD              : asazure.usgovcloudapi.net (Gov AAS data-plane)
+ * Mirrors the Az PowerShell `AnalysisServicesEndpointSuffix` boundary mapping
+ * (`Get-AzEnvironment -Name AzureUSGovernment`). AAS is in the DoD IL5 PA scope:
+ *   https://learn.microsoft.com/azure/azure-government/documentation-government-overview-dod
+ * `LOOM_AAS_HOST_SUFFIX` overrides outright for any custom sovereign endpoint.
+ */
+export function aasSuffix(): string {
+  if (process.env.LOOM_AAS_HOST_SUFFIX) return process.env.LOOM_AAS_HOST_SUFFIX;
+  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
+}
+
+/**
+ * Full AAS connection URI (as it appears in SSMS / Power BI "Analysis Services"
+ * data source): `asazure://<region>.<suffix>/<serverName>`.
+ */
+export function aasConnectionUri(serverName: string, region: string): string {
+  return `asazure://${region}.${aasSuffix()}/${serverName}`;
+}
+
 /** Log Analytics query-API host (full URL with scheme). */
 export function getLogAnalyticsHost(): string {
   return isGovCloud() ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com';
@@ -757,10 +780,8 @@ export function getKustoSuffix(): string {
 // real subdomain (e.g. https://eastus2.asazure.windows.net) FAILS auth.
 // Ref: https://learn.microsoft.com/analysis-services/azure-analysis-services/analysis-services-async-refresh
 
-/** AAS XMLA/REST hostname suffix for the active cloud (no leading dot). */
-export function aasSuffix(): string {
-  return isGovCloud() ? 'asazure.usgovcloudapi.net' : 'asazure.windows.net';
-}
+// aasSuffix() is declared once above (with LOOM_AAS_HOST_SUFFIX override
+// support) — re-using that single source of truth here.
 
 /**
  * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
