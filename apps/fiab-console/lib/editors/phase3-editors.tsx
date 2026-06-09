@@ -79,6 +79,8 @@ import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '
 import { WarehouseAlerts } from './components/warehouse-alerts';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
+import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
@@ -9073,6 +9075,33 @@ interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
 
+// "Get data" starter mashup — a self-contained inline table so the wizard runs
+// end-to-end with zero external connection config; the source picker replaces
+// the Source step when a connector is chosen.
+const INGEST_STARTER_M = `section Section1;
+
+shared IngestQuery = let
+    Source = #table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}}),
+    Filtered = Table.SelectRows(Source, each [value] > 0)
+in
+    Filtered;`;
+
+// Source picker connectors. Each emits a real Power Query M `Source =`
+// expression. Connectors that reach an external system reference an ADF linked
+// service / account the operator already configured (no secrets in the UI).
+const INGEST_SOURCES: Array<{ key: string; label: string; hint: string; m: string }> = [
+  { key: 'inline', label: 'Sample table (inline)', hint: 'A literal #table — runs with no connection config.',
+    m: '#table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}})' },
+  { key: 'adls-csv', label: 'ADLS Gen2 — CSV', hint: 'Delimited file in your data lake.',
+    m: 'Csv.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv])' },
+  { key: 'adls-parquet', label: 'ADLS Gen2 — Parquet', hint: 'Parquet file/folder in your data lake.',
+    m: 'Parquet.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.parquet"))' },
+  { key: 'azuresql', label: 'Azure SQL Database', hint: 'A table or view over your Azure SQL server.',
+    m: 'Sql.Database("<server>.database.windows.net", "<database>"){[Schema="dbo", Item="<table>"]}[Data]' },
+  { key: 'odata', label: 'REST / OData feed', hint: 'An OData v4 endpoint.',
+    m: 'OData.Feed("https://<host>/<service>/", null, [Implementation="2.0"])' },
+];
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
@@ -9088,7 +9117,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'refresh' | 'config' | 'direct-lake' | 'direct-lake-query' | 'access' | 'governance' | 'embed'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9130,6 +9159,198 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
+  // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
+  // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
+  // same Gold Delta files are queried via Synapse Serverless OPENROWSET — the
+  // Azure-native analog of Fabric "Direct Lake on SQL" DirectQuery fallback.
+  interface DlQueryResult {
+    ok: boolean;
+    servingFrom?: 'warm-cache' | 'serverless-fallback';
+    columns?: string[];
+    rows?: unknown[][];
+    rowCount?: number;
+    executionMs?: number;
+    truncated?: boolean;
+    endpoint?: string;
+    deltaPath?: string;
+    lastRefreshedAt?: string | null;
+    cacheTtlSeconds?: number;
+    error?: string;
+  }
+  const [dlTable, setDlTable] = useState('');
+  const [dlMaxRows, setDlMaxRows] = useState(1000);
+  const [dlqLoading, setDlqLoading] = useState(false);
+  const [dlResult, setDlResult] = useState<DlQueryResult | null>(null);
+
+  // --- Direct Lake (shim) tab -------------------------------------------------
+  // Azure-native parity for Fabric Direct Lake: the shim keeps a warm AAS
+  // (Power BI Premium XMLA) cache fresh from an ADLS Gen2 Delta source, driven
+  // by _delta_log Event Grid notifications. Config persists to the shim's
+  // Cosmos store via PUT /api/items/semantic-model/{id}/direct-lake.
+  type DlPolicy = 'Partition' | 'Full' | 'DirectQueryFallback' | 'Composite';
+  type DlTableRow = { tableName: string; policy: DlPolicy; partitionColumn: string };
+  interface DlShimRun { requestId: string; refreshType?: string; status?: string; startTime?: string; endTime?: string; durationMs?: number; error?: string }
+  interface DlEventGrid { systemTopic: string; topicState: string; subscriptionName: string; subscriptionState: string; destinationQueueId?: string }
+  const DL_SLA_OPTIONS = [
+    { value: 300, label: '5 minutes' },
+    { value: 900, label: '15 minutes' },
+    { value: 3600, label: '1 hour' },
+    { value: -1, label: 'On change (Event Grid trigger)' },
+  ];
+  const DL_POLICIES: Array<{ value: DlPolicy; label: string }> = [
+    { value: 'Partition', label: 'Partition (incremental — Direct Lake sweet spot)' },
+    { value: 'Full', label: 'Full table refresh' },
+    { value: 'DirectQueryFallback', label: 'DirectQuery (always live)' },
+    { value: 'Composite', label: 'Composite (Import + DirectQuery)' },
+  ];
+  const [dlEnabled, setDlEnabled] = useState<boolean | null>(null); // null = unknown until first load
+  const [dlHint, setDlHint] = useState<string>('');
+  const [dlDeltaPath, setDlDeltaPath] = useState('');
+  const [dlSla, setDlSla] = useState<number>(300);
+  const [dlTables, setDlTables] = useState<DlTableRow[]>([]);
+  const [dlRuns, setDlRuns] = useState<DlShimRun[]>([]);
+  const [dlEventGrid, setDlEventGrid] = useState<DlEventGrid | null>(null);
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlLoading, setDlLoading] = useState(false);
+  const [dlMsg, setDlMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const DEFAULT_DL_PATH_HINT = 'abfss://gold@<account>.dfs.core.windows.net/<delta-table-path>';
+
+  const loadDirectLake = useCallback(async (dsId: string, wsId: string) => {
+    if (!dsId) return;
+    setDlLoading(true); setDlMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      const j = await r.json();
+      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); setDlEnabled(true); return; }
+      setDlEnabled(!!j.shimEnabled);
+      setDlHint(j.hint || '');
+      setDlRuns(Array.isArray(j.runs) ? j.runs : []);
+      setDlEventGrid(j.eventGrid || null);
+      if (j.config) {
+        setDlDeltaPath(j.config.deltaSourcePath || '');
+        setDlSla(typeof j.config.freshnessSlaSeconds === 'number' ? j.config.freshnessSlaSeconds : 300);
+        const rows: DlTableRow[] = Object.values(j.config.tables || {}).map((t: any) => ({
+          tableName: t.tableName || '', policy: (t.policy as DlPolicy) || 'Partition', partitionColumn: t.partitionColumn || '',
+        }));
+        if (rows.length) setDlTables(rows);
+      }
+    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); setDlEnabled(true); }
+    finally { setDlLoading(false); }
+  }, []);
+
+  // Seed the per-table policy grid from the model's tables when none is loaded
+  // yet, so the operator sees one row per table to configure.
+  useEffect(() => {
+    if (tab !== 'direct-lake') return;
+    setDlTables((prev) => {
+      if (prev.length) return prev;
+      const fromModel = (detail?.tables || []).map((t) => ({ tableName: t.name, policy: 'Partition' as DlPolicy, partitionColumn: '' }));
+      return fromModel;
+    });
+  }, [tab, detail?.tables]);
+
+  useEffect(() => {
+    if (tab === 'direct-lake' && datasetId) loadDirectLake(datasetId, workspaceId);
+  }, [tab, datasetId, workspaceId, loadDirectLake]);
+
+  const setDlTablePolicy = useCallback((idx: number, policy: DlPolicy) => {
+    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, policy } : row)));
+  }, []);
+  const setDlTablePartCol = useCallback((idx: number, partitionColumn: string) => {
+    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, partitionColumn } : row)));
+  }, []);
+
+  const saveDirectLake = useCallback(async () => {
+    if (!datasetId || !workspaceId || !dlDeltaPath.trim()) {
+      setDlMsg({ ok: false, text: 'Select a workspace + dataset and enter the ADLS Gen2 Delta source path first.' });
+      return;
+    }
+    setDlBusy(true); setDlMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/direct-lake`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          deltaSourcePath: dlDeltaPath.trim(),
+          freshnessSlaSeconds: dlSla,
+          workspaceId,
+          datasetId,
+          tables: dlTables.filter((t) => t.tableName.trim()).map((t) => ({
+            tableName: t.tableName.trim(), policy: t.policy,
+            ...(t.partitionColumn.trim() ? { partitionColumn: t.partitionColumn.trim() } : {}),
+          })),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setDlEventGrid(j.eventGrid || null);
+      setDlMsg({ ok: true, text: j.eventGridNote ? `Saved. Event Grid wiring deferred: ${j.eventGridNote}` : 'Direct Lake (shim) configured. The shim picks up the new policy within ~60 s.' });
+      if (j.config?.deltaSourcePath) setDlDeltaPath(j.config.deltaSourcePath);
+    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setDlBusy(false); }
+  }, [datasetId, workspaceId, dlDeltaPath, dlSla, dlTables]);
+
+  // Composite + Dual per-table storage mode (Tables tab). Each table gets an
+  // Import / DirectQuery / Dual picker so a single model can MIX modes; the
+  // selection is pushed to the BFF datasource route which builds a model.bim
+  // TMSL with a per-partition `mode` and applies it (Fabric updateDefinition)
+  // or returns it as an Invoke-ASCmd receipt. Dual requires Premium/Fabric.
+  const TABLE_STORAGE_MODES = ['import', 'directQuery', 'dual'] as const;
+  type TableStorageMode = typeof TABLE_STORAGE_MODES[number];
+  const [tableModes, setTableModes] = useState<Record<string, TableStorageMode>>({});
+  const [tableSourceQ, setTableSourceQ] = useState<Record<string, string>>({});
+  const [modesBusy, setModesBusy] = useState(false);
+  const [modesMsg, setModesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [tmslReceipt, setTmslReceipt] = useState<string | null>(null);
+
+  // --- Get data (Power Query / M → Delta → semantic layer) ----------------
+  // Source picker → Power Query (M) authoring (PowerQueryHost) → materialise to
+  // Delta in ADLS via ADF/Synapse data flows → refresh the AAS tabular model.
+  // POSTs to /api/items/semantic-model/{id}/ingest (real backends; honest gate).
+  const [getDataOpen, setGetDataOpen] = useState(false);
+  const [ingestTab, setIngestTab] = useState<'source' | 'transform' | 'run'>('source');
+  const [ingestMScript, setIngestMScript] = useState(INGEST_STARTER_M);
+  const [ingestContainer, setIngestContainer] = useState<'bronze' | 'silver' | 'gold'>('silver');
+  const [ingestAasTable, setIngestAasTable] = useState('');
+  const [ingestRunning, setIngestRunning] = useState(false);
+  const [ingestResult, setIngestResult] = useState<{
+    ok: boolean; deltaPath?: string; adfRunId?: string; deltaRunId?: string; deltaBackend?: string;
+    aasRefreshId?: string; warnings?: string[]; error?: string;
+  } | null>(null);
+
+  const insertSource = useCallback((mExpr: string) => {
+    // Append/replace the active query's Source step with the connector's M.
+    setIngestMScript((prev) => {
+      const qs = parseSharedQueries(prev);
+      const target = qs[qs.length - 1];
+      const body = `let\n    Source = ${mExpr}\nin\n    Source`;
+      if (!target) {
+        return `section Section1;\n\nshared IngestQuery = ${body};\n`;
+      }
+      return setQueryBody(prev, target.name, body);
+    });
+    setIngestTab('transform');
+  }, []);
+
+  const runIngest = useCallback(async () => {
+    setIngestRunning(true); setIngestResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mScript: typeof window === 'undefined' ? '' : window.btoa(unescape(encodeURIComponent(ingestMScript))),
+          container: ingestContainer,
+          aasTable: ingestAasTable.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setIngestResult({ ok: false, error: j.error || j.hint || `HTTP ${r.status}`, warnings: j.warnings }); return; }
+      setIngestResult({ ok: true, deltaPath: j.deltaPath, adfRunId: j.adfRunId, deltaRunId: j.deltaRunId, deltaBackend: j.deltaBackend, aasRefreshId: j.aasRefreshId, warnings: j.warnings });
+    } catch (e: any) {
+      setIngestResult({ ok: false, error: e?.message || String(e) });
+    } finally { setIngestRunning(false); }
+  }, [id, ingestMScript, ingestContainer, ingestAasTable]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9236,6 +9457,53 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
 
+  // Apply the per-table storage modes: builds a composite model.bim TMSL with a
+  // per-partition `mode` (import/directQuery/dual) and applies it via the
+  // datasource BFF route, then surfaces the live DAX probe + TMSL receipt.
+  const applyModes = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setModesBusy(true); setModesMsg(null); setTmslReceipt(null);
+    try {
+      const tables = (detail?.tables || []).map((t) => {
+        const mode: TableStorageMode = tableModes[t.name] ?? 'import';
+        return {
+          name: t.name,
+          mode,
+          ...(mode !== 'import'
+            ? { sourceQuery: (tableSourceQ[t.name] || `SELECT * FROM [${t.name}]`).trim(), dataSourceName: 'sqlSource' }
+            : {}),
+          columns: (t.columns || []).map((c) => ({ name: c.name, dataType: c.dataType })),
+        };
+      });
+      const rels = relationships
+        .filter((r) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
+        .map((r) => ({
+          name: r.name,
+          fromTable: r.fromTable!, fromColumn: r.fromColumn!,
+          toTable: r.toTable!, toColumn: r.toColumn!,
+          crossFilteringBehavior: (r.crossFilteringBehavior === 'bothDirections' ? 'bothDirections' : 'oneDirection') as 'oneDirection' | 'bothDirections',
+        }));
+      const r = await fetch(
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: detail?.dataset?.name || 'CompositeModel', tables, relationships: rels }),
+        },
+      );
+      const j = await r.json();
+      if (!j.ok) { setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null); setModesMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null);
+      const probe = j.probe ? ` Query probe (first rows): ${j.probe}` : '';
+      setModesMsg({
+        ok: true,
+        text: j.applied
+          ? `Composite TMSL applied in-place via Fabric.${probe}`
+          : `Composite TMSL built (apply offline via Invoke-ASCmd, or opt into a Fabric/Premium backend). See receipt below.${probe}`,
+      });
+    } catch (e: any) { setModesMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setModesBusy(false); }
+  }, [workspaceId, datasetId, detail?.tables, detail?.dataset?.name, tableModes, tableSourceQ, relationships]);
+
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
   // and evaluates a probe row — invalid DAX returns the engine's real
@@ -9262,6 +9530,30 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!measureTable && detail?.tables?.[0]?.name) setMeasureTable(detail.tables[0].name);
     if (!measureName) setMeasureName('MyMeasure');
   }, [measureTable, measureName, detail?.tables]);
+
+  // Direct Lake query: POST to the BFF, which serves from the warm Power BI
+  // cache when fresh and transparently falls back to Synapse Serverless
+  // OPENROWSET over the Gold Delta files when the cache is stale/unbuilt.
+  // datasetId is optional here — the Serverless fallback only needs the table
+  // name and LOOM_GOLD_URL, so the query works with no Power BI workspace bound.
+  const executeDlQuery = useCallback(async () => {
+    if (!dlTable) return;
+    setDlqLoading(true); setDlResult(null);
+    try {
+      const dsPath = datasetId ? encodeURIComponent(datasetId) : '_';
+      const r = await fetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, table: dlTable, maxRows: dlMaxRows }),
+      });
+      const j: DlQueryResult = await r.json();
+      setDlResult(j);
+    } catch (e: any) {
+      setDlResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDlqLoading(false);
+    }
+  }, [workspaceId, datasetId, dlTable, dlMaxRows]);
 
   // Build a REAL new semantic model (push dataset) via the Power BI Push
   // Datasets REST API. After a successful build we refresh the dataset list
@@ -9310,6 +9602,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Get data', onClick: () => { setGetDataOpen(true); setIngestTab('source'); }, title: 'Ingest data with Power Query (M) → Delta in ADLS → refresh the semantic layer (Azure-native, no Fabric required)' },
+      ]},
       { label: 'Model', actions: [
         { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
         { label: 'Model view', onClick: datasetId ? focusModel : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Interactive relationship diagram (cardinality, cross-filter, active/inactive) + drill-hierarchy editor; writes TMSL' },
@@ -9343,6 +9638,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.pad}>
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
+              <Button appearance="outline" icon={<DatabaseLink20Regular />} onClick={() => { setGetDataOpen(true); setIngestTab('source'); }} title="Power Query (M) → Delta in ADLS → semantic layer (Azure-native, no Fabric required)">Get data</Button>
               {powerBiConfigured && (
                 <>
                   <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
@@ -9360,6 +9656,117 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
             </div>
+
+            {/* Get data — Power Query (M) → Delta → semantic layer ingest wizard */}
+            <Dialog open={getDataOpen} onOpenChange={(_, d) => setGetDataOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: '1080px', width: '94vw' }}>
+                <DialogBody>
+                  <DialogTitle>Get data — Power Query (M) ingest</DialogTitle>
+                  <DialogContent>
+                    <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Azure-native, no Fabric required</MessageBarTitle>
+                        Author a Power Query (M) mashup, then <strong>Run ingest</strong>: Loom compiles it into an ADF
+                        WranglingDataFlow (M → Parquet), a Mapping Data Flow lands the result as <strong>Delta</strong> in
+                        ADLS Gen2, and the Azure Analysis Services tabular model is refreshed so the table is queryable.
+                        Set <code>LOOM_SYNAPSE_WORKSPACE</code> to run the Delta step on Synapse instead. In Government
+                        clouds (no AAS) the Delta is queryable via Synapse Serverless <code>OPENROWSET</code>.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div className={s.tabBar}>
+                      <TabList selectedValue={ingestTab} onTabSelect={(_: unknown, d: any) => setIngestTab(d.value)}>
+                        <Tab value="source">1 · Source</Tab>
+                        <Tab value="transform">2 · Transform (M)</Tab>
+                        <Tab value="run">3 · Run</Tab>
+                      </TabList>
+                    </div>
+
+                    {ingestTab === 'source' && (
+                      <div style={{ marginTop: 12 }}>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
+                          details on the next tab. External connectors reference a server / account you already configured.
+                        </Caption1>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12, marginTop: 12 }}>
+                          {INGEST_SOURCES.map((src) => (
+                            <div key={src.key} className={s.card} style={{ cursor: 'pointer' }} role="button" tabIndex={0}
+                              onClick={() => insertSource(src.m)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') insertSource(src.m); }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Database20Regular />
+                                <span style={{ fontWeight: 600 }}>{src.label}</span>
+                              </div>
+                              <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>{src.hint}</Caption1>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {ingestTab === 'transform' && (
+                      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+                        <PowerQueryHost mScript={ingestMScript} onChange={setIngestMScript} />
+                      </div>
+                    )}
+
+                    {ingestTab === 'run' && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          <Field label="Delta destination (ADLS zone)" style={{ minWidth: 220 }}>
+                            <Select value={ingestContainer} onChange={(_, d) => setIngestContainer(d.value as 'bronze' | 'silver' | 'gold')}>
+                              <option value="bronze">bronze</option>
+                              <option value="silver">silver</option>
+                              <option value="gold">gold</option>
+                            </Select>
+                          </Field>
+                          <Field label="AAS table to refresh (optional)" style={{ minWidth: 260 }} hint="Defaults to the output query name. The AAS model's partition source must point at the Delta path.">
+                            <Input value={ingestAasTable} onChange={(_, d) => setIngestAasTable(d.value)} placeholder="(output query name)" />
+                          </Field>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                          <Button appearance="primary" icon={<Play20Regular />} disabled={ingestRunning} onClick={runIngest}>
+                            {ingestRunning ? 'Running ingest…' : 'Run ingest'}
+                          </Button>
+                          {ingestRunning && <Spinner size="tiny" />}
+                        </div>
+                        {ingestResult?.ok && (
+                          <MessageBar intent="success" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest dispatched</MessageBarTitle>
+                              Delta landing at <code>{ingestResult.deltaPath}</code> — ADF run <code>{ingestResult.adfRunId}</code>
+                              {ingestResult.deltaRunId ? <> → Delta run <code>{ingestResult.deltaRunId}</code> ({ingestResult.deltaBackend})</> : null}
+                              {ingestResult.aasRefreshId ? <>. AAS refresh <code>{ingestResult.aasRefreshId}</code> queued.</> : '.'}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {ingestResult && !ingestResult.ok && (
+                          <MessageBar intent="error" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest failed</MessageBarTitle>
+                              {ingestResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {(ingestResult?.warnings || []).map((w, i) => (
+                          <MessageBar key={i} intent="warning" style={{ marginTop: 8 }}>
+                            <MessageBarBody>{w}</MessageBarBody>
+                          </MessageBar>
+                        ))}
+                      </div>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    {ingestTab !== 'run' && (
+                      <Button appearance="primary" onClick={() => setIngestTab(ingestTab === 'source' ? 'transform' : 'run')}>Next</Button>
+                    )}
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Close</Button>
+                    </DialogTrigger>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
@@ -9390,31 +9797,101 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
+                  <Tab value="direct-lake">Direct Lake (shim)</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
+                  <Tab value="direct-lake-query">Direct Lake query</Tab>
                   {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
                 </TabList>
               </div>
               <div className={s.pad}>
                 {tab === 'tables' && (
-                  <div className={s.tableWrap}>
-                    <Table aria-label="Tables" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Table</TableHeaderCell>
-                        <TableHeaderCell>Columns</TableHeaderCell>
-                        <TableHeaderCell>Measures</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {(detail?.tables || []).map((t) => (
-                          <TableRow key={t.name}>
-                            <TableCell>{t.name}</TableCell>
-                            <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
-                            <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                  <>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 8 }}>
+                      Set a per-table <strong>storage mode</strong> to build a composite model that mixes
+                      Import, DirectQuery, and Dual tables. Apply pushes a <code>model.bim</code> TMSL with a
+                      per-partition mode (Fabric updateDefinition), or returns it as an <code>Invoke-ASCmd</code>
+                      receipt. <strong>Dual</strong> requires Power BI Premium / Fabric capacity.
+                    </Caption1>
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Tables" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Table</TableHeaderCell>
+                          <TableHeaderCell>Columns</TableHeaderCell>
+                          <TableHeaderCell>Measures</TableHeaderCell>
+                          <TableHeaderCell>Storage mode</TableHeaderCell>
+                          <TableHeaderCell>Source query (DQ / Dual)</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(detail?.tables || []).map((t) => {
+                            const mode = tableModes[t.name] ?? 'import';
+                            return (
+                              <TableRow key={t.name}>
+                                <TableCell>{t.name}</TableCell>
+                                <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
+                                <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
+                                <TableCell>
+                                  <Select
+                                    size="small"
+                                    value={mode}
+                                    onChange={(_, d) => setTableModes((prev) => ({ ...prev, [t.name]: d.value as TableStorageMode }))}
+                                    aria-label={`Storage mode for ${t.name}`}
+                                    title={`Storage mode for ${t.name}. 'dual' requires Power BI Premium / Fabric capacity.`}
+                                  >
+                                    {TABLE_STORAGE_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                                  </Select>
+                                </TableCell>
+                                <TableCell>
+                                  {mode === 'import' ? (
+                                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+                                  ) : (
+                                    <Input
+                                      size="small"
+                                      value={tableSourceQ[t.name] ?? `SELECT * FROM [${t.name}]`}
+                                      onChange={(_, d) => setTableSourceQ((prev) => ({ ...prev, [t.name]: d.value }))}
+                                      aria-label={`Source query for ${t.name}`}
+                                      style={{ minWidth: 220 }}
+                                    />
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+                      <Button
+                        appearance="primary"
+                        icon={<ArrowSync20Regular />}
+                        disabled={modesBusy || !datasetId || !powerBiConfigured || (detail?.tables || []).length === 0}
+                        onClick={applyModes}
+                        title={!powerBiConfigured ? 'Power BI / Fabric not configured' : 'Build the composite TMSL with the selected per-table modes and apply via Fabric updateDefinition (or generate the Invoke-ASCmd receipt), then probe the live model'}
+                      >
+                        {modesBusy ? 'Applying…' : 'Apply storage modes'}
+                      </Button>
+                      {!powerBiConfigured && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Power BI / Fabric not configured — storage modes build TMSL only (no live apply).
+                        </Caption1>
+                      )}
+                    </div>
+                    {modesMsg && (
+                      <MessageBar intent={modesMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                        <MessageBarBody>{modesMsg.text}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {tmslReceipt && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary style={{ cursor: 'pointer' }}>
+                          <Caption1>TMSL receipt (apply offline: <code>Invoke-ASCmd -Server &quot;asazure://…&quot; -Query &lt;tmsl&gt;</code>)</Caption1>
+                        </summary>
+                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, marginTop: 4 }}>
+                          {tmslReceipt.slice(0, 4000)}
+                        </pre>
+                      </details>
+                    )}
+                  </>
                 )}
                 {tab === 'relationships' && (
                   <>
@@ -9672,6 +10149,144 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBar>
                   </>
                 )}
+                {tab === 'direct-lake' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820 }}>
+                    <div>
+                      <Subtitle2>Direct Lake (shim)</Subtitle2>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>
+                        Azure-native parity for Fabric Direct Lake. The shim keeps a warm AAS (Power BI Premium XMLA)
+                        cache fresh from an ADLS Gen2 Delta source — triggered by <code>_delta_log</code> Event Grid
+                        notifications — so the model reflects new Delta rows within the freshness SLA.
+                      </Caption1>
+                    </div>
+
+                    {/* Honest, always-on disclosure — cloud-invariant. */}
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>This is an AAS incremental-refresh shim, not a Fabric F-SKU</MessageBarTitle>
+                        True Direct Lake sub-second freshness requires a Fabric F-SKU (unavailable in Gov). This shim
+                        achieves 5–30 s via AAS incremental refresh via Power BI Premium XMLA. Set
+                        {' '}<code>LOOM_DIRECT_LAKE_SHIM_ENABLED=true</code> to activate.
+                      </MessageBarBody>
+                    </MessageBar>
+
+                    {dlEnabled === false ? (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          <MessageBarTitle>Direct Lake (shim) is not enabled in this deployment</MessageBarTitle>
+                          {dlHint || 'Set LOOM_DIRECT_LAKE_SHIM_ENABLED=true to activate the shim.'} Deploy the shim
+                          container app, its Service Bus queue, and the Event Grid system topic via
+                          {' '}<code>platform/fiab/bicep/modules/admin-plane/aas.bicep</code>.
+                        </MessageBarBody>
+                      </MessageBar>
+                    ) : (
+                      <>
+                        {dlEventGrid && (
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <Badge appearance="filled" color={dlEventGrid.subscriptionState === 'Succeeded' ? 'success' : 'warning'}>
+                              Event Grid: {dlEventGrid.subscriptionState}
+                            </Badge>
+                            <Caption1>Topic: <strong>{dlEventGrid.systemTopic}</strong> ({dlEventGrid.topicState})</Caption1>
+                          </div>
+                        )}
+
+                        <Field label="ADLS Gen2 Delta source path" hint="abfss://container@account.dfs… or https://account.dfs…/container/… — populated from the lakehouse the model is built on.">
+                          <Input value={dlDeltaPath} onChange={(_, d) => setDlDeltaPath(d.value)} placeholder={DEFAULT_DL_PATH_HINT} disabled={dlBusy} />
+                        </Field>
+
+                        <Field label="Freshness SLA">
+                          <Select value={String(dlSla)} onChange={(_, d) => setDlSla(parseInt(d.value, 10))} disabled={dlBusy}>
+                            {DL_SLA_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </Select>
+                        </Field>
+
+                        <div>
+                          <Caption1 style={{ fontWeight: 600 }}>Per-table refresh policy</Caption1>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2, marginBottom: 6 }}>
+                            One row per table in the model. Partition is the incremental Direct-Lake sweet spot — set the
+                            partition column the Delta directory layout encodes (e.g. <code>event_date</code>).
+                          </Caption1>
+                          <div className={s.tableWrap}>
+                            <Table aria-label="Per-table refresh policy" size="small">
+                              <TableHeader><TableRow>
+                                <TableHeaderCell>Table</TableHeaderCell>
+                                <TableHeaderCell>Refresh policy</TableHeaderCell>
+                                <TableHeaderCell>Partition column</TableHeaderCell>
+                              </TableRow></TableHeader>
+                              <TableBody>
+                                {dlTables.length === 0 && (
+                                  <TableRow><TableCell colSpan={3}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No tables loaded yet — open the Tables tab to load the model schema.</Caption1></TableCell></TableRow>
+                                )}
+                                {dlTables.map((row, idx) => (
+                                  <TableRow key={row.tableName || idx}>
+                                    <TableCell>{row.tableName}</TableCell>
+                                    <TableCell>
+                                      <Select value={row.policy} onChange={(_, d) => setDlTablePolicy(idx, d.value as DlPolicy)} disabled={dlBusy}>
+                                        {DL_POLICIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Input
+                                        value={row.partitionColumn}
+                                        onChange={(_, d) => setDlTablePartCol(idx, d.value)}
+                                        placeholder={row.policy === 'Partition' ? 'event_date' : '—'}
+                                        disabled={dlBusy || row.policy !== 'Partition'}
+                                        size="small"
+                                      />
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <Button appearance="primary" icon={<Save20Regular />} disabled={dlBusy || dlLoading} onClick={saveDirectLake}>
+                            {dlBusy ? 'Saving…' : 'Configure shim'}
+                          </Button>
+                          <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={dlLoading || !datasetId} onClick={() => loadDirectLake(datasetId, workspaceId)}>
+                            {dlLoading ? 'Loading…' : 'Refresh status'}
+                          </Button>
+                        </div>
+                        {dlMsg && <MessageBar intent={dlMsg.ok ? 'success' : 'error'}><MessageBarBody>{dlMsg.text}</MessageBarBody></MessageBar>}
+
+                        <div>
+                          <Caption1 style={{ fontWeight: 600 }}>Shim run log (last {dlRuns.length})</Caption1>
+                          <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                            <Table aria-label="Shim refresh runs" size="small">
+                              <TableHeader><TableRow>
+                                <TableHeaderCell>Request</TableHeaderCell>
+                                <TableHeaderCell>Type</TableHeaderCell>
+                                <TableHeaderCell>Status</TableHeaderCell>
+                                <TableHeaderCell>Start</TableHeaderCell>
+                                <TableHeaderCell>Duration</TableHeaderCell>
+                              </TableRow></TableHeader>
+                              <TableBody>
+                                {dlRuns.length === 0 && (
+                                  <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No refresh runs yet. Write new Delta rows to the source to trigger the shim.</Caption1></TableCell></TableRow>
+                                )}
+                                {dlRuns.map((run, i) => (
+                                  <TableRow key={run.requestId || i}>
+                                    <TableCell><span style={{ fontFamily: 'monospace' }}>{(run.requestId || '—').slice(0, 8)}</span></TableCell>
+                                    <TableCell>{run.refreshType || '—'}</TableCell>
+                                    <TableCell>
+                                      <Badge appearance="outline" color={run.status === 'Completed' ? 'success' : run.status === 'Failed' ? 'danger' : 'informative'}>
+                                        {run.status || 'Unknown'}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell>{run.startTime ? new Date(run.startTime).toLocaleString() : '—'}</TableCell>
+                                    <TableCell>{typeof run.durationMs === 'number' ? `${(run.durationMs / 1000).toFixed(1)} s` : '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                     {/* F17 — read-only sensitivity label inherited from the model's
@@ -9692,6 +10307,137 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBarBody>
                   </MessageBar>
                 )}
+
+                {tab === 'direct-lake-query' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Direct Lake query with transparent Serverless fallback</MessageBarTitle>
+                        When the warm cache (last model refresh) is within{' '}
+                        <code>LOOM_DL_CACHE_TTL_SECONDS</code>, rows are served from the Power BI
+                        in-memory VertiPaq cache. When stale or unbuilt, the same Gold Delta files
+                        are queried transparently via Synapse Serverless <code>OPENROWSET</code> —
+                        the Azure-native analog of Fabric Direct Lake on SQL DirectQuery fallback.
+                        No Fabric capacity required.
+                      </MessageBarBody>
+                    </MessageBar>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-table-picker">Table</Label>
+                        {(detail?.tables && detail.tables.length > 0) ? (
+                          <Dropdown
+                            id="dl-table-picker"
+                            placeholder="Select table"
+                            value={dlTable}
+                            selectedOptions={dlTable ? [dlTable] : []}
+                            onOptionSelect={(_, d) => setDlTable((d.optionValue as string) || '')}
+                            style={{ minWidth: 200 }}
+                          >
+                            {detail.tables.map((t) => (
+                              <Option key={t.name} value={t.name}>{t.name}</Option>
+                            ))}
+                          </Dropdown>
+                        ) : (
+                          <Input
+                            id="dl-table-picker"
+                            placeholder="Gold Delta table name (e.g. fact_sales)"
+                            value={dlTable}
+                            onChange={(_, d) => setDlTable(d.value)}
+                            style={{ minWidth: 240 }}
+                          />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-max-rows">Max rows</Label>
+                        <Input
+                          id="dl-max-rows"
+                          type="number"
+                          value={String(dlMaxRows)}
+                          onChange={(_, d) => setDlMaxRows(Math.min(5000, Math.max(1, parseInt(d.value, 10) || 1000)))}
+                          style={{ width: 100 }}
+                        />
+                      </div>
+                      <Button
+                        appearance="primary"
+                        icon={<Play20Regular />}
+                        disabled={!dlTable || dlqLoading}
+                        onClick={executeDlQuery}
+                      >
+                        Run
+                      </Button>
+                    </div>
+
+                    {dlqLoading && <Spinner size="small" label="Querying…" labelPosition="after" />}
+
+                    {dlResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {dlResult.servingFrom === 'warm-cache' && (
+                            <Badge appearance="filled" color="success">Serving from: warm cache</Badge>
+                          )}
+                          {dlResult.servingFrom === 'serverless-fallback' && (
+                            <Badge appearance="filled" color="warning">Serving from: fallback (Serverless)</Badge>
+                          )}
+                          {dlResult.executionMs !== undefined && (
+                            <Caption1>{dlResult.executionMs} ms</Caption1>
+                          )}
+                          {dlResult.rowCount !== undefined && (
+                            <Badge appearance="outline">{dlResult.rowCount} rows</Badge>
+                          )}
+                          {dlResult.truncated && <Badge color="warning">Truncated</Badge>}
+                        </div>
+
+                        {dlResult.servingFrom === 'serverless-fallback' && dlResult.endpoint && (
+                          <Caption1>
+                            Serverless endpoint: <code>{dlResult.endpoint}</code>
+                            {dlResult.deltaPath && <> · Delta path: <code>{dlResult.deltaPath}</code></>}
+                          </Caption1>
+                        )}
+                        {dlResult.lastRefreshedAt && (
+                          <Caption1>
+                            Last successful model refresh: {new Date(dlResult.lastRefreshedAt).toLocaleString()}
+                            {dlResult.cacheTtlSeconds !== undefined && <> (TTL {dlResult.cacheTtlSeconds}s)</>}
+                          </Caption1>
+                        )}
+
+                        {!dlResult.ok && (
+                          <MessageBar intent="error">
+                            <MessageBarBody>
+                              <MessageBarTitle>Query failed</MessageBarTitle>
+                              {dlResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+
+                        {dlResult.ok && dlResult.columns && dlResult.rows && (
+                          <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                              <thead>
+                                <tr>
+                                  {dlResult.columns.map((c) => (
+                                    <th key={c} style={{ padding: '4px 8px', background: tokens.colorNeutralBackground2, textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0 }}>{c}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dlResult.rows.slice(0, 200).map((row, ri) => (
+                                  <tr key={ri}>
+                                    {(row as unknown[]).map((cell, ci) => (
+                                      <td key={ci} style={{ padding: '3px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
+                                        {cell === null || cell === undefined ? <em style={{ opacity: 0.5 }}>null</em> : String(cell)}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -9709,6 +10455,43 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 // authoring surfaces. The Loom editor is a metadata + embed-viewer + open-
 // in-Desktop launcher. Each editor (Report, Dashboard, Scorecard) builds
 // an honest inline ribbon (no decorative disabled buttons) below.
+
+/**
+ * Built-in Power BI report themes (parity with the Power BI service
+ * "View → Themes" gallery). Each entry is a valid Power BI report-theme JSON
+ * object — applied at runtime via `report.applyTheme({ themeJson })` and at
+ * load time via the embed config `theme`. Kept as TypeScript constants (not a
+ * freeform JSON config file) per loom-no-freeform-config: the user picks a
+ * named preset from a dropdown, or pastes a custom theme into the editor.
+ * Format reference: https://learn.microsoft.com/power-bi/create-reports/desktop-report-themes#report-theme-json-file-format
+ */
+const PRESET_THEMES: Array<{ key: string; label: string; theme: Record<string, unknown> }> = [
+  {
+    key: 'loom-light', label: 'Loom Light',
+    theme: {
+      name: 'Loom Light',
+      dataColors: ['#0F6CBD', '#13A10E', '#C19C00', '#D13438', '#8764B8', '#038387', '#CA5010', '#5C2E91'],
+      background: '#FFFFFF', foreground: '#242424', tableAccent: '#0F6CBD',
+    },
+  },
+  {
+    key: 'loom-dark', label: 'Loom Dark',
+    theme: {
+      name: 'Loom Dark',
+      dataColors: ['#479EF5', '#54B054', '#E6B400', '#F1707B', '#B393E0', '#3FC5C9', '#F08A4B', '#A47BD4'],
+      background: '#1B1A19', foreground: '#F3F2F1', tableAccent: '#479EF5',
+      visualStyles: { '*': { '*': { background: [{ color: { solid: { color: '#252423' } } }] } } },
+    },
+  },
+  {
+    key: 'high-contrast', label: 'High Contrast',
+    theme: {
+      name: 'High Contrast',
+      dataColors: ['#000000', '#FFFFFF', '#FFFF00', '#00FFFF', '#FF00FF', '#00FF00', '#FF0000', '#0000FF'],
+      background: '#000000', foreground: '#FFFFFF', tableAccent: '#FFFF00',
+    },
+  },
+];
 
 interface ReportLite {
   id: string; name: string; embedUrl?: string; webUrl?: string; datasetId?: string;
@@ -9742,6 +10525,19 @@ function ReportLikeEditor({
   const [bookmarks, setBookmarks] = useState<Array<{ name: string; displayName: string }>>([]);
   const [editMode, setEditMode] = useState(false);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
+  // Drill-through / cross-highlight / theme / format-pane state (Power BI
+  // report viewer parity). drillContext = the filter context carried onto the
+  // active page after a drill-through navigation; lastSelection = the most
+  // recent cross-highlight / hierarchy drill selection from the embed.
+  const [drillContext, setDrillContext] = useState<any[] | null>(null);
+  const [lastSelection, setLastSelection] = useState<{ visualName?: string; pageDisplayName?: string; filterCount: number; pointCount: number } | null>(null);
+  const [showThemeDialog, setShowThemeDialog] = useState(false);
+  const [themePreset, setThemePreset] = useState<string>(PRESET_THEMES[0].key);
+  const [themeJson, setThemeJson] = useState(() => JSON.stringify(PRESET_THEMES[0].theme, null, 2));
+  const [themeApplying, setThemeApplying] = useState(false);
+  const [themeErr, setThemeErr] = useState<string | null>(null);
+  const [themeMsg, setThemeMsg] = useState<string | null>(null);
+  const [showFormatPane, setShowFormatPane] = useState(false);
   const embedRef = useRef<any>(null);
   // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
   // metadata by default; expose embed/refresh/export only when configured.
@@ -9922,14 +10718,86 @@ function ReportLikeEditor({
     catch (e: any) { setViewerErr(e?.message || String(e)); }
   }, [editMode]);
 
-  // Mirror the active page when the user navigates inside the embed.
+  // Apply a Power BI report theme at runtime (parity with the service
+  // "View → Themes" picker). Real powerbi-client API: report.applyTheme.
+  // Accepts a preset key, a raw JSON string, or a theme object.
+  const applyTheme = useCallback(async (input: string | object) => {
+    setThemeErr(null); setThemeMsg(null); setThemeApplying(true);
+    try {
+      let themeObj: any;
+      if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!trimmed) throw new Error('Paste a Power BI theme JSON or pick a preset.');
+        themeObj = JSON.parse(trimmed);
+      } else { themeObj = input; }
+      await embedRef.current?.applyTheme?.({ themeJson: themeObj });
+      setThemeMsg(`Applied theme "${themeObj?.name || 'custom'}".`);
+    } catch (e: any) { setThemeErr(e?.message || String(e)); }
+    finally { setThemeApplying(false); }
+  }, []);
+
+  // Reset the report to its authored theme (report.resetTheme).
+  const resetTheme = useCallback(async () => {
+    setThemeErr(null); setThemeMsg(null);
+    try { await embedRef.current?.resetTheme?.(); setThemeMsg('Reset to the report’s authored theme.'); }
+    catch (e: any) { setThemeErr(e?.message || String(e)); }
+  }, []);
+
+  // Show/hide the Power BI visualizations + fields panes (parity with the
+  // service edit-mode formatting pane). Real API: report.updateSettings.
+  const toggleFormatPane = useCallback(async () => {
+    const next = !showFormatPane;
+    setShowFormatPane(next); setViewerErr(null);
+    try {
+      await embedRef.current?.updateSettings?.({
+        panes: {
+          visualizations: { visible: next, expanded: next },
+          fields: { visible: next, expanded: false },
+          filters: { visible: true, expanded: false },
+        },
+      });
+    } catch (e: any) { setViewerErr(e?.message || String(e)); setShowFormatPane(!next); }
+  }, [showFormatPane]);
+
+  // Mirror the active page when the user navigates inside the embed, and read
+  // the drill-through filter context carried onto the newly-active page.
   const onEmbedded = useCallback((embed: any) => {
     embedRef.current = embed;
     try {
       embed?.on?.('loaded', () => { reloadBookmarks(); });
-      embed?.on?.('pageChanged', (ev: any) => {
+      embed?.on?.('pageChanged', async (ev: any) => {
         const name = ev?.detail?.newPage?.name;
         if (name) setActivePage(name);
+        // Drill-through carries source-page filters onto the target page; read
+        // them off the now-active page so the viewer can show what arrived.
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          const filters = await pg?.getFilters?.();
+          setDrillContext(Array.isArray(filters) && filters.length ? filters : null);
+        } catch { setDrillContext(null); }
+      });
+      // Native bookmarks pane / programmatic apply → re-sync the Loom list +
+      // the active page (a bookmark can navigate pages).
+      embed?.on?.('bookmarkApplied', async () => {
+        reloadBookmarks();
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          if (pg?.name) setActivePage(pg.name);
+        } catch { /* best-effort */ }
+      });
+      // Cross-highlight + hierarchy drill selection surface (dataSelected fires
+      // on visual selection and drill-down node clicks).
+      embed?.on?.('dataSelected', (ev: any) => {
+        const d = ev?.detail || {};
+        const filters = Array.isArray(d.filters) ? d.filters : [];
+        const dataPoints = Array.isArray(d.dataPoints) ? d.dataPoints : [];
+        if (!dataPoints.length && !filters.length) { setLastSelection(null); return; }
+        setLastSelection({
+          visualName: d?.visual?.name,
+          pageDisplayName: d?.page?.displayName,
+          filterCount: filters.length,
+          pointCount: dataPoints.length,
+        });
       });
     } catch { /* event wiring best-effort */ }
   }, [reloadBookmarks]);
@@ -9955,9 +10823,14 @@ function ReportLikeEditor({
         { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
         { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
         { label: slideshow ? 'Stop slideshow' : 'Play bookmarks', onClick: hasReport ? toggleSlideshow : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'play the report bookmarks as a slideshow (bookmarksManager.play)' },
+        { label: showFormatPane ? 'Hide format pane' : 'Show format pane', onClick: hasReport && editMode ? toggleFormatPane : undefined, disabled: !hasReport || !editMode, title: !hasReport ? 'select a report first' : (!editMode ? 'switch to Edit mode first to author visuals' : 'show/hide the Power BI visualizations + fields panes (report.updateSettings)') },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'Theme', actions: [
+        { label: 'Apply theme', onClick: hasReport ? () => setShowThemeDialog(true) : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'apply a built-in or custom JSON theme to the embedded report (report.applyTheme)' },
+        { label: 'Reset theme', onClick: hasReport ? resetTheme : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reset the report to its authored theme (report.resetTheme)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -10117,9 +10990,44 @@ function ReportLikeEditor({
                         <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
                       </div>
                     </div>
+                    <div className={s.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Subtitle2>Selection</Subtitle2>
+                        <Button size="small" appearance="outline" onClick={() => setShowThemeDialog(true)} title="apply a report theme (report.applyTheme)">Theme…</Button>
+                      </div>
+                      {lastSelection ? (
+                        <>
+                          <Caption1 style={{ display: 'block' }}>
+                            Cross-highlight: <strong>{lastSelection.visualName || 'visual'}</strong>
+                            {lastSelection.pageDisplayName ? ` on ${lastSelection.pageDisplayName}` : ''}
+                          </Caption1>
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                            {lastSelection.pointCount} point(s){lastSelection.filterCount > 0 ? ` · ${lastSelection.filterCount} filter(s)` : ''}
+                          </Caption1>
+                          <Button size="small" appearance="subtle" onClick={() => setLastSelection(null)} style={{ marginTop: 4 }}>Clear</Button>
+                        </>
+                      ) : (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a data point to cross-highlight; use a hierarchy axis to drill down/up.</Caption1>
+                      )}
+                    </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                     {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    {drillContext && drillContext.length > 0 && (
+                      <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Drill-through context · {drillContext.length} filter{drillContext.length > 1 ? 's' : ''} carried</MessageBarTitle>
+                          {drillContext.slice(0, 6).map((f: any, i: number) => (
+                            <Caption1 key={i} style={{ display: 'block' }}>
+                              {(f?.target?.table ?? '?')}.{(f?.target?.column ?? f?.target?.hierarchy ?? f?.target?.measure ?? '?')}: {JSON.stringify(f?.values ?? f?.conditions ?? f?.operator ?? '—')}
+                            </Caption1>
+                          ))}
+                        </MessageBarBody>
+                        <MessageBarActions>
+                          <Button size="small" appearance="subtle" onClick={() => setDrillContext(null)}>Dismiss</Button>
+                        </MessageBarActions>
+                      </MessageBar>
+                    )}
                     <PowerBIEmbedFrame
                       embedType="report"
                       id={embed.reportId}
@@ -10129,6 +11037,7 @@ function ReportLikeEditor({
                       edit={editMode}
                       pageName={activePage || undefined}
                       onEmbedded={onEmbedded}
+                      paneOverrides={{ bookmarks: { visible: true }, selection: { visible: true } }}
                     />
                   </div>
                 </div>
@@ -10137,6 +11046,244 @@ function ReportLikeEditor({
               )}
             </>
           )}
+          <Dialog open={showThemeDialog} onOpenChange={(_, d) => setShowThemeDialog(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Apply report theme</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Pick a built-in Loom theme or paste a Power BI theme JSON. Applied live to the embedded
+                      report via <code>report.applyTheme</code> — the same engine the Power BI service uses.
+                    </Caption1>
+                    <Field label="Preset theme">
+                      <Dropdown
+                        value={PRESET_THEMES.find((t) => t.key === themePreset)?.label || 'Custom'}
+                        selectedOptions={[themePreset]}
+                        onOptionSelect={(_, d) => {
+                          const key = d.optionValue || '';
+                          setThemePreset(key);
+                          const preset = PRESET_THEMES.find((t) => t.key === key);
+                          if (preset) setThemeJson(JSON.stringify(preset.theme, null, 2));
+                        }}
+                      >
+                        {PRESET_THEMES.map((t) => <Option key={t.key} value={t.key} text={t.label}>{t.label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Theme JSON (editable)" hint="leave as a preset, or paste a custom Power BI report-theme JSON">
+                      <Textarea
+                        value={themeJson}
+                        onChange={(_, d) => setThemeJson(d.value)}
+                        placeholder={'{\n  "name": "My theme",\n  "dataColors": ["#0F6CBD", "#13A10E"]\n}'}
+                        rows={12}
+                        style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                      />
+                    </Field>
+                    {themeErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Theme failed to apply</MessageBarTitle>{themeErr}</MessageBarBody></MessageBar>}
+                    {themeMsg && <MessageBar intent="success"><MessageBarBody>{themeMsg}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={resetTheme}>Reset to authored</Button>
+                  <Button
+                    appearance="primary"
+                    disabled={themeApplying}
+                    onClick={() => {
+                      const preset = PRESET_THEMES.find((t) => t.key === themePreset);
+                      const src = themeJson.trim() ? themeJson : (preset ? JSON.stringify(preset.theme) : '');
+                      applyTheme(src);
+                    }}
+                  >{themeApplying ? 'Applying…' : 'Apply theme'}</Button>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button appearance="subtle">Close</Button>
+                  </DialogTrigger>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
+  );
+}
+
+// ── Loom-native report renderer (Azure Analysis Services, default backend) ──
+//
+// no-fabric-dependency.md: the Report editor's DEFAULT path renders visuals by
+// querying the bound AAS tabular model with DAX (POST /query) — NO Power BI /
+// Fabric workspace required. Power BI embed is strictly opt-in via
+// NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (see ReportEditor below).
+type LoomVisualDef = { type: string; title?: string; field?: string; config?: any };
+type LoomReportPage = { name: string; displayName?: string; order?: number; visuals?: LoomVisualDef[] };
+type LoomReportDetail = {
+  report: { id: string; name: string; reportType?: string };
+  aasServer: string | null;
+  aasDatabase: string | null;
+  pages: LoomReportPage[];
+};
+type VisualState = { rows: Array<Record<string, unknown>>; loading: boolean; err: string | null };
+
+/** Render a single visual's AAS query result (card = big value, else table). */
+function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualState }) {
+  if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
+  if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
+  const rows = state.rows;
+  if (visual.type === 'card' && rows.length >= 1) {
+    const val = Object.values(rows[0])[0];
+    return (
+      <div>
+        <Caption1>{visual.title || '(untitled)'}</Caption1>
+        <div style={{ fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold }}>
+          {val == null ? '—' : String(val)}
+        </div>
+      </div>
+    );
+  }
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
+      {visual.type !== 'table' && visual.type !== 'card' && (
+        <MessageBar intent="info" style={{ margin: '4px 0' }}>
+          <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
+        </MessageBar>
+      )}
+      {rows.length === 0 ? <Caption1>No rows returned.</Caption1> : (
+        <Table size="small">
+          <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+          <TableBody>
+            {rows.slice(0, 100).map((row, ri) => (
+              <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{row[c] == null ? '—' : String(row[c])}</TableCell>)}</TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+/** Config-only visual preview shown when no AAS model is bound yet. */
+function LoomVisualDefinition({ visual }: { visual: LoomVisualDef }) {
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled visual)'}</strong></Caption1>
+      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        type: {visual.type} · field: {visual.field || '—'}
+      </Caption1>
+    </div>
+  );
+}
+
+function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [detail, setDetail] = useState<LoomReportDetail | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activePage, setActivePage] = useState(0);
+  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true); setDetailErr(null); setVisualRows({});
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.ok) {
+        setDetail({ report: j.report, aasServer: j.aasServer ?? null, aasDatabase: j.aasDatabase ?? null, pages: j.pages || [] });
+        setActivePage(0);
+      } else setDetailErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  const bound = !!(detail?.aasServer && detail?.aasDatabase);
+  const pages = useMemo(() => detail?.pages || [], [detail]);
+  const page = pages[activePage];
+
+  const runVisual = useCallback(async (key: string, visual: LoomVisualDef) => {
+    if (!visual.field) { setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: 'visual has no field binding' } })); return; }
+    setVisualRows((p) => ({ ...p, [key]: { rows: p[key]?.rows || [], loading: true, err: null } }));
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: { type: visual.type, field: visual.field } }),
+      });
+      const j = await r.json();
+      if (j.ok) setVisualRows((p) => ({ ...p, [key]: { rows: j.rows || [], loading: false, err: null } }));
+      else setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+    } catch (e: any) {
+      setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: e?.message || String(e) } }));
+    }
+  }, [id]);
+
+  // When the bound page changes, fire a DAX query per visual (real AAS rows).
+  useEffect(() => {
+    if (!bound || !page) return;
+    (page.visuals || []).forEach((v, i) => { runVisual(`${activePage}:${i}`, v); });
+  }, [bound, activePage, page, runVisual]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Refresh', onClick: loadDetail, title: 'reload the report definition and re-run all visual queries' },
+      ]},
+      { label: 'View', actions: pages.map((p, i) => ({
+        label: p.displayName || p.name, onClick: () => setActivePage(i), title: 'show this report page',
+      })) },
+    ]},
+  ], [loadDetail, pages]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Pages ({pages.length})</Subtitle2>
+          {pages.length === 0 && !loading && <Caption1>No pages defined.</Caption1>}
+          <Tree aria-label="Report pages">
+            {pages.map((p, i) => (
+              <TreeItem key={p.name || i} itemType="leaf" value={String(i)} onClick={() => setActivePage(i)}>
+                <TreeItemLayout>{activePage === i ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Report · Loom-native (Azure Analysis Services)</Badge>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadDetail}>Refresh</Button>
+          </div>
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {loading && <Spinner label="Loading report…" />}
+          {!bound && detail && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Bind an Azure Analysis Services model</MessageBarTitle>
+                This report renders visuals by querying a bound AAS tabular model with DAX — no Power BI workspace required.
+                Set <strong>state.aasServer</strong> (XMLA URI, e.g. <code>asazure://eastus2.asazure.windows.net/my-server</code>)
+                and <strong>state.aasDatabase</strong> on this item, or configure <strong>LOOM_AAS_SERVER</strong> + <strong>LOOM_AAS_DATABASE</strong>
+                {' '}(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detail && page && (
+            <div className={s.card}>
+              <Subtitle2 style={{ marginBottom: 8 }}>{page.displayName || page.name}</Subtitle2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+                {(page.visuals || []).map((v, i) => (
+                  <div key={i} className={s.card}>
+                    {bound
+                      ? <LoomVisual visual={v} state={visualRows[`${activePage}:${i}`]} />
+                      : <LoomVisualDefinition visual={v} />}
+                  </div>
+                ))}
+                {(page.visuals || []).length === 0 && <Caption1>This page has no visuals.</Caption1>}
+              </div>
+            </div>
+          )}
+          {detail && pages.length === 0 && !loading && <Caption1>This report has no pages defined.</Caption1>}
         </div>
       }
     />
@@ -10144,7 +11291,13 @@ function ReportLikeEditor({
 }
 
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  // no-fabric-dependency.md: Loom-native AAS renderer is the DEFAULT. Power BI
+  // embed is opt-in only via NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi.
+  const biBackend = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase();
+  if (biBackend === 'powerbi') {
+    return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  }
+  return <LoomNativeReportEditor item={item} id={id} />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
