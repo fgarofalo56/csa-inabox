@@ -793,40 +793,9 @@ export function aasServerBase(server: string): string {
 // that license it; its token scope differs per sovereign cloud, hence
 // `pbiXmlaScope()` (Commercial vs USGov vs DoD).
 
-/** AAS server hostname suffix (no leading dot). Commercial/GCC only — AAS is unavailable in Gov. */
-export function aasSuffix(): string {
-  return 'asazure.windows.net';
-}
-
-/**
- * AAD `.default` scope for an Azure Analysis Services server token. The
- * audience is the server host (e.g. `https://eastus2.asazure.windows.net`),
- * so the region-qualified host must be passed in. Falls back to the bare
- * suffix when no host is supplied.
- */
-export function aasScope(host?: string): string {
-  const h = (host || aasSuffix()).replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  return `https://${h}/.default`;
-}
-
-/**
- * AAD `.default` scope for a Power BI Premium XMLA endpoint token. The Power
- * BI analysis resource differs per sovereign cloud (verified against Microsoft
- * Learn power-bi national-cloud guidance):
- *   Commercial / GCC : https://analysis.windows.net/powerbi/api/.default
- *   GCC-High         : https://high.analysis.usgovcloudapi.net/powerbi/api/.default
- *   DoD / IL5        : https://mil.analysis.usgovcloudapi.net/powerbi/api/.default
- */
-export function pbiXmlaScope(): string {
-  switch (detectLoomCloud()) {
-    case 'DoD':
-      return 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default';
-    case 'GCC-High':
-      return 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default';
-    default:
-      return 'https://analysis.windows.net/powerbi/api/.default';
-  }
-}
+// NOTE: aasSuffix(), aasScope(), and pbiXmlaScope() are each declared once
+// elsewhere in this file (single source of truth). The PR #984 column-editor
+// path uses those existing exports — no duplicate declarations here.
 
 // ---------------------------------------------------------------------------
 // Cloud-invariant constants

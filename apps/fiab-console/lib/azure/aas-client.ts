@@ -1857,7 +1857,7 @@ export interface AasXmlaConfig {
   backend: 'analysis-services' | 'powerbi';
 }
 
-import { aasScope as colCloudAasScope, pbiXmlaScope as colCloudPbiXmlaScope, cloudBoundaryLabel as colCloudBoundaryLabel } from './cloud-endpoints';
+import { pbiXmlaScope as colCloudPbiXmlaScope, cloudBoundaryLabel as colCloudBoundaryLabel } from './cloud-endpoints';
 
 /**
  * Derive the XMLA HTTP URL + AAD token scope from the configured backend.
@@ -1874,9 +1874,12 @@ export function aasXmlaConfig(): AasXmlaConfig | null {
     const host = slash >= 0 ? stripped.slice(0, slash) : stripped;
     const serverName = slash >= 0 ? stripped.slice(slash + 1).replace(/\/+$/, '') : '';
     if (host && serverName) {
+      // The host-specific .default scope (the audience must be the AAS server
+      // host, not the wildcard). cloud-endpoints.aasScope() is the no-arg
+      // data-plane form, so we compute the host scope inline here.
       return {
         xmlaUrl: `https://${host}/servers/${serverName}/models/${database}/xmla`,
-        scope: colCloudAasScope(host),
+        scope: `https://${host}/.default`,
         database,
         backend: 'analysis-services',
       };
