@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { aasScope, xmlaEndpointFromWorkspace } from '../cloud-endpoints';
+import { pbiRestScope, xmlaEndpointFromWorkspace } from '../cloud-endpoints';
 import { parseDeltaSource, toAbfss, toHttps } from '../delta-source-uri';
 import { aasApiBase, shimEnabled, SHIM_DISABLED_HINT } from '../aas-client';
 import { SHIM_REFRESH_POLICIES } from '../direct-lake-config-store';
@@ -22,27 +22,27 @@ function withCloud(c: string) {
   delete process.env.AZURE_CLOUD;
 }
 
-describe('aasScope — sovereign Power BI / AAS XMLA audience (4-way split)', () => {
+describe('pbiRestScope — sovereign Power BI / AAS XMLA audience (4-way split)', () => {
   it('Commercial → analysis.windows.net', () => {
     withCloud('Commercial');
-    expect(aasScope()).toBe('https://analysis.windows.net/powerbi/api/.default');
+    expect(pbiRestScope()).toBe('https://analysis.windows.net/powerbi/api/.default');
   });
   it('GCC → analysis.usgovcloudapi.net', () => {
     withCloud('GCC');
-    expect(aasScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
+    expect(pbiRestScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
   });
   it('GCC-High → high.analysis.usgovcloudapi.net', () => {
     withCloud('GCC-High');
-    expect(aasScope()).toBe('https://high.analysis.usgovcloudapi.net/powerbi/api/.default');
+    expect(pbiRestScope()).toBe('https://high.analysis.usgovcloudapi.net/powerbi/api/.default');
   });
   it('DoD → mil.analysis.usgovcloudapi.net', () => {
     withCloud('DoD');
-    expect(aasScope()).toBe('https://mil.analysis.usgovcloudapi.net/powerbi/api/.default');
+    expect(pbiRestScope()).toBe('https://mil.analysis.usgovcloudapi.net/powerbi/api/.default');
   });
   it('LOOM_AAS_SCOPE overrides outright (e.g. China)', () => {
     withCloud('Commercial');
     process.env.LOOM_AAS_SCOPE = 'https://analysis.chinacloudapi.cn/powerbi/api/.default';
-    expect(aasScope()).toBe('https://analysis.chinacloudapi.cn/powerbi/api/.default');
+    expect(pbiRestScope()).toBe('https://analysis.chinacloudapi.cn/powerbi/api/.default');
   });
 });
 

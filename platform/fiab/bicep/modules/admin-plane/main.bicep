@@ -223,6 +223,12 @@ param loomPostgresAadUser string = ''
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Azure Analysis Services connection string (asazure://<region>.asazure.windows.net/<server>) backing the semantic-model Power Query ingest refresh. Empty = the AAS refresh phase is honestly gated (Delta still lands; query via Synapse Serverless). Set from landing-zone aas.bicep output aasConnectionString when deployAas=true. AAS is unavailable in Government clouds — leave empty there.')
+param loomAasServer string = ''
+
+@description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
+param loomAasModel string = ''
+
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
@@ -591,6 +597,20 @@ param loomLakehouseBackend string = 'adls'
 @allowed(['loom-native', 'analysis-services', 'powerbi'])
 param loomSemanticBackend string = 'loom-native'
 
+@description('Deploy an Azure Analysis Services server to host a COMPOSITE (mixed Import / DirectQuery / Dual) tabular model. OFF by default — the semantic-model item works on the Loom-native tabular layer with no AAS server (no-fabric-dependency.md). Turn on only to opt into a standalone composite-model host.')
+param aasEnabled bool = false
+
+@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). S0/S1/S2/S4 = Standard (prod).')
+@allowed(['D1', 'B1', 'S0', 'S1', 'S2', 'S4'])
+param aasSku string = 'D1'
+
+@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to "powerbi" to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
+@allowed(['', 'powerbi'])
+param loomBiBackend string = ''
+
+@description('Azure Analysis Services tabular model / database name — platform-level default for the Loom-native report renderer. Matches the model database name on loomAasServer (declared above). Leave empty to require a per-item state.aasDatabase binding.')
+param loomAasDatabase string = ''
+
 @description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
@@ -790,7 +810,26 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
-// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// 8a-bis. Azure Analysis Services (opt-in composite-model host)
+// Hosts a COMPOSITE tabular model mixing Import / DirectQuery / Dual
+// storage modes. Off by default — the semantic-model item's default is the
+// Loom-native tabular layer (no AAS required). See analysis-services.bicep.
+// =====================================================================
+
+module aas 'analysis-services.bicep' = if (aasEnabled) {
+  name: 'aas'
+  params: {
+    location: location
+    serverName: 'aasloom${uniqueString(resourceGroup().id)}'
+    skuName: aasSku
+    skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
+    aasDatabase: 'LoomComposite'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    aasAdminUpn: 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
+    skipRoleGrants: skipRoleGrants
+    tags: complianceTags
+  }
+}
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
@@ -1116,6 +1155,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in Azure Analysis Services semantic layer — backs the
+            // semantic-model "Get data" (Power Query M) ingest refresh phase.
+            // Empty values honestly gate the AAS phase (Delta still lands; query
+            // via Synapse Serverless). Unavailable in Government clouds.
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
             // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
             // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
             // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
@@ -1327,6 +1372,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            // Report editor BI backend. Empty (default) → Loom-native renderer
+            // that queries the bound AAS model with DAX (no Power BI / Fabric).
+            // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
+            // the client editor branch without a round-trip. (no-fabric-dependency.md)
+            { name: 'LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
+            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
             // Microsoft Fabric / Purview-unified-catalog dependency). Set to
@@ -1540,6 +1593,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            // Semantic-model backend + opt-in Azure Analysis Services composite
+            // host. The semantic-model item defaults to the Loom-native tabular
+            // layer (no AAS needed); these only populate when aasEnabled. The
+            // per-table storage-mode picker builds composite TMSL regardless.
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -1638,6 +1698,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
+            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
+            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
           ]
         )
         secrets: concat(
