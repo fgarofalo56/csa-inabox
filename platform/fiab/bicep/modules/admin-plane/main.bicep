@@ -92,6 +92,11 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Soft-delete retention days for ADLS Gen2 recovery — surfaced to the Console as LOOM_RECYCLE_RETENTION_DAYS (OneLake Recycle bin restore window). Must match the storage account deleteRetentionPolicy. 1–365. Default 30.')
+@minValue(1)
+@maxValue(365)
+param recycleRetentionDays int = 30
+
 @description('Deploy the Loom apps (Console, MCP, Orchestrator, Copilot, Activator, Mirroring, Direct-Lake Shim). Requires the container images to exist in ACR first — set false on initial provision, then true after images are built + pushed (PRP-16).')
 param deployAppsEnabled bool = false
 
@@ -233,6 +238,9 @@ param loomApprovalLogicAppRg string = ''
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
+@description('Key Vault URI for external-source SHORTCUT credentials (S3/GCS/SAS/Synapse-Link). Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault to isolate shortcut credentials — keep it the SAME vault the shortcut engine binding reads, or unset to default.')
+param loomShortcutKeyVaultUri string = ''
+
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
@@ -241,6 +249,9 @@ param loomHdinsightLinkedService string = ''
 
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
+
+@description('Resource group containing the Azure SQL logical servers Loom manages. The Console UAMI is granted SQL DB Contributor here so the Compute & Storage scale tab can PATCH database SKUs (Microsoft.Sql/servers/databases/write). Empty = skip the grant; the tab then surfaces an honest MessageBar naming the role.')
+param loomAzureSqlServerRg string = ''
 
 @description('Opt-in (F5): also mirror workspace role assignments to a Microsoft Fabric workspace via /v1/workspaces/{id}/roleAssignments. Default false: Azure-native only (Cosmos + Azure RBAC). Forced off at IL5 (Fabric is not IL5-authorized).')
 param loomWorkspaceRolesFabricEnabled bool = false
@@ -332,6 +343,19 @@ param loomAmlSubscription string = ''
 
 @description('Primary region of the AML workspace (LOOM_AML_REGION). Empty falls back to LOOM_FOUNDRY_REGION, then eastus2.')
 param loomAmlRegion string = ''
+
+// ---------------------------------------------------------------------------
+// SQL editor Copilot — Azure OpenAI endpoint (LOOM_AZURE_OPENAI_ENDPOINT).
+// Backs the unified SQL editor's Fix / Explain / NL→T-SQL quick-actions and the
+// Monaco inline ghost-text completion. The route resolves the data-plane host
+// per cloud via getOpenAiSuffix() (openai.azure.com vs openai.azure.us), so this
+// may be a bare account name OR a full inference URL. Empty derives from the
+// Foundry Agent Service account (when agentFoundryEnabled=true); empty + Foundry
+// off → the SQL Copilot pane shows an honest gate MessageBar naming this var and
+// the Cognitive Services OpenAI User role, while the rest of the editor works.
+// ---------------------------------------------------------------------------
+@description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true.')
+param loomAzureOpenAiEndpoint string = ''
 
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
@@ -954,6 +978,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // Deployment region — used as the `location` for on-demand ARM PUTs
+            // that require it (e.g. the Gov warehouse-create path that provisions
+            // a Synapse Dedicated SQL pool via createDedicatedSqlPool). Read by
+            // synapse-dev-client / the warehouse create BFF route.
+            { name: 'LOOM_LOCATION', value: location }
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
@@ -1020,6 +1049,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // point at a separate vault by overriding loomParamKeyVaultUri and
             // granting the Console identity "Key Vault Secrets User" on it.
             { name: 'LOOM_PARAM_KEYVAULT', value: !empty(loomParamKeyVaultUri) ? loomParamKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // External-source shortcut credentials (S3/GCS/SAS/Synapse-Link). KV
+            // defaults to the admin-plane vault (Console UAMI has Secrets Officer);
+            // override loomShortcutKeyVaultUri to isolate them in a dedicated vault
+            // (keep it the same vault the shortcut engine binding reads).
+            { name: 'LOOM_SHORTCUT_KEYVAULT', value: !empty(loomShortcutKeyVaultUri) ? loomShortcutKeyVaultUri : keyvault.outputs.keyVaultUri }
             // App Configuration source for parameter overrides. Empty disables
             // the App Config path; set to an App Configuration endpoint and grant
             // the Console identity "App Configuration Data Reader" to enable.
@@ -1256,6 +1290,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // container is created in landing-zone/storage.bicep; the Console UAMI
             // already holds Storage Blob Data Contributor on the account.
             { name: 'LOOM_CSV_IMPORTS_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/csv-imports' }
+            // LOOM_RECYCLE_RETENTION_DAYS — OneLake Recycle bin restore window.
+            // Mirrors the storage account's blob soft-delete deleteRetentionPolicy
+            // (landing-zone/storage.bicep recycleRetentionDays) so the recycle-bin
+            // UI shows the correct days-remaining countdown and computes purgeAfter.
+            { name: 'LOOM_RECYCLE_RETENTION_DAYS', value: string(recycleRetentionDays) }
             // LOOM_SAMPLE_ADLS gates the data-pipeline "Practice with sample data"
             // card: when set, the BFF uploads a sample CSV to landing/samples and
             // runs an ADF copy pipeline into bronze/samples. Defaults to the DLZ
@@ -1302,6 +1341,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
           ] : []),
+          // Apache Atlas-on-AKS lineage endpoint (DoD / IL5 boundary). Read by
+          // /api/items/[type]/[id]/lineage when detectLoomCloud() === 'DoD'.
+          // STRICTLY the Azure-native lineage backend for sovereign clouds — no
+          // Fabric/OneLake dependency. Empty when atlasOnAksEnabled = false, in
+          // which case the lineage drawer shows an honest "set LOOM_ATLAS_ENDPOINT"
+          // MessageBar gate (never an empty graph).
+          atlasOnAksEnabled ? [
+            { name: 'LOOM_ATLAS_ENDPOINT', value: catalog.outputs.atlasEndpoint }
+          ] : [],
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
@@ -1470,7 +1518,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
             // AOAI inference endpoint + model deployment names for the Agent
             // Service account. Consumed by the AOAI clients (chat + embeddings).
-            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
+            // AOAI inference endpoint + model deployment names. Sourced from the
+            // dedicated Agent Service account when present, else from the shared
+            // Foundry hub (so the AI Functions Gov/AOAI path works on a hub-only
+            // deploy — the deployment is then discovered from the hub connections
+            // by resolveAoaiTarget()).
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '') }
             { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
@@ -1483,6 +1536,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            // SQL editor Copilot (Fix / Explain / NL→T-SQL + inline ghost text).
+            // Explicit loomAzureOpenAiEndpoint wins; otherwise reuse the Foundry
+            // Agent Service AOAI endpoint. When both are empty the copilot route
+            // returns an honest 503 gate naming this var + the Cognitive Services
+            // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
+            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '') }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
@@ -1715,6 +1774,21 @@ resource pbiEmbeddedCapacity 'Microsoft.PowerBIDedicated/capacities@2021-01-01' 
 module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRoleGrants) {
   name: 'console-workspace-rbac'
   scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// Compute & Storage scale tab — SQL DB Contributor on the SQL server RG so
+// the Console UAMI can PATCH database compute SKUs (DTU / vCore / serverless).
+// Delegated to its own module (principalId is a runtime output — BCP177).
+// Opt-in: set loomAzureSqlServerRg to the RG holding your SQL logical servers.
+// =====================================================================
+module sqlRbac 'sql-rbac.bicep' = if (!empty(loomAzureSqlServerRg) && !skipRoleGrants) {
+  name: 'console-sql-scale-rbac'
+  scope: resourceGroup(loomAzureSqlServerRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants

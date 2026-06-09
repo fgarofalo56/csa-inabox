@@ -849,3 +849,58 @@ export async function getDedicatedPool(name: string): Promise<{ name: string; sk
   return jsonOrThrow(r, `getDedicatedPool(${name})`);
 }
 
+/**
+ * Create a Synapse Dedicated SQL pool (the Azure-native DEFAULT warehouse
+ * backend in Gov boundaries, per `.claude/rules/no-fabric-dependency.md`).
+ *
+ * ARM PUT /.../sqlPools/{name}?api-version=2021-06-01 with body
+ *   { location, sku: { name: '<DWxxxxc>' },
+ *     properties: { createMode: 'Default', collation } }
+ *
+ * Provisioning is asynchronous — ARM returns 200/201 (or 202 + Location) with
+ * the pool's initial properties; the pool reaches Online after a few minutes.
+ * Returns the immediate ARM response; polling to Online is the caller's job
+ * (the UI polls via getDedicatedPool / listDedicatedSqlPools).
+ *
+ * `location` MUST be supplied (ARM PUT requires it). The route resolves it
+ * from LOOM_LOCATION (the deployment region) before calling.
+ */
+export async function createDedicatedSqlPool(
+  name: string,
+  sku: string,
+  location: string,
+  collation = 'SQL_Latin1_General_CP1_CI_AS',
+): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
+  if (!name) throw new Error('createDedicatedSqlPool: name is required');
+  if (!location) throw new Error('createDedicatedSqlPool: location is required');
+  if (!sku || !/^DW\d+c$/i.test(sku)) {
+    throw new Error(`createDedicatedSqlPool: invalid sku ${sku}; expected DWxxxxc`);
+  }
+  const body = {
+    location,
+    sku: { name: sku },
+    properties: { createMode: 'Default', collation },
+  };
+  const r = await callArm(
+    `${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  return jsonOrThrow(r, `createDedicatedSqlPool(${name},${sku})`);
+}
+
+/**
+ * Delete a Synapse Dedicated SQL pool (ARM DELETE). Idempotent: a 404 (pool
+ * already gone) is swallowed; any other non-2xx surfaces verbatim. Like create,
+ * delete is asynchronous (202 + Location) — the immediate return means the
+ * delete was accepted.
+ */
+export async function deleteDedicatedSqlPool(name: string): Promise<void> {
+  if (!name) throw new Error('deleteDedicatedSqlPool: name is required');
+  const r = await callArm(
+    `${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'DELETE' },
+  );
+  if (r.ok || r.status === 202 || r.status === 204 || r.status === 404) return;
+  throw new Error(`deleteDedicatedSqlPool(${name}) failed ${r.status}: ${await r.text()}`);
+}
+

@@ -9,6 +9,14 @@ export interface Workspace {
   domain?: string;
   /** Bound Power BI / Fabric group id (created lazily on first PBI-backed artifact). */
   fabricGroupId?: string;
+  /**
+   * ARM resource id of the storage account explicitly bound to this workspace
+   * for OneLake lifecycle management (and shortcut resolution). When absent, the
+   * global DLZ account (LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG + LOOM_*_URL) is used.
+   * Shape: /subscriptions/{sub}/resourceGroups/{rg}/providers/
+   *   Microsoft.Storage/storageAccounts/{name}
+   */
+  storageAccountId?: string;
   /** Outcome of the post-create Capacity assignment side-effect — captured so the
    * UI can show whether it succeeded, is pending, or failed with a reason. */
   capacityAssignment?: {

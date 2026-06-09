@@ -26,11 +26,13 @@ import { useSearchParams } from 'next/navigation';
 import {
   Badge, Button, Caption1, Spinner, Tooltip, Dropdown, Option, Label,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Play20Regular, ArrowDownload20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionDetailsPanel } from './components/connection-details';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -38,6 +40,7 @@ import {
   SynapseServerlessSqlObjectExplorer,
   type ObjectsResponse,
 } from '@/lib/components/synapse-sql-object-explorer';
+import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -126,26 +129,6 @@ function formatCell(v: unknown): string {
   return String(v);
 }
 
-function downloadBlob(filename: string, mime: string, data: string) {
-  const blob = new Blob([data], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function resultsToCsv(columns: string[], rows: unknown[][]): string {
-  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
-}
-function resultsToJson(columns: string[], rows: unknown[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
-}
-
 export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // A paired editor (e.g. opened from a mirror's "SQL analytics endpoint" link)
@@ -163,6 +146,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [resultTab, setResultTab] = useState<'results' | 'messages'>('results');
   const [loading, setLoading] = useState(false);
+  const [connOpen, setConnOpen] = useState(false);
 
   // Editor handle + objects ref so the (once-registered) Monaco completion
   // provider can read the latest catalog without re-registering on each render.
@@ -234,6 +218,34 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
     const sel = ed?.getModel()?.getValueInRange(ed.getSelection());
     runText(sel && sel.trim() ? sel : sqlText);
   }, [runText, sqlText]);
+
+  // Open-in-Excel — download a .iqy web-query for the current script + database.
+  // Excel refreshes by POSTing back to the serverless /query route (real TDS).
+  const openInExcel = useCallback(async () => {
+    const sqlToRun = sqlText.trim();
+    if (!sqlToRun) return;
+    try {
+      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlToRun, database }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-synapse-serverless-${id}.iqy`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+      setResultTab('messages');
+    }
+  }, [id, sqlText, database]);
 
   // After a successful DDL, refresh the object tree + IntelliSense source.
   useEffect(() => {
@@ -333,9 +345,13 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
         { label: 'New SQL script', onClick: () => newScript('') },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
         { label: 'Run selection', onClick: !loading ? runSelection : undefined, disabled: loading },
+        { label: 'Open in Excel', onClick: !loading && sqlText.trim() ? openInExcel : undefined, disabled: loading || !sqlText.trim(), title: !sqlText.trim() ? 'Enter a query first' : 'Download a .iqy web-query — refresh in Excel to re-execute against the live endpoint' },
       ]},
       { label: 'Objects', actions: [
         { label: objectsLoading ? 'Refreshing…' : 'Refresh objects', onClick: !objectsLoading ? loadObjects : undefined, disabled: objectsLoading },
+      ]},
+      { label: 'Connect', actions: [
+        { label: 'Connection details', onClick: () => setConnOpen(true), title: 'Serverless endpoint FQDN, database, JDBC URL + sqlcmd snippet (copy)' },
       ]},
       { label: 'New', actions: [
         { label: 'New view', onClick: () => newScript(TEMPLATE_VIEW) },
@@ -354,7 +370,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
         ) },
       ]},
     ]},
-  ], [loading, run, runSelection, objectsLoading, loadObjects, newScript]);
+  ], [loading, run, runSelection, objectsLoading, loadObjects, newScript, openInExcel, sqlText]);
 
   const rows = result?.rows || [];
   const columns = result?.columns || [];
@@ -454,6 +470,10 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                           <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                             onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
                         </Tooltip>
+                        <Tooltip content="Open in Excel (web query — refresh re-runs against the live endpoint)" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                            onClick={() => void openInExcel()}>Excel</Button>
+                        </Tooltip>
                       </div>
                     )}
                   </div>
@@ -502,6 +522,24 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               )
             )}
           </div>
+
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '640px' }}>
+              <DialogBody>
+                <DialogTitle>Connection details — Serverless SQL</DialogTitle>
+                <DialogContent>
+                  <ConnectionDetailsPanel
+                    engine="synapse-serverless-sql-pool"
+                    id={id}
+                    database={database}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
