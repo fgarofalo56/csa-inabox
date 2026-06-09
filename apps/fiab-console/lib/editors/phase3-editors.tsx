@@ -100,6 +100,7 @@ import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
 import { ResultVisualize } from './components/result-visualize';
 import { ReportVisualDesigner } from './components/report-visual-designer';
+import { ReportSubscriptionsPanel } from './components/report-subscriptions-panel';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -12967,6 +12968,16 @@ function ReportLikeEditor({
               <div className={s.card} style={{ marginTop: 8 }}>
                 <ManageAccessPanel workspaceId={workspaceId} />
               </div>
+              {kind !== 'paginated' && reportId && (
+                <div className={s.card} style={{ marginTop: 8 }}>
+                  <ReportSubscriptionsPanel
+                    reportId={reportId}
+                    workspaceId={workspaceId}
+                    reportName={report?.name}
+                    itemId={id}
+                  />
+                </div>
+              )}
               {!powerBiConfigured ? (
                 <div className={s.card}>
                   <Subtitle2 style={{ marginBottom: 12 }}>Report metadata (Loom-native view)</Subtitle2>

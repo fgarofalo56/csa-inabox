@@ -110,6 +110,8 @@ let _pipelineHistory: Container | null = null;
 // ARM/Bicep step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _scorecardConfig: Container | null = null;
+let _reportSubscriptions: Container | null = null;
+let _reportDeliveryLog: Container | null = null;
 let _ensured = false;
 
 /**
@@ -134,6 +136,56 @@ export interface DataProductImportJob {
   /** True when the raw CSV was staged to ADLS; false when the storage gate fired (inline-only). */
   staged: boolean;
   createdBy?: string;
+}
+
+/**
+ * Report subscription — a scheduled, recurring export+email delivery of a
+ * Power BI report (Azure-native parity with Fabric/Power BI "Subscribe to
+ * report" + "Subscriptions"). One row per subscription, partitioned by the
+ * reportId so the editor's per-report subscription list hits a single physical
+ * partition. The fiab-report-subscriptions timer Function reads `enabled=true`
+ * rows, renders the report via the real Power BI ExportTo REST job, and emails
+ * the file via the report-subscription Logic App. No Microsoft Fabric
+ * dependency — Power BI REST is the Azure-native rendering backend.
+ */
+export interface ReportSubscription {
+  id: string;                       // 'sub:<uuid>' — partition companion
+  reportId: string;                 // PK — the Power BI report id (groupId-scoped)
+  workspaceId: string;              // the Power BI workspace (groupId) the report lives in
+  itemId?: string;                  // owning Loom item id (when launched from an item editor)
+  format: 'PDF' | 'PPTX' | 'PNG';   // export format
+  cron: string;                     // NCRONTAB (6-field: sec min hour day month day-of-week)
+  recipients: string[];             // email addresses the export is delivered to
+  subject?: string;                 // email subject override (defaults to the report name)
+  enabled: boolean;                 // false pauses delivery without deleting the row
+  createdBy: string;                // creator oid — scopes ownership
+  createdByName?: string;           // creator display name/upn for the audit trail
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;               // last delivery attempt (set by the timer Function)
+  lastStatus?: 'succeeded' | 'failed';
+  lastError?: string;               // last failure message (cleared on success)
+}
+
+/**
+ * Report delivery log — one append-only row per delivery attempt for a
+ * subscription, partitioned by subscriptionId so the editor's per-subscription
+ * "Delivery history" view hits a single physical partition. Written by the
+ * timer Function after each export+email. This is the "delivery log" half of
+ * the acceptance receipt.
+ */
+export interface ReportDeliveryLog {
+  id: string;                       // 'del:<uuid>'
+  subscriptionId: string;           // PK — the parent subscription id
+  reportId: string;
+  workspaceId: string;
+  format: 'PDF' | 'PPTX' | 'PNG';
+  recipients: string[];
+  deliveredAt: string;
+  status: 'succeeded' | 'failed';
+  fileSizeBytes?: number;           // size of the exported file (succeeded only)
+  blobPath?: string;                // ADLS path the export was archived to (succeeded only)
+  error?: string;                   // failure detail (failed only)
 }
 
 function endpoint(): string {
@@ -391,6 +443,16 @@ async function ensure() {
   // live Fabric goals; loom: bundle scorecards carry config inline in
   // state.content. Single-partition point-read per scorecard.
   _scorecardConfig = await mk('scorecard-config', '/scorecardId');
+  // Report subscriptions (scheduled export + email delivery) — one row per
+  // subscription, PK /reportId so the editor's per-report subscription list and
+  // the timer Function's per-report reads hit a single physical partition. The
+  // delivery log is append-only, PK /subscriptionId. Both created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  // Azure-native parity with Fabric/Power BI report subscriptions — rendering is
+  // the real Power BI ExportTo REST job; delivery is the report-subscription
+  // Logic App. No Microsoft Fabric dependency.
+  _reportSubscriptions = await mk('report-subscriptions', '/reportId');
+  _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
   _ensured = true;
 }
 
@@ -427,6 +489,10 @@ export async function pipelineStageRulesContainer(): Promise<Container> { await 
 export async function pipelineHistoryContainer(): Promise<Container> { await ensure(); return _pipelineHistory!; }
 /** Scorecard rollup + status-rule config — PK /scorecardId. */
 export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
+/** Report subscriptions (scheduled export + email delivery) — PK /reportId. */
+export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
+/** Report delivery log (append-only delivery history) — PK /subscriptionId. */
+export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }

@@ -41,6 +41,8 @@ SEARCH_CONTRIB="7ca78c08-252a-4471-8644-bb5ff32d4ba0"  # Search Service Contribu
 SEARCH_DATA="8ebe5a00-799e-43f5-93ac-243d3dce84a7"     # Search Index Data Contributor
 COG_CONTRIB="25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68"     # Cognitive Services Contributor
 READER="acdd72a7-3385-48ef-bd42-f606fba81ae7"          # Reader
+STORAGE_BLOB_CONTRIB="ba92f5b4-2d11-453d-a403-e96b0029c9fe" # Storage Blob Data Contributor
+LOGIC_CONTRIB="87a39d53-fc1b-424a-814c-f7e04687dc9e"   # Logic App Contributor
 
 grant() { # grant ROLE_GUID SCOPE LABEL
   local role="$1" scope="$2" label="$3"
@@ -106,6 +108,59 @@ if [[ -n "$LABEL_PROP_FUNC" && -n "${COSMOS_ACCT:-}" ]]; then
   fi
 else
   echo "  - label-propagation Function not found in $ADMIN_RG — skipping (F15 engine optional)"
+fi
+
+# report-subscriptions timer Function — its system-assigned identity renders
+# Power BI reports on a schedule and delivers them by email. It needs:
+#   - Cosmos DATA-plane Built-in Data Contributor (read subs + write delivery log)
+#   - Storage Blob Data Contributor on the ADLS account (archive the export)
+#   - Logic App Contributor on the delivery workflow (resolve trigger URL)
+# (Power BI workspace membership is granted in the Power BI portal/tenant, not
+# Azure RBAC.) No-op when the engine isn't deployed (opt-in feature).
+RPTSUB_FUNC="${REPORT_SUBS_FUNC_NAME:-$(q functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-rptsub')].name | [0]" -o tsv)}"
+if [[ -n "$RPTSUB_FUNC" ]]; then
+  RS_PRINCIPAL="$(q functionapp identity show -n "$RPTSUB_FUNC" -g "$ADMIN_RG" --query principalId -o tsv)"
+  if [[ -n "$RS_PRINCIPAL" ]]; then
+    # Cosmos data-plane (same role-definition surface as the Console + F15).
+    if [[ -n "${COSMOS_ACCT:-}" ]]; then
+      echo "  report-subscriptions Function data-plane: Built-in Data Contributor ($RPTSUB_FUNC)"
+      MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
+        --account-name "$COSMOS_ACCT" -g "$DLZ_RG" \
+        --role-definition-id "00000000-0000-0000-0000-000000000002" \
+        --principal-id "$RS_PRINCIPAL" --scope "/" -o none 2>&1 \
+        | grep -vi "already\|exists\|Conflict" || true
+      echo "  ✓ Cosmos data-plane granted to $RPTSUB_FUNC"
+    fi
+    # Storage Blob Data Contributor on the ADLS account (export archive). The
+    # ADLS account is the Loom storage account; discover it in the DLZ RG, or
+    # override with REPORT_SUBS_ADLS_ACCT / REPORT_SUBS_ADLS_RG.
+    RS_ADLS_RG="${REPORT_SUBS_ADLS_RG:-$DLZ_RG}"
+    RS_ADLS="${REPORT_SUBS_ADLS_ACCT:-$(q storage account list -g "$RS_ADLS_RG" --query "[?starts_with(name,'st')].name | [0]" -o tsv)}"
+    if [[ -n "$RS_ADLS" ]]; then
+      RS_ADLS_SCOPE="/subscriptions/$SUB/resourceGroups/$RS_ADLS_RG/providers/Microsoft.Storage/storageAccounts/$RS_ADLS"
+      MSYS_NO_PATHCONV=1 az role assignment create \
+        --assignee-object-id "$RS_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+        --role "$STORAGE_BLOB_CONTRIB" --scope "$RS_ADLS_SCOPE" -o none 2>&1 \
+        | grep -vi "already exists\|RoleAssignmentExists" || true
+      echo "  ✓ Storage Blob Data Contributor granted to $RPTSUB_FUNC ($RS_ADLS)"
+    else
+      echo "  - ADLS account not found in $RS_ADLS_RG — report exports won't archive (delivery still works)"
+    fi
+    # Logic App Contributor on the delivery workflow (listCallbackUrl).
+    RS_LA="${REPORT_SUBS_LOGIC_APP:-$(q logic workflow list -g "$ADMIN_RG" --query "[?starts_with(name,'logic-loom-report-subs')].name | [0]" -o tsv)}"
+    if [[ -n "$RS_LA" ]]; then
+      RS_LA_SCOPE="/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Logic/workflows/$RS_LA"
+      MSYS_NO_PATHCONV=1 az role assignment create \
+        --assignee-object-id "$RS_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+        --role "$LOGIC_CONTRIB" --scope "$RS_LA_SCOPE" -o none 2>&1 \
+        | grep -vi "already exists\|RoleAssignmentExists" || true
+      echo "  ✓ Logic App Contributor granted to $RPTSUB_FUNC ($RS_LA)"
+    else
+      echo "  - report-subscription Logic App not found in $ADMIN_RG — skipping (delivery gated)"
+    fi
+  fi
+else
+  echo "  - report-subscriptions Function not found in $ADMIN_RG — skipping (opt-in feature)"
 fi
 
 # AI Search service
