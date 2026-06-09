@@ -60,6 +60,7 @@ import {
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { ModelViewPanel } from './components/model-view-canvas';
+import { PbiModelViewPanel } from './components/pbi-model-view-panel';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
@@ -9116,7 +9117,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'direct-lake' | 'direct-lake-query' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'refresh' | 'config' | 'direct-lake' | 'direct-lake-query' | 'access' | 'governance' | 'embed'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9587,6 +9588,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!bModelName) setBModelName('My semantic model');
   }, [bModelName]);
 
+  const focusModel = useCallback(() => setTab('model'), []);
+
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
@@ -9604,6 +9607,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       ]},
       { label: 'Model', actions: [
         { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
+        { label: 'Model view', onClick: datasetId ? focusModel : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Interactive relationship diagram (cardinality, cross-filter, active/inactive) + drill-hierarchy editor; writes TMSL' },
       ]},
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
@@ -9615,7 +9619,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -9788,6 +9792,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
+                  <Tab value="model">Model view</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
@@ -9919,6 +9924,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </div>
                     )}
                   </>
+                )}
+                {tab === 'model' && (
+                  <PbiModelViewPanel
+                    workspaceId={workspaceId || undefined}
+                    datasetId={datasetId}
+                  />
                 )}
                 {tab === 'build' && (
                   <>
