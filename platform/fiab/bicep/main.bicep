@@ -312,6 +312,9 @@ param loomAmlRegion string = ''
 @description('Azure OpenAI account endpoint or name for the SQL editor Copilot (LOOM_AZURE_OPENAI_ENDPOINT — Fix / Explain / NL→T-SQL + inline ghost text). Empty derives from the Foundry Agent Service account when agentFoundryEnabled=true; empty + Foundry off → the SQL Copilot pane shows an honest gate naming this var + the Cognitive Services OpenAI User role.')
 param loomAzureOpenAiEndpoint string = ''
 
+@description('Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION) for the Copilot / data-agent orchestrators. Default 2024-10-21; advance for o-series reasoning models. The data-plane host is derived per sovereign boundary from environment(), so this value is cloud-invariant.')
+param loomAoaiApiVersion string = '2024-10-21'
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -447,6 +450,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomAmlRegion: loomAmlRegion
     // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
     loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
+    loomAoaiApiVersion: loomAoaiApiVersion
   }
 }
 
