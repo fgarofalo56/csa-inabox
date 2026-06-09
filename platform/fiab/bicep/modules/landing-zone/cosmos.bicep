@@ -110,6 +110,14 @@ var databases = [
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
 //     medallion ADLS account; external (s3/gcs/dataverse/delta_sharing) targets
 //     resolve a Key Vault credentialRef via the flat /api/lakehouse/shortcuts.
+//
+// NOTE (F6 — admin Workspaces list & govern): GET /api/admin/workspaces does a
+//   CROSS-PARTITION scan of the lazily-created `loom/workspaces` container
+//   (SELECT * FROM c — NO partitionKey filter). This is required because each
+//   workspace's tenantId = the CREATOR's OID (not a shared tenant GUID), so a
+//   single-partition query would only ever return the admin's own workspaces.
+//   The same Cosmos DB Built-in Data Contributor role at account scope (above)
+//   authorises the fan-out; no extra RBAC grant is needed for the admin route.
 //   copilot-sessions (PK /sessionId, defaultTtl=2419200 — 28-day TTL set by
 //     cosmos-client.ts ensure() on create AND via a one-time container
 //     replace() upgrade for pre-existing containers; chat sessions expire

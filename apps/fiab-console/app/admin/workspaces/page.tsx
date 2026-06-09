@@ -6,23 +6,47 @@
  * with item counts + last activity + capacity assignment.
  */
 
+import * as React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Folder24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Folder24Regular, Settings16Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
+import type { Workspace as ApiWorkspace } from '@/lib/api/workspaces';
+
+type WorkspaceState = 'Active' | 'Provisioning' | 'Suspended' | 'Deleted';
 
 interface Workspace {
   id: string; name: string; description?: string;
   createdBy?: string; createdAt?: string; updatedAt?: string;
   capacity?: string; domain?: string;
+  storageAccountId?: string;
   itemCount: number; lastActivity?: string;
-  state?: string;
+  state?: WorkspaceState;
+  owners?: string[];
+}
+
+/** State → Fluent Badge color. Filled for known states, outline+neutral for unknown. */
+const STATE_COLOR: Record<WorkspaceState, React.ComponentProps<typeof Badge>['color']> = {
+  Active: 'success',
+  Provisioning: 'informative',
+  Suspended: 'warning',
+  Deleted: 'danger',
+};
+
+function StateBadge({ state }: { state?: WorkspaceState }) {
+  const known = state && STATE_COLOR[state];
+  return (
+    <Badge appearance={known ? 'filled' : 'outline'} color={known ? STATE_COLOR[state!] : 'subtle'} size="small">
+      {state || 'Active'}
+    </Badge>
+  );
 }
 
 const useStyles = makeStyles({
@@ -43,6 +67,10 @@ export default function AdminWorkspacesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const [selected, setSelected] = useState<Workspace | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const openSettings = useCallback((w: Workspace) => { setSelected(w); setDrawerOpen(true); }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -65,6 +93,7 @@ export default function AdminWorkspacesPage() {
       w.name.toLowerCase().includes(f) ||
       (w.description || '').toLowerCase().includes(f) ||
       (w.createdBy || '').toLowerCase().includes(f) ||
+      (w.owners || []).some((o) => o.toLowerCase().includes(f)) ||
       (w.domain || '').toLowerCase().includes(f) ||
       (w.capacity || '').toLowerCase().includes(f)
     );
@@ -89,7 +118,15 @@ export default function AdminWorkspacesPage() {
         </span>
       ),
     },
-    { key: 'createdBy', label: 'Owner', width: 180, getValue: (w) => w.createdBy || '', render: (w) => w.createdBy || '—' },
+    {
+      key: 'owners', label: 'Owners', width: 220,
+      getValue: (w) => (w.owners && w.owners.length ? w.owners.join(', ') : (w.createdBy || '')),
+      render: (w) => {
+        const list = w.owners && w.owners.length ? w.owners : (w.createdBy ? [w.createdBy] : []);
+        if (!list.length) return '—';
+        return <span title={list.join(', ')} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{list.join(', ')}</span>;
+      },
+    },
     {
       key: 'capacity', label: 'Capacity', width: 150, getValue: (w) => w.capacity || '',
       render: (w) => w.capacity ? <Badge appearance="tint" size="small">{w.capacity}</Badge> : '—',
@@ -97,27 +134,50 @@ export default function AdminWorkspacesPage() {
     { key: 'domain', label: 'Domain', width: 140, getValue: (w) => w.domain || '', render: (w) => w.domain || '—' },
     { key: 'itemCount', label: 'Items', width: 100, getValue: (w) => w.itemCount, render: (w) => <strong>{w.itemCount}</strong> },
     {
-      key: 'lastActivity', label: 'Last activity', width: 170,
+      key: 'lastActivity', label: 'Last modified', width: 170,
       getValue: (w) => (w.lastActivity ? new Date(w.lastActivity).getTime() : 0),
       render: (w) => <Caption1>{w.lastActivity ? new Date(w.lastActivity).toLocaleString() : '—'}</Caption1>,
     },
     {
-      key: 'state', label: 'State', width: 110, getValue: (w) => w.state || 'Active',
-      render: (w) => (
-        <Badge appearance={w.state === 'Active' || !w.state ? 'filled' : 'outline'} color="success" size="small">
-          {w.state || 'Active'}
-        </Badge>
-      ),
+      key: 'state', label: 'State', width: 130, getValue: (w) => w.state || 'Active',
+      render: (w) => <StateBadge state={w.state} />,
     },
     {
-      key: 'open', label: 'Open', width: 100, sortable: false, filterable: false,
+      key: 'open', label: 'Open', width: 90, sortable: false, filterable: false,
       render: (w) => (
         <a href={`/workspaces/${w.id}`} className={s.openLink} onClick={(e) => e.stopPropagation()}>
           Open <Open16Regular />
         </a>
       ),
     },
-  ], [s]);
+    {
+      key: 'settings', label: 'Govern', width: 110, sortable: false, filterable: false,
+      render: (w) => (
+        <Button size="small" appearance="subtle" icon={<Settings16Regular />}
+          onClick={(e) => { e.stopPropagation(); openSettings(w); }}>
+          Settings
+        </Button>
+      ),
+    },
+  ], [s, openSettings]);
+
+  // Build the synthetic Workspace the settings drawer expects (lib/api/workspaces).
+  const selectedForDrawer: ApiWorkspace | null = useMemo(() => {
+    if (!selected) return null;
+    return {
+      id: selected.id,
+      tenantId: (selected as { tenantId?: string }).tenantId || selected.createdBy || selected.id,
+      name: selected.name,
+      description: selected.description,
+      capacity: selected.capacity,
+      domain: selected.domain,
+      storageAccountId: selected.storageAccountId,
+      createdBy: selected.createdBy || '',
+      createdAt: selected.createdAt || '',
+      updatedAt: selected.updatedAt || '',
+      itemCount: selected.itemCount,
+    };
+  }, [selected]);
 
   return (
     <AdminShell sectionTitle="Workspaces (tenant-wide)">
@@ -153,11 +213,21 @@ export default function AdminWorkspacesPage() {
             columns={columns}
             rows={filtered}
             getRowId={(w) => w.id}
+            onRowClick={openSettings}
             empty={q ? `No workspaces match "${q}".` : 'No workspaces in this tenant yet. Create one from /workspaces.'}
             ariaLabel="Workspaces"
           />
         )}
       </Section>
+
+      {selectedForDrawer && (
+        <WorkspaceSettingsDrawer
+          workspace={selectedForDrawer}
+          open={drawerOpen}
+          onOpenChange={(o) => { setDrawerOpen(o); if (!o) setSelected(null); }}
+          hideTrigger
+        />
+      )}
     </AdminShell>
   );
 }

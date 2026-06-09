@@ -3,11 +3,13 @@
  *
  * Calls the AOAI deployment hanging off the Foundry hub (auto-discovered
  * via foundry-client.listConnections() with override LOOM_AOAI_ENDPOINT /
- * LOOM_AOAI_DEPLOYMENT). Exposes 38 built-in tools spanning every wired Loom
+ * LOOM_AOAI_DEPLOYMENT). Exposes 38+ built-in tools spanning every wired Loom
  * service: Synapse SQL, Lakehouse/ADLS, Databricks, APIM, ADX, ADF,
- * Power BI, Fabric, Foundry, Activator, Cosmos, Workspaces — plus any
- * runtime-connected MCP shim tools. (Keep this count in sync with
- * buildDefaultRegistry(); /api/copilot/status reports the live number.)
+ * Power BI, Fabric, Foundry, Activator, Cosmos, Workspaces, Tabular
+ * (semantic-model read — Semantic Link parity, no Power BI on the default
+ * path) — plus any runtime-connected MCP shim tools. (Keep this count in
+ * sync with buildDefaultRegistry(); /api/copilot/status reports the live
+ * number.)
  *
  * Sovereign clouds: the Fabric / Power BI / Activator tools hit
  * api.fabric.microsoft.com / api.powerbi.com, which have NO GCC-High / IL5 /
@@ -69,6 +71,7 @@ import { buildKqlToolRegistry } from '@/lib/copilot/kql-tools';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 import type { AuditReport } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
+import { buildTabularReadTools } from '@/lib/copilot/tabular-read-tool';
 import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
@@ -793,6 +796,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     parameters: obj({ fixId: S_STRING }, ['fixId']),
     handler: async ({ fixId }) => applyFix(String(fixId)),
   });
+
+  // -------- Tabular model reading (Semantic Link parity, no Power BI) --------
+  // Four tools: tabular_list_models / tabular_list_tables / tabular_list_measures
+  // / tabular_eval_dax. Default backend is loom-native (Cosmos metadata +
+  // Synapse SQL); AAS XMLA only when LOOM_SEMANTIC_BACKEND=analysis-services +
+  // LOOM_AAS_SERVER. The Power BI REST host is NEVER called on the default path.
+  for (const t of buildTabularReadTools()) r.register(t);
 
   // -------- Approval-gated edits (Keep / Undo) --------
   // Tools that propose a change to an OPEN editor surface return a result with a

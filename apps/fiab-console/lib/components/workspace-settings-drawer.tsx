@@ -36,7 +36,17 @@ import { GitIntegrationPane } from '@/lib/panes/git-integration';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 
-interface Props { workspace: Workspace; }
+interface Props {
+  workspace: Workspace;
+  /** Controlled open state. When provided, the drawer is driven by the parent
+   * (e.g. opened from a table row click) instead of its own trigger button. */
+  open?: boolean;
+  /** Controlled open-change handler. Required for controlled mode. */
+  onOpenChange?: (open: boolean) => void;
+  /** Hide the built-in gear trigger button (used when the parent opens the
+   * drawer some other way, e.g. row click). Default false. */
+  hideTrigger?: boolean;
+}
 
 const useStyles = makeStyles({
   trigger: { flexShrink: 0 },
@@ -47,20 +57,24 @@ const useStyles = makeStyles({
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
 
-export function WorkspaceSettingsDrawer({ workspace }: Props) {
+export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChange, hideTrigger }: Props) {
   const styles = useStyles();
   const router = useRouter();
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+  const setOpen = (v: boolean) => { onOpenChange ? onOpenChange(v) : setInternalOpen(v); };
   const [tab, setTab] = useState<TabId>('general');
 
   return (
     <>
-      <Tooltip content="Workspace settings" relationship="label">
-        <Button className={styles.trigger} appearance="subtle"
-          icon={<Settings24Regular />} onClick={() => setOpen(true)}
-          aria-label="Workspace settings" />
-      </Tooltip>
+      {!hideTrigger && (
+        <Tooltip content="Workspace settings" relationship="label">
+          <Button className={styles.trigger} appearance="subtle"
+            icon={<Settings24Regular />} onClick={() => setOpen(true)}
+            aria-label="Workspace settings" />
+        </Tooltip>
+      )}
       <Drawer open={open} onOpenChange={(_, d) => setOpen(d.open)} position="end" size="medium">
         <DrawerHeader>
           <DrawerHeaderTitle action={

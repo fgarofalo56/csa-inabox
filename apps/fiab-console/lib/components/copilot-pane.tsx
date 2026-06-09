@@ -23,12 +23,44 @@ import {
   ThumbLike20Regular, ThumbDislike20Regular,
   History20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
+import { LoomDataTable, type LoomColumn } from './ui/loom-data-table';
 import { CopilotResult } from '@/lib/components/copilot-result';
 import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
 import { CopilotDiff, type ProposedChange } from './copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
+
+/**
+ * Render a tabular_* tool result ({ columns, rows }) as a real LoomDataTable
+ * (T7) so a notebook / DAX Copilot answer shows the model's measures, tables,
+ * or DAX values as a sortable/filterable grid — not a raw JSON blob.
+ */
+function TabularResult({ result }: { result: unknown }): JSX.Element | null {
+  const r = result as { columns?: unknown; rows?: unknown } | null;
+  const columns = Array.isArray(r?.columns) ? (r!.columns as string[]) : null;
+  const rawRows = Array.isArray(r?.rows) ? (r!.rows as Record<string, unknown>[]) : null;
+  if (!columns || !rawRows || columns.length === 0) return null;
+  // Inject a stable per-row id (results can contain duplicate rows).
+  const rows = rawRows.map((row, i) => ({ ...row, __rid: String(i) }));
+  const cols: LoomColumn<Record<string, unknown>>[] = columns.map((c) => ({
+    key: c,
+    label: c,
+    render: (row) => String(row[c] ?? ''),
+  }));
+  return (
+    <div style={{ marginTop: 6, maxHeight: 320, overflow: 'auto' }}>
+      <LoomDataTable<Record<string, unknown>>
+        columns={cols}
+        rows={rows}
+        getRowId={(row) => String(row.__rid)}
+        noFilters
+        ariaLabel="Tabular result"
+        empty="No rows."
+      />
+    </div>
+  );
+}
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
@@ -456,7 +488,8 @@ export function CopilotPane() {
                         {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
                         {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
                       </div>
-                      {!step.error && step.result != null && (
+                      {!step.error && step.name.startsWith('tabular_') && <TabularResult result={step.result} />}
+                      {!step.error && !step.name.startsWith('tabular_') && step.result != null && (
                         <CopilotResult result={tagResult(step.result, step.name)} toolName={step.name} />
                       )}
                     </div>

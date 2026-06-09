@@ -870,6 +870,32 @@ export function aasServerBase(server: string): string {
 // path uses those existing exports — no duplicate declarations here.
 
 // ---------------------------------------------------------------------------
+// Azure Analysis Services (XMLA data plane — opt-in tabular backend)
+// ---------------------------------------------------------------------------
+//
+// AAS is the OPT-IN alternative backend for the Loom semantic-model tabular
+// layer (the default is loom-native: Cosmos metadata + Synapse SQL eval — no
+// Power BI / Fabric). AAS is NOT available in the Azure Government clouds
+// (GCC-High / IL5 / DoD), so every AAS helper guards with isGovCloud() — Gov
+// deployments stay on loom-native. The Power BI XMLA / Fabric XMLA endpoints
+// are NOT used here; only the Azure-native `asazure.windows.net` resource is.
+// Reference: https://learn.microsoft.com/azure/analysis-services/analysis-services-connect
+
+/**
+ * Construct the AAS XMLA POST endpoint URL from `LOOM_AAS_SERVER`.
+ *   - `https://…` form: returned as-is (with `/xmla` appended if absent).
+ *   - `asazure://<host>/<server>` form: expanded to
+ *     `https://<host>/servers/<server>/models/<database>/xmla` using `database`.
+ */
+export function aasXmlaUrl(server: string, database: string): string {
+  const s = (server || '').trim();
+  if (s.startsWith('https://')) return s.endsWith('/xmla') ? s : `${s.replace(/\/+$/, '')}/xmla`;
+  const m = /^asazure:\/\/([^/]+)\/(.+)$/.exec(s);
+  if (m) return `https://${m[1]}/servers/${m[2]}/models/${encodeURIComponent(database || 'model')}/xmla`;
+  throw new Error(`LOOM_AAS_SERVER "${server}" is not a valid AAS server URI.`);
+}
+
+// ---------------------------------------------------------------------------
 // Cloud-invariant constants
 // ---------------------------------------------------------------------------
 

@@ -3,6 +3,8 @@ export interface Workspace {
   tenantId: string;
   name: string;
   description?: string;
+  /** Lifecycle state. Absent on older docs (treated as 'Active' by readers). */
+  state?: 'Active' | 'Provisioning' | 'Suspended' | 'Deleted';
   /** Selected Fabric/Power BI capacity id (or SKU label for legacy free-text). */
   capacity?: string;
   /** Selected Loom-managed business domain id. */
