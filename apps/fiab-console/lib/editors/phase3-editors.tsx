@@ -9087,7 +9087,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed' | 'direct-lake'>('tables');
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9129,6 +9129,30 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // Direct Lake query with transparent Serverless fallback (direct-lake tab).
+  // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
+  // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
+  // same Gold Delta files are queried via Synapse Serverless OPENROWSET — the
+  // Azure-native analog of Fabric "Direct Lake on SQL" DirectQuery fallback.
+  interface DlQueryResult {
+    ok: boolean;
+    servingFrom?: 'warm-cache' | 'serverless-fallback';
+    columns?: string[];
+    rows?: unknown[][];
+    rowCount?: number;
+    executionMs?: number;
+    truncated?: boolean;
+    endpoint?: string;
+    deltaPath?: string;
+    lastRefreshedAt?: string | null;
+    cacheTtlSeconds?: number;
+    error?: string;
+  }
+  const [dlTable, setDlTable] = useState('');
+  const [dlMaxRows, setDlMaxRows] = useState(1000);
+  const [dlLoading, setDlLoading] = useState(false);
+  const [dlResult, setDlResult] = useState<DlQueryResult | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9262,6 +9286,30 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!measureName) setMeasureName('MyMeasure');
   }, [measureTable, measureName, detail?.tables]);
 
+  // Direct Lake query: POST to the BFF, which serves from the warm Power BI
+  // cache when fresh and transparently falls back to Synapse Serverless
+  // OPENROWSET over the Gold Delta files when the cache is stale/unbuilt.
+  // datasetId is optional here — the Serverless fallback only needs the table
+  // name and LOOM_GOLD_URL, so the query works with no Power BI workspace bound.
+  const executeDlQuery = useCallback(async () => {
+    if (!dlTable) return;
+    setDlLoading(true); setDlResult(null);
+    try {
+      const dsPath = datasetId ? encodeURIComponent(datasetId) : '_';
+      const r = await fetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, table: dlTable, maxRows: dlMaxRows }),
+      });
+      const j: DlQueryResult = await r.json();
+      setDlResult(j);
+    } catch (e: any) {
+      setDlResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDlLoading(false);
+    }
+  }, [workspaceId, datasetId, dlTable, dlMaxRows]);
+
   // Build a REAL new semantic model (push dataset) via the Power BI Push
   // Datasets REST API. After a successful build we refresh the dataset list
   // and select the new model so the user lands in its detail view.
@@ -9387,6 +9435,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="config">Configuration</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
+                  <Tab value="direct-lake">Direct Lake query</Tab>
                   {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
                 </TabList>
               </div>
@@ -9680,6 +9729,137 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       Browse the model metadata and author DAX in the Tables, Relationships, and Measures tabs above. Power BI live-query / external-tool embedding is configured here when a workspace is bound.
                     </MessageBarBody>
                   </MessageBar>
+                )}
+
+                {tab === 'direct-lake' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Direct Lake query with transparent Serverless fallback</MessageBarTitle>
+                        When the warm cache (last model refresh) is within{' '}
+                        <code>LOOM_DL_CACHE_TTL_SECONDS</code>, rows are served from the Power BI
+                        in-memory VertiPaq cache. When stale or unbuilt, the same Gold Delta files
+                        are queried transparently via Synapse Serverless <code>OPENROWSET</code> —
+                        the Azure-native analog of Fabric Direct Lake on SQL DirectQuery fallback.
+                        No Fabric capacity required.
+                      </MessageBarBody>
+                    </MessageBar>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-table-picker">Table</Label>
+                        {(detail?.tables && detail.tables.length > 0) ? (
+                          <Dropdown
+                            id="dl-table-picker"
+                            placeholder="Select table"
+                            value={dlTable}
+                            selectedOptions={dlTable ? [dlTable] : []}
+                            onOptionSelect={(_, d) => setDlTable((d.optionValue as string) || '')}
+                            style={{ minWidth: 200 }}
+                          >
+                            {detail.tables.map((t) => (
+                              <Option key={t.name} value={t.name}>{t.name}</Option>
+                            ))}
+                          </Dropdown>
+                        ) : (
+                          <Input
+                            id="dl-table-picker"
+                            placeholder="Gold Delta table name (e.g. fact_sales)"
+                            value={dlTable}
+                            onChange={(_, d) => setDlTable(d.value)}
+                            style={{ minWidth: 240 }}
+                          />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-max-rows">Max rows</Label>
+                        <Input
+                          id="dl-max-rows"
+                          type="number"
+                          value={String(dlMaxRows)}
+                          onChange={(_, d) => setDlMaxRows(Math.min(5000, Math.max(1, parseInt(d.value, 10) || 1000)))}
+                          style={{ width: 100 }}
+                        />
+                      </div>
+                      <Button
+                        appearance="primary"
+                        icon={<Play20Regular />}
+                        disabled={!dlTable || dlLoading}
+                        onClick={executeDlQuery}
+                      >
+                        Run
+                      </Button>
+                    </div>
+
+                    {dlLoading && <Spinner size="small" label="Querying…" labelPosition="after" />}
+
+                    {dlResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {dlResult.servingFrom === 'warm-cache' && (
+                            <Badge appearance="filled" color="success">Serving from: warm cache</Badge>
+                          )}
+                          {dlResult.servingFrom === 'serverless-fallback' && (
+                            <Badge appearance="filled" color="warning">Serving from: fallback (Serverless)</Badge>
+                          )}
+                          {dlResult.executionMs !== undefined && (
+                            <Caption1>{dlResult.executionMs} ms</Caption1>
+                          )}
+                          {dlResult.rowCount !== undefined && (
+                            <Badge appearance="outline">{dlResult.rowCount} rows</Badge>
+                          )}
+                          {dlResult.truncated && <Badge color="warning">Truncated</Badge>}
+                        </div>
+
+                        {dlResult.servingFrom === 'serverless-fallback' && dlResult.endpoint && (
+                          <Caption1>
+                            Serverless endpoint: <code>{dlResult.endpoint}</code>
+                            {dlResult.deltaPath && <> · Delta path: <code>{dlResult.deltaPath}</code></>}
+                          </Caption1>
+                        )}
+                        {dlResult.lastRefreshedAt && (
+                          <Caption1>
+                            Last successful model refresh: {new Date(dlResult.lastRefreshedAt).toLocaleString()}
+                            {dlResult.cacheTtlSeconds !== undefined && <> (TTL {dlResult.cacheTtlSeconds}s)</>}
+                          </Caption1>
+                        )}
+
+                        {!dlResult.ok && (
+                          <MessageBar intent="error">
+                            <MessageBarBody>
+                              <MessageBarTitle>Query failed</MessageBarTitle>
+                              {dlResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+
+                        {dlResult.ok && dlResult.columns && dlResult.rows && (
+                          <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                              <thead>
+                                <tr>
+                                  {dlResult.columns.map((c) => (
+                                    <th key={c} style={{ padding: '4px 8px', background: tokens.colorNeutralBackground2, textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0 }}>{c}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dlResult.rows.slice(0, 200).map((row, ri) => (
+                                  <tr key={ri}>
+                                    {(row as unknown[]).map((cell, ci) => (
+                                      <td key={ci} style={{ padding: '3px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
+                                        {cell === null || cell === undefined ? <em style={{ opacity: 0.5 }}>null</em> : String(cell)}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </>

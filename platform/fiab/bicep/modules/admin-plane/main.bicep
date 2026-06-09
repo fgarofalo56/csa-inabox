@@ -187,6 +187,9 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Direct Lake warm-cache TTL in seconds. Semantic-model "Direct Lake query" requests within this window are served from the Power BI in-memory VertiPaq cache; older queries fall back transparently to Synapse Serverless OPENROWSET over the Gold Delta files. 0 = always Serverless. Default 3600 (1 hour).')
+param loomDlCacheTtlSeconds int = 3600
+
 @description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
 param loomOnelakeSecurityEnabled bool = false
 
@@ -1053,6 +1056,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Direct Lake warm-cache TTL (seconds). Semantic-model queries within
+            // this window are served from the Power BI in-memory VertiPaq cache;
+            // older queries fall back transparently to Synapse Serverless
+            // OPENROWSET over the Gold Delta files. 0 = always Serverless.
+            { name: 'LOOM_DL_CACHE_TTL_SECONDS', value: string(loomDlCacheTtlSeconds) }
             // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA
             // DDL via Livy, and the sovereign-cloud dev-endpoint DNS suffix.
             { name: 'LOOM_DEFAULT_SPARK_POOL', value: loomDefaultSparkPool }
