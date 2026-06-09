@@ -89,3 +89,154 @@ describe('buildAssistMessages', () => {
     expect(msgs[0].content).toContain('abfss://bronze@acct');
   });
 });
+
+/**
+ * Unit tests for the pure "Fix with Copilot" cell-error helpers
+ * (lib/copilot/notebook-tools.ts). No network, no Azure — pure functions.
+ *
+ * Covers: buildCellFixMessages (JSON-instruction system prompt, verbatim error
+ * fields, execution-details block presence/omission, language labels) and
+ * parseCellFixResponse (structured JSON, embedded fences, malformed JSON
+ * fallback, missing proposedCode, empty input) + stripCodeFences.
+ */
+import {
+  buildCellFixMessages,
+  parseCellFixResponse,
+  stripCodeFences,
+  CELL_FIX_LANG_LABEL,
+} from '@/lib/copilot/notebook-tools';
+
+describe('buildCellFixMessages', () => {
+  const base = {
+    cellSource: 'df.select("nonexistent_col")',
+    lang: 'pyspark',
+    errorContext: {
+      ename: 'AnalysisException',
+      evalue: 'Resolved attribute(s) missing from child',
+      traceback: ['Traceback (most recent call last):', 'AnalysisException: missing'],
+    },
+  };
+
+  it('system message instructs the model to answer with JSON keys', () => {
+    const [sys] = buildCellFixMessages(base);
+    expect(sys.role).toBe('system');
+    expect(sys.content).toMatch(/valid JSON object/i);
+    expect(sys.content).toContain('"summary"');
+    expect(sys.content).toContain('"rootCause"');
+    expect(sys.content).toContain('"proposedCode"');
+  });
+
+  it('user message contains the cell source and verbatim error fields', () => {
+    const [, user] = buildCellFixMessages(base);
+    expect(user.role).toBe('user');
+    expect(user.content).toContain('df.select("nonexistent_col")');
+    expect(user.content).toContain('AnalysisException');
+    expect(user.content).toContain('Resolved attribute(s) missing from child');
+    expect(user.content).toContain('Traceback (most recent call last):');
+  });
+
+  it('includes execution details when present', () => {
+    const [, user] = buildCellFixMessages({
+      ...base,
+      executionDetails: {
+        executionCount: 3,
+        durationMs: 4210,
+        executedAtUtc: '2026-06-09T00:00:00Z',
+        sessionPool: 'loompool',
+      },
+    });
+    expect(user.content).toContain('Execution count: 3');
+    expect(user.content).toContain('Duration: 4210 ms');
+    expect(user.content).toContain('Executed at (UTC): 2026-06-09T00:00:00Z');
+    expect(user.content).toContain('Spark pool: loompool');
+  });
+
+  it('omits the execution-details block when all details are undefined', () => {
+    const [, user] = buildCellFixMessages({ ...base, executionDetails: {} });
+    expect(user.content).not.toContain('Execution details:');
+  });
+
+  it('omits the execution-details block when no executionDetails at all', () => {
+    const [, user] = buildCellFixMessages(base);
+    expect(user.content).not.toContain('Execution details:');
+  });
+
+  it('maps every supported language label', () => {
+    for (const lang of Object.keys(CELL_FIX_LANG_LABEL)) {
+      const [sys] = buildCellFixMessages({ ...base, lang });
+      expect(sys.content).toContain(CELL_FIX_LANG_LABEL[lang]);
+    }
+  });
+
+  it('falls back to the raw lang id for an unknown language', () => {
+    const [sys] = buildCellFixMessages({ ...base, lang: 'kotlin' });
+    expect(sys.content).toContain('kotlin');
+  });
+});
+
+describe('parseCellFixResponse', () => {
+  it('extracts all three fields from a valid JSON object', () => {
+    const raw = JSON.stringify({
+      summary: 'The column does not exist.',
+      rootCause: "Typo in the column name 'nonexistent_col'.",
+      proposedCode: 'df.select("existing_col")',
+    });
+    const r = parseCellFixResponse(raw);
+    expect(r.summary).toBe('The column does not exist.');
+    expect(r.rootCause).toBe("Typo in the column name 'nonexistent_col'.");
+    expect(r.proposedCode).toBe('df.select("existing_col")');
+  });
+
+  it('strips a ```json fence the model wraps the JSON in', () => {
+    const raw = '```json\n' + JSON.stringify({
+      summary: 's', rootCause: 'r', proposedCode: 'print(1)',
+    }) + '\n```';
+    const r = parseCellFixResponse(raw);
+    expect(r.proposedCode).toBe('print(1)');
+    expect(r.summary).toBe('s');
+  });
+
+  it('strips fences embedded inside the proposedCode field', () => {
+    const raw = JSON.stringify({
+      summary: 's', rootCause: 'r', proposedCode: '```python\nprint(1)\n```',
+    });
+    const r = parseCellFixResponse(raw);
+    expect(r.proposedCode).toBe('print(1)');
+    expect(r.proposedCode).not.toContain('```');
+  });
+
+  it('falls back to raw-code when the reply is not JSON', () => {
+    const raw = '```python\nundefined_var = 1\nprint(undefined_var)\n```';
+    const r = parseCellFixResponse(raw);
+    expect(r.proposedCode).toBe('undefined_var = 1\nprint(undefined_var)');
+    expect(r.summary).toMatch(/could not be parsed/i);
+    expect(r.rootCause).toBe('');
+  });
+
+  it('falls back when JSON is missing the proposedCode field', () => {
+    const raw = JSON.stringify({ summary: 's', rootCause: 'r' });
+    const r = parseCellFixResponse(raw);
+    // The whole JSON string becomes the proposed code (honest fallback).
+    expect(r.summary).toMatch(/could not be parsed/i);
+    expect(r.proposedCode).toContain('summary');
+  });
+
+  it('returns empty proposedCode for empty input', () => {
+    const r = parseCellFixResponse('');
+    expect(r.proposedCode).toBe('');
+  });
+});
+
+describe('stripCodeFences', () => {
+  it('strips a leading ```python fence and trailing ``` and trims', () => {
+    expect(stripCodeFences('```python\nprint(1)\n```')).toBe('print(1)');
+  });
+
+  it('passes through a string with no fences unchanged (trimmed)', () => {
+    expect(stripCodeFences('  print(1)  ')).toBe('print(1)');
+  });
+
+  it('handles a bare ``` opening fence', () => {
+    expect(stripCodeFences('```\nx = 1\n```')).toBe('x = 1');
+  });
+});
