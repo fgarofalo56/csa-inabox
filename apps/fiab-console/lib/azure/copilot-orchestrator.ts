@@ -23,7 +23,7 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
-import { cogScope } from './cloud-endpoints';
+import { cogScope, getOpenAiSuffix, isGovCloud, detectLoomCloud } from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -115,6 +115,49 @@ export interface AoaiTarget {
 let _aoaiTarget: AoaiTarget | null = null;
 
 /**
+ * Cross-check a resolved AOAI endpoint host against the active sovereign cloud.
+ *
+ * The AOAI bearer token is minted with `cogScope()` — `cognitiveservices.azure.us`
+ * in Gov, `cognitiveservices.azure.com` in Commercial/GCC. If an operator points
+ * `LOOM_AOAI_ENDPOINT` (or a tenant cfg) at the wrong sovereign host (e.g. a
+ * `*.openai.azure.com` Commercial endpoint inside a GCC-High deployment), the
+ * data-plane call will 401 with an opaque auth error. Catch the mismatch here
+ * and surface a precise, actionable honest-gate instead.
+ *
+ * A bare host with neither known suffix (custom DNS / private endpoint CNAME)
+ * is allowed through — we only reject a host that explicitly carries the OTHER
+ * boundary's suffix.
+ */
+function validateEndpointCloud(endpoint: string): void {
+  const host = endpoint.toLowerCase();
+  const expectedSuffix = getOpenAiSuffix(); // openai.azure.us | openai.azure.com
+  const gov = isGovCloud();
+  const cloud = detectLoomCloud();
+  const govHost = host.includes('openai.azure.us');
+  const comHost = host.includes('openai.azure.com');
+  if (gov && comHost && !govHost) {
+    throw new NoAoaiDeploymentError(
+      `LOOM_AOAI_ENDPOINT points to a Commercial Azure OpenAI host (openai.azure.com) ` +
+        `but the active cloud (${cloud}) requires *.${expectedSuffix}. ` +
+        `Update LOOM_AOAI_ENDPOINT to your Gov endpoint, or set LOOM_CLOUD to match the endpoint.`,
+    );
+  }
+  if (!gov && govHost && !comHost) {
+    throw new NoAoaiDeploymentError(
+      `LOOM_AOAI_ENDPOINT points to an Azure Government Azure OpenAI host (openai.azure.us) ` +
+        `but the active cloud (${cloud}) requires *.${expectedSuffix}. ` +
+        `Update LOOM_AOAI_ENDPOINT to your Commercial endpoint, or set LOOM_CLOUD=GCC-High to match.`,
+    );
+  }
+}
+
+/** The endpoint-suffix hint appended to "no deployment" gates so the operator
+ *  knows which sovereign host pattern to provision (openai.azure.us vs .com). */
+function expectedSuffixHint(): string {
+  return `For ${detectLoomCloud()}, the expected endpoint suffix is ${getOpenAiSuffix()}.`;
+}
+
+/**
  * Resolve the AOAI chat target.
  *
  * Resolution order:
@@ -142,6 +185,7 @@ export async function resolveAoaiTarget(
     const endpoint = (cfg.aoaiEndpoint || process.env.LOOM_AOAI_ENDPOINT || '').replace(/\/$/, '');
     const deployment = cfg.copilotChatDeployment || process.env.LOOM_AOAI_DEPLOYMENT || '';
     if (endpoint && deployment) {
+      validateEndpointCloud(endpoint);
       return { endpoint, deployment, apiVersion };
     }
     // Endpoint known but no deployment chosen yet → honest gate.
@@ -160,7 +204,9 @@ export async function resolveAoaiTarget(
   const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
 
   if (envEndpoint && envDeployment) {
-    const t = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
+    const ep = envEndpoint.replace(/\/$/, '');
+    validateEndpointCloud(ep);
+    const t = { endpoint: ep, deployment: envDeployment, apiVersion };
     if (!cfg) _aoaiTarget = t;
     return t;
   }
@@ -171,7 +217,8 @@ export async function resolveAoaiTarget(
     conns = await listConnections();
   } catch (e: any) {
     throw new NoAoaiDeploymentError(
-      `No AOAI deployment on Foundry hub. Deploy a gpt-4 / gpt-4o model first. (Foundry connection lookup failed: ${e?.message || e})`,
+      `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ` +
+        `${expectedSuffixHint()} (Foundry connection lookup failed: ${e?.message || e})`,
     );
   }
 
@@ -181,14 +228,16 @@ export async function resolveAoaiTarget(
   );
   if (!aoai || !aoai.target) {
     throw new NoAoaiDeploymentError(
-      'No AOAI deployment on Foundry hub. Deploy a gpt-4 / gpt-4o model first.',
+      `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ${expectedSuffixHint()}`,
     );
   }
 
   const deployment =
     cfg?.copilotChatDeployment || envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
+  const discoveredEndpoint = aoai.target.replace(/\/$/, '');
+  validateEndpointCloud(discoveredEndpoint);
   const discovered: AoaiTarget = {
-    endpoint: aoai.target.replace(/\/$/, ''),
+    endpoint: discoveredEndpoint,
     deployment,
     apiVersion,
   };

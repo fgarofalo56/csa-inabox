@@ -33,6 +33,8 @@ import {
   Checkmark16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { CopilotChips } from '@/lib/components/copilot-chips';
+import type { CopilotContext } from '@/lib/azure/copilot-personas';
 
 interface AttachedSource {
   kind: 'lakehouse' | 'warehouse' | 'kql-database';
@@ -174,6 +176,17 @@ export function CopilotChatPane({
   const slashMatches = useMemo(
     () => (slashOpen ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase())) : []),
     [slashOpen, input],
+  );
+
+  // Persona context for the suggested-prompt chips: notebook-flavoured prompts
+  // grounded in the real attached lakehouse names + active language.
+  const chipCtx: CopilotContext = useMemo(
+    () => ({
+      persona: 'notebook',
+      attachedSourceNames: attachedSources.map((src) => src.displayName),
+      defaultLang,
+    }),
+    [attachedSources, defaultLang],
   );
 
   useEffect(() => {
@@ -432,6 +445,9 @@ export function CopilotChatPane({
           )}
 
           <div className={s.inputRow}>
+            {messages.length === 0 && !streaming && (
+              <CopilotChips ctx={chipCtx} busy={streaming} onSelect={(prompt) => void send(prompt)} />
+            )}
             {slashOpen && slashMatches.length > 0 && (
               <div className={s.slashMenu} role="listbox" aria-label="Slash commands">
                 {slashMatches.map((c, i) => (
