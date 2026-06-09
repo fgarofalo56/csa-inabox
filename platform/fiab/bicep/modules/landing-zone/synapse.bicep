@@ -326,6 +326,9 @@ param adxClusterPrincipalId string = ''
 @description('OPTIONAL — separate ADLS Gen2 account hosting the mirror Bronze container (split-DLZ topology). When set, the Synapse workspace MSI is granted Storage Blob Data Reader on it so the mirror-paired Serverless SQL analytics endpoint can OPENROWSET mirrored CSV. Empty = skip (mirror Bronze == default SA is already Contributor-granted).')
 param mirrorBronzeStorageAccountName string = ''
 
+@description('Grant the Console UAMI Storage Blob Data Contributor on the lakehouse SA so the built-in mirrored-database engine can write Bronze snapshot CSV (no-Fabric default). Defaults true.')
+param consolePrincipalNeedsContributor bool = true
+
 module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorageRole && !skipRoleGrants) {
   name: 'synapse-storage-rbac-${domainName}'
   scope: resourceGroup(defaultStorageResourceGroup)
@@ -345,6 +348,9 @@ module synapseStorageRbac 'synapse-storage-rbac.bicep' = if (grantSynapseStorage
     // topology (separate mirror Bronze account); empty = skip (common topology
     // is already covered by the default-SA Contributor grant above).
     mirrorBronzeStorageAccountName: mirrorBronzeStorageAccountName
+    // Mirrored-database engine writes Bronze snapshot CSV as the Console UAMI
+    // (no-Fabric default backend) → needs Storage Blob Data Contributor.
+    consolePrincipalNeedsContributor: skipRoleGrants ? false : consolePrincipalNeedsContributor
   }
 }
 

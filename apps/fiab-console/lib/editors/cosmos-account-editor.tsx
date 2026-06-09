@@ -28,7 +28,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import {
-  Button, Tooltip, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Button, Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -37,6 +37,7 @@ import {
   Search16Regular, Code16Regular, MathFormula20Regular, Flow20Regular,
   Organization20Regular,
   Table20Regular,
+  DataHistogram20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -44,9 +45,11 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CosmosTree, type CosmosSelection, type CosmosAction } from '@/lib/components/cosmos/cosmos-tree';
 import { CosmosDataExplorer } from '@/lib/components/cosmos/cosmos-data-explorer';
 import { CosmosHome } from '@/lib/components/cosmos/cosmos-home';
+import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel';
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
+import { CosmosMetrics } from './components/cosmos-metrics';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -99,6 +102,7 @@ function tabIcon(kind: CosmosAction) {
     case 'home': return <Home16Regular />;
     case 'items': return <DocumentBulletList16Regular />;
     case 'settings': return <Settings20Regular />;
+    case 'metrics': return <DataHistogram20Regular />;
     case 'newSqlQuery': return <Search16Regular />;
     case 'graph': return <Organization20Regular />;
     case 'storedProcedure':
@@ -159,6 +163,14 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
         defaultTtl: sel.defaultTtl, throughput: sel.throughput,
       };
+    } else if (a === 'metrics') {
+      // Container-scoped (or account-level) Azure Monitor RU/storage/429 charts.
+      const scope = sel.container ? `${sel.db}|${sel.container}` : (sel.db || 'account');
+      tab = {
+        key: `metrics:${scope}`, kind: 'metrics',
+        title: sel.container ? `${sel.container} · Metrics` : 'Metrics', closable: true,
+        db: sel.db, container: sel.container,
+      };
     } else if (a === 'newSqlQuery') {
       // A standalone query tab against a chosen db/container (or db only).
       const n = Date.now().toString(36);
@@ -213,6 +225,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'New Container', icon: <Table20Regular />, onClick: () => { void openContainerWizard(); } },
         { label: 'New SQL Query', icon: <Search16Regular />, onClick: () => openTab({ action: 'newSqlQuery' }) },
         { label: 'Graph explorer', icon: <Organization20Regular />, onClick: () => openTab({ action: 'graph' }) },
+        { label: 'Metrics', icon: <DataHistogram20Regular />, onClick: () => openTab({ action: 'metrics' }) },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refresh },
       ]},
     ]},
@@ -313,7 +326,16 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
             )}
 
             {active.kind === 'settings' && !active.container && (
-              <ConnectPanel />
+              <CosmosConnectPanel id={id} />
+            )}
+
+            {active.kind === 'metrics' && (
+              <CosmosMetrics
+                key={active.key}
+                id={id}
+                db={active.db}
+                container={active.container}
+              />
             )}
 
             {(active.kind === 'storedProcedure' || active.kind === 'newStoredProcedure'
@@ -345,28 +367,6 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         </div>
       }
     />
-  );
-}
-
-/** Connect card → live account-info surface (real document endpoint). */
-function ConnectPanel() {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>Connect</MessageBarTitle>
-          The account chip in the Data Explorer pane shows the live account name + region from{' '}
-          <code>/api/cosmos/account</code> (the real <code>documentEndpoint</code> on{' '}
-          <code>documents.azure.com</code>). Loom drives the data plane with the Console managed
-          identity (AAD token), so there is no key/connection-string to copy — the SDK connect
-          pattern is <code>new CosmosClient(endpoint, new DefaultAzureCredential())</code>.
-        </MessageBarBody>
-      </MessageBar>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-        Account keys are intentionally not surfaced here; Loom uses RBAC (AAD) data-plane access, not
-        primary keys, per the deployment&apos;s security posture.
-      </Caption1>
-    </div>
   );
 }
 

@@ -229,6 +229,12 @@ param loomShirVmssName string = 'vmss-loom-shir-default'
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
+@description('Opt-in ADF CDC mirroring — name of the pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server / PostgreSQL). Empty = mirrored databases use the built-in CSV snapshot engine (still Azure-native, no Fabric).')
+param loomMirrorSourceLinkedService string = ''
+
+@description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
+param loomMirrorAdlsLinkedService string = ''
+
 @description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
 param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
 
@@ -249,6 +255,34 @@ param loomHdinsightLinkedService string = ''
 
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
+
+@description('Resource group of the Azure SQL logical server(s) the per-database Share dialog manages. Empty defaults to LOOM_DLZ_RG. The Console UAMI receives constrained RBAC-Admin here (Reader/Contributor/SQL DB Contributor only) so it can assign roles at the database scope.')
+param loomSqlServerRg string = ''
+
+@description('Git provider for Azure SQL schema source control (Source control tab): "azdo", "github", or empty (honest gate). Repo + PAT are supplied via the LOOM_SQL_GIT_* settings below.')
+@allowed([ '', 'azdo', 'github' ])
+param loomSqlGitProvider string = ''
+
+@description('Azure DevOps organization name (when loomSqlGitProvider=azdo).')
+param loomSqlGitAdoOrg string = ''
+
+@description('Azure DevOps project that holds the schema (DACPAC) repo (when loomSqlGitProvider=azdo).')
+param loomSqlGitAdoProject string = ''
+
+@description('Azure DevOps Git repository name for the schema project (when loomSqlGitProvider=azdo).')
+param loomSqlGitAdoRepo string = ''
+
+@description('Key Vault secret name holding the Azure DevOps PAT (when loomSqlGitProvider=azdo).')
+param loomSqlGitAdoPatSecretName string = ''
+
+@description('GitHub repository (org/repo) for the schema project (when loomSqlGitProvider=github).')
+param loomSqlGitGithubRepo string = ''
+
+@description('GitHub default branch for the schema project (when loomSqlGitProvider=github).')
+param loomSqlGitGithubBranch string = 'main'
+
+@description('Key Vault secret name holding the GitHub PAT (when loomSqlGitProvider=github).')
+param loomSqlGitGithubPatSecretName string = ''
 
 @description('Resource group containing the Azure SQL logical servers Loom manages. The Console UAMI is granted SQL DB Contributor here so the Compute & Storage scale tab can PATCH database SKUs (Microsoft.Sql/servers/databases/write). Empty = skip the grant; the tab then surfaces an honest MessageBar naming the role.')
 param loomAzureSqlServerRg string = ''
@@ -1060,6 +1094,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
+            // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
+            // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
+            // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
+            { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
+            { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
             // Approval activity (F25) - Consumption Logic App + O365 approval
             // email backing the pipeline editor's Approval activity. Empty name
             // -> the approval-logicapp route returns an honest 503 naming the
@@ -1200,6 +1240,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // UAMI to hold "DocumentDB Account Contributor" (granted in cosmos.bicep).
             { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
+            // Item-level Share (per-Azure-SQL-database Access control / IAM).
+            // The RG of the SQL server(s); the Console UAMI holds constrained
+            // RBAC-Admin here (sql-database-share-rbac.bicep) so the Share dialog
+            // can PUT/DELETE Reader/Contributor/SQL DB Contributor role
+            // assignments at the database scope.
+            { name: 'LOOM_SQL_RG',             value: !empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg }
+            // Azure SQL schema source control (Source control tab). Empty
+            // provider → honest gate; otherwise the named repo + KV PAT secret
+            // drive the SqlPackage DACPAC diff pipeline.
+            { name: 'LOOM_SQL_GIT_PROVIDER',          value: loomSqlGitProvider }
+            { name: 'LOOM_SQL_GIT_ADO_ORG',           value: loomSqlGitAdoOrg }
+            { name: 'LOOM_SQL_GIT_ADO_PROJECT',       value: loomSqlGitAdoProject }
+            { name: 'LOOM_SQL_GIT_ADO_REPO',          value: loomSqlGitAdoRepo }
+            { name: 'LOOM_SQL_GIT_ADO_PAT_SECRET',    value: loomSqlGitAdoPatSecretName }
+            { name: 'LOOM_SQL_GIT_GITHUB_REPO',       value: loomSqlGitGithubRepo }
+            { name: 'LOOM_SQL_GIT_GITHUB_BRANCH',     value: loomSqlGitGithubBranch }
+            { name: 'LOOM_SQL_GIT_GITHUB_PAT_SECRET', value: loomSqlGitGithubPatSecretName }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
             // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
             // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
@@ -1774,6 +1831,18 @@ resource pbiEmbeddedCapacity 'Microsoft.PowerBIDedicated/capacities@2021-01-01' 
 module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRoleGrants) {
   name: 'console-workspace-rbac'
   scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Item-level Share — constrained RBAC-Admin on the SQL server's RG so the
+// per-database Share dialog can assign Reader/Contributor/SQL DB Contributor
+// at the Microsoft.Sql/servers/databases scope (ABAC-limited to those roles).
+module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrants) {
+  name: 'console-sql-database-share-rbac'
+  scope: resourceGroup(!empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants

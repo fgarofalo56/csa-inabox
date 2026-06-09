@@ -25,7 +25,7 @@ param privateDnsZoneCosmosId string
 @description('Log Analytics workspace ID for diagnostic settings')
 param workspaceId string
 
-@description('Loom Console UAMI principal ID — granted "DocumentDB Account Contributor" on this account so the Cosmos DB control-plane navigator (databases/containers/stored-procs) can CRUD via ARM. The account sets disableLocalAuth=true, so AAD RBAC is the only path. Empty skips the grant.')
+@description('Loom Console UAMI principal ID — granted "DocumentDB Account Contributor" on this account so the Cosmos DB control-plane navigator (databases/containers/stored-procs) can CRUD via ARM AND the Connect panel can call listKeys / listConnectionStrings / regenerateKey. The account sets disableLocalAuth=true, so AAD RBAC is the only data-plane path. "Cosmos DB Operator" is NOT sufficient (it blocks key access). Empty skips the grant.')
 param consolePrincipalId string = ''
 
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
@@ -104,6 +104,7 @@ var databases = [
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
+//   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
 //   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
 //     registry (Azure-native, no Fabric). Internal shortcuts need no extra
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
@@ -191,7 +192,13 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 }
 
 // Console UAMI — DocumentDB Account Contributor for the control-plane navigator
-// (databases / containers / stored-procedure listing via ARM).
+// (databases / containers / stored-procedure listing via ARM) AND the Connect
+// panel (ARM listKeys / listConnectionStrings / regenerateKey, api-version
+// 2024-11-15). The databaseAccounts/* wildcard in this role covers the key
+// actions; "Cosmos DB Operator" (230815da-…) is NOT sufficient — it explicitly
+// excludes key access. NOTE: this account sets disableLocalAuth=true, so the
+// keys exist in ARM but the data plane rejects them (RBAC-only) — the Connect
+// panel discloses that honestly.
 resource cosmosNavRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: account
   name: guid(account.id, consolePrincipalId, '5bd9cd88-fe45-4216-938b-f97437e15450')

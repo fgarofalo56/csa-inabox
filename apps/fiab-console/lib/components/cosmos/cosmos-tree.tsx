@@ -46,6 +46,7 @@ import {
   Search20Regular, DocumentDatabase20Regular,
   Flow20Regular, MathFormula20Regular, ArrowSort20Regular,
   Home16Regular, Settings20Regular, DocumentBulletList20Regular,
+  DataHistogram20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -105,6 +106,7 @@ export type CosmosAction =
   | 'home'
   | 'items'
   | 'settings'
+  | 'metrics'
   | 'newSqlQuery'
   | 'graph'
   | 'newStoredProcedure'
@@ -527,6 +529,15 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                               onClick={() => onOpen?.(sel('settings'))}
                             >
                               <span className={s.leafBtn}>Settings</span>
+                            </TreeItemLayout>
+                          </TreeItem>
+                          {/* Metrics — opens the RU/storage/429 Azure Monitor charts. */}
+                          <TreeItem itemType="leaf" value={`metrics-${db.name}|${c.name}`}>
+                            <TreeItemLayout
+                              iconBefore={<DataHistogram20Regular />}
+                              onClick={() => onOpen?.(sel('metrics'))}
+                            >
+                              <span className={s.leafBtn}>Metrics</span>
                             </TreeItemLayout>
                           </TreeItem>
                           {/* Stored Procedures */}

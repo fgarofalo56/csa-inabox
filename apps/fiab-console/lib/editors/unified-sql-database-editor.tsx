@@ -27,22 +27,26 @@
  * ui-parity.md).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label, Field, Textarea,
   Dropdown, Option, Tooltip, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   TabList, Tab, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, TopSpeed20Regular,
+  PeopleTeam20Regular, BranchFork20Regular,
   Stop20Regular, ChartMultiple20Regular,
   Sparkle20Regular, Sparkle20Filled, Bug20Regular, TextBulletListSquare20Regular,
   ArrowEnter20Regular, Dismiss20Regular,
+  BookmarkMultiple20Regular, Save20Regular, Rename20Regular, DocumentCopy20Regular,
+  MoreHorizontal20Regular, Folder20Regular, Open20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ResultsPanel } from './components/results-panel';
@@ -53,6 +57,7 @@ import { registerInlineCompletion } from '@/lib/components/editor/inline-complet
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { ShareDialog } from './components/share-dialog';
 import { SqlScalePanel } from './components/sql-scale-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
@@ -144,6 +149,20 @@ const useStyles = makeStyles({
     borderRadius: '4px', overflow: 'hidden',
   },
   ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
+  // ---- Saved queries panel ----
+  qpToolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  qpFolders: { display: 'flex', flexDirection: 'column', gap: 16, marginTop: 4 },
+  qpFolderHead: { display: 'flex', gap: 8, alignItems: 'center', paddingBottom: 4, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  qpList: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 },
+  qpRow: {
+    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 4,
+    cursor: 'pointer', border: '1px solid transparent',
+  },
+  qpRowSel: { background: tokens.colorNeutralBackground1Selected, border: `1px solid ${tokens.colorBrandStroke1}` },
+  qpRowMain: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 },
+  qpName: { fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  qpMeta: { color: tokens.colorNeutralForeground3, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: '8px 0' },
   // ── Copilot side pane (Query tab) ──
   queryRow: { display: 'flex', gap: 12, alignItems: 'stretch', minHeight: 0 },
   queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
@@ -221,8 +240,214 @@ interface Inventory {
 // ResultsPanel normalises both the new and legacy single-recordset forms.
 type QueryResponse = BatchQueryResponse;
 
-// ---- Server admin panel (Firewall + Entra admin + Geo-replication) -------
-// Every control calls a real, pre-existing BFF route:
+// ── Saved queries (My Queries / Shared Queries) — Cosmos-backed ──
+type WorkspaceRoleName = 'Admin' | 'Member' | 'Contributor' | 'Viewer';
+interface SavedQuery {
+  id: string;
+  itemId: string;
+  workspaceId: string;
+  scope: 'private' | 'shared';
+  ownerId: string;
+  name: string;
+  description?: string;
+  sql: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+}
+
+// ---- Saved queries panel (My Queries / Shared Queries + bulk delete) ------
+// Two folders mirror SSMS / ADS "saved queries": personal (private) and the
+// workspace's shared set. Ctrl/Cmd-click toggles a row in the multi-select set;
+// Shift-click range-selects; a plain click selects just that row. Per-row
+// context menu = Open / Rename / Duplicate / Delete. Bulk-delete confirms then
+// calls the DELETE route with the selected ids. All real Cosmos via the route.
+function QueryRow({
+  q, selected, onClick, onContextMenu, onOpen, onRename, onDuplicate, onDelete,
+}: {
+  q: SavedQuery; selected: boolean;
+  onClick: (e: ReactMouseEvent) => void;
+  onContextMenu: (e: ReactMouseEvent) => void;
+  onOpen: () => void; onRename: () => void; onDuplicate: () => void; onDelete: () => void;
+}) {
+  const s = useStyles();
+  const updated = (() => { try { return new Date(q.updatedAt).toLocaleString(); } catch { return q.updatedAt; } })();
+  return (
+    <div
+      className={`${s.qpRow} ${selected ? s.qpRowSel : ''}`}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      role="option"
+      aria-selected={selected}
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter') onOpen(); }}
+    >
+      <Checkbox checked={selected} onClick={onClick} aria-label={`Select ${q.name}`} />
+      <div className={s.qpRowMain}>
+        <span className={s.qpName}>{q.name}</span>
+        <span className={s.qpMeta}>
+          {q.scope === 'shared' ? 'Shared' : 'Private'} · updated {updated}
+          {q.description ? ` · ${q.description}` : ''}
+        </span>
+      </div>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${q.name}`}
+            onClick={(e) => e.stopPropagation()} />
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem icon={<Open20Regular />} onClick={onOpen}>Open in Query</MenuItem>
+            <MenuItem icon={<Rename20Regular />} onClick={onRename}>Rename / edit</MenuItem>
+            <MenuItem icon={<DocumentCopy20Regular />} onClick={onDuplicate}>Duplicate</MenuItem>
+            <MenuItem icon={<Delete20Regular />} onClick={onDelete}>Delete</MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    </div>
+  );
+}
+
+function QueriesPanel({
+  queries, loading, error, disabled, callerRole, selectedIds, onSelectionChange,
+  onRefresh, onSaveNew, onOpen, onRename, onDuplicate, onBulkDelete,
+}: {
+  queries: SavedQuery[]; loading: boolean; error: string | null; disabled: boolean;
+  callerRole: WorkspaceRoleName | null;
+  selectedIds: Set<string>; onSelectionChange: (next: Set<string>) => void;
+  onRefresh: () => void; onSaveNew: () => void;
+  onOpen: (q: SavedQuery) => void; onRename: (q: SavedQuery) => void;
+  onDuplicate: (q: SavedQuery) => void; onBulkDelete: () => void;
+}) {
+  const s = useStyles();
+  const [lastClicked, setLastClicked] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const mine = useMemo(() => queries.filter((q) => q.scope === 'private'), [queries]);
+  const shared = useMemo(() => queries.filter((q) => q.scope === 'shared'), [queries]);
+  // Flat display order drives Shift range-selection.
+  const ordered = useMemo(() => [...mine, ...shared], [mine, shared]);
+  const canShare = callerRole === 'Admin' || callerRole === 'Member' || callerRole === 'Contributor';
+
+  const handleRowClick = useCallback((q: SavedQuery, e: ReactMouseEvent) => {
+    e.preventDefault();
+    const next = new Set(selectedIds);
+    if (e.shiftKey && lastClicked) {
+      const a = ordered.findIndex((x) => x.id === lastClicked);
+      const b = ordered.findIndex((x) => x.id === q.id);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        for (let i = lo; i <= hi; i++) next.add(ordered[i].id);
+      } else {
+        next.add(q.id);
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      if (next.has(q.id)) next.delete(q.id); else next.add(q.id);
+      setLastClicked(q.id);
+    } else {
+      next.clear();
+      next.add(q.id);
+      setLastClicked(q.id);
+    }
+    onSelectionChange(next);
+  }, [selectedIds, lastClicked, ordered, onSelectionChange]);
+
+  if (disabled) {
+    return (
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Save the item first</MessageBarTitle>
+          Saved queries live on a persisted SQL-database item. Create / save this item (it lives in a
+          workspace), then return here to save personal and shared queries.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  const renderFolder = (label: string, icon: ReactNode, rows: SavedQuery[], emptyHint: string, gated?: string) => (
+    <div>
+      <div className={s.qpFolderHead}>
+        {icon}
+        <Subtitle2>{label}</Subtitle2>
+        <Badge appearance="tint" color="informative">{rows.length}</Badge>
+      </div>
+      {gated
+        ? <Caption1 className={s.qpEmpty}>{gated}</Caption1>
+        : rows.length === 0
+          ? <Caption1 className={s.qpEmpty}>{emptyHint}</Caption1>
+          : (
+            <div className={s.qpList} role="listbox" aria-label={label}>
+              {rows.map((q) => (
+                <QueryRow
+                  key={q.id}
+                  q={q}
+                  selected={selectedIds.has(q.id)}
+                  onClick={(e) => handleRowClick(q, e)}
+                  onContextMenu={(e) => { if (!selectedIds.has(q.id)) handleRowClick(q, e); }}
+                  onOpen={() => onOpen(q)}
+                  onRename={() => onRename(q)}
+                  onDuplicate={() => onDuplicate(q)}
+                  onDelete={() => { onSelectionChange(new Set([q.id])); setConfirmDelete(true); }}
+                />
+              ))}
+            </div>
+          )}
+    </div>
+  );
+
+  return (
+    <>
+      <div className={s.qpToolbar}>
+        <Badge appearance="filled" color="brand" icon={<BookmarkMultiple20Regular />}>Saved queries</Badge>
+        <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={onSaveNew}>Save current query</Button>
+        <Button size="small" appearance="outline" icon={<ArrowClockwise20Regular />} onClick={onRefresh} disabled={loading}>Refresh</Button>
+        <Button
+          size="small" appearance="outline" icon={<Delete20Regular />}
+          disabled={selectedIds.size === 0} onClick={() => setConfirmDelete(true)}>
+          Delete{selectedIds.size > 0 ? ` ${selectedIds.size} selected` : ''}
+        </Button>
+        {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+        {callerRole && <Caption1>your role: <strong>{callerRole}</strong></Caption1>}
+      </div>
+      {error && (
+        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Saved queries error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+      )}
+      <Caption1>Tip: <strong>Ctrl/Cmd-click</strong> to multi-select, <strong>Shift-click</strong> for a range, then bulk delete.</Caption1>
+      <div className={s.qpFolders}>
+        {renderFolder('My Queries', <Folder20Regular />, mine, 'No personal saved queries yet. Save the current query to add one.')}
+        {renderFolder(
+          'Shared Queries', <Folder20Regular />, shared,
+          'No shared queries yet.',
+          canShare ? undefined : 'Shared queries are visible to workspace Admin / Member / Contributor. Your role does not include shared-query access.',
+        )}
+      </div>
+
+      <Dialog open={confirmDelete} onOpenChange={(_, d) => setConfirmDelete(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete saved queries</DialogTitle>
+            <DialogContent>
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  This permanently deletes <strong>{selectedIds.size}</strong> saved {selectedIds.size === 1 ? 'query' : 'queries'}.
+                  You can only delete your own queries (workspace Admins can delete any). The receipt reports
+                  the exact before/after row counts.
+                </MessageBarBody>
+              </MessageBar>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+              <Button appearance="primary" icon={<Delete20Regular />}
+                onClick={() => { setConfirmDelete(false); onBulkDelete(); }}>
+                Delete {selectedIds.size} selected
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
 //   - Firewall    GET/POST/DELETE /api/items/azure-sql-database/[id]/firewall
 //   - Entra admin GET/PUT         /api/items/azure-sql-database/[id]/aad-admin
 //   - Geo-repl.   POST            /api/items/azure-sql-database/[id]/replication
@@ -570,7 +795,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'queries' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data' | 'share' | 'git'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -669,6 +894,121 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   // TOP 1000, EXEC, CREATE templates) — matches the SSMS / portal flow.
   const openInQuery = useCallback((sql: string) => {
     setSqlText(sql);
+    setTab('query');
+  }, []);
+
+  // ---- saved queries (My Queries / Shared Queries) ----
+  const queriesUrl = useMemo(
+    () => `/api/items/azure-sql-database/${encodeURIComponent(id)}/queries`,
+    [id],
+  );
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const [sqLoading, setSqLoading] = useState(false);
+  const [sqError, setSqError] = useState<string | null>(null);
+  const [callerRole, setCallerRole] = useState<WorkspaceRoleName | null>(null);
+  const [selectedQueryIds, setSelectedQueryIds] = useState<Set<string>>(new Set());
+  // Save / rename dialog state.
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [saveDesc, setSaveDesc] = useState('');
+  const [saveScope, setSaveScope] = useState<'private' | 'shared'>('private');
+  const [saveSql, setSaveSql] = useState('');
+  const [editingQueryId, setEditingQueryId] = useState<string | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  const loadSavedQueries = useCallback(async () => {
+    if (id === 'new') return;
+    setSqLoading(true); setSqError(null);
+    const j = await fetchJson(queriesUrl);
+    if (j.ok) {
+      setSavedQueries(j.queries || []);
+      setCallerRole(j.callerRole ?? null);
+      setSelectedQueryIds((prev) => {
+        const live = new Set((j.queries || []).map((q: SavedQuery) => q.id));
+        const next = new Set<string>();
+        for (const sid of prev) if (live.has(sid)) next.add(sid);
+        return next;
+      });
+    } else {
+      setSqError(j.error || 'failed to load saved queries');
+    }
+    setSqLoading(false);
+  }, [queriesUrl, id]);
+
+  // Load saved queries when the item id resolves (skip the transient 'new').
+  useEffect(() => { if (id !== 'new') loadSavedQueries(); }, [id, loadSavedQueries]);
+
+  const openSaveNew = useCallback(() => {
+    setEditingQueryId(null);
+    setSaveName('');
+    setSaveDesc('');
+    setSaveScope('private');
+    setSaveSql(sqlText);
+    setSaveErr(null);
+    setSaveDialogOpen(true);
+  }, [sqlText]);
+
+  const openRename = useCallback((q: SavedQuery) => {
+    setEditingQueryId(q.id);
+    setSaveName(q.name);
+    setSaveDesc(q.description || '');
+    setSaveScope(q.scope);
+    setSaveSql(q.sql);
+    setSaveErr(null);
+    setSaveDialogOpen(true);
+  }, []);
+
+  const submitSaveQuery = useCallback(async () => {
+    if (!saveName.trim()) { setSaveErr('name is required'); return; }
+    if (!saveSql.trim()) { setSaveErr('the query text is empty'); return; }
+    setSaveBusy(true); setSaveErr(null);
+    const j = await fetchJson(queriesUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        queryId: editingQueryId || undefined,
+        name: saveName.trim(),
+        description: saveDesc.trim() || undefined,
+        sql: saveSql,
+        scope: saveScope,
+      }),
+    });
+    setSaveBusy(false);
+    if (j.ok) {
+      setSaveDialogOpen(false);
+      setEditingQueryId(null);
+      loadSavedQueries();
+    } else {
+      setSaveErr(j.error || 'save failed');
+    }
+  }, [queriesUrl, editingQueryId, saveName, saveDesc, saveSql, saveScope, loadSavedQueries]);
+
+  const duplicateQuery = useCallback(async (q: SavedQuery) => {
+    setSqError(null);
+    const j = await fetchJson(queriesUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `${q.name} (copy)`, description: q.description, sql: q.sql, scope: 'private' }),
+    });
+    if (j.ok) loadSavedQueries(); else setSqError(j.error || 'duplicate failed');
+  }, [queriesUrl, loadSavedQueries]);
+
+  const bulkDeleteQueries = useCallback(async () => {
+    if (selectedQueryIds.size === 0) return;
+    setSqError(null);
+    const j = await fetchJson(queriesUrl, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ queryIds: [...selectedQueryIds] }),
+    });
+    if (j.ok) {
+      setSelectedQueryIds(new Set());
+      loadSavedQueries();
+    } else {
+      setSqError(j.error || 'delete failed');
+    }
+  }, [queriesUrl, selectedQueryIds, loadSavedQueries]);
+
+  const openSavedQuery = useCallback((q: SavedQuery) => {
+    setSqlText(q.sql);
     setTab('query');
   }, []);
 
@@ -989,17 +1329,19 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     setCatBusy(false);
   }, [family, serverFqdn, database, server]);
 
-  // Ctrl+S → Run on the query tab (SSMS muscle memory).
+  // Ctrl+S → Run on the Query tab; on the Saved-queries tab it opens the
+  // "Save current query" dialog (SSMS muscle memory either way).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (tab === 'query' && !qLoading) run();
+        if (tab === 'queries') { if (id !== 'new') openSaveNew(); }
+        else if (tab === 'query' && !qLoading) run();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tab, qLoading, run]);
+  }, [tab, qLoading, run, id, openSaveNew]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1035,11 +1377,21 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Share', actions: [
+        { label: 'Manage access', onClick: (server && database && family === 'azure-sql') ? () => setTab('share') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Assign Azure RBAC roles on this database (Access control / IAM)' },
+      ]},
+      { label: 'Source control', actions: [
+        { label: 'Git settings', onClick: () => setTab('git'), title: 'Connect this database schema to Azure DevOps or GitHub' },
+      ]},
       { label: 'Performance', actions: [
         { label: 'Query Store / QPI', onClick: (server && database) ? () => setTab('performance') : undefined, disabled: !(server && database), title: !(server && database) ? 'Pick a server + database first' : 'Top-resource queries, runtime-stats time series + execution plans over Query Store' },
       ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
+      ]},
+      { label: 'Saved queries', actions: [
+        { label: 'My Queries', onClick: id !== 'new' ? () => { setTab('queries'); loadSavedQueries(); } : undefined, disabled: id === 'new', title: id === 'new' ? 'Save the item first' : 'Open the saved-queries panel' },
+        { label: 'Save current query', onClick: id !== 'new' ? openSaveNew : undefined, disabled: id === 'new', title: id === 'new' ? 'Save the item first' : 'Save the current Query-tab text' },
       ]},
       { label: 'Get data', actions: [
         {
@@ -1072,7 +1424,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         },
       ]},
     ]},
-  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, copilotOpen, copilotEligible, invokeCopilot, getDataBusy, openGetData]);
+  ], [invLoading, loadInventory, server, database, family, bindConnection, qLoading, run, serverFqdn, loadSchema, id, loadSavedQueries, openSaveNew, copilotOpen, copilotEligible, invokeCopilot, getDataBusy, openGetData]);
 
   const pgGate = inv?.postgres.error;
   const sqlGate = inv?.sql.error;
@@ -1129,14 +1481,17 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="connect" icon={<PlugConnected20Regular />}>Connect</Tab>
             <Tab value="provision" icon={<Add20Regular />}>Provision</Tab>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="queries" icon={<BookmarkMultiple20Regular />}>Saved queries</Tab>
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
             {family === 'azure-sql' && <Tab value="performance" icon={<ChartMultiple20Regular />}>Performance</Tab>}
+            {family === 'azure-sql' && <Tab value="share" icon={<PeopleTeam20Regular />}>Share</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
             <Tab value="get-data" icon={<ArrowDownload20Regular />}>Get data</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
             {family === 'azure-sql' && <Tab value="scale" icon={<TopSpeed20Regular />}>Compute &amp; Storage</Tab>}
+            <Tab value="git" icon={<BranchFork20Regular />}>Source control</Tab>
           </TabList>
 
           {/* ---------------- Connect ---------------- */}
@@ -1517,6 +1872,25 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             </>
           )}
 
+          {/* ---------------- Saved queries (My Queries / Shared Queries) ---------------- */}
+          {tab === 'queries' && (
+            <QueriesPanel
+              queries={savedQueries}
+              loading={sqLoading}
+              error={sqError}
+              disabled={id === 'new'}
+              callerRole={callerRole}
+              selectedIds={selectedQueryIds}
+              onSelectionChange={setSelectedQueryIds}
+              onRefresh={loadSavedQueries}
+              onSaveNew={openSaveNew}
+              onOpen={openSavedQuery}
+              onRename={openRename}
+              onDuplicate={duplicateQuery}
+              onBulkDelete={bulkDeleteQueries}
+            />
+          )}
+
           {/* ---------------- Schema (rich sys.* object navigator) ---------------- */}
           {tab === 'schema' && (
             <>
@@ -1594,6 +1968,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               )
           )}
 
+          {/* ---------------- Share (per-database Access control / IAM) ---------------- */}
+          {tab === 'share' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <ShareDialog itemId={id} server={server} database={database} open={true} />
+                  : <Caption1>Pick an Azure SQL server + database on the <strong>Connect</strong> tab to assign Azure RBAC roles at the database scope.</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Database Share applies to Azure SQL</MessageBarTitle>
+                    Per-database Azure RBAC role assignment targets the <code>Microsoft.Sql/servers/databases</code> scope. Select an Azure SQL database; SQL MI and PostgreSQL manage access at the instance/server resource scope.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
           {/* ---------------- Performance (Query Store / QPI) ---------------- */}
           {tab === 'performance' && (
             family === 'azure-sql'
@@ -1606,6 +1996,57 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </MessageBarBody>
                 </MessageBar>
               )
+          )}
+
+
+          {/* ---------------- Source control (Git) — honest connection gate ---------------- */}
+          {tab === 'git' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Source control for this database schema</MessageBarTitle>
+                  Mirrors the Azure SQL Database / SSDT "Schema compare + Git" workflow. Schema version
+                  control (DACPAC diff, migration history) runs through an Azure DevOps service connection or
+                  a GitHub Actions workflow — not a live ARM data-plane API — so it is gated on a one-time
+                  connection setting rather than a fake in-app commit form.
+                </MessageBarBody>
+              </MessageBar>
+              <div className={s.card}>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Connect a Git provider</Subtitle2>
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>No ADO / GitHub connection configured</MessageBarTitle>
+                    Set the following environment variables on the Console container app and redeploy, then
+                    schema source control activates for this database:
+                    <br /><br />
+                    <code>LOOM_SQL_GIT_PROVIDER</code> — <code>azdo</code> or <code>github</code>
+                    <br />
+                    <strong>Azure DevOps</strong> (when <code>LOOM_SQL_GIT_PROVIDER=azdo</code>):
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_ORG</code> — your Azure DevOps organization name
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_PROJECT</code> — the Azure DevOps project that holds the repo
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_REPO</code> — the Git repository name for the DACPAC project
+                    <br />
+                    <code>LOOM_SQL_GIT_ADO_PAT_SECRET</code> — Key Vault secret name holding the ADO PAT
+                    <br /><br />
+                    <strong>GitHub</strong> (when <code>LOOM_SQL_GIT_PROVIDER=github</code>):
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_REPO</code> — <code>org/repo</code> for the schema project
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_BRANCH</code> — default branch (e.g. <code>main</code>)
+                    <br />
+                    <code>LOOM_SQL_GIT_GITHUB_PAT_SECRET</code> — Key Vault secret name holding the GitHub PAT
+                    <br /><br />
+                    Wire these in <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code> (env block) and
+                    add a pipeline step that runs <code>SqlPackage /Action:Extract</code> (DACPAC) +
+                    <code> /Action:Script</code> to diff against the checked-in schema. See
+                    <code> docs/fiab/v3-tenant-bootstrap.md</code>. Honest gate — no fake commit form.
+                  </MessageBarBody>
+                </MessageBar>
+              </div>
+            </>
           )}
 
           {/* ---------------- Catalog ---------------- */}
@@ -1804,6 +2245,58 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             </>
           )}
 
+          {/* ---------------- Save / rename query dialog (shared by Save + Rename) ---------------- */}
+          <Dialog open={saveDialogOpen} onOpenChange={(_, d) => setSaveDialogOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>{editingQueryId ? 'Rename / edit saved query' : 'Save query'}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Field label="Name" required>
+                      <Input value={saveName} onChange={(_, d) => setSaveName(d.value)} placeholder="Top customers by revenue" maxLength={120} />
+                    </Field>
+                    <Field label="Description (optional)">
+                      <Input value={saveDesc} onChange={(_, d) => setSaveDesc(d.value)} placeholder="What this query answers" maxLength={500} />
+                    </Field>
+                    <Field label="Folder">
+                      <Dropdown
+                        aria-label="Folder / scope"
+                        selectedOptions={[saveScope]}
+                        value={saveScope === 'shared' ? 'Shared Queries (workspace)' : 'My Queries (private)'}
+                        onOptionSelect={(_, d) => setSaveScope((d.optionValue as 'private' | 'shared') || 'private')}
+                      >
+                        <Option value="private">My Queries (private)</Option>
+                        <Option value="shared" disabled={callerRole === 'Viewer' || callerRole === null}>
+                          Shared Queries (workspace)
+                        </Option>
+                      </Dropdown>
+                    </Field>
+                    {(callerRole === 'Viewer' || callerRole === null) && (
+                      <Caption1>Shared queries need workspace Admin / Member / Contributor. Your queries save privately.</Caption1>
+                    )}
+                    <Field label="Query text">
+                      <Textarea
+                        value={saveSql}
+                        onChange={(_, d) => setSaveSql(d.value)}
+                        rows={8}
+                        textarea={{ style: { fontFamily: 'Consolas, monospace', fontSize: 12 } }}
+                        aria-label="SQL text to save"
+                      />
+                    </Field>
+                    {saveErr && (
+                      <MessageBar intent="error"><MessageBarBody>{saveErr}</MessageBarBody></MessageBar>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSaveDialogOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" icon={<Save20Regular />} disabled={saveBusy || !saveName.trim() || !saveSql.trim()} onClick={submitSaveQuery}>
+                    {saveBusy ? 'Saving…' : editingQueryId ? 'Save changes' : 'Save query'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
           {/* ---------------- Compute & Storage (scale) ---------------- */}
           {tab === 'scale' && (
             family === 'azure-sql'
