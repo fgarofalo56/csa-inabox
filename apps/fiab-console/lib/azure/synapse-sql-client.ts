@@ -242,6 +242,36 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
 }
 
 /**
+ * Run `EXPLAIN [WITH_RECOMMENDATIONS] <sqlText>` on a Synapse Dedicated SQL pool
+ * and return the raw distributed-query-plan XML from the first result-set cell.
+ *
+ * EXPLAIN compiles (but does NOT execute) the statement and returns the MPP
+ * plan as XML — operation types such as BroadcastMoveOperation /
+ * ShuffleMoveOperation reveal the data-movement steps a query incurs. The
+ * WITH_RECOMMENDATIONS form additionally surfaces engine optimization hints
+ * (missing statistics, alternative distributions). This is the real backend
+ * the Warehouse Copilot "optimize" mode grounds its suggestions in.
+ *
+ * Only supported on Dedicated pools (not Serverless / Databricks) — the caller
+ * must gate. Requires SHOWPLAN, held by any SQL admin (the Console UAMI
+ * qualifies); no extra GRANT is needed.
+ *
+ * Reference: https://learn.microsoft.com/sql/t-sql/queries/explain-transact-sql?view=azure-sqldw-latest
+ */
+export async function explainQuery(
+  target: SynapseTarget,
+  sqlText: string,
+  withRecommendations = true,
+  timeoutMs = 30_000,
+): Promise<string> {
+  const keyword = withRecommendations ? 'EXPLAIN WITH_RECOMMENDATIONS' : 'EXPLAIN';
+  const res = await executeQuery(target, `${keyword}\n${sqlText}`, timeoutMs);
+  if (!res.rows.length) return '';
+  const cell = res.rows[0]?.[0];
+  return cell == null ? '' : String(cell);
+}
+
+/**
  * Get (or open) a per-user TDS pool authenticated with the caller's own Azure
  * SQL access token. Pools are isolated by user oid and never shared, because
  * the connection carries the token's AAD identity (sharing would leak one
@@ -345,4 +375,47 @@ export async function executeQueryAsUser(
   } finally {
     if (queryId) activeRequests.delete(queryId);
   }
+}
+
+/**
+ * Build a T-SQL OPENROWSET query for a Delta Lake root folder on ADLS Gen2.
+ * Synapse Serverless' DELTA reader auto-discovers partitions from `_delta_log`
+ * and returns the latest committed version, so the BULK path must point at the
+ * Delta ROOT (the folder containing `_delta_log/`) — never a partition subdir
+ * or a wildcard. This is the Azure-native analog of Fabric "Direct Lake on SQL"
+ * DirectQuery fallback (which reads the same Delta files via the Lakehouse SQL
+ * analytics endpoint when the in-memory VertiPaq cache can't serve a query).
+ * Grounded in: https://learn.microsoft.com/azure/synapse-analytics/sql/query-delta-lake-format
+ */
+export function buildDeltaOpenRowsetSql(deltaBulkUrl: string, maxRows = 5_000): string {
+  const safeMax = Math.min(Math.max(1, Math.floor(maxRows) || 1), MAX_ROWS);
+  // Single-quotes in the URL would break out of the BULK string literal; double
+  // them per T-SQL escaping. URLs never legitimately contain a quote, so this is
+  // purely defensive against a malformed table name reaching here.
+  const safeUrl = deltaBulkUrl.replace(/'/g, "''");
+  return `SELECT TOP ${safeMax} *\nFROM OPENROWSET(\n  BULK '${safeUrl}',\n  FORMAT = 'DELTA'\n) AS r;`;
+}
+
+/**
+ * Build the full https:// DFS URL for a Gold Delta table, for use as a Synapse
+ * Serverless OPENROWSET BULK target. Reads `LOOM_GOLD_URL` (the landing-zone
+ * Bicep wires it as `https://{account}.dfs.core.{suffix}/gold`, the same env
+ * var `adls-client` uses for the gold medallion container) and appends the
+ * conventional `Tables/<name>` Delta layout.
+ *
+ * Sovereign-cloud portability: `LOOM_GOLD_URL` already carries the correct DFS
+ * suffix per cloud (stamped at deploy time), so no extra cloud detection is
+ * needed here. Throws an honest, var-named error when it is not configured.
+ */
+export function goldDeltaBulkUrl(tableName: string): string {
+  const goldUrl = process.env.LOOM_GOLD_URL;
+  if (!goldUrl) {
+    throw new Error(
+      'LOOM_GOLD_URL is not configured — set it to the Gold container DFS URL ' +
+      '(https://{account}.dfs.core.{suffix}/gold). ' +
+      'Required for Direct Lake Serverless fallback.',
+    );
+  }
+  const safeTable = encodeURIComponent(tableName.replace(/[^A-Za-z0-9._-]/g, ''));
+  return `${goldUrl.replace(/\/+$/, '')}/Tables/${safeTable}`;
 }

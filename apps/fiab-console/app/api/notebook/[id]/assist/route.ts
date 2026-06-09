@@ -39,8 +39,12 @@ import {
 } from '@azure/identity';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
+import { buildAssistMessages, type InCellMode } from '@/lib/copilot/notebook-tools';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { getLastLivyError } from '@/lib/azure/synapse-livy-client';
 
-type AssistMode = 'generate' | 'explain' | 'fix';
+type AssistMode = InCellMode; // 'generate' | 'explain' | 'fix' | 'comments' | 'optimize'
+const ASSIST_MODES: AssistMode[] = ['generate', 'explain', 'fix', 'comments', 'optimize'];
 
 // ---------- Credential (identical pattern to copilot-orchestrator) ----------
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -87,73 +91,35 @@ async function buildServerSchemaContext(): Promise<string> {
   return parts.join('\n');
 }
 
-// ---------- Per-mode system + user messages ----------
-function buildMessages(
-  mode: AssistMode,
-  lang: string,
-  source: string,
-  prompt: string,
-  errorText: string,
-  schema: string,
-): { role: 'system' | 'user'; content: string }[] {
-  const langLabel: Record<string, string> = {
-    pyspark: 'PySpark (Python)',
-    spark: 'Spark (Scala)',
-    sql: 'Spark SQL',
-    sparkr: 'SparkR (R)',
-  };
-  const langName = langLabel[lang] || lang;
-  const schemaSection = schema.trim()
-    ? `\n\nLakehouse schema context (ground your code in these, do not invent table/container names):\n${schema}`
-    : '';
+// ---------- Per-mode messages: shared with the in-cell popover ----------
+// buildAssistMessages lives in lib/copilot/notebook-tools.ts so the client and
+// this route stay aligned from one canonical source (no duplicated prompts).
 
-  if (mode === 'generate') {
-    return [
-      {
-        role: 'system',
-        content:
-          `You are a Spark notebook code generator for the CSA Loom platform (Azure Synapse Spark). ` +
-          `Given a natural-language description and optional lakehouse schema, write idiomatic, runnable ` +
-          `${langName} code for a SINGLE notebook cell. Assume a SparkSession named \`spark\` is already ` +
-          `available. Return ONLY executable code — no markdown fences, no commentary, no leading language tag.` +
-          schemaSection,
-      },
-      {
-        role: 'user',
-        content: prompt || 'Write a PySpark cell that reads from the bronze container.',
-      },
-    ];
+/**
+ * Pull the real last error for this notebook's live Spark session from Livy.
+ * Loads the notebook item (Cosmos) to read state.sparkSession {pool,id}, then
+ * asks Livy for the most recent error statement. Soft-fails to '' so /fix can
+ * return an honest "run the cell first" gate instead of throwing. Azure-native:
+ * Synapse Livy is the default backend; no Fabric workspace is required.
+ */
+async function liveLivyErrorText(notebookId: string, workspaceId: string): Promise<string> {
+  if (!workspaceId) return '';
+  try {
+    const items = await itemsContainer();
+    const { resource } = await items.item(notebookId, workspaceId).read<any>();
+    const spark = resource?.state?.sparkSession;
+    const pool = typeof spark?.pool === 'string' ? spark.pool : '';
+    const sid = typeof spark?.id === 'number' ? spark.id : Number(spark?.id);
+    if (!pool || !Number.isFinite(sid) || sid <= 0) return '';
+    const e = await getLastLivyError(pool, sid);
+    if (!e) return '';
+    return [e.ename, e.evalue, ...(e.traceback ?? [])].filter(Boolean).join('\n');
+  } catch {
+    return '';
   }
-  if (mode === 'explain') {
-    return [
-      {
-        role: 'system',
-        content:
-          `You are a Spark notebook assistant for the CSA Loom platform. Explain what the following ` +
-          `${langName} cell does in 3-5 concise sentences. Focus on data flow, transformations, and ` +
-          `business intent. Plain prose, no code fences.` +
-          schemaSection,
-      },
-      { role: 'user', content: `Cell source:\n\`\`\`\n${source}\n\`\`\`` },
-    ];
-  }
-  // mode === 'fix'
-  return [
-    {
-      role: 'system',
-      content:
-        `You are a Spark notebook debugger for the CSA Loom platform. Fix the following ${langName} cell ` +
-        `that produced an error. Return ONLY the corrected, runnable code for the cell — no markdown fences, ` +
-        `no explanation, no leading language tag.` +
-        schemaSection,
-    },
-    { role: 'user', content: `Cell source:\n\`\`\`\n${source}\n\`\`\`\n\nError:\n${errorText}` },
-  ];
 }
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  // `params.id` (the notebook item id) is available for future per-notebook
-  // schema pinning; not used today — schema grounding is env/serverless-based.
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -161,34 +127,48 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
 
   const body = await req.json().catch(() => ({}));
   const mode = body?.mode as AssistMode | undefined;
-  if (!mode || !['generate', 'explain', 'fix'].includes(mode)) {
+  if (!mode || !ASSIST_MODES.includes(mode)) {
     return NextResponse.json(
-      { ok: false, error: 'mode must be generate | explain | fix' },
+      { ok: false, error: `mode must be one of: ${ASSIST_MODES.join(' | ')}` },
       { status: 400 },
     );
   }
   const lang = String(body?.lang || 'pyspark');
   const source = String(body?.source || '');
   const prompt = String(body?.prompt || '');
-  const errorText = String(body?.errorText || '');
+  let errorText = String(body?.errorText || '');
+  const workspaceId = String(body?.workspaceId || '');
 
-  if (mode === 'generate' && !prompt.trim()) {
+  if (mode === 'generate' && !prompt.trim() && !source.trim()) {
     return NextResponse.json(
-      { ok: false, error: 'prompt is required for generate mode' },
+      { ok: false, error: 'prompt or source is required for generate mode' },
       { status: 400 },
     );
   }
-  if ((mode === 'explain' || mode === 'fix') && !source.trim()) {
+  // explain/fix/comments/optimize all operate on the current cell's source.
+  if (mode !== 'generate' && !source.trim()) {
     return NextResponse.json(
-      { ok: false, error: 'source is required for explain/fix modes' },
+      { ok: false, error: `source is required for ${mode} mode` },
       { status: 400 },
     );
   }
   if (mode === 'fix' && !errorText.trim()) {
-    return NextResponse.json(
-      { ok: false, error: 'errorText is required for fix mode' },
-      { status: 400 },
-    );
+    // The client passes the cell's cached error when present; when it's empty
+    // (cold-loaded notebook), pull the REAL last error from the live Livy
+    // session for this notebook (Azure-native Synapse Spark, no Fabric needed).
+    const notebookId = (await ctx.params).id;
+    errorText = await liveLivyErrorText(notebookId, workspaceId);
+    if (!errorText.trim()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'No error to fix — run the cell first so the Spark (Livy) session has a recent error, ' +
+            'or include the error text.',
+        },
+        { status: 400 },
+      );
+    }
   }
 
   // Resolve AOAI target — same resolution order as the cross-item Copilot.
@@ -214,7 +194,7 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
   const serverSchema = await buildServerSchemaContext().catch(() => '');
   const schema = [clientSchema, serverSchema].filter(Boolean).join('\n');
 
-  const messages = buildMessages(mode, lang, source, prompt, errorText, schema);
+  const messages = buildAssistMessages(mode, lang, source, prompt, errorText, schema);
 
   try {
     const token = await aoaiToken();

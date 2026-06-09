@@ -41,6 +41,25 @@ export interface Workspace {
   lastAccessedAt?: string;
   /** Aggregated item count. Only present on GET /api/workspaces?count=true. */
   itemCount?: number;
+  /**
+   * Customer-managed keys (F14) binding state for the workspace's backing ADLS
+   * Gen2 storage account (and, optionally, its Cosmos account). Set when a
+   * customer key is bound via /api/admin/workspaces/{id}/cmk. The live ARM
+   * state is always re-read on GET; this is a cached convenience copy.
+   */
+  cmkBinding?: {
+    status: 'bound' | 'unbound' | 'pending' | 'error';
+    vaultUri?: string;
+    keyName?: string;
+    /** '' = auto-rotate to latest; a hex string = pinned version. */
+    keyVersion?: string;
+    /** ARM resource id of the UAMI used as the storage encryption identity. */
+    uamiResourceId?: string;
+    /** True when the Cosmos account was also bound to the customer key. */
+    cosmosBound?: boolean;
+    boundAt?: string;
+    error?: string;
+  };
 }
 
 export interface WorkspaceItem {

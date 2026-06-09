@@ -4,9 +4,10 @@
  *
  * Asserts: (1) unauthed → 401, (2) wrong mode → 400, (3) missing cellSource →
  * 400, (4) missing error context → 400, (5) honest no_aoai gate → 503 with
- * code+hint, (6) happy path → proposedCode with stray ```fences stripped +
- * sessionId, (7) Cosmos persist failure still returns 200 (soft-fail),
- * (8) AOAI non-200 → 502.
+ * code+hint, (6) happy path → structured { proposedCode, summary, rootCause }
+ * (fences stripped) + sessionId persisted with summary/rootCause, (7) Cosmos
+ * persist failure still returns 200 (soft-fail), (8) AOAI non-200 → 502,
+ * (9) a non-JSON AOAI reply falls back to raw-code + parse-failure summary.
  *
  * AOAI, identity, tenant config, and Cosmos are all mocked — no live Azure.
  */
@@ -57,6 +58,11 @@ function stubAoai(content: string, status = 200) {
   ));
 }
 
+/** Build a structured cell-fix JSON reply, the shape the route now expects. */
+function aoaiFix(proposedCode: string, summary = 'It broke.', rootCause = 'Bad column.') {
+  return JSON.stringify({ summary, rootCause, proposedCode });
+}
+
 const ERR_CTX = { ename: 'NameError', evalue: "name 'undefined_var' is not defined", traceback: ['Traceback...', "NameError: name 'undefined_var' is not defined"] };
 
 beforeEach(() => {
@@ -103,8 +109,8 @@ describe('POST /api/copilot/sessions (cell-fix)', () => {
     expect(j.hint).toMatch(/No AOAI deployment/);
   });
 
-  it('happy path returns proposedCode (fences stripped) + sessionId, persists', async () => {
-    stubAoai('```python\nundefined_var = "hello"\nprint(undefined_var)\n```');
+  it('happy path returns structured proposedCode+summary+rootCause + sessionId, persists', async () => {
+    stubAoai(aoaiFix('undefined_var = "hello"\nprint(undefined_var)', 'Variable was undefined.', 'No prior assignment.'));
     const { POST } = await import('@/app/api/copilot/sessions/route');
     const r = await POST(postReq({ mode: 'cell-fix', cellSource: 'print(undefined_var)', lang: 'pyspark', errorContext: ERR_CTX }));
     expect(r.status).toBe(200);
@@ -112,8 +118,35 @@ describe('POST /api/copilot/sessions (cell-fix)', () => {
     expect(j.ok).toBe(true);
     expect(j.proposedCode).toBe('undefined_var = "hello"\nprint(undefined_var)');
     expect(j.proposedCode).not.toContain('```');
+    expect(j.summary).toBe('Variable was undefined.');
+    expect(j.rootCause).toBe('No prior assignment.');
     expect(typeof j.sessionId).toBe('string');
     expect(createMock).toHaveBeenCalledTimes(1);
+    // The persisted record carries the structured summary + rootCause.
+    const persisted = createMock.mock.calls[0][0];
+    expect(persisted.summary).toBe('Variable was undefined.');
+    expect(persisted.rootCause).toBe('No prior assignment.');
+  });
+
+  it('proposedCode embedded fences are stripped', async () => {
+    stubAoai(aoaiFix('```python\nundefined_var = "hi"\n```'));
+    const { POST } = await import('@/app/api/copilot/sessions/route');
+    const r = await POST(postReq({ mode: 'cell-fix', cellSource: 'print(undefined_var)', lang: 'pyspark', errorContext: ERR_CTX }));
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.proposedCode).toBe('undefined_var = "hi"');
+    expect(j.proposedCode).not.toContain('```');
+  });
+
+  it('falls back to raw-code when AOAI does not return JSON', async () => {
+    stubAoai('```python\nundefined_var = 1\nprint(undefined_var)\n```');
+    const { POST } = await import('@/app/api/copilot/sessions/route');
+    const r = await POST(postReq({ mode: 'cell-fix', cellSource: 'print(undefined_var)', lang: 'pyspark', errorContext: ERR_CTX }));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.proposedCode).toBe('undefined_var = 1\nprint(undefined_var)');
+    expect(j.summary).toMatch(/could not be parsed/i);
   });
 
   it('still returns 200 when Cosmos persist fails (soft-fail)', async () => {
