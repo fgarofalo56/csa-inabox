@@ -54,6 +54,12 @@ function ws(): string {
 }
 
 function devBase(): string {
+  // Sovereign-cloud aware (matches synapse-dev-client.devBase): prefer the
+  // explicit LOOM_SYNAPSE_DEV_SUFFIX (e.g. `azuresynapse.us` for GCC-High /
+  // DoD IL5), otherwise the public `azuresynapse.net` host. Without this the
+  // Livy data-plane calls hit the wrong host in Gov and fail silently.
+  const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX;
+  if (suffix) return `https://${ws()}.dev.${suffix}`;
   return `https://${ws()}.dev.azuresynapse.net`;
 }
 
@@ -222,6 +228,58 @@ export async function getLivyStatement(
 ): Promise<LivyStatement> {
   const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements/${stmtId}`);
   return jsonOrThrow<LivyStatement>(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
+}
+
+interface LivyStatementsResponse {
+  from?: number;
+  total?: number;
+  statements?: LivyStatement[];
+}
+
+/**
+ * List ALL statements submitted to a Livy session, in submission order.
+ *   GET {livyBase(pool)}/sessions/{id}/statements
+ *   → { from, total, statements: LivyStatement[] }  (LivyStatementsResponseBody)
+ * Used by the in-cell Copilot /fix path to pull the most recent error a cell
+ * produced straight from the live Spark session, not from cached client state.
+ *
+ * Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/list-spark-statements
+ */
+export async function listLivyStatements(
+  poolName: string,
+  sessionId: number,
+): Promise<LivyStatement[]> {
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements`);
+  const body = await jsonOrThrow<LivyStatementsResponse>(r, `listLivyStatements(${poolName}/${sessionId})`);
+  return Array.isArray(body.statements) ? body.statements : [];
+}
+
+/**
+ * Fetch the most recent error output from a live Livy session — the real
+ * backing for the in-cell Copilot /fix command. Scans completed statements
+ * (state 'available') with an error output and returns the highest-id one's
+ * normalized error fields. Returns null when there is no error statement OR the
+ * session is unreachable (soft-fail so /fix degrades to "run the cell first"
+ * rather than throwing). No mocks — hits the real Livy statements REST surface.
+ */
+export async function getLastLivyError(
+  poolName: string,
+  sessionId: number,
+): Promise<{ ename?: string; evalue?: string; traceback?: string[] } | null> {
+  let statements: LivyStatement[];
+  try {
+    statements = await listLivyStatements(poolName, sessionId);
+  } catch {
+    return null;
+  }
+  const errored = statements
+    .filter((st) => st.state === 'available' && st.output?.status === 'error')
+    .sort((a, b) => b.id - a.id);
+  const last = errored[0];
+  if (!last?.output) return null;
+  const norm = normalizeLivyOutput(last.output);
+  if (!norm || norm.status !== 'error') return null;
+  return { ename: norm.ename, evalue: norm.evalue, traceback: norm.traceback };
 }
 
 // ============================================================

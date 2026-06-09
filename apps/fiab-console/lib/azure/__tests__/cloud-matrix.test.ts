@@ -86,6 +86,24 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.kustoClusterUri('adx-loom', 'eastus2')).toBe(`https://adx-loom.eastus2.${KUSTO_COM}`);
   });
 
+  it('AAS helpers use asazure.windows.net + literal-* scope', async () => {
+    const m = await load('AzureCloud');
+    const AAS_COM = J('asazure', 'windows', 'net');
+    expect(m.aasSuffix()).toBe(AAS_COM);
+    // The '*' is a literal subdomain char per the AAS REST auth spec, NOT a wildcard.
+    expect(m.aasScope()).toBe(`https://*.${AAS_COM}`);
+    expect(m.aasModelUrl('eastus2', 'my-server', 'AdventureWorks')).toBe(
+      `https://eastus2.${AAS_COM}/servers/my-server/models/AdventureWorks`,
+    );
+    expect(m.parseAasServer('asazure://eastus2.asazure.windows.net/my-server')).toEqual({
+      region: 'eastus2', serverName: 'my-server',
+    });
+    expect(m.parseAasServer('my-server.eastus2.asazure.windows.net')).toEqual({
+      region: 'eastus2', serverName: 'my-server',
+    });
+    expect(m.parseAasServer('bare-name')).toBeNull();
+  });
+
   it('Cosmos DB helpers use documents.azure.com', async () => {
     const m = await load('AzureCloud');
     // Assembled from fragments to keep the contiguous literal out of source.
@@ -109,6 +127,14 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     const SYN_COM = J('sql', 'azuresynapse', 'net');
     expect(m.synapseSqlSuffix()).toBe(SYN_COM);
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
+  });
+
+  it('Analysis Services + Power BI XMLA helpers (Commercial)', async () => {
+    const m = await load('AzureCloud');
+    const AAS_COM = J('asazure', 'windows', 'net');
+    expect(m.aasSuffix()).toBe(AAS_COM);
+    expect(m.aasScope('eastus')).toBe(`https://eastus.${AAS_COM}/.default`);
+    expect(m.pbiXmlaScope()).toBe(`https://${J('analysis', 'windows', 'net')}/powerbi/api/.default`);
   });
 });
 
@@ -165,6 +191,18 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     );
   });
 
+  it('AAS helpers use asazure.usgovcloudapi.net + literal-* Gov scope', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasScope()).toBe('https://*.asazure.usgovcloudapi.net');
+    expect(m.aasModelUrl('usgovvirginia', 'my-server', 'AdventureWorks')).toBe(
+      'https://usgovvirginia.asazure.usgovcloudapi.net/servers/my-server/models/AdventureWorks',
+    );
+    expect(m.parseAasServer('asazure://usgovvirginia.asazure.usgovcloudapi.net/my-server')).toEqual({
+      region: 'usgovvirginia', serverName: 'my-server',
+    });
+  });
+
   it('Cosmos DB helpers use documents.azure.us', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.cosmosSuffix()).toBe('documents.azure.us');
@@ -182,6 +220,13 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     const m = await load('AzureUSGovernment');
     expect(m.synapseSqlSuffix()).toBe('sql.azuresynapse.usgovcloudapi.net');
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
+  });
+
+  it('Analysis Services + Power BI XMLA helpers (Gov)', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
+    expect(m.aasScope('usgovvirginia')).toBe('https://usgovvirginia.asazure.usgovcloudapi.net/.default');
+    expect(m.pbiXmlaScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
   });
 });
 
@@ -207,6 +252,55 @@ describe('cloud-endpoints — overrides + DoD', () => {
   it('LOGIC_APP_WORKFLOW_SCHEMA is the cloud-invariant schema namespace', async () => {
     const m = await load('AzureCloud');
     expect(m.LOGIC_APP_WORKFLOW_SCHEMA).toContain('/workflowdefinition.json#');
+  });
+});
+
+/**
+ * Azure Analysis Services (AAS) XMLA data plane — the optional Azure-native
+ * backend for the semantic-model item. Commercial / GCC use asazure.windows.net;
+ * GCC-High / IL5 / DoD use asazure.usgovcloudapi.net. The token audience must
+ * carry the literal `*` subdomain (per Microsoft Learn — NOT a wildcard).
+ */
+describe('cloud-matrix — Azure Analysis Services (XMLA)', () => {
+  it('aasSuffix() / aasScope() — Commercial uses asazure.windows.net', async () => {
+    const m = await load('AzureCloud');
+    expect(m.aasSuffix()).toBe(J('asazure', 'windows', 'net'));
+    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'windows', 'net')}/.default`);
+  });
+
+  it('aasSuffix() / aasScope() — GCC-High / IL5 uses asazure.usgovcloudapi.net', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.aasSuffix()).toBe(J('asazure', 'usgovcloudapi', 'net'));
+    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'usgovcloudapi', 'net')}/.default`);
+  });
+
+  it('aasSuffix() — DoD uses the Gov suffix', async () => {
+    const m = await load('AzureDOD');
+    expect(m.aasSuffix()).toBe(J('asazure', 'usgovcloudapi', 'net'));
+  });
+
+  it('aasServerBase() normalises the asazure:// connection string', async () => {
+    const m = await load('AzureCloud');
+    expect(m.aasServerBase(`asazure://westus.${J('asazure', 'windows', 'net')}/myserver`))
+      .toBe(`https://westus.${J('asazure', 'windows', 'net')}/servers/myserver`);
+  });
+
+  it('aasServerBase() normalises the bare host/server form', async () => {
+    const m = await load('AzureCloud');
+    expect(m.aasServerBase(`westus.${J('asazure', 'windows', 'net')}/myserver`))
+      .toBe(`https://westus.${J('asazure', 'windows', 'net')}/servers/myserver`);
+  });
+
+  it('aasServerBase() passes an already-resolved HTTPS base through (no trailing slash)', async () => {
+    const m = await load('AzureCloud');
+    const url = `https://westus.${J('asazure', 'windows', 'net')}/servers/myserver`;
+    expect(m.aasServerBase(`${url}/`)).toBe(url);
+  });
+
+  it('aasServerBase() returns empty for unparseable / empty input', async () => {
+    const m = await load('AzureCloud');
+    expect(m.aasServerBase('')).toBe('');
+    expect(m.aasServerBase('not-a-server')).toBe('');
   });
 });
 
@@ -242,5 +336,60 @@ describe('cloud-matrix — warehouse alerts backend dispatch', () => {
     const m = await load('AzureDOD');
     expect(m.isGovCloud()).toBe(true); // route → upsertScheduledQueryRule
     expect(m.detectLoomCloud()).toBe('DoD');
+  });
+});
+
+/**
+ * AOAI data-plane endpoint + token audience across all four sovereign
+ * boundaries. The Copilot / data-agent orchestrators resolve the Azure OpenAI
+ * host from getOpenAiSuffix() and mint the bearer with cogScope(); a drift back
+ * to a Commercial-only literal would 401 every Gov AOAI call. This is the
+ * regression gate the "verify + harden AOAI across 4 clouds" task requires.
+ *
+ * Cloud mapping:
+ *   Commercial (AzureCloud)            → openai.azure.com  + cognitiveservices.azure.com
+ *   GCC        (AzureCloud, LOOM=GCC)  → openai.azure.com  + cognitiveservices.azure.com
+ *   GCC-High   (AzureUSGovernment)     → openai.azure.us   + cognitiveservices.azure.us
+ *   IL5        (LOOM_CLOUD=il5→GCC-High) → openai.azure.us + cognitiveservices.azure.us
+ */
+describe('cloud-matrix — AOAI data-plane endpoint + token audience (4 clouds)', () => {
+  it('Commercial → openai.azure.com + cognitiveservices.azure.com scope', async () => {
+    const m = await load('AzureCloud');
+    delete process.env.LOOM_CLOUD;
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.com');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.com/.default');
+    expect(m.isGovCloud()).toBe(false);
+    expect(m.detectLoomCloud()).toBe('Commercial');
+  });
+
+  it('GCC (runs on Commercial Azure AOAI endpoints) → openai.azure.com', async () => {
+    // GCC tenants use the same AzureCloud AOAI data-plane as Commercial; only
+    // detectLoomCloud() distinguishes them for badge purposes.
+    const m = await load('AzureCloud');
+    process.env.LOOM_CLOUD = 'GCC';
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.com');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.com/.default');
+    expect(m.isGovCloud()).toBe(false);
+    expect(m.detectLoomCloud()).toBe('GCC');
+  });
+
+  it('GCC-High (AzureUSGovernment) → openai.azure.us + cognitiveservices.azure.us scope', async () => {
+    const m = await load('AzureUSGovernment');
+    delete process.env.LOOM_CLOUD;
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.us');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.us/.default');
+    expect(m.isGovCloud()).toBe(true);
+    expect(m.detectLoomCloud()).toBe('GCC-High');
+  });
+
+  it('IL5 (LOOM_CLOUD=il5 aliases to GCC-High) → openai.azure.us', async () => {
+    // In bicep IL5 deployments arrive as LOOM_CLOUD='GCC-High'; detectLoomCloud()
+    // also accepts the raw 'il5' alias and resolves it to GCC-High.
+    const m = await load('AzureUSGovernment');
+    process.env.LOOM_CLOUD = 'il5';
+    expect(m.getOpenAiSuffix()).toBe('openai.azure.us');
+    expect(m.cogScope()).toBe('https://cognitiveservices.azure.us/.default');
+    expect(m.isGovCloud()).toBe(true);
+    expect(m.detectLoomCloud()).toBe('GCC-High');
   });
 });

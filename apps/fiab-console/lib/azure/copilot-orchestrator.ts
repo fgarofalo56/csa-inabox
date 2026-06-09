@@ -23,7 +23,7 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
-import { cogScope } from './cloud-endpoints';
+import { cogScope, getOpenAiSuffix, isGovCloud, detectLoomCloud } from './cloud-endpoints';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
@@ -42,7 +42,9 @@ import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
+import type { AuditReport } from '@/lib/admin/self-audit';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
+import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -113,6 +115,49 @@ export interface AoaiTarget {
 let _aoaiTarget: AoaiTarget | null = null;
 
 /**
+ * Cross-check a resolved AOAI endpoint host against the active sovereign cloud.
+ *
+ * The AOAI bearer token is minted with `cogScope()` — `cognitiveservices.azure.us`
+ * in Gov, `cognitiveservices.azure.com` in Commercial/GCC. If an operator points
+ * `LOOM_AOAI_ENDPOINT` (or a tenant cfg) at the wrong sovereign host (e.g. a
+ * `*.openai.azure.com` Commercial endpoint inside a GCC-High deployment), the
+ * data-plane call will 401 with an opaque auth error. Catch the mismatch here
+ * and surface a precise, actionable honest-gate instead.
+ *
+ * A bare host with neither known suffix (custom DNS / private endpoint CNAME)
+ * is allowed through — we only reject a host that explicitly carries the OTHER
+ * boundary's suffix.
+ */
+function validateEndpointCloud(endpoint: string): void {
+  const host = endpoint.toLowerCase();
+  const expectedSuffix = getOpenAiSuffix(); // openai.azure.us | openai.azure.com
+  const gov = isGovCloud();
+  const cloud = detectLoomCloud();
+  const govHost = host.includes('openai.azure.us');
+  const comHost = host.includes('openai.azure.com');
+  if (gov && comHost && !govHost) {
+    throw new NoAoaiDeploymentError(
+      `LOOM_AOAI_ENDPOINT points to a Commercial Azure OpenAI host (openai.azure.com) ` +
+        `but the active cloud (${cloud}) requires *.${expectedSuffix}. ` +
+        `Update LOOM_AOAI_ENDPOINT to your Gov endpoint, or set LOOM_CLOUD to match the endpoint.`,
+    );
+  }
+  if (!gov && govHost && !comHost) {
+    throw new NoAoaiDeploymentError(
+      `LOOM_AOAI_ENDPOINT points to an Azure Government Azure OpenAI host (openai.azure.us) ` +
+        `but the active cloud (${cloud}) requires *.${expectedSuffix}. ` +
+        `Update LOOM_AOAI_ENDPOINT to your Commercial endpoint, or set LOOM_CLOUD=GCC-High to match.`,
+    );
+  }
+}
+
+/** The endpoint-suffix hint appended to "no deployment" gates so the operator
+ *  knows which sovereign host pattern to provision (openai.azure.us vs .com). */
+function expectedSuffixHint(): string {
+  return `For ${detectLoomCloud()}, the expected endpoint suffix is ${getOpenAiSuffix()}.`;
+}
+
+/**
  * Resolve the AOAI chat target.
  *
  * Resolution order:
@@ -140,6 +185,7 @@ export async function resolveAoaiTarget(
     const endpoint = (cfg.aoaiEndpoint || process.env.LOOM_AOAI_ENDPOINT || '').replace(/\/$/, '');
     const deployment = cfg.copilotChatDeployment || process.env.LOOM_AOAI_DEPLOYMENT || '';
     if (endpoint && deployment) {
+      validateEndpointCloud(endpoint);
       return { endpoint, deployment, apiVersion };
     }
     // Endpoint known but no deployment chosen yet → honest gate.
@@ -158,7 +204,9 @@ export async function resolveAoaiTarget(
   const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
 
   if (envEndpoint && envDeployment) {
-    const t = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
+    const ep = envEndpoint.replace(/\/$/, '');
+    validateEndpointCloud(ep);
+    const t = { endpoint: ep, deployment: envDeployment, apiVersion };
     if (!cfg) _aoaiTarget = t;
     return t;
   }
@@ -169,7 +217,8 @@ export async function resolveAoaiTarget(
     conns = await listConnections();
   } catch (e: any) {
     throw new NoAoaiDeploymentError(
-      `No AOAI deployment on Foundry hub. Deploy a gpt-4 / gpt-4o model first. (Foundry connection lookup failed: ${e?.message || e})`,
+      `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ` +
+        `${expectedSuffixHint()} (Foundry connection lookup failed: ${e?.message || e})`,
     );
   }
 
@@ -179,14 +228,16 @@ export async function resolveAoaiTarget(
   );
   if (!aoai || !aoai.target) {
     throw new NoAoaiDeploymentError(
-      'No AOAI deployment on Foundry hub. Deploy a gpt-4 / gpt-4o model first.',
+      `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ${expectedSuffixHint()}`,
     );
   }
 
   const deployment =
     cfg?.copilotChatDeployment || envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
+  const discoveredEndpoint = aoai.target.replace(/\/$/, '');
+  validateEndpointCloud(discoveredEndpoint);
   const discovered: AoaiTarget = {
-    endpoint: aoai.target.replace(/\/$/, ''),
+    endpoint: discoveredEndpoint,
     deployment,
     apiVersion,
   };
@@ -249,6 +300,29 @@ function obj(props: Record<string, unknown>, required: string[] = []) {
   return { type: 'object', properties: props, required, additionalProperties: false };
 }
 
+/** Render a self-audit report as readable markdown for the summary renderer. */
+function auditToMarkdown(report: AuditReport): string {
+  const { score, summary } = report;
+  const icon = (st: string) => (st === 'pass' ? '✅' : st === 'warn' ? '⚠️' : '❌');
+  const lines: string[] = [];
+  lines.push(`## CSA Loom self-audit — score ${score}/100`);
+  lines.push(`**${summary.pass} pass · ${summary.warn} warn · ${summary.fail} fail** (${summary.total} checks, ${summary.fixable} runtime-fixable)`);
+  const issues = report.results.filter((r) => r.status !== 'pass');
+  if (issues.length === 0) {
+    lines.push('');
+    lines.push('All checks passed. The deployment is healthy.');
+  } else {
+    lines.push('');
+    lines.push('### Findings');
+    for (const r of issues) {
+      lines.push(`- ${icon(r.status)} **${r.title}** — ${r.detail}`);
+      if (r.remediation) lines.push(`  - Remediation: ${r.remediation.replace(/\n/g, ' ').trim()}`);
+      if (r.fixId) lines.push(`  - Runtime-fixable via loom_heal — fixId: \`${r.fixId}\``);
+    }
+  }
+  return lines.join('\n');
+}
+
 // ---------- Build the default registry ----------
 
 export function buildDefaultRegistry(): LoomToolRegistry {
@@ -260,14 +334,14 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Synapse',
     description: 'Run a T-SQL query against the Synapse serverless SQL pool (read-only ad-hoc analytics over ADLS).',
     parameters: obj({ sql: S_STRING, database: S_STRING }, ['sql']),
-    handler: async ({ sql, database }) => synapseExecute(serverlessTarget(database || 'master'), sql),
+    handler: async ({ sql, database }) => asTable(await synapseExecute(serverlessTarget(database || 'master'), sql), 'synapse_serverless'),
   });
   r.register({
     name: 'synapse_dedicated_query',
     service: 'Synapse',
     description: 'Run a T-SQL query against the Synapse dedicated SQL pool (provisioned MPP warehouse).',
     parameters: obj({ sql: S_STRING }, ['sql']),
-    handler: async ({ sql }) => synapseExecute(dedicatedTarget(), sql),
+    handler: async ({ sql }) => asTable(await synapseExecute(dedicatedTarget(), sql), 'synapse_dedicated'),
   });
   r.register({
     name: 'synapse_pool_state',
@@ -336,7 +410,7 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     description: 'Execute a SQL statement on a Databricks SQL warehouse.',
     parameters: obj({ warehouseId: S_STRING, sql: S_STRING, catalog: S_STRING, schema: S_STRING }, ['warehouseId', 'sql']),
     handler: async ({ warehouseId, sql, catalog, schema }) =>
-      databricks.executeStatement(warehouseId, sql, catalog, schema),
+      asTable(await databricks.executeStatement(warehouseId, sql, catalog, schema), 'databricks_warehouse'),
   });
   r.register({
     name: 'databricks_run_notebook',
@@ -402,7 +476,7 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'ADX',
     description: 'Run a KQL query against an ADX database.',
     parameters: obj({ database: S_STRING, kql: S_STRING }, ['database', 'kql']),
-    handler: async ({ database, kql }) => kusto.executeQuery(database, kql),
+    handler: async ({ database, kql }) => asTable(await kusto.executeQuery(database, kql), 'adx'),
   });
   r.register({
     name: 'adx_list_databases',
@@ -646,7 +720,10 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Loom',
     description: 'Run a full CSA Loom self-audit: identity, data plane (Cosmos), the Azure services each workload needs (Synapse, ADX, Event Hubs, ADLS, AI Search, AOAI/Foundry, Monitor, ADF, Purview), permissions (bootstrap admin), and security posture. Returns a scored report with the exact remediation for every warning/failure. Use this first when asked to check, validate, or fix the deployment.',
     parameters: obj({}),
-    handler: async () => runSelfAudit(new Date().toISOString()),
+    handler: async () => {
+      const report = await runSelfAudit(new Date().toISOString());
+      return asSummary(auditToMarkdown(report), `Self-audit · ${report.score}/100`);
+    },
   });
   r.register({
     name: 'loom_heal',
