@@ -1650,6 +1650,10 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
       if (clean.length < 2) { setMsg({ kind: 'error', text: 'At least 2 stages are required.' }); setBusy(false); return; }
       if (clean.some((s) => !s.displayName)) { setMsg({ kind: 'error', text: 'Every stage needs a name.' }); setBusy(false); return; }
       if (clean.some((s) => !s.workspaceId)) { setMsg({ kind: 'error', text: 'Every stage needs a bound workspace.' }); setBusy(false); return; }
+      if (new Set(clean.map((s) => s.workspaceId)).size !== clean.length) {
+        setMsg({ kind: 'error', text: 'Each stage needs its own workspace — content is promoted between stages, so two stages can’t share one workspace.' });
+        setBusy(false); return;
+      }
       const r = await fetch('/api/deployment-pipelines/loom', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: clean }),
@@ -1684,6 +1688,10 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
               )}
               {stages.map((s, i) => {
                 const wsName = workspaces?.find((w) => w.id === s.workspaceId)?.name || '';
+                // Workspaces already bound to another stage are disabled here:
+                // each stage must use a distinct workspace so content can be
+                // promoted between stages (the server enforces the same rule).
+                const usedByOthers = new Set(stages.filter((_, idx) => idx !== i).map((o) => o.workspaceId).filter(Boolean));
                 return (
                   <div key={i} className={styles.assignRow}>
                     <Field label={`Stage ${i + 1} name`} style={{ flex: 1 }}>
@@ -1698,7 +1706,11 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
                         onOptionSelect={(_, d) => d.optionValue && setStage(i, { workspaceId: d.optionValue })}
                         disabled={!workspaces || workspaces.length === 0}
                       >
-                        {(workspaces || []).map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                        {(workspaces || []).map((w) => (
+                          <Option key={w.id} value={w.id} text={w.name} disabled={usedByOthers.has(w.id)}>
+                            {w.name}{usedByOthers.has(w.id) ? ' (used by another stage)' : ''}
+                          </Option>
+                        ))}
                       </Dropdown>
                     </Field>
                     <Button appearance="subtle" icon={<Delete20Regular />} disabled={stages.length <= 2} onClick={() => removeStage(i)} aria-label={`Remove stage ${i + 1}`} />

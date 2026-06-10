@@ -121,6 +121,17 @@ describe('POST /api/deployment-pipelines/loom', () => {
     const { POST } = await import('@/app/api/deployment-pipelines/loom/route');
     expect((await POST(req({ displayName: 'P', stages: [{ displayName: 'Dev' }, { displayName: 'Test', workspaceId: 'ws-test' }] }))).status).toBe(400);
   });
+  it('rejects two stages bound to the same workspace → 400 duplicate_workspace (C-86 self-modification guard)', async () => {
+    const { POST } = await import('@/app/api/deployment-pipelines/loom/route');
+    const r = await POST(req({ displayName: 'P', stages: [{ displayName: 'Dev', workspaceId: 'ws-dev' }, { displayName: 'Test', workspaceId: 'ws-dev' }] }));
+    expect(r.status).toBe(400);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('duplicate_workspace');
+    expect(j.error).toMatch(/distinct workspace/i);
+    // The invalid pipeline must never reach Cosmos.
+    expect(pipelinesCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/deployment-pipelines/loom/[id]/compare', () => {
@@ -174,6 +185,27 @@ describe('POST /api/deployment-pipelines/loom/[id]/deploy', () => {
   it('missing sourceStageId → 400', async () => {
     const { POST } = await import('@/app/api/deployment-pipelines/loom/[id]/deploy/route');
     expect((await POST(req({ targetStageId: 'test' }), ctx({ id: 'p1' }))).status).toBe(400);
+  });
+  it('legacy pipeline whose source+target share a workspace → 400 duplicate_workspace with a clear remediation', async () => {
+    const original = pipelineDoc.stages;
+    pipelineDoc.stages = [
+      { id: 'dev', displayName: 'Development', order: 0, workspaceId: 'ws-shared' },
+      { id: 'test', displayName: 'Test', order: 1, workspaceId: 'ws-shared' },
+    ];
+    try {
+      const { POST } = await import('@/app/api/deployment-pipelines/loom/[id]/deploy/route');
+      const r = await POST(req({ sourceStageId: 'dev', targetStageId: 'test' }), ctx({ id: 'p1' }));
+      expect(r.status).toBe(400);
+      const j = await r.json();
+      expect(j.ok).toBe(false);
+      expect(j.code).toBe('duplicate_workspace');
+      expect(j.error).toMatch(/same workspace/i);
+      expect(j.error).toMatch(/Re-bind one stage/i);
+      // No deploy side-effects when the pipeline is self-referential.
+      expect(historyCreate).not.toHaveBeenCalled();
+    } finally {
+      pipelineDoc.stages = original;
+    }
   });
 });
 

@@ -20,6 +20,7 @@ provisioner backends.
 | Create pipeline (name + ordered stages 2–10) | ✅ `New pipeline` dialog; each stage bound to a Loom workspace | `POST /api/deployment-pipelines/loom` → Cosmos `loom-pipelines` |
 | Dev → Test → Prod stage cards (coloured, ordered) | ✅ `LoomPipelineDetail` stage-flow cards (same colour language as the Fabric tab) | `GET /api/deployment-pipelines/loom/[id]` |
 | Assign a workspace to a stage | ✅ at create time (workspace picker per stage) | `/api/workspaces` |
+| **Distinct workspace per stage** (a workspace belongs to one stage only — [assign-pipeline limitation 1.2](https://learn.microsoft.com/fabric/cicd/deployment-pipelines/assign-pipeline#considerations-and-limitations)) | ✅ create rejects duplicate `workspaceId` (`409`-style `duplicate_workspace` 400); the create dialog disables already-chosen workspaces; deploy on a legacy same-workspace pipeline returns a readable "re-bind one stage" message instead of a raw promote error | `POST /api/deployment-pipelines/loom` + `POST …/[id]/deploy` |
 | Compare two stages (sync indicator + per-item status) | ✅ `LoomStageCompare` — Same / Different / Only-in-source / Not-in-source + summary | `GET …/[id]/compare` → `computePipelineDiff` |
 | **Content-level diff** (the thing Fabric REST can't do) | ✅ serialized-definition diff: TMSL (`buildTmsl`) for semantic models, stable JSON for report / paginated-report / scorecard | `lib/install/pipeline-compare.ts` |
 | Deploy all | ✅ `Deploy all` in `LoomDeployDialog` | `POST …/[id]/deploy` |
@@ -75,4 +76,10 @@ scope, so no new role assignment or bicep module is required.
 - `app/api/deployment-pipelines/__tests__/loom-pipeline-routes.test.ts` —
   list/create, content compare, selective deploy (asserts the Test data-source
   rule reaches the provisioner + the deployed item ids + history write), rule
-  GET/PUT round-trip + unknown-key rejection.
+  GET/PUT round-trip + unknown-key rejection, and the **distinct-workspace
+  guard** (create rejects two stages sharing a workspace; deploy on a legacy
+  same-workspace pipeline returns `duplicate_workspace` with no side-effects).
+- `app/api/deployment-pipelines/__tests__/deployment-pipelines-routes.test.ts` —
+  the Fabric-path equivalents: deploy short-circuits a same-workspace promote
+  before calling Fabric REST, and stage-workspace assign rejects a workspace
+  already bound to another stage.

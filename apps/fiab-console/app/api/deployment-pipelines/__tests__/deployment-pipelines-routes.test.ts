@@ -181,6 +181,28 @@ describe('POST /api/deployment-pipelines/[id]/deploy', () => {
     expect(j.ok).toBe(false);
     expect(j.gate).toBeTruthy();
   });
+
+  it('source + target stages share a workspace → 400 duplicate_workspace (no deploy call)', async () => {
+    let deployCalled = false;
+    stubFetch((u) => {
+      if (u.includes('/stages') && !u.includes('/deploy')) {
+        return { body: { value: [
+          { id: 's1', order: 0, displayName: 'Development', workspaceId: 'ws-shared' },
+          { id: 's2', order: 1, displayName: 'Test', workspaceId: 'ws-shared' },
+        ] } };
+      }
+      if (u.includes('/deploy')) { deployCalled = true; return { status: 202 }; }
+      return { body: {} };
+    });
+    const { POST } = await import('@/app/api/deployment-pipelines/[id]/deploy/route');
+    const r = await POST(deployReq({ sourceStageId: 's1', targetStageId: 's2' }), ctx({ id: 'dp1' }));
+    expect(r.status).toBe(400);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('duplicate_workspace');
+    expect(j.error).toMatch(/same workspace/i);
+    expect(deployCalled).toBe(false);
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -325,6 +347,29 @@ describe('Stage workspace assign / unassign', () => {
       ctx({ id: 'dp1', stageId: 's1' }),
     );
     expect(r.status).toBe(400);
+  });
+  it('POST rejects a workspace already bound to another stage → 400 duplicate_workspace', async () => {
+    let assignCalled = false;
+    stubFetch((u) => {
+      if (u.includes('assignWorkspace')) { assignCalled = true; return { status: 200 }; }
+      if (u.includes('/stages')) {
+        return { body: { value: [
+          { id: 's1', order: 0, displayName: 'Development' },
+          { id: 's2', order: 1, displayName: 'Test', workspaceId: 'ws-busy' },
+        ] } };
+      }
+      return { body: {} };
+    });
+    const { POST } = await import('@/app/api/deployment-pipelines/[id]/stages/[stageId]/workspace/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: 'ws-busy' }) }),
+      ctx({ id: 'dp1', stageId: 's1' }),
+    );
+    expect(r.status).toBe(400);
+    const j = await r.json();
+    expect(j.code).toBe('duplicate_workspace');
+    expect(j.error).toMatch(/already assigned to stage "Test"/i);
+    expect(assignCalled).toBe(false);
   });
   it('DELETE unassigns a workspace', async () => {
     let url = '';

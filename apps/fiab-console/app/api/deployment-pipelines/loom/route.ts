@@ -48,13 +48,29 @@ export async function POST(req: NextRequest) {
   }
 
   // Validate + resolve each stage's workspace (must be owned by the tenant).
+  // Each stage must use a DISTINCT workspace: a stage bound to the same
+  // workspace as an earlier stage could only ever promote into its own
+  // source, which is not a valid deploy. Fabric enforces the same invariant —
+  // a workspace belongs to a single stage of a single pipeline
+  // (learn.microsoft.com/fabric/cicd/deployment-pipelines/assign-pipeline,
+  // limitation 1.2). We reject it here at construction time with a clear
+  // message rather than letting deploy fail later with a "promote error".
   const stages: LoomPipelineStage[] = [];
+  const workspaceToStage = new Map<string, string>();
   for (let i = 0; i < rawStages.length; i++) {
     const st = rawStages[i] || {};
     const stageName = String(st.displayName || '').trim();
     const workspaceId = String(st.workspaceId || '').trim();
     if (!stageName) return jerr(`Stage ${i + 1} needs a name`, 400, 'bad_request');
     if (!workspaceId) return jerr(`Stage "${stageName}" needs a bound workspace`, 400, 'bad_request');
+    const priorStage = workspaceToStage.get(workspaceId);
+    if (priorStage) {
+      return jerr(
+        `Each stage must use a distinct workspace. Stage "${stageName}" reuses the workspace already bound to "${priorStage}". Pick a different workspace so content can be promoted between stages.`,
+        400,
+        'duplicate_workspace',
+      );
+    }
     let ws;
     try {
       ws = await ownedWorkspace(tenantId, workspaceId);
@@ -62,6 +78,7 @@ export async function POST(req: NextRequest) {
       return jerr((e as Error).message || 'workspace lookup failed');
     }
     if (!ws) return jerr(`Workspace for stage "${stageName}" not found or not owned`, 404, 'workspace_not_found');
+    workspaceToStage.set(workspaceId, stageName);
     stages.push({ id: crypto.randomUUID(), displayName: stageName, order: i, workspaceId, workspaceName: ws.name });
   }
 

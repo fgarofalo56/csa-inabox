@@ -12,7 +12,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { deployStageContent, FabricError, type DeployItemRef } from '@/lib/azure/fabric-client';
+import {
+  deployStageContent,
+  listDeploymentPipelineStages,
+  FabricError,
+  type DeployItemRef,
+} from '@/lib/azure/fabric-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,6 +52,34 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       : undefined;
 
   try {
+    // Guard against a self-referential promote: if the source and target
+    // stages resolve to the same workspace, the deploy would modify its own
+    // source. Fabric also forbids two stages sharing a workspace
+    // (learn.microsoft.com/fabric/cicd/deployment-pipelines/assign-pipeline,
+    // limitation 1.2), but its REST surface returns an opaque 400 — so we
+    // resolve the stage workspaces first and return a Loom-authored message.
+    try {
+      const stages = await listDeploymentPipelineStages(id);
+      const srcWs = stages.find((st) => st.id === sourceStageId)?.workspaceId;
+      const tgtWs = stages.find((st) => st.id === targetStageId)?.workspaceId;
+      if (srcWs && tgtWs && srcWs === tgtWs) {
+        const srcName = stages.find((st) => st.id === sourceStageId)?.displayName || 'source';
+        const tgtName = stages.find((st) => st.id === targetStageId)?.displayName || 'target';
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Stages "${srcName}" and "${tgtName}" are bound to the same workspace, so content can't be promoted between them. Re-bind one stage to a distinct workspace, then deploy again.`,
+            code: 'duplicate_workspace',
+          },
+          { status: 400 },
+        );
+      }
+    } catch (e) {
+      // A 401/403 here means the caller can't read stages — fall through and
+      // let deployStageContent surface the proper Fabric authorization gate.
+      if (!(e instanceof FabricError && (e.status === 401 || e.status === 403))) throw e;
+    }
+
     const res = await deployStageContent(id, { sourceStageId, targetStageId, items, note, createdWorkspaceDetails });
     const accepted = (res as any)?._accepted === true;
     return NextResponse.json({
