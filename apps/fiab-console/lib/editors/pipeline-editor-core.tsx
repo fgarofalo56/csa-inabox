@@ -34,6 +34,8 @@ import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
 import { AdfCdcEditor } from '@/lib/adf/adf-cdc-editor';
 import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
+import { SynapseKqlEditor } from './synapse-kql-editor';
+import { SynapseSparkEditor } from './synapse-spark-editor';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PipelineCopilotPane } from './pipeline-editor';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -131,6 +133,10 @@ export function PipelineEditorCore({
   // Resources) to re-list after a bind/create/manage action mutates the backend.
   const [factoryRefreshKey, setFactoryRefreshKey] = useState(0);
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
+  // Synapse workspace KQL-script / Spark-job-definition editor overlays. Opened
+  // from the Workspace Resources navigator; rendered as Drawer overlays.
+  const [kqlScriptOpen, setKqlScriptOpen] = useState<string | null>(null);
+  const [sparkJobDefOpen, setSparkJobDefOpen] = useState<string | null>(null);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -495,6 +501,8 @@ export function PipelineEditorCore({
           <SynapseWorkspaceTree
             boundPipeline={bound}
             onOpenPipeline={(name) => bindTo(name, false)}
+            onOpenKqlScript={(name) => setKqlScriptOpen(name)}
+            onOpenSparkJobDef={(name) => setSparkJobDefOpen(name)}
             refreshKey={workspaceRefreshKey}
           />
         )
@@ -728,6 +736,22 @@ export function PipelineEditorCore({
               if (changed) setFactoryRefreshKey((k) => k + 1);
             }}
           />
+
+          {/* Synapse workspace artifact editors (Develop hub parity). Opened
+              from the Workspace Resources navigator; on close the navigator
+              re-lists so any rename/connection change reflects in the counts. */}
+          {kqlScriptOpen && (
+            <SynapseKqlEditor
+              name={kqlScriptOpen}
+              onClose={() => { setKqlScriptOpen(null); setWorkspaceRefreshKey((k) => k + 1); }}
+            />
+          )}
+          {sparkJobDefOpen && (
+            <SynapseSparkEditor
+              name={sparkJobDefOpen}
+              onClose={() => { setSparkJobDefOpen(null); setWorkspaceRefreshKey((k) => k + 1); }}
+            />
+          )}
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>

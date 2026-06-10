@@ -448,3 +448,284 @@ export async function runPipeline(
   });
   return jsonOrThrow<{ runId: string }>(r, `runPipeline(${name})`);
 }
+
+// ============================================================
+// 202 long-running commit helper (local mirror of synapse-dev-client's
+// commitArtifact). Spark-job-definition PUTs return 202 + a Location
+// (operationResults) header: the artifact only exists once that operation
+// reaches Succeeded, and can reach Failed when the definition references a pool
+// or file that doesn't resolve. Treating the 202 as success would report
+// "created" for a definition that silently failed to commit. We poll to a
+// terminal state and throw the real error on failure. On a 200 (synchronous
+// commit) it returns immediately. Inlined here (rather than importing from
+// synapse-dev-client) to avoid a cross-client import cycle — both modules own a
+// private `callDev`/credential pair.
+//
+// Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-job-definition/create-or-update-spark-job-definition
+// ============================================================
+async function commitArtifactLocal<T>(r: Response, label: string): Promise<T> {
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`${label} failed ${r.status}: ${await r.text()}`);
+  }
+  if (r.status !== 202) {
+    const text = await r.text();
+    if (!text) return {} as T;
+    try { return JSON.parse(text) as T; } catch { return {} as T; }
+  }
+  const loc = r.headers.get('location') || r.headers.get('Location');
+  let accepted: T = {} as T;
+  try { const t = await r.text(); if (t) accepted = JSON.parse(t) as T; } catch { /* ignore */ }
+  if (!loc) return accepted;
+
+  const tok = await credential.getToken(DEV_SCOPE);
+  if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
+  const deadline = Date.now() + 90_000;
+  let delay = 1000;
+  while (Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, delay));
+    delay = Math.min(delay * 1.5, 5000);
+    const op = await fetch(loc, {
+      headers: { authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
+    });
+    const text = await op.text();
+    let body: any = null;
+    try { body = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+    // operationResults returns the artifact itself (with no status) on success,
+    // or { status: 'Succeeded' | 'Failed' | 'InProgress', error? }.
+    const status = body?.status as string | undefined;
+    if (!status) {
+      // No status field → terminal artifact echo. Treat 200 as done.
+      if (op.ok) return (body as T) ?? accepted;
+      throw new Error(`${label} operation poll failed ${op.status}: ${text}`);
+    }
+    if (status === 'Succeeded') return (body as T) ?? accepted;
+    if (status === 'Failed' || status === 'Cancelled') {
+      const err = body?.error?.message || body?.error?.code || text;
+      throw new Error(`${label} did not commit (${status}): ${err}`);
+    }
+    // InProgress / Running → keep polling.
+  }
+  throw new Error(`${label} timed out waiting for the commit operation to settle`);
+}
+
+// ============================================================
+// KQL scripts  (workspaces/.../kqlScripts)
+//
+// The Synapse Studio Develop hub → KQL scripts surface. A KQL script artifact
+// carries `content.query` (the KQL text) + `content.currentConnection`, which
+// pins the Synapse Data Explorer (Kusto) pool + database the script runs
+// against. The pool is a Synapse-workspace Kusto pool
+// (Microsoft.Synapse/workspaces/{ws}/kustoPools) — NOT standalone ADX and NOT
+// a Fabric Eventhouse — so the Azure-native default path needs no Fabric.
+//
+// Dev-plane REST (api-version 2020-12-01):
+//   GET    https://<ws>.dev.azuresynapse.net/kqlScripts?api-version=…
+//   PUT    https://<ws>.dev.azuresynapse.net/kqlScripts/<name>?api-version=…
+//   DELETE https://<ws>.dev.azuresynapse.net/kqlScripts/<name>?api-version=…
+//   Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/kql-scripts
+// ============================================================
+
+export interface SynapseKqlScript extends SynapseArtifact {
+  properties?: {
+    content?: {
+      query?: string;
+      currentConnection?: { poolName?: string; databaseName?: string; type?: string };
+      metadata?: { language?: string };
+    };
+    folder?: { name: string };
+  };
+}
+
+export async function listKqlScripts(): Promise<SynapseKqlScript[]> {
+  return listAll<SynapseKqlScript>('kqlScripts', 'listKqlScripts');
+}
+
+export async function getKqlScript(name: string): Promise<SynapseKqlScript | null> {
+  const r = await callDev(`/kqlScripts/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  if (r.status === 404) return null;
+  return jsonOrThrow<SynapseKqlScript>(r, `getKqlScript(${name})`);
+}
+
+export async function upsertKqlScript(name: string, spec: SynapseKqlScript): Promise<SynapseKqlScript> {
+  const r = await callDev(`/kqlScripts/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: spec.name || name, properties: spec.properties }),
+  });
+  // KQL-script PUT may be a 202 LRO like the other heavy artifacts.
+  return commitArtifactLocal<SynapseKqlScript>(r, `upsertKqlScript(${name})`);
+}
+
+export async function deleteKqlScript(name: string): Promise<void> {
+  const r = await callDev(`/kqlScripts/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteKqlScript failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * A minimal but valid empty KQL script. Connection (pool/database) is left
+ * unset by default — the editor's "Connect to" / "Use database" dropdowns bind
+ * it from the workspace's live Kusto pools before the first Run.
+ */
+export function emptyKqlScriptProperties(poolName?: string, databaseName?: string): SynapseKqlScript['properties'] {
+  return {
+    content: {
+      query: '// new KQL script\n',
+      currentConnection: { type: 'KustoPool', poolName, databaseName },
+      metadata: { language: 'kql' },
+    },
+  };
+}
+
+// ============================================================
+// Spark job definitions  (workspaces/.../sparkJobDefinitions)
+//
+// The Synapse Studio Develop hub → Spark job definitions surface: a batch
+// Spark JAR/.py job definition that runs as a Livy batch against a target Spark
+// Big Data pool. `jobProperties` is a Livy-batch-compatible payload (file,
+// className, args, sizing). Submitting it creates a real Livy batch.
+//
+// Dev-plane REST (api-version 2020-12-01) — the PUT is a 202 LRO:
+//   GET    https://<ws>.dev.azuresynapse.net/sparkJobDefinitions?api-version=…
+//   PUT    https://<ws>.dev.azuresynapse.net/sparkJobDefinitions/<name>?api-version=…
+//   DELETE https://<ws>.dev.azuresynapse.net/sparkJobDefinitions/<name>?api-version=…
+//   Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-job-definition
+// ============================================================
+
+export interface SynapseSparkJobProperties {
+  file?: string;
+  className?: string;
+  args?: string[];
+  jars?: string[];
+  pyFiles?: string[];
+  files?: string[];
+  conf?: Record<string, string>;
+  driverMemory?: string;
+  driverCores?: number;
+  executorMemory?: string;
+  executorCores?: number;
+  numExecutors?: number;
+}
+
+export interface SynapseSparkJobDefinition extends SynapseArtifact {
+  properties: {
+    description?: string;
+    targetBigDataPool: { referenceName: string; type: 'BigDataPoolReference' };
+    requiredSparkVersion?: string;
+    language?: 'PySpark' | 'Spark' | 'SparkR' | string;
+    jobProperties: SynapseSparkJobProperties;
+    folder?: { name: string };
+  };
+}
+
+export async function listSparkJobDefinitions(): Promise<SynapseSparkJobDefinition[]> {
+  return listAll<SynapseSparkJobDefinition>('sparkJobDefinitions', 'listSparkJobDefinitions');
+}
+
+export async function getSparkJobDefinition(name: string): Promise<SynapseSparkJobDefinition | null> {
+  const r = await callDev(`/sparkJobDefinitions/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  if (r.status === 404) return null;
+  return jsonOrThrow<SynapseSparkJobDefinition>(r, `getSparkJobDefinition(${name})`);
+}
+
+export async function upsertSparkJobDefinition(name: string, spec: SynapseSparkJobDefinition): Promise<SynapseSparkJobDefinition> {
+  const r = await callDev(`/sparkJobDefinitions/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: spec.name || name, properties: spec.properties }),
+  });
+  return commitArtifactLocal<SynapseSparkJobDefinition>(r, `upsertSparkJobDefinition(${name})`);
+}
+
+export async function deleteSparkJobDefinition(name: string): Promise<void> {
+  const r = await callDev(`/sparkJobDefinitions/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteSparkJobDefinition failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/** A minimal Spark job definition targeting the given Spark Big Data pool. */
+export function emptySparkJobDefinitionProperties(poolName: string): SynapseSparkJobDefinition['properties'] {
+  return {
+    targetBigDataPool: { referenceName: poolName, type: 'BigDataPoolReference' },
+    language: 'PySpark',
+    jobProperties: { file: '' },
+  };
+}
+
+// ============================================================
+// Synapse Kusto pool data-plane query (for the KQL-script Run button)
+//
+// Synapse Data Explorer (Kusto) pools expose a v1 REST query endpoint at
+// `https://<poolName>.<workspace>.kusto.azuresynapse.net` (Azure Government:
+// `…kusto.azuresynapse.us`). This is distinct from the standalone ADX cluster
+// the `kusto-client` targets — it is the pool that lives INSIDE the Synapse
+// workspace, so the KQL-script Run never depends on a separate ADX deployment
+// (and never on Fabric). Auth uses the same workspace credential, scoped to the
+// pool's `<clusterUri>/.default`.
+// ============================================================
+
+function kustoPoolSuffix(): string {
+  const cloud = detectLoomCloud();
+  return cloud === 'GCC-High' || cloud === 'DoD'
+    ? 'kusto.azuresynapse.us'
+    : 'kusto.azuresynapse.net';
+}
+
+/** The data-plane cluster URI for a Synapse Kusto pool. */
+export function synapseKustoPoolUri(poolName: string): string {
+  return `https://${poolName}.${ws()}.${kustoPoolSuffix()}`;
+}
+
+export interface KqlRunResult {
+  columns: string[];
+  columnTypes: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated: boolean;
+  executionMs: number;
+}
+
+const KQL_MAX_ROWS = 5000;
+
+/**
+ * Run a KQL query against a Synapse Kusto pool's database. Returns the primary
+ * results table (Table_0) in a UI-friendly shape. Throws with the real Kusto
+ * error message on failure (surfaced verbatim by the Run route).
+ */
+export async function runKqlOnPool(poolName: string, databaseName: string, query: string): Promise<KqlRunResult> {
+  const clusterUri = synapseKustoPoolUri(poolName);
+  const tok = await credential.getToken(`${clusterUri}/.default`);
+  if (!tok?.token) throw new Error(`Failed to acquire token for Kusto pool ${poolName}`);
+  const started = Date.now();
+  const res = await fetch(`${clusterUri}/v1/rest/query`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'application/json; charset=utf-8',
+      accept: 'application/json',
+      'x-ms-client-request-id': `loom-synapse-kql.${Math.random().toString(36).slice(2)}`,
+    },
+    body: JSON.stringify({ db: databaseName, csl: query }),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.['@message'] || json?.error?.message || text || 'Kusto query failed').toString();
+    throw new Error(`runKqlOnPool(${poolName}/${databaseName}) ${res.status}: ${msg}`);
+  }
+  const tables = json?.Tables || [];
+  const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
+  const cols: { ColumnName: string; DataType?: string; ColumnType?: string }[] = primary?.Columns || [];
+  const rawRows: unknown[][] = primary?.Rows || [];
+  const truncated = rawRows.length > KQL_MAX_ROWS;
+  return {
+    columns: cols.map((c) => c.ColumnName),
+    columnTypes: cols.map((c) => c.DataType || c.ColumnType || ''),
+    rows: truncated ? rawRows.slice(0, KQL_MAX_ROWS) : rawRows,
+    rowCount: rawRows.length,
+    truncated,
+    executionMs: Date.now() - started,
+  };
+}

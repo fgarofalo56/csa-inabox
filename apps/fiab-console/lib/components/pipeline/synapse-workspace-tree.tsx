@@ -18,13 +18,15 @@
  *   - Data flows     → /api/synapse/dataflows       (list/create/delete)
  *   - Notebooks      → /api/synapse/notebooks       (list/create/delete)
  *   - SQL scripts    → /api/synapse/sqlscripts      (list/create/delete)
+ *   - KQL scripts    → /api/synapse/kqlscripts      (list/create/delete + open editor → Run on a Kusto pool)
+ *   - Spark job defs → /api/synapse/sparkjobdefinitions (list/create/delete + open editor → Submit Livy batch)
  *   - Triggers       → /api/synapse/triggers        (list/create/start/stop/delete)
  *   - Linked services→ /api/synapse/linkedservices  (list/create/delete)
  *   - Spark / SQL pools → /api/synapse/pools         (read-only list from ARM)
  *
- * Groups Synapse Studio exposes but we don't yet wire (KQL scripts, Spark job
- * definitions, dedicated-SQL-pool authoring) render as honest ⚠️ gate rows
- * naming what's missing — never a fake list. No mocks.
+ * The remaining Synapse Studio group we don't yet author (dedicated-SQL-pool
+ * create/scale — listed read-only here, authored in the scaling editor) renders
+ * as an honest ⚠️ gate row naming where it lives — never a fake list. No mocks.
  *
  * The workspace is the env-pinned default (LOOM_SYNAPSE_WORKSPACE). When
  * unconfigured the routes 503 and the whole tree shows a single honest
@@ -45,7 +47,7 @@ import {
   Flow20Regular, DocumentTable20Regular, DataUsage20Regular, Clock20Regular,
   Link20Regular, Server20Regular, Play16Regular, Stop16Regular, Open16Regular,
   Search20Regular, Warning20Regular, Notebook20Regular, DocumentText20Regular,
-  Database20Regular,
+  Database20Regular, DatabaseArrowRight20Regular, AppsListDetail20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -67,6 +69,8 @@ const SQL_ROUTE = '/api/synapse/sqlscripts';
 const TRG_ROUTE = '/api/synapse/triggers';
 const LS_ROUTE = '/api/synapse/linkedservices';
 const POOLS_ROUTE = '/api/synapse/pools';
+const KQL_ROUTE = '/api/synapse/kqlscripts';
+const SJD_ROUTE = '/api/synapse/sparkjobdefinitions';
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -75,13 +79,17 @@ async function readJson(res: Response): Promise<any> {
 
 interface NamedRow { name: string; [k: string]: unknown }
 
-type CreatableGroup = 'pipeline' | 'dataset' | 'dataflow' | 'notebook' | 'sqlscript' | 'trigger';
+type CreatableGroup = 'pipeline' | 'dataset' | 'dataflow' | 'notebook' | 'sqlscript' | 'trigger' | 'kqlscript' | 'sparkjobdef';
 
 export interface SynapseWorkspaceTreeProps {
   /** The currently bound pipeline name (highlighted in the tree). */
   boundPipeline: string | null;
   /** Open / bind a pipeline on the canvas (existing flow). */
   onOpenPipeline: (name: string) => void;
+  /** Open the KQL-script editor for a workspace KQL script artifact. */
+  onOpenKqlScript?: (name: string) => void;
+  /** Open the Spark-job-definition editor for a workspace SJD artifact. */
+  onOpenSparkJobDef?: (name: string) => void;
   /** Increment to force a refresh from the parent (e.g. after a bind/create). */
   refreshKey?: number;
 }
@@ -90,7 +98,7 @@ export interface SynapseWorkspaceTreeProps {
  * A typed, Synapse-Studio-faithful Workspace Resources navigator.
  */
 export function SynapseWorkspaceTree({
-  boundPipeline, onOpenPipeline, refreshKey = 0,
+  boundPipeline, onOpenPipeline, onOpenKqlScript, onOpenSparkJobDef, refreshKey = 0,
 }: SynapseWorkspaceTreeProps) {
   const s = useStyles();
 
@@ -104,6 +112,8 @@ export function SynapseWorkspaceTree({
   const [dataflows, setDataflows] = useState<NamedRow[]>([]);
   const [notebooks, setNotebooks] = useState<NamedRow[]>([]);
   const [sqlScripts, setSqlScripts] = useState<NamedRow[]>([]);
+  const [kqlScripts, setKqlScripts] = useState<Array<{ name: string; pool?: string; database?: string }>>([]);
+  const [sparkJobDefs, setSparkJobDefs] = useState<Array<{ name: string; pool?: string; language?: string }>>([]);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
   const [linkedServices, setLinkedServices] = useState<NamedRow[]>([]);
   const [sparkPools, setSparkPools] = useState<Array<{ name: string; nodeSize?: string; sparkVersion?: string; state?: string }>>([]);
@@ -116,6 +126,7 @@ export function SynapseWorkspaceTree({
   const [createName, setCreateName] = useState('');
   const [createDsType, setCreateDsType] = useState('DelimitedText');
   const [createDsLinkedService, setCreateDsLinkedService] = useState('');
+  const [createSjdPool, setCreateSjdPool] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
 
   function applyGate(body: any): boolean {
@@ -126,7 +137,7 @@ export function SynapseWorkspaceTree({
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [pr, dr, fr, nr, qr, tr, lr, plr] = await Promise.all([
+      const [pr, dr, fr, nr, qr, tr, lr, plr, kr, sjr] = await Promise.all([
         fetch(PIPE_ROUTE).then(readJson),
         fetch(DS_ROUTE).then(readJson),
         fetch(DF_ROUTE).then(readJson),
@@ -135,9 +146,11 @@ export function SynapseWorkspaceTree({
         fetch(TRG_ROUTE).then(readJson),
         fetch(LS_ROUTE).then(readJson),
         fetch(POOLS_ROUTE).then(readJson),
+        fetch(KQL_ROUTE).then(readJson),
+        fetch(SJD_ROUTE).then(readJson),
       ]);
       // Any route reporting not_configured gates the whole tree (same workspace).
-      for (const b of [pr, dr, fr, nr, qr, tr, lr, plr]) { if (applyGate(b)) { setLoading(false); return; } }
+      for (const b of [pr, dr, fr, nr, qr, tr, lr, plr, kr, sjr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (pr.ok) setPipelines(pr.pipelines || []); else setError(pr.error || 'failed to list pipelines');
       if (dr.ok) setDatasets(dr.datasets || []);
@@ -147,6 +160,8 @@ export function SynapseWorkspaceTree({
       if (tr.ok) setTriggers(tr.triggers || []);
       if (lr.ok) setLinkedServices(lr.linkedServices || []);
       if (plr.ok) { setSparkPools(plr.sparkPools || []); setSqlPools(plr.sqlPools || []); }
+      if (kr.ok) setKqlScripts(kr.kqlScripts || []);
+      if (sjr.ok) setSparkJobDefs(sjr.sparkJobDefinitions || []);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -162,7 +177,8 @@ export function SynapseWorkspaceTree({
   const openCreate = useCallback((g: CreatableGroup) => {
     setCreateGroup(g); setCreateName(''); setCreateError(null);
     setCreateDsType('DelimitedText'); setCreateDsLinkedService(linkedServices[0]?.name as string || '');
-  }, [linkedServices]);
+    setCreateSjdPool(sparkPools[0]?.name || '');
+  }, [linkedServices, sparkPools]);
 
   const submitCreate = useCallback(async () => {
     if (!createGroup || !createName.trim()) return;
@@ -175,6 +191,11 @@ export function SynapseWorkspaceTree({
       else if (createGroup === 'notebook') { route = NB_ROUTE; payload = { name }; }
       else if (createGroup === 'sqlscript') { route = SQL_ROUTE; payload = { name }; }
       else if (createGroup === 'trigger') { route = TRG_ROUTE; payload = { name }; }
+      else if (createGroup === 'kqlscript') { route = KQL_ROUTE; payload = { name }; }
+      else if (createGroup === 'sparkjobdef') {
+        if (!createSjdPool) { setCreateError('Pick a Spark pool for the job definition (create one first).'); setBusy(false); return; }
+        route = SJD_ROUTE; payload = { name, pool: createSjdPool };
+      }
       else if (createGroup === 'dataset') {
         if (!createDsLinkedService) { setCreateError('Pick a linked service (create one first).'); setBusy(false); return; }
         route = DS_ROUTE;
@@ -198,12 +219,15 @@ export function SynapseWorkspaceTree({
       await loadAll();
       // Creating a pipeline opens it straight away on the canvas (Synapse Studio behaviour).
       if (group === 'pipeline') onOpenPipeline(name);
+      // KQL scripts + Spark job definitions open their editor on create.
+      else if (group === 'kqlscript') onOpenKqlScript?.(name);
+      else if (group === 'sparkjobdef') onOpenSparkJobDef?.(name);
     } catch (e: any) {
       setCreateError(e?.message || String(e));
     } finally {
       setBusy(false);
     }
-  }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline]);
+  }, [createGroup, createName, createDsType, createDsLinkedService, createSjdPool, loadAll, onOpenPipeline, onOpenKqlScript, onOpenSparkJobDef]);
 
   const del = useCallback(async (route: string, name: string) => {
     setBusy(true); setError(null);
@@ -241,6 +265,8 @@ export function SynapseWorkspaceTree({
   const fDataflows = useMemo(() => dataflows.filter((d) => match(d.name)), [dataflows, f]);
   const fNotebooks = useMemo(() => notebooks.filter((n) => match(n.name)), [notebooks, f]);
   const fSqlScripts = useMemo(() => sqlScripts.filter((q) => match(q.name)), [sqlScripts, f]);
+  const fKqlScripts = useMemo(() => kqlScripts.filter((q) => match(q.name)), [kqlScripts, f]);
+  const fSparkJobDefs = useMemo(() => sparkJobDefs.filter((d) => match(d.name)), [sparkJobDefs, f]);
   const fTriggers = useMemo(() => triggers.filter((t) => match(t.name)), [triggers, f]);
   const fLinked = useMemo(() => linkedServices.filter((l) => match(l.name)), [linkedServices, f]);
   const fSparkPools = useMemo(() => sparkPools.filter((p) => match(p.name)), [sparkPools, f]);
@@ -302,6 +328,8 @@ export function SynapseWorkspaceTree({
                 <MenuItem icon={<DataUsage20Regular />} onClick={() => openCreate('dataflow')}>Data flow</MenuItem>
                 <MenuItem icon={<Notebook20Regular />} onClick={() => openCreate('notebook')}>Notebook</MenuItem>
                 <MenuItem icon={<DocumentText20Regular />} onClick={() => openCreate('sqlscript')}>SQL script</MenuItem>
+                <MenuItem icon={<DatabaseArrowRight20Regular />} onClick={() => openCreate('kqlscript')}>KQL script</MenuItem>
+                <MenuItem icon={<AppsListDetail20Regular />} onClick={() => openCreate('sparkjobdef')}>Spark job definition</MenuItem>
                 <MenuItem icon={<DocumentTable20Regular />} onClick={() => openCreate('dataset')}>Dataset</MenuItem>
                 <MenuItem icon={<Clock20Regular />} onClick={() => openCreate('trigger')}>Trigger</MenuItem>
               </MenuList>
@@ -443,6 +471,59 @@ export function SynapseWorkspaceTree({
             </Tree>
           </TreeItem>
 
+          {/* KQL scripts */}
+          <TreeItem itemType="branch" value="g-kqlscripts">
+            {groupHeader('KQL scripts', <DatabaseArrowRight20Regular />, kqlScripts.length, () => openCreate('kqlscript'), 'New KQL script')}
+            <Tree>
+              {fKqlScripts.length === 0 && <TreeItem itemType="leaf" value="k-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No KQL scripts'}</Caption1></TreeItemLayout></TreeItem>}
+              {fKqlScripts.map((k) => (
+                <TreeItem key={k.name} itemType="leaf" value={`k-${k.name}`}>
+                  <TreeItemLayout iconBefore={<DatabaseArrowRight20Regular />}>
+                    <span className={s.leafRow}>
+                      <span
+                        role="button" tabIndex={0} style={{ cursor: onOpenKqlScript ? 'pointer' : undefined }}
+                        onClick={() => onOpenKqlScript?.(k.name)}
+                        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenKqlScript) { e.preventDefault(); onOpenKqlScript(k.name); } }}
+                      >{k.name}</span>
+                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                        {k.pool && <Caption1>{k.pool}</Caption1>}
+                        {onOpenKqlScript && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenKqlScript(k.name)} aria-label={`Open ${k.name}`} /></Tooltip>}
+                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(KQL_ROUTE, k.name)} aria-label={`Delete ${k.name}`} /></Tooltip>
+                      </span>
+                    </span>
+                  </TreeItemLayout>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
+          {/* Spark job definitions */}
+          <TreeItem itemType="branch" value="g-sparkjobdefs">
+            {groupHeader('Spark job definitions', <AppsListDetail20Regular />, sparkJobDefs.length, () => openCreate('sparkjobdef'), 'New Spark job definition')}
+            <Tree>
+              {fSparkJobDefs.length === 0 && <TreeItem itemType="leaf" value="sj-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Spark job definitions'}</Caption1></TreeItemLayout></TreeItem>}
+              {fSparkJobDefs.map((d) => (
+                <TreeItem key={d.name} itemType="leaf" value={`sj-${d.name}`}>
+                  <TreeItemLayout iconBefore={<AppsListDetail20Regular />}>
+                    <span className={s.leafRow}>
+                      <span
+                        role="button" tabIndex={0} style={{ cursor: onOpenSparkJobDef ? 'pointer' : undefined }}
+                        onClick={() => onOpenSparkJobDef?.(d.name)}
+                        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenSparkJobDef) { e.preventDefault(); onOpenSparkJobDef(d.name); } }}
+                      >{d.name}</span>
+                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                        {d.language && <Caption1>{d.language}</Caption1>}
+                        {d.pool && <Badge size="small" appearance="outline">{d.pool}</Badge>}
+                        {onOpenSparkJobDef && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenSparkJobDef(d.name)} aria-label={`Open ${d.name}`} /></Tooltip>}
+                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(SJD_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
+                      </span>
+                    </span>
+                  </TreeItemLayout>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
           {/* Triggers */}
           <TreeItem itemType="branch" value="g-triggers">
             {groupHeader('Triggers', <Clock20Regular />, triggers.length, () => openCreate('trigger'), 'New trigger')}
@@ -536,8 +617,6 @@ export function SynapseWorkspaceTree({
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['KQL scripts', 'workspaces/.../kqlScripts — Data Explorer (Kusto) script authoring against a KQL pool; data plane not wired yet.'],
-                ['Spark job definitions', 'workspaces/.../sparkJobDefinitions — batch Spark JAR/.py job authoring; list/run not wired yet (use the Notebooks group + Livy for now).'],
                 ['Dedicated SQL pool authoring', 'sqlPools create/scale/pause/resume — listed read-only here; authoring lives in the Synapse scaling editor (/api/admin/scaling/*).'],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
@@ -563,6 +642,8 @@ export function SynapseWorkspaceTree({
                 : createGroup === 'dataflow' ? 'data flow'
                 : createGroup === 'notebook' ? 'notebook'
                 : createGroup === 'sqlscript' ? 'SQL script'
+                : createGroup === 'kqlscript' ? 'KQL script'
+                : createGroup === 'sparkjobdef' ? 'Spark job definition'
                 : createGroup === 'dataset' ? 'dataset' : 'trigger'}
             </DialogTitle>
             <DialogContent>
@@ -609,6 +690,24 @@ export function SynapseWorkspaceTree({
                   the SQL script editor.
                 </Caption1>
               )}
+              {createGroup === 'kqlscript' && (
+                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  Creates an empty KQL script. Pick a Synapse Data Explorer (Kusto) pool + database in the
+                  editor, then write and run KQL against it.
+                </Caption1>
+              )}
+              {createGroup === 'sparkjobdef' && (
+                <Field label="Spark pool" required style={{ marginTop: 8 }}>
+                  <Dropdown
+                    placeholder={sparkPools.length ? 'Select a Spark pool' : 'No Spark pools — provision one first'}
+                    value={createSjdPool} selectedOptions={createSjdPool ? [createSjdPool] : []}
+                    onOptionSelect={(_, d) => setCreateSjdPool(d.optionValue || '')}
+                    disabled={!sparkPools.length}
+                  >
+                    {sparkPools.map((p) => <Option key={p.name} value={p.name} text={p.name}>{p.name}{p.sparkVersion ? ` · Spark ${p.sparkVersion}` : ''}</Option>)}
+                  </Dropdown>
+                </Field>
+              )}
               {createGroup === 'trigger' && (
                 <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
                   Creates a daily Schedule trigger (Stopped). Wire it to a pipeline from that pipeline&apos;s
@@ -619,7 +718,7 @@ export function SynapseWorkspaceTree({
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>
-              <Button appearance="primary" onClick={submitCreate} disabled={busy || !createName.trim()}>{busy ? 'Creating…' : 'Create'}</Button>
+              <Button appearance="primary" onClick={submitCreate} disabled={busy || !createName.trim() || (createGroup === 'sparkjobdef' && !createSjdPool)}>{busy ? 'Creating…' : 'Create'}</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
