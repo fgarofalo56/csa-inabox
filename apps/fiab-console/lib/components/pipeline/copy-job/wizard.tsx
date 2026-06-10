@@ -42,7 +42,7 @@ export const COPY_SINK_TYPES = [
 ];
 const SQL_SOURCE_TYPES = new Set(['AzureSqlSource', 'SqlServerSource', 'SqlMISource', 'AzureSqlDWSource']);
 
-export type CopyMode = 'Full' | 'Incremental';
+export type CopyMode = 'Full' | 'Incremental' | 'CDC';
 export type WriteMode = 'Append' | 'Overwrite' | 'Merge';
 
 export interface CopyJobSpec {
@@ -52,9 +52,9 @@ export interface CopyJobSpec {
   writeMode: WriteMode;
   /** Incremental only — the monotonically-increasing watermark column. */
   watermarkCol?: string;
-  /** Incremental only — logical source name; PK in dbo.copy_watermark. */
+  /** Incremental + CDC — logical source name; PK in the control tables. */
   sourceName?: string;
-  /** Merge only — comma-separated key columns for upsert. */
+  /** Merge + CDC — comma-separated key columns for upsert. */
   mergeKeys?: string;
   mappings: Array<{ source: string; sink: string }>;
 }
@@ -76,9 +76,10 @@ export interface CopyJobWizardProps {
 
 const STEPS = ['Source', 'Destination', 'Mode', 'Update', 'Mapping', 'Review'] as const;
 
-const MODES: { kind: CopyMode; title: string; desc: string }[] = [
+const MODES: { kind: CopyMode; title: string; desc: string; sqlOnly?: boolean }[] = [
   { kind: 'Full', title: 'Full copy', desc: 'Copy the entire source every run. Simplest — no watermark.' },
   { kind: 'Incremental', title: 'Incremental copy', desc: 'Copy only rows changed since the last run, tracked by a watermark column in a control table.' },
+  { kind: 'CDC', title: 'CDC (change tracking)', desc: 'Native SQL change tracking — copies inserts, updates AND deletes since the last SYS_CHANGE_VERSION. No watermark column needed.', sqlOnly: true },
 ];
 
 const WRITE_MODES: { kind: WriteMode; title: string; desc: string }[] = [
@@ -172,6 +173,7 @@ export function CopyJobWizard({
       mode,
       writeMode,
       ...(mode === 'Incremental' ? { watermarkCol: watermarkCol || undefined, sourceName: (sourceName || srcTable) || undefined } : {}),
+      ...(mode === 'CDC' ? { sourceName: (sourceName || srcTable) || undefined } : {}),
       ...(writeMode === 'Merge' ? { mergeKeys: mergeKeys || undefined } : {}),
       mappings,
     };
@@ -181,14 +183,19 @@ export function CopyJobWizard({
     switch (step) {
       case 0: return !!srcLs && !!srcType && (!isSqlSource || !!srcTable);
       case 1: return !!snkLs && !!snkType && !!snkTable;
-      case 2: return mode === 'Full' || (!!watermarkCol && (!!sourceName || !!srcTable));
+      case 2:
+        if (mode === 'Full') return true;
+        if (mode === 'CDC') return isSqlSource && !!srcTable;
+        return !!watermarkCol && (!!sourceName || !!srcTable);
       case 3: return writeMode !== 'Merge' || !!mergeKeys.trim();
       default: return true;
     }
   }, [step, srcLs, srcType, srcTable, isSqlSource, snkLs, snkType, snkTable, mode, watermarkCol, sourceName, writeMode, mergeKeys]);
 
   const canSave = !busy && !!srcLs && !!snkLs && !!snkTable
-    && (mode === 'Full' || (!!watermarkCol && isSqlSource))
+    && (mode === 'Full'
+      || (mode === 'Incremental' && !!watermarkCol && isSqlSource)
+      || (mode === 'CDC' && isSqlSource && !!srcTable))
     && (writeMode !== 'Merge' || !!mergeKeys.trim());
 
   const lsOptions = (l: LinkedServiceLite) => (l.properties?.type ? `${l.name} (${l.properties.type})` : l.name);
@@ -271,15 +278,28 @@ export function CopyJobWizard({
               {step === 2 && (
                 <>
                   <div className={styles.cardRow}>
-                    {MODES.map((m) => (
-                      <div key={m.kind} role="button" tabIndex={0}
-                        className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''}`}
-                        onClick={() => setMode(m.kind)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMode(m.kind); }}>
-                        <span className={styles.cardTitle}>{m.title}</span>
-                        <span className={styles.cardDesc}>{m.desc}</span>
-                      </div>
-                    ))}
+                    {MODES.map((m) => {
+                      const disabled = !!m.sqlOnly && !isSqlSource;
+                      const onPick = () => {
+                        if (disabled) return;
+                        setMode(m.kind);
+                        // CDC applies inserts/updates/deletes by key — Merge is the
+                        // only coherent update method, so default it on selection.
+                        if (m.kind === 'CDC') setWriteMode('Merge');
+                      };
+                      return (
+                        <div key={m.kind} role="button" tabIndex={disabled ? -1 : 0}
+                          aria-disabled={disabled}
+                          className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''}`}
+                          style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                          onClick={onPick}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onPick(); }}>
+                          <span className={styles.cardTitle}>{m.title}</span>
+                          <span className={styles.cardDesc}>{m.desc}</span>
+                          {m.sqlOnly && <Badge appearance="outline" color="informative" size="small">SQL source only</Badge>}
+                        </div>
+                      );
+                    })}
                   </div>
                   {mode === 'Incremental' && (
                     <>
@@ -301,20 +321,55 @@ export function CopyJobWizard({
                       </div>
                     </>
                   )}
+                  {mode === 'CDC' && (
+                    <>
+                      {!isSqlSource ? (
+                        <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
+                          CDC mode requires a SQL-family source (Azure SQL DB, SQL Server, or SQL MI) with
+                          ALTER DATABASE … SET CHANGE_TRACKING = ON and per-table change tracking enabled.
+                          Pick a SQL source type on the Source step.
+                        </Text>
+                      ) : (
+                        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                          Native change tracking reads <code>CHANGE_TRACKING_CURRENT_VERSION()</code> and{' '}
+                          <code>CHANGETABLE(CHANGES {srcTable || '<table>'}, &lt;last_version&gt;)</code>, so no watermark
+                          column is needed — inserts, updates, and deletes are all captured. The change-version
+                          checkpoint is stored in <code>dbo.copy_change_version</code> in the control DB.
+                          Enable it on the source first:{' '}
+                          <code>ALTER TABLE {srcTable || 'dbo.orders'} ENABLE CHANGE_TRACKING;</code>
+                        </Text>
+                      )}
+                      <Field label="Source name (control-table key)"
+                        hint="Identifies this job's change-version row in dbo.copy_change_version. Defaults to the source table.">
+                        <Input value={sourceName} onChange={(_, d) => setSourceName(d.value)} placeholder={srcTable || 'orders-feed'} />
+                      </Field>
+                    </>
+                  )}
                 </>
               )}
 
+              {step === 3 && mode === 'CDC' && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  CDC applies inserts, updates, and deletes, so <strong>Merge (upsert)</strong> is required —
+                  set the key column(s) used to match rows below.
+                </Text>
+              )}
               {step === 3 && (
                 <div className={styles.cardRow}>
-                  {WRITE_MODES.map((w) => (
-                    <div key={w.kind} role="button" tabIndex={0}
-                      className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
-                      onClick={() => setWriteMode(w.kind)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setWriteMode(w.kind); }}>
-                      <span className={styles.cardTitle}>{w.title}</span>
-                      <span className={styles.cardDesc}>{w.desc}</span>
-                    </div>
-                  ))}
+                  {WRITE_MODES.map((w) => {
+                    const disabled = mode === 'CDC' && w.kind !== 'Merge';
+                    return (
+                      <div key={w.kind} role="button" tabIndex={disabled ? -1 : 0}
+                        aria-disabled={disabled}
+                        className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
+                        style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                        onClick={() => { if (!disabled) setWriteMode(w.kind); }}
+                        onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) setWriteMode(w.kind); }}>
+                        <span className={styles.cardTitle}>{w.title}</span>
+                        <span className={styles.cardDesc}>{w.desc}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {step === 3 && writeMode === 'Merge' && (
@@ -344,9 +399,10 @@ export function CopyJobWizard({
                   <TableBody>
                     <SummaryRow k="Source" v={`${srcLs || '—'} · ${srcType}${srcTable ? ` · ${srcTable}` : ''}`} />
                     <SummaryRow k="Destination" v={`${snkLs || '—'} · ${snkType} · ${snkTable || '—'}`} />
-                    <SummaryRow k="Copy mode" v={mode} />
+                    <SummaryRow k="Copy mode" v={mode === 'CDC' ? 'CDC (change tracking)' : mode} />
                     {mode === 'Incremental' && <SummaryRow k="Watermark column" v={watermarkCol || '—'} />}
-                    {mode === 'Incremental' && <SummaryRow k="Control-table key" v={sourceName || srcTable || '—'} />}
+                    {mode === 'CDC' && <SummaryRow k="Change tracking" v="SYS_CHANGE_VERSION (inserts + updates + deletes)" />}
+                    {(mode === 'Incremental' || mode === 'CDC') && <SummaryRow k="Control-table key" v={sourceName || srcTable || '—'} />}
                     <SummaryRow k="Update method" v={writeMode} />
                     {writeMode === 'Merge' && <SummaryRow k="Merge keys" v={mergeKeys || '—'} />}
                     <SummaryRow k="Column mappings" v={`${spec.mappings.length} mapped${spec.mappings.length === 0 ? ' (all by name)' : ''}`} />
@@ -360,7 +416,9 @@ export function CopyJobWizard({
                   <Badge appearance="tint" color="informative">ADF pipeline</Badge>{' '}
                   Saving materialises an Azure Data Factory pipeline. {mode === 'Incremental'
                     ? 'Incremental mode generates Lookup → Lookup → Copy → StoredProcedure activities and persists the watermark in dbo.copy_watermark.'
-                    : 'Full mode generates a single Copy activity.'}
+                    : mode === 'CDC'
+                      ? 'CDC mode generates Lookup → Lookup → Copy (CHANGETABLE net changes) → StoredProcedure activities and persists the SYS_CHANGE_VERSION checkpoint in dbo.copy_change_version.'
+                      : 'Full mode generates a single Copy activity.'}
                 </Text>
               )}
             </div>

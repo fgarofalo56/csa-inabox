@@ -62,6 +62,13 @@ interface WatermarkDTO {
   updated_utc?: string | null;
 }
 
+interface ChangeVersionDTO {
+  source?: string;
+  table_name?: string;
+  sync_version?: number | null;
+  updated_utc?: string | null;
+}
+
 interface LinkedServiceDTO { name: string; properties?: { type?: string; description?: string } }
 
 function fmtTs(ts?: string | number | null): string {
@@ -157,10 +164,15 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const [wmConfigured, setWmConfigured] = useState<boolean | null>(null);
   const [wmMissing, setWmMissing] = useState<string | null>(null);
   const [wmModule, setWmModule] = useState<string | null>(null);
+  const [changeVersion, setChangeVersion] = useState<ChangeVersionDTO | null>(null);
+  const [cvConfigured, setCvConfigured] = useState<boolean | null>(null);
+  const [cvMissing, setCvMissing] = useState<string | null>(null);
+  const [cvModule, setCvModule] = useState<string | null>(null);
 
   const persisted = useMemo(() => specFromState(cosmosItem?.state), [cosmosItem]);
   const configured = !!persisted.source?.linkedService && !!persisted.sink?.linkedService && !!persisted.sink?.table;
   const isIncremental = persisted.mode === 'Incremental';
+  const isCdc = persisted.mode === 'CDC';
 
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
@@ -184,7 +196,19 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, [id]);
 
-  useEffect(() => { if (cosmosItem) { loadRuns(); loadWatermark(); } }, [cosmosItem, loadRuns, loadWatermark]);
+  const loadChangeVersion = useCallback(async () => {
+    if (id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/copy-job/${encodeURIComponent(id)}/change-version`);
+      const j = await r.json();
+      setCvConfigured(!!j.configured);
+      setCvMissing(j.missing || null);
+      setCvModule(j.module || null);
+      setChangeVersion(j.configured ? (j.changeVersion || null) : null);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+  }, [id]);
+
+  useEffect(() => { if (cosmosItem) { loadRuns(); loadWatermark(); loadChangeVersion(); } }, [cosmosItem, loadRuns, loadWatermark, loadChangeVersion]);
 
   const onSave = useCallback(async (spec: CopyJobSpec) => {
     setBusy(true); setErr(null);
@@ -193,9 +217,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
       await reload();
       setWizardOpen(false);
       await loadWatermark();
+      await loadChangeVersion();
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [id, reload, loadWatermark]);
+  }, [id, reload, loadWatermark, loadChangeVersion]);
 
   const run = useCallback(async () => {
     setBusy(true); setErr(null); setLastRun(null);
@@ -207,10 +232,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
       if (!j.ok) throw new Error(j.error || 'run failed');
       setLastRun(j.runId);
       setTab('runs');
-      setTimeout(() => { loadRuns(); loadWatermark(); }, 2500);
+      setTimeout(() => { loadRuns(); loadWatermark(); loadChangeVersion(); }, 2500);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [id, loadRuns, loadWatermark]);
+  }, [id, loadRuns, loadWatermark, loadChangeVersion]);
 
   const canRun = !busy && configured;
   const ribbon: RibbonTab[] = useMemo(() => [
@@ -220,11 +245,11 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
       ]},
       { label: 'Run', actions: [
         { label: busy ? 'Running…' : 'Run now', onClick: canRun ? run : undefined, disabled: !canRun },
-        { label: 'Refresh', onClick: busy ? undefined : () => { loadRuns(); loadWatermark(); }, disabled: busy },
+        { label: 'Refresh', onClick: busy ? undefined : () => { loadRuns(); loadWatermark(); loadChangeVersion(); }, disabled: busy },
       ]},
     ]},
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [busy, canRun, run, loadRuns, loadWatermark]);
+  ], [busy, canRun, run, loadRuns, loadWatermark, loadChangeVersion]);
 
   if (id === 'new') {
     return (
@@ -287,9 +312,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                       <Caption1 className={styles.label}>Destination</Caption1>
                       <Body1 className={styles.mono}>{persisted.sink?.linkedService} · {persisted.sink?.type} · {persisted.sink?.table}</Body1>
                       <Caption1 className={styles.label}>Copy mode</Caption1>
-                      <Body1><Badge appearance="tint" color={isIncremental ? 'brand' : 'informative'}>{persisted.mode}</Badge></Body1>
+                      <Body1><Badge appearance="tint" color={(isIncremental || isCdc) ? 'brand' : 'informative'}>{isCdc ? 'CDC (change tracking)' : persisted.mode}</Badge></Body1>
                       {isIncremental && <><Caption1 className={styles.label}>Watermark column</Caption1><Body1 className={styles.mono}>{persisted.watermarkCol || '—'}</Body1></>}
-                      {isIncremental && <><Caption1 className={styles.label}>Control-table key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
+                      {isCdc && <><Caption1 className={styles.label}>Change tracking</Caption1><Body1>SYS_CHANGE_VERSION (inserts + updates + deletes)</Body1></>}
+                      {(isIncremental || isCdc) && <><Caption1 className={styles.label}>Control-table key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
                       <Caption1 className={styles.label}>Update method</Caption1>
                       <Body1>{persisted.writeMode}{persisted.writeMode === 'Merge' && persisted.mergeKeys ? ` (keys: ${persisted.mergeKeys})` : ''}</Body1>
                       <Caption1 className={styles.label}>Column mappings</Caption1>
@@ -325,6 +351,39 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                         <Caption1 className={styles.label}>Table</Caption1><Body1 className={styles.mono}>{watermark.table_name}</Body1>
                         <Caption1 className={styles.label}>Last value</Caption1><Body1 className={styles.mono}>{watermark.last_value ?? '—'}</Body1>
                         <Caption1 className={styles.label}>Updated</Caption1><Body1>{fmtTs(watermark.updated_utc)}</Body1>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {isCdc && (
+                  <div className={styles.card}>
+                    <Subtitle2>Change tracking</Subtitle2>
+                    {cvConfigured === false && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Control table not configured</MessageBarTitle>
+                          CDC copy persists its SYS_CHANGE_VERSION checkpoint in <code>dbo.copy_change_version</code> in Azure SQL.
+                          Set <code>{cvMissing || 'LOOM_COPYJOB_CONTROL_SQL_SERVER'}</code> on the console app and deploy{' '}
+                          <code>{cvModule || 'platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep'}</code> to create the
+                          table and stored procedure. Also enable change tracking on the source:{' '}
+                          <code>ALTER DATABASE … SET CHANGE_TRACKING = ON</code> and{' '}
+                          <code>ALTER TABLE {persisted.source?.sourceTable || '…'} ENABLE CHANGE_TRACKING</code>.
+                          Full copy works without this; CDC runs will fail until it is set.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {cvConfigured && !changeVersion && (
+                      <Caption1 className={styles.label}>
+                        No change-version recorded yet — the first CDC run captures all changes from version 0 and writes the current SYS_CHANGE_VERSION.
+                      </Caption1>
+                    )}
+                    {cvConfigured && changeVersion && (
+                      <div className={styles.specGrid}>
+                        <Caption1 className={styles.label}>Source key</Caption1><Body1 className={styles.mono}>{changeVersion.source}</Body1>
+                        <Caption1 className={styles.label}>Table</Caption1><Body1 className={styles.mono}>{changeVersion.table_name}</Body1>
+                        <Caption1 className={styles.label}>Sync version</Caption1><Body1 className={styles.mono}>{changeVersion.sync_version ?? '—'}</Body1>
+                        <Caption1 className={styles.label}>Updated</Caption1><Body1>{fmtTs(changeVersion.updated_utc)}</Body1>
                       </div>
                     )}
                   </div>

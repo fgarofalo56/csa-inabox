@@ -47,7 +47,7 @@ interface SideSpec {
 interface CopySpec {
   source: SideSpec;
   sink: SideSpec;
-  mode?: 'Full' | 'Incremental';
+  mode?: 'Full' | 'Incremental' | 'CDC';
   writeMode?: 'Append' | 'Overwrite' | 'Merge';
   watermarkCol?: string;
   sourceName?: string;
@@ -86,6 +86,33 @@ async function ensureControlTable(server: string, database: string): Promise<voi
     'ON tgt.source = src.source AND tgt.table_name = src.table_name ' +
     'WHEN MATCHED THEN UPDATE SET last_value = @last_value, updated_utc = SYSDATETIMEOFFSET() ' +
     'WHEN NOT MATCHED THEN INSERT (source, table_name, last_value) VALUES (@source, @table_name, @last_value); END;');
+}
+
+/**
+ * Idempotently ensure the dbo.copy_change_version control table +
+ * dbo.usp_write_change_version stored procedure exist in the control DB. This is
+ * the CDC (native SQL change-tracking) analogue of the watermark control table:
+ * instead of a user watermark column it persists the SQL Server change-tracking
+ * checkpoint (SYS_CHANGE_VERSION) between runs. Real DDL via TDS+AAD.
+ */
+async function ensureChangeVersionTable(server: string, database: string): Promise<void> {
+  await executeQuery(server, database,
+    "IF OBJECT_ID('dbo.copy_change_version','U') IS NULL " +
+    'CREATE TABLE dbo.copy_change_version (' +
+    '  source nvarchar(256) NOT NULL,' +
+    '  table_name nvarchar(256) NOT NULL,' +
+    '  sync_version bigint NULL,' +
+    '  updated_utc datetimeoffset NOT NULL CONSTRAINT DF_copy_change_version_updated DEFAULT SYSDATETIMEOFFSET(),' +
+    '  CONSTRAINT PK_copy_change_version PRIMARY KEY (source, table_name));');
+  await executeQuery(server, database,
+    'CREATE OR ALTER PROCEDURE dbo.usp_write_change_version ' +
+    '@source nvarchar(256), @table_name nvarchar(256), @sync_version bigint AS BEGIN ' +
+    'SET NOCOUNT ON; ' +
+    'MERGE dbo.copy_change_version AS tgt ' +
+    'USING (SELECT @source AS source, @table_name AS table_name) AS src ' +
+    'ON tgt.source = src.source AND tgt.table_name = src.table_name ' +
+    'WHEN MATCHED THEN UPDATE SET sync_version = @sync_version, updated_utc = SYSDATETIMEOFFSET() ' +
+    'WHEN NOT MATCHED THEN INSERT (source, table_name, sync_version) VALUES (@source, @table_name, @sync_version); END;');
 }
 
 function splitTable(t: string): { schema: string; table: string } {
@@ -268,6 +295,96 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
   };
 }
 
+/**
+ * CDC (native SQL change-tracking) pipeline. Mirrors the change-tracking tutorial
+ * (learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-change-tracking-feature-portal):
+ *
+ *   LookupOldChangeVersion (Script, control DB) — reads stored sync_version
+ *     → LookupNewChangeVersion (Script, source DB) — CHANGE_TRACKING_CURRENT_VERSION()
+ *       → IncrementalCopyActivity (Copy) — net changes via CHANGETABLE(CHANGES <t>, @old)
+ *         → UpdateChangeVersion (StoredProcedure) — persists the new sync_version
+ *
+ * Unlike Incremental mode (which needs a user watermark column and only sees
+ * inserts/updates ≤ MAX), CDC captures inserts, updates AND deletes between two
+ * SYS_CHANGE_VERSION checkpoints. Requires CHANGE_TRACKING enabled on the source
+ * DB + table. Always upserts by key (writeMode is forced to Merge).
+ */
+function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: string): AdfPipeline {
+  const sourceTable = spec.source.sourceTable!;
+  const sourceName = spec.sourceName || sourceTable;
+  const tx = translator(spec.mappings);
+  const oldVal = "@{activity('LookupOldChangeVersion').output.resultSets[0].rows[0].sync_version}";
+  const newVal = "@{activity('LookupNewChangeVersion').output.resultSets[0].rows[0].current_version}";
+  // Join the change table (net changes since the last sync version) back to the
+  // base table to pull the current row image. SYS_CHANGE_OPERATION exposes the
+  // op (I/U/D) for downstream merge/delete handling.
+  const cdcQuery =
+    `SELECT ct.SYS_CHANGE_VERSION, ct.SYS_CHANGE_OPERATION, t.* ` +
+    `FROM CHANGETABLE(CHANGES ${sourceTable}, ${oldVal}) AS ct ` +
+    `LEFT JOIN ${sourceTable} AS t ON ` +
+    `ct.SYS_CHANGE_VERSION <= ${newVal}`;
+  return {
+    name: `loom-copy-${itemId}`,
+    properties: {
+      description: `Loom copy-job ${itemId} (CDC · change tracking)`,
+      activities: [
+        {
+          name: 'LookupOldChangeVersion',
+          type: 'Script',
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{
+              type: 'Query',
+              text:
+                `SELECT ISNULL(sync_version, 0) AS sync_version ` +
+                `FROM dbo.copy_change_version WHERE source = '${sourceName}' AND table_name = '${sourceTable}'`,
+            }],
+          },
+        },
+        {
+          name: 'LookupNewChangeVersion',
+          type: 'Script',
+          linkedServiceName: { referenceName: spec.source.linkedService, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{ type: 'Query', text: 'SELECT CHANGE_TRACKING_CURRENT_VERSION() AS current_version' }],
+          },
+        },
+        {
+          name: 'IncrementalCopyActivity',
+          type: 'Copy',
+          dependsOn: [
+            { activity: 'LookupOldChangeVersion', dependencyConditions: ['Succeeded'] },
+            { activity: 'LookupNewChangeVersion', dependencyConditions: ['Succeeded'] },
+          ],
+          inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
+          outputs: [{ referenceName: snkDs, type: 'DatasetReference' }],
+          typeProperties: {
+            source: { type: spec.source.type, sqlReaderQuery: cdcQuery },
+            sink: sinkProps(spec),
+            ...(tx ? { translator: tx } : {}),
+            enableStaging: false,
+          },
+        },
+        {
+          name: 'UpdateChangeVersion',
+          type: 'SqlServerStoredProcedure',
+          dependsOn: [{ activity: 'IncrementalCopyActivity', dependencyConditions: ['Succeeded'] }],
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            storedProcedureName: 'dbo.usp_write_change_version',
+            storedProcedureParameters: {
+              source: { value: sourceName, type: 'String' },
+              table_name: { value: sourceTable, type: 'String' },
+              sync_version: { value: newVal, type: 'Int64' },
+            },
+          },
+        },
+      ],
+      annotations: ['loom', 'copy-job', itemId, 'cdc'],
+    },
+  };
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
@@ -287,7 +404,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!spec.sink.table) {
       return jerr('a destination table / path is required', 400);
     }
-    const mode = spec.mode === 'Incremental' ? 'Incremental' : 'Full';
+    const mode = spec.mode === 'Incremental' ? 'Incremental' : spec.mode === 'CDC' ? 'CDC' : 'Full';
 
     const controlServer = process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER;
     if (mode === 'Incremental') {
@@ -309,6 +426,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         );
       }
     }
+    if (mode === 'CDC') {
+      if (!spec.source.sourceTable) {
+        return jerr('a source table is required for CDC copy', 400);
+      }
+      if (!isSqlSource(spec.source.type)) {
+        return jerr('CDC copy requires a SQL-family source with native change tracking (Azure SQL DB, SQL Server, or SQL MI). Enable ALTER DATABASE … SET CHANGE_TRACKING = ON and ALTER TABLE … ENABLE CHANGE_TRACKING on the source.', 400);
+      }
+      if (!controlServer) {
+        return jerr(
+          'LOOM_COPYJOB_CONTROL_SQL_SERVER is not configured, so the change-version control table cannot be reached. ' +
+          'Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and set LOOM_COPYJOB_CONTROL_SQL_SERVER ' +
+          '(+ LOOM_COPYJOB_CONTROL_SQL_DB) on the console app. Full-mode copy works without this.',
+          503,
+        );
+      }
+    }
 
     // Datasets — real ADF child resources referenced by the Copy activity.
     const srcDs = `loom-copy-${id}-src`;
@@ -316,18 +449,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await upsertDataset(srcDs, buildDataset(srcDs, spec.source.type, spec.source.linkedService, spec.source.sourceTable));
     await upsertDataset(snkDs, buildDataset(snkDs, spec.sink.type, spec.sink.linkedService, spec.sink.table));
 
-    if (mode === 'Incremental') {
-      // Make sure the watermark control table + stored procedure exist (real DDL).
-      await ensureControlTable(controlServer!, process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control');
-      // Control linked service → Azure SQL watermark DB via the factory's MI.
+    if (mode === 'Incremental' || mode === 'CDC') {
+      const controlDb = process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control';
+      // Make sure the relevant control table + stored procedure exist (real DDL).
+      if (mode === 'Incremental') {
+        await ensureControlTable(controlServer!, controlDb);
+      } else {
+        await ensureChangeVersionTable(controlServer!, controlDb);
+      }
+      // Control linked service → Azure SQL control DB via the factory's MI.
       const controlLs: AdfLinkedService = {
         name: CONTROL_LS,
         properties: {
           type: 'AzureSqlDatabase',
-          description: 'Loom copy-job watermark control DB (dbo.copy_watermark).',
+          description: 'Loom copy-job control DB (dbo.copy_watermark / dbo.copy_change_version).',
           typeProperties: {
             server: controlServer,
-            database: process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control',
+            database: controlDb,
             authenticationType: 'SystemAssignedManagedIdentity',
           },
         },
@@ -338,7 +476,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const pipelineName = `loom-copy-${id}`;
     const pipeline = mode === 'Incremental'
       ? incrementalPipeline(id, spec, srcDs, snkDs)
-      : fullPipeline(id, spec, srcDs, snkDs);
+      : mode === 'CDC'
+        ? cdcPipeline(id, spec, srcDs, snkDs)
+        : fullPipeline(id, spec, srcDs, snkDs);
     await upsertPipeline(pipelineName, pipeline);
 
     const run = await runPipeline(pipelineName);

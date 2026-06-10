@@ -25,6 +25,33 @@ describe('CopyJobEditor', () => {
         ok: true, configured: true,
         watermark: { source: 'orders', table_name: 'dbo.orders', last_value: '2026-01-01T00:00:00Z', updated_utc: '2026-01-01T00:05:00Z' },
       }),
+      '/api/items/copy-job/cj-1/change-version': () => ({
+        ok: true, configured: true,
+        changeVersion: { source: 'orders', table_name: 'dbo.orders', sync_version: 42, updated_utc: '2026-01-01T00:05:00Z' },
+      }),
+      '/api/items/copy-job/cj-cdc/runs': () => ({ ok: true, runs: [] }),
+      '/api/items/copy-job/cj-cdc/watermark': () => ({ ok: true, configured: true, watermark: null }),
+      '/api/items/copy-job/cj-cdc/change-version': () => ({
+        ok: true, configured: true,
+        changeVersion: { source: 'orders', table_name: 'dbo.orders', sync_version: 42, updated_utc: '2026-01-01T00:05:00Z' },
+      }),
+      '/api/items/copy-job/cj-cdc': () => ({
+        ok: true,
+        item: {
+          id: 'cj-cdc',
+          workspaceId: 'ws-1',
+          displayName: 'copy-cdc',
+          state: {
+            source: { linkedService: 'AzureSql_src', type: 'AzureSqlSource', sourceTable: 'dbo.orders' },
+            sink: { linkedService: 'AzureSql_sink', type: 'AzureSqlSink', table: 'bronze.orders' },
+            mode: 'CDC',
+            writeMode: 'Merge',
+            mergeKeys: 'id',
+            sourceName: 'orders',
+            mappings: [],
+          },
+        },
+      }),
       '/api/items/copy-job/cj-1': () => ({
         ok: true,
         item: {
@@ -71,6 +98,17 @@ describe('CopyJobEditor', () => {
     // Watermark panel renders the last value read from the control table.
     await waitFor(() => {
       expect(screen.getByText('2026-01-01T00:00:00Z')).toBeInTheDocument();
+    });
+  });
+
+  it('shows CDC mode + the change-tracking sync version', async () => {
+    render(<CopyJobEditor item={makeItem('copy-job', 'Copy Job')} id="cj-cdc" />);
+    await waitFor(() => {
+      expect(screen.getByText(/CDC \(change tracking\)/)).toBeInTheDocument();
+    });
+    // Change-tracking panel renders the sync_version read from dbo.copy_change_version.
+    await waitFor(() => {
+      expect(screen.getByText('42')).toBeInTheDocument();
     });
   });
 });

@@ -4,13 +4,14 @@ Source UI:
 - https://learn.microsoft.com/fabric/data-factory/what-is-copy-job
 - https://learn.microsoft.com/fabric/data-factory/create-copy-job
 - Incremental pattern grounded in https://learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal
+- CDC (change-tracking) pattern grounded in https://learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-change-tracking-feature-portal and https://learn.microsoft.com/fabric/data-factory/cdc-copy-job-azure-sql-database
 
 Loom item: `copy-job` · Editor: `lib/editors/copy-job-editor.tsx` ·
 Wizard: `lib/components/pipeline/copy-job/wizard.tsx`
 
 Azure-native backend (no-fabric-dependency.md): **Azure Data Factory** pipeline +
-**Azure SQL** watermark control table. No Microsoft Fabric capacity / workspace
-is required.
+**Azure SQL** control tables (watermark for Incremental, change-version for CDC).
+No Microsoft Fabric capacity / workspace is required.
 
 ## Fabric Copy job feature inventory
 
@@ -18,8 +19,9 @@ is required.
 |---|---|---|
 | 1 | Guided wizard: choose **source** connector + dataset | Connectors → ADF Linked Services |
 | 2 | Choose **destination** connector + table/path | |
-| 3 | **Copy mode**: Full vs Incremental | Incremental tracks a watermark column |
+| 3 | **Copy mode**: Full vs Incremental vs CDC | Incremental tracks a watermark column; CDC uses native SQL change tracking |
 | 4 | **Incremental column** selection | The monotonically-increasing watermark |
+| 4b | **CDC mode** (SQL sources) — no incremental column needed | Native change tracking captures inserts, updates AND deletes; first run full-loads, then net changes via `CHANGETABLE` |
 | 5 | **Update method**: Append / Overwrite / Merge (upsert) | Merge needs key column(s) |
 | 6 | **Column mapping** source → destination | Optional; default copy-by-name |
 | 7 | **Review + create**, then run | |
@@ -33,14 +35,16 @@ is required.
 |---|---|---|
 | 1 | ✅ Wizard Step 1 "Source" — Linked Service dropdown (`/api/adf/linked-services`) + type + source table + query override | ADF `listLinkedServices` |
 | 2 | ✅ Wizard Step 2 "Destination" — Linked Service + type + table/path | ADF |
-| 3 | ✅ Wizard Step 3 "Mode" — Full / Incremental cards | — |
+| 3 | ✅ Wizard Step 3 "Mode" — Full / Incremental / CDC cards (CDC card source-gated: enabled only for SQL sources) | — |
 | 4 | ✅ Step 3 watermark column + control-table key (incremental) | — |
+| 4b | ✅ Step 3 CDC — source name (control-table key); no watermark column required; Update method forced to Merge | — |
 | 5 | ✅ Wizard Step 4 "Update" — Append / Overwrite / Merge cards + merge keys | ADF sink `preCopyScript` (Overwrite) / `writeBehavior:upsert` (Merge) |
 | 6 | ✅ Wizard Step 5 "Mapping" — `KeyValueGrid` (no raw JSON) | ADF `TabularTranslator` |
 | 7 | ✅ Wizard Step 6 "Review" — summary table + Save & apply | `PUT /api/items/copy-job/[id]` → Cosmos |
-| 8 | ✅ Run now — Full = 1 Copy activity; Incremental = Lookup→Lookup→Copy→StoredProcedure | `POST .../run` → `upsertDataset`/`upsertPipeline`/`runPipeline` (adf-client) |
+| 8 | ✅ Run now — Full = 1 Copy activity; Incremental = Lookup→Lookup→Copy→StoredProcedure; CDC = Lookup→Lookup→Copy(`CHANGETABLE`)→StoredProcedure | `POST .../run` → `upsertDataset`/`upsertPipeline`/`runPipeline` (adf-client) |
 | 9 | ✅ Runs tab — real ADF pipeline runs | `GET .../runs` → `listPipelineRuns` (adf-client) |
 | 10 | ✅ Watermark panel — reads `dbo.copy_watermark` | `GET .../watermark` → `executeParameterized` (azure-sql-client) |
+| 10b | ✅ Change-tracking panel — reads `dbo.copy_change_version` (sync_version) | `GET .../change-version` → `executeParameterized` (azure-sql-client) |
 
 Honest infra gate (no-vaporware.md): when `LOOM_COPYJOB_CONTROL_SQL_SERVER` is
 unset the Watermark panel shows a `MessageBar intent="warning"` naming the env
@@ -56,10 +60,18 @@ Zero ❌, zero stub banners.
   `LookupNewWatermark` (Script `MAX(<col>)` on the source) →
   `IncrementalCopyActivity` (Copy, `WHERE <col> > old AND <= new`) →
   `UpdateWatermark` (`SqlServerStoredProcedure` → `dbo.usp_write_watermark`).
-- **Control table** — `dbo.copy_watermark` (PK `source,table_name`) +
-  `dbo.usp_write_watermark`. Created by `admin-plane/copy-job-control.bicep` **and**
-  self-healed by the console on first incremental run (`ensureControlTable` via
-  TDS+AAD). The ADF factory MI is granted `db_datareader/db_datawriter/EXECUTE`.
+- **Pipeline (CDC / change tracking)** — the canonical change-tracking pattern:
+  `LookupOldChangeVersion` (Script on `dbo.copy_change_version`) →
+  `LookupNewChangeVersion` (Script `CHANGE_TRACKING_CURRENT_VERSION()` on the source) →
+  `IncrementalCopyActivity` (Copy reading `CHANGETABLE(CHANGES <t>, <old>)` net changes) →
+  `UpdateChangeVersion` (`SqlServerStoredProcedure` → `dbo.usp_write_change_version`).
+  Requires `CHANGE_TRACKING` enabled on the source DB + table.
+- **Control tables** — `dbo.copy_watermark` (+ `dbo.usp_write_watermark`) and
+  `dbo.copy_change_version` (PK `source,table_name`, + `dbo.usp_write_change_version`).
+  Created by `admin-plane/copy-job-control.bicep` **and** self-healed by the
+  console on first incremental/CDC run (`ensureControlTable` /
+  `ensureChangeVersionTable` via TDS+AAD). The ADF factory MI is granted
+  `db_datareader/db_datawriter/EXECUTE` on both procs.
 - **Env** — `LOOM_COPYJOB_CONTROL_SQL_SERVER` + `LOOM_COPYJOB_CONTROL_SQL_DB`
   added to `admin-plane/main.bicep` console app env.
 
@@ -70,3 +82,16 @@ Zero ❌, zero stub banners.
 3. Insert new source rows.
 4. **Run now** again → only the delta is copied; `last_value` advances.
 5. Watermark panel + Runs tab reflect real Azure responses (no mock).
+
+### CDC mode
+
+1. On the source DB run `ALTER DATABASE … SET CHANGE_TRACKING = ON` and
+   `ALTER TABLE <t> ENABLE CHANGE_TRACKING`.
+2. Configure a copy job with a SQL source, pick **CDC (change tracking)** on the
+   Mode step (the card is disabled for non-SQL sources), and Merge keys on Update.
+3. **Run now** → first run captures changes from version 0; a
+   `dbo.copy_change_version` row is written with the current `SYS_CHANGE_VERSION`.
+4. Insert/update/delete source rows.
+5. **Run now** again → only net changes (inserts + updates + deletes) are copied
+   via `CHANGETABLE`; `sync_version` advances.
+6. Change-tracking panel + Runs tab reflect real Azure responses (no mock).

@@ -1,9 +1,11 @@
 // =====================================================================
-// Copy Job watermark control table (F14)
+// Copy Job control tables (F14 watermark + CDC change-tracking)
 //
-// Creates dbo.copy_watermark + dbo.usp_write_watermark in an existing Azure
-// SQL database, and (optionally) grants the ADF factory managed identity and
-// the Loom console UAMI the rights they need to read/write the watermark.
+// Creates dbo.copy_watermark + dbo.usp_write_watermark (Incremental mode) AND
+// dbo.copy_change_version + dbo.usp_write_change_version (CDC / native SQL
+// change-tracking mode) in an existing Azure SQL database, and (optionally)
+// grants the ADF factory managed identity and the Loom console UAMI the rights
+// they need to read/write both control tables.
 //
 // This is the Azure-native backing for the Fabric Copy job's incremental
 // watermark (no-fabric-dependency.md). The Loom console ALSO self-heals the
@@ -106,6 +108,29 @@ BEGIN
   WHEN NOT MATCHED THEN INSERT (source, table_name, last_value) VALUES (@source, @table_name, @last_value);
 END;
 GO
+-- CDC (native SQL change-tracking) checkpoint store — the SYS_CHANGE_VERSION
+-- analogue of the watermark table. Used by Copy job CDC mode.
+IF OBJECT_ID('dbo.copy_change_version','U') IS NULL
+CREATE TABLE dbo.copy_change_version (
+  source        nvarchar(256)  NOT NULL,
+  table_name    nvarchar(256)  NOT NULL,
+  sync_version  bigint         NULL,
+  updated_utc   datetimeoffset NOT NULL CONSTRAINT DF_copy_change_version_updated DEFAULT SYSDATETIMEOFFSET(),
+  CONSTRAINT PK_copy_change_version PRIMARY KEY (source, table_name)
+);
+GO
+CREATE OR ALTER PROCEDURE dbo.usp_write_change_version
+  @source nvarchar(256), @table_name nvarchar(256), @sync_version bigint
+AS
+BEGIN
+  SET NOCOUNT ON;
+  MERGE dbo.copy_change_version AS tgt
+  USING (SELECT @source AS source, @table_name AS table_name) AS src
+    ON tgt.source = src.source AND tgt.table_name = src.table_name
+  WHEN MATCHED THEN UPDATE SET sync_version = @sync_version, updated_utc = SYSDATETIMEOFFSET()
+  WHEN NOT MATCHED THEN INSERT (source, table_name, sync_version) VALUES (@source, @table_name, @sync_version);
+END;
+GO
 SQL
 
 # Optional grants — create contained DB users for the console UAMI + ADF MI.
@@ -124,6 +149,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'${ADF_FACTOR
 ALTER ROLE db_datareader ADD MEMBER [${ADF_FACTORY}];
 ALTER ROLE db_datawriter ADD MEMBER [${ADF_FACTORY}];
 GRANT EXECUTE ON dbo.usp_write_watermark TO [${ADF_FACTORY}];
+GRANT EXECUTE ON dbo.usp_write_change_version TO [${ADF_FACTORY}];
 GO
 SQL
 fi
@@ -133,10 +159,12 @@ sqlcmd -S "${SQL_SERVER}" -d "${SQL_DB}" \
   --authentication-method ActiveDirectoryManagedIdentity -U "${UAMI_CLIENT_ID}" \
   -i /tmp/ddl.sql
 
-echo '{"status":"applied","table":"dbo.copy_watermark","proc":"dbo.usp_write_watermark"}' > "$AZ_SCRIPTS_OUTPUT_PATH"
+echo '{"status":"applied","table":"dbo.copy_watermark","proc":"dbo.usp_write_watermark","cdcTable":"dbo.copy_change_version","cdcProc":"dbo.usp_write_change_version"}' > "$AZ_SCRIPTS_OUTPUT_PATH"
 '''
   }
 }
 
 output controlTableName string = 'dbo.copy_watermark'
 output writeProcedureName string = 'dbo.usp_write_watermark'
+output changeVersionTableName string = 'dbo.copy_change_version'
+output writeChangeVersionProcedureName string = 'dbo.usp_write_change_version'
