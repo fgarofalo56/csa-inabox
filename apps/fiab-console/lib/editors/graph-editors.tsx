@@ -11,19 +11,28 @@
  *    semantics) are dispatched via the existing /api/items/kql-database/[id]/query
  *    route, so no new BFF endpoints required here.
  *  - Vector store: backend picker (Cosmos vCore / AI Search / pgvector) +
- *    create-index form. Live similarity test deferred to v3.x — for now we
- *    persist the index spec into item state.
+ *    create-index form. Live similarity test is fully wired against Azure AI
+ *    Search: POST /api/items/vector-store/[id]/search dispatches to
+ *    foundry-client.vectorSearch() (k-NN + optional hybrid). Requires the
+ *    LOOM_AI_SEARCH_SERVICE env var and the Console UAMI 'Search Index Data
+ *    Contributor' RBAC on the search service (see ai-search.bicep) — without
+ *    them the route returns a 503 honest gate naming both. The non-ai-search
+ *    backends (cosmos-nosql / cosmos-vcore / pgvector) persist their spec to
+ *    Cosmos and surface an honest infra gate in the editor.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Subtitle2, Badge, Button, Input, Label, Spinner,
-  Tab, TabList, Textarea,
+  Tab, TabList, Textarea, Dropdown, Option, Field, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, Add20Regular, Search20Regular } from '@fluentui/react-icons';
+import {
+  Play20Regular, Add20Regular, Search20Regular, ArrowClockwise20Regular,
+  Save20Regular, DocumentSearch24Regular, Database24Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -40,9 +49,36 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: 12 },
+  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 12 },
   field: { display: 'flex', flexDirection: 'column', gap: 4 },
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  // Vector store surfaces
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  searchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
+  fullField: { flex: 1, minWidth: 220 },
+  kField: { width: 96 },
+  sectionHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
+  },
+  jsonView: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+    maxHeight: 320, overflow: 'auto', margin: 0,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground1,
+    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+  },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, textAlign: 'center',
+    ...shorthands.padding(tokens.spacingVerticalXXXL, tokens.spacingHorizontalL),
+    color: tokens.colorNeutralForeground3,
+  },
+  emptyIcon: { color: tokens.colorNeutralForeground4 },
+  scoreCell: { fontVariantNumeric: 'tabular-nums', fontFamily: tokens.fontFamilyMonospace },
+  monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
 });
 
 const SAMPLE_GREMLIN = `// Find vertices labeled "person", their friends, and the company they work for.
@@ -459,6 +495,111 @@ const VECTOR_BACKEND_DESCRIPTIONS: Record<VectorBackend, string> = {
 // honest gate — they aren't reachable from this Loom build's network plane.
 const AI_SEARCH_BACKEND: VectorBackend = 'ai-search';
 
+/**
+ * Renders live k-NN search hits as a sortable results table when the rows share a
+ * tabular shape, falling back to formatted JSON for arbitrary payloads. The raw
+ * backend response is always available via the "Raw JSON" toggle.
+ */
+function VectorSearchResults({ result }: { result: any }) {
+  const s = useStyles();
+  const rows: any[] = Array.isArray(result.result?.value)
+    ? result.result.value
+    : Array.isArray(result.result) ? result.result : [];
+  const [sortKey, setSortKey] = useState<string>('@search.score');
+  const [sortDesc, setSortDesc] = useState(true);
+  const [showRaw, setShowRaw] = useState(false);
+
+  // Derive the column set (cap scalar columns; collapse vector/object fields).
+  const columns = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of rows.slice(0, 25)) {
+      for (const key of Object.keys(row || {})) {
+        const v = (row as any)[key];
+        if (Array.isArray(v) || (v && typeof v === 'object')) continue;
+        seen.add(key);
+      }
+    }
+    const all = Array.from(seen);
+    // Score columns first, then id-ish, then the rest.
+    return all.sort((a, b) => {
+      const rank = (k: string) => (k.startsWith('@search') ? 0 : /id|key/i.test(k) ? 1 : 2);
+      return rank(a) - rank(b) || a.localeCompare(b);
+    }).slice(0, 8);
+  }, [rows]);
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return rows;
+    return [...rows].sort((a, b) => {
+      const av = a?.[sortKey], bv = b?.[sortKey];
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const cmp = typeof av === 'number' && typeof bv === 'number'
+        ? av - bv : String(av).localeCompare(String(bv));
+      return sortDesc ? -cmp : cmp;
+    });
+  }, [rows, sortKey, sortDesc]);
+
+  const toggleSort = (key: string) => {
+    if (key === sortKey) setSortDesc((d) => !d);
+    else { setSortKey(key); setSortDesc(true); }
+  };
+
+  const isScore = (k: string) => k === '@search.score' || k === '@search.rerankerScore';
+
+  return (
+    <>
+      <div className={s.toolbar}>
+        <Caption1>{result.count ?? rows.length} result(s)</Caption1>
+        {result.result?.['@search.coverage'] != null && (
+          <Badge appearance="tint" color="informative">coverage {result.result['@search.coverage']}%</Badge>
+        )}
+        <Button size="small" appearance="subtle" onClick={() => setShowRaw((v) => !v)}>
+          {showRaw ? 'Table view' : 'Raw JSON'}
+        </Button>
+      </div>
+      {showRaw || columns.length === 0 ? (
+        <pre className={s.jsonView}>{JSON.stringify(result.result?.value || result.result, null, 2)}</pre>
+      ) : (
+        <div className={s.tableWrap}>
+          <Table aria-label="Vector search results" size="small">
+            <TableHeader>
+              <TableRow>
+                {columns.map((c) => (
+                  <TableHeaderCell
+                    key={c}
+                    onClick={() => toggleSort(c)}
+                    sortDirection={sortKey === c ? (sortDesc ? 'descending' : 'ascending') : undefined}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    {c.replace('@search.', '')}
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map((row, i) => (
+                <TableRow key={row?.id ?? row?.key ?? i}>
+                  {columns.map((c) => {
+                    const v = row?.[c];
+                    const display = isScore(c) && typeof v === 'number' ? v.toFixed(4) : String(v ?? '');
+                    return (
+                      <TableCell key={c} className={isScore(c) ? s.scoreCell : undefined}>
+                        {isScore(c) && typeof v === 'number'
+                          ? <Badge appearance="tint" color="brand">{display}</Badge>
+                          : display}
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [tab, setTab] = useState<'schema' | 'documents' | 'search'>('schema');
@@ -473,6 +614,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   // Live index schema (from AI Search) + action results.
   const [liveIndex, setLiveIndex] = useState<any>(null);
   const [schemaMsg, setSchemaMsg] = useState<any>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createResult, setCreateResult] = useState<any>(null);
 
@@ -540,7 +682,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   // Load the live AI Search index schema.
   const loadSchema = useCallback(async () => {
     if (!isAiSearch || !indexName) return;
-    setSchemaMsg(null); setLiveIndex(null);
+    setSchemaMsg(null); setLiveIndex(null); setSchemaLoading(true);
     try {
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}`);
       const j = await r.json();
@@ -548,6 +690,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       setLiveIndex(j.exists ? j.index : null);
       if (!j.exists) setSchemaMsg({ ok: true, info: `Index "${indexName}" not created yet — click Create index.` });
     } catch (e: any) { setSchemaMsg({ ok: false, error: e?.message || String(e) }); }
+    finally { setSchemaLoading(false); }
   }, [isAiSearch, indexName, id]);
 
   useEffect(() => { if (isAiSearch) loadSchema(); }, [isAiSearch, loadSchema]);
@@ -610,13 +753,13 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Index', actions: [
-        { label: saving ? 'Saving…' : 'Save spec', onClick: saving ? undefined : () => persistSpec(), disabled: saving },
-        { label: creating ? 'Creating…' : 'Create index', onClick: creating ? undefined : createIndex, disabled: creating },
-        { label: 'Reload schema', onClick: loadSchema, disabled: !isAiSearch },
+        { label: saving ? 'Saving…' : 'Save spec', icon: <Save20Regular />, onClick: saving ? undefined : () => persistSpec(), disabled: saving },
+        { label: creating ? 'Creating…' : 'Create index', icon: <Add20Regular />, onClick: creating ? undefined : createIndex, disabled: creating },
+        { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !isAiSearch },
       ]},
       { label: 'Test', actions: [
-        { label: 'Documents', onClick: () => setTab('documents') },
-        { label: 'Vector search', onClick: () => setTab('search') },
+        { label: 'Documents', icon: <Add20Regular />, onClick: () => setTab('documents') },
+        { label: 'Vector search', icon: <Search20Regular />, onClick: () => setTab('search') },
       ]},
     ]},
   ], [saving, persistSpec, creating, createIndex, loadSchema, isAiSearch]);
@@ -632,26 +775,44 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <div className={s.field}>
-            <Label>Backend</Label>
-            <select value={backend} onChange={(e) => { setBackend(e.target.value as VectorBackend); setDirty(true); }} style={{ padding: 6 }}>
+          <div className={s.sectionHeader}>
+            <Database24Regular className={s.emptyIcon} />
+            <Subtitle2>Index spec</Subtitle2>
+          </div>
+          <Field label="Backend" hint="Azure-native vector store backing this index.">
+            <Dropdown
+              value={VECTOR_BACKEND_DESCRIPTIONS[backend]}
+              selectedOptions={[backend]}
+              onOptionSelect={(_, d) => { if (d.optionValue) { setBackend(d.optionValue as VectorBackend); setDirty(true); } }}
+            >
               {(['ai-search', 'cosmos-nosql', 'cosmos-vcore', 'pgvector'] as VectorBackend[]).map(b => (
-                <option key={b} value={b}>{VECTOR_BACKEND_DESCRIPTIONS[b]}</option>
+                <Option key={b} value={b} text={VECTOR_BACKEND_DESCRIPTIONS[b]}>{VECTOR_BACKEND_DESCRIPTIONS[b]}</Option>
               ))}
-            </select>
-          </div>
-          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_: unknown, d: any) => { setIndexName(d.value); setDirty(true); }} /></div>
-          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }} /></div>
-          <div className={s.field}>
-            <Label>Metric</Label>
-            <select value={metric} onChange={(e) => { setMetric(e.target.value as any); setDirty(true); }} style={{ padding: 6 }}>
-              <option value="cosine">cosine</option>
-              <option value="euclidean">euclidean</option>
-              <option value="dotProduct">dotProduct</option>
-            </select>
-          </div>
-          {dirty && <Badge appearance="outline" color="warning">unsaved spec</Badge>}
-          {savedAt && !dirty && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
+            </Dropdown>
+          </Field>
+          <Field label="Index name">
+            <Input value={indexName} onChange={(_: unknown, d: any) => { setIndexName(d.value); setDirty(true); }} />
+          </Field>
+          <Field label="Dimensions" hint="Length of each embedding vector (e.g. 1536 for text-embedding-3-small).">
+            <Input type="number" value={String(dim)} onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }} />
+          </Field>
+          <Field label="Metric">
+            <Dropdown
+              value={metric}
+              selectedOptions={[metric]}
+              onOptionSelect={(_, d) => { if (d.optionValue) { setMetric(d.optionValue as any); setDirty(true); } }}
+            >
+              <Option value="cosine">cosine</Option>
+              <Option value="euclidean">euclidean</Option>
+              <Option value="dotProduct">dotProduct</Option>
+            </Dropdown>
+          </Field>
+          <Divider />
+          {dirty
+            ? <Badge appearance="outline" color="warning">Unsaved spec</Badge>
+            : savedAt
+              ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>
+              : <Badge appearance="tint" color="informative">New spec</Badge>}
         </div>
       }
       main={
@@ -677,12 +838,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
 
             {tab === 'schema' && (
               <>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex} disabled={creating || saving}>
+                <div className={s.toolbar}>
+                  <Button appearance="primary" icon={creating ? <Spinner size="tiny" /> : <Add20Regular />} onClick={createIndex} disabled={creating || saving}>
                     {creating ? 'Creating…' : 'Create / update index'}
                   </Button>
-                  <Button onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
-                  <Button onClick={loadSchema} disabled={!isAiSearch}>Reload schema</Button>
+                  <Button icon={<Save20Regular />} onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
+                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!isAiSearch || schemaLoading}>Reload schema</Button>
                 </div>
                 {createResult && (
                   <MessageBar intent={createResult.ok ? 'success' : createResult.deferred ? 'warning' : 'error'}>
@@ -699,9 +860,21 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                   </MessageBar>
                 )}
                 {schemaMsg?.info && <MessageBar intent="info"><MessageBarBody>{schemaMsg.info}</MessageBarBody></MessageBar>}
+                {schemaLoading && <Spinner size="small" label="Loading live index schema…" labelPosition="after" />}
+                {!schemaLoading && !liveIndex && isAiSearch && !schemaMsg && (
+                  <div className={s.emptyState}>
+                    <Database24Regular className={s.emptyIcon} fontSize={40} />
+                    <Subtitle2>No live index yet</Subtitle2>
+                    <Caption1>Set the index name, dimensions, and metric on the left, then choose <strong>Create / update index</strong> to provision it on Azure AI Search.</Caption1>
+                  </div>
+                )}
                 {liveIndex && (
                   <>
-                    <Subtitle2>Live index fields — {liveIndex.name}</Subtitle2>
+                    <div className={s.sectionHeader}>
+                      <Database24Regular className={s.emptyIcon} />
+                      <Subtitle2>Live index fields — {liveIndex.name}</Subtitle2>
+                      <Badge appearance="tint" color="success">{(liveIndex.fields || []).length} fields</Badge>
+                    </div>
                     <Table aria-label="Index fields" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
@@ -711,9 +884,9 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                         {(liveIndex.fields || []).map((f: any) => (
                           <TableRow key={f.name}>
                             <TableCell><strong>{f.name}</strong></TableCell>
-                            <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.type}</TableCell>
-                            <TableCell>{f.key ? 'yes' : ''}</TableCell>
-                            <TableCell>{f.dimensions || ''}</TableCell>
+                            <TableCell className={s.monoCell}>{f.type}</TableCell>
+                            <TableCell>{f.key ? <Badge appearance="tint" color="brand">key</Badge> : ''}</TableCell>
+                            <TableCell className={s.scoreCell}>{f.dimensions || ''}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -725,10 +898,15 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
 
             {tab === 'documents' && (
               <>
-                <Subtitle2>Add documents (mergeOrUpload)</Subtitle2>
+                <div className={s.sectionHeader}>
+                  <Add20Regular className={s.emptyIcon} />
+                  <Subtitle2>Add documents (mergeOrUpload)</Subtitle2>
+                </div>
                 <Caption1>Paste a JSON array of documents. Each must carry the index key (<code>id</code>) and the vector field (<code>{vectorField}</code>: number[{dim}]).</Caption1>
                 <MonacoTextarea value={docsText} onChange={setDocsText} language="json" height={220} minHeight={160} ariaLabel="Documents JSON" />
-                <Button appearance="primary" icon={<Add20Regular />} onClick={uploadDocs} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload documents'}</Button>
+                <div className={s.toolbar}>
+                  <Button appearance="primary" icon={uploading ? <Spinner size="tiny" /> : <Add20Regular />} onClick={uploadDocs} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload documents'}</Button>
+                </div>
                 {uploadResult && (
                   <MessageBar intent={uploadResult.ok ? 'success' : uploadResult.deferred ? 'warning' : 'error'}>
                     <MessageBarBody>
@@ -742,31 +920,39 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
 
             {tab === 'search' && (
               <>
-                <Subtitle2>Vector similarity search</Subtitle2>
-                <div className={s.field}><Label>Query vector (JSON number array, {dim}-dim)</Label>
-                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]" />
+                <div className={s.sectionHeader}>
+                  <Search20Regular className={s.emptyIcon} />
+                  <Subtitle2>Vector similarity search</Subtitle2>
                 </div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                  <div className={s.field} style={{ flex: 1 }}><Label>Hybrid text (optional)</Label>
+                <Field label={`Query vector (JSON number array, ${dim}-dim)`} hint="Paste an embedding to find its nearest neighbours via k-NN.">
+                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]" />
+                </Field>
+                <div className={s.searchRow}>
+                  <Field className={s.fullField} label="Hybrid text (optional)" hint="Adds BM25 keyword ranking fused with the vector score.">
                     <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="keyword filter (BM25 + vector)" />
-                  </div>
-                  <div className={s.field}><Label>k (neighbors)</Label>
-                    <Input type="number" value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} style={{ width: 80 }} />
-                  </div>
-                  <Button appearance="primary" icon={<Search20Regular />} onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Search'}</Button>
+                  </Field>
+                  <Field className={s.kField} label="k (neighbors)">
+                    <Input type="number" min={1} value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} />
+                  </Field>
+                  <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : <Search20Regular />} onClick={runSearch} disabled={searching || !searchVec.trim()}>{searching ? 'Searching…' : 'Search'}</Button>
                 </div>
                 {searching && <Spinner size="small" label="Running k-NN…" labelPosition="after" />}
-                {searchResult && (
+                {!searching && !searchResult && (
+                  <div className={s.emptyState}>
+                    <DocumentSearch24Regular className={s.emptyIcon} fontSize={40} />
+                    <Subtitle2>No results yet</Subtitle2>
+                    <Caption1>Paste a query vector and choose <strong>Search</strong> to run a live k-NN query against the index.</Caption1>
+                  </div>
+                )}
+                {!searching && searchResult && (
                   searchResult.ok ? (
-                    <>
-                      <Caption1>{searchResult.count} result(s)</Caption1>
-                      <pre style={{ fontSize: 12, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
-                        {JSON.stringify(searchResult.result?.value || searchResult.result, null, 2)}
-                      </pre>
-                    </>
+                    <VectorSearchResults result={searchResult} />
                   ) : (
                     <MessageBar intent={searchResult.deferred ? 'warning' : 'error'}>
-                      <MessageBarBody>{searchResult.error}{searchResult.hint && <><br />{searchResult.hint}</>}</MessageBarBody>
+                      <MessageBarBody>
+                        <MessageBarTitle>{searchResult.deferred ? 'Backend not provisioned' : 'Search failed'}</MessageBarTitle>
+                        {searchResult.error}{searchResult.hint && <><br />{searchResult.hint}</>}
+                      </MessageBarBody>
                     </MessageBar>
                   )
                 )}

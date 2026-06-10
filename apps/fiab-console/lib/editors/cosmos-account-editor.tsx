@@ -49,6 +49,7 @@ import { CosmosConnectPanel } from '@/lib/components/cosmos/cosmos-connect-panel
 import { GremlinGraphCanvas } from './components/gremlin-graph-canvas';
 import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-panel';
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
+import { CosmosScriptEditor } from '@/lib/components/cosmos/cosmos-script-editor';
 import { CosmosMetrics } from './components/cosmos-metrics';
 
 const useStyles = makeStyles({
@@ -184,7 +185,8 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
       // Cosmos Gremlin graph explorer — one tab per account (pinned key).
       tab = { key: 'graph', kind: 'graph', title: 'Graph explorer', closable: true };
     } else {
-      // Script tabs (existing or new sproc/udf/trigger) — honest-gated authoring.
+      // Script tabs (existing or new sproc/udf/trigger) — real ARM authoring +
+      // data-plane execute (CosmosScriptEditor).
       const label =
         a === 'newStoredProcedure' || a === 'storedProcedure' ? 'Stored Procedure'
           : a === 'newUdf' || a === 'udf' ? 'UDF'
@@ -195,7 +197,8 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
       tab = {
         key, kind: a,
         title: sel.scriptName ? `${sel.scriptName}` : `New ${label}`, closable: true,
-        db: sel.db, container: sel.container, scriptName: sel.scriptName,
+        db: sel.db, container: sel.container, partitionKey: sel.partitionKey,
+        scriptName: sel.scriptName,
       };
     }
 
@@ -341,7 +344,15 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
             {(active.kind === 'storedProcedure' || active.kind === 'newStoredProcedure'
               || active.kind === 'udf' || active.kind === 'newUdf'
               || active.kind === 'trigger' || active.kind === 'newTrigger') && (
-              <ScriptGate kind={active.kind} db={active.db} container={active.container} scriptName={active.scriptName} />
+              <CosmosScriptEditor
+                key={active.key}
+                kind={active.kind}
+                db={active.db}
+                container={active.container}
+                scriptName={active.scriptName}
+                partitionKey={active.partitionKey}
+                onSaved={() => { refresh(); closeTab(active.key); }}
+              />
             )}
           </div>
 
@@ -367,36 +378,6 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
         </div>
       }
     />
-  );
-}
-
-/** Honest gate for script authoring/viewing (no data-plane script route yet). */
-function ScriptGate({ kind, db, container, scriptName }: { kind: CosmosAction; db?: string; container?: string; scriptName?: string }) {
-  const isNew = kind === 'newStoredProcedure' || kind === 'newUdf' || kind === 'newTrigger';
-  const noun =
-    kind === 'newStoredProcedure' || kind === 'storedProcedure' ? 'stored procedure'
-      : kind === 'newUdf' || kind === 'udf' ? 'user-defined function'
-        : 'trigger';
-  const restLeaf =
-    noun === 'stored procedure' ? 'storedProcedures'
-      : noun === 'user-defined function' ? 'userDefinedFunctions' : 'triggers';
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <MessageBar intent="warning">
-        <MessageBarBody>
-          <MessageBarTitle>
-            {isNew ? `New ${noun}` : scriptName} — script authoring not yet wired
-          </MessageBarTitle>
-          The studio opens a Monaco JS editor here to {isNew ? 'create' : 'view, edit, or execute'} the{' '}
-          {noun}{scriptName ? <> <code>{scriptName}</code></> : null}
-          {container ? <> on container <code>{db}/{container}</code></> : null}. The navigator already
-          <strong> lists</strong> existing scripts (read-only) from{' '}
-          <code>…/containers/{container || '{container}'}/{restLeaf}</code>; create/edit/execute needs a
-          script read+write route (data-plane <code>/{restLeaf}</code> + <code>x-ms-documentdb</code>
-          headers). Not wired yet — surfaced honestly per no-vaporware.md rather than faked.
-        </MessageBarBody>
-      </MessageBar>
-    </div>
   );
 }
 

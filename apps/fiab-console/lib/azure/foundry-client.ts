@@ -20,7 +20,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope, amlDataPlaneHost } from './cloud-endpoints';
+import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, SEARCH_AAD_SCOPE } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -1092,12 +1092,15 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
 function searchService(): string {
   const s = process.env.LOOM_AI_SEARCH_SERVICE;
   if (!s) throw new NotDeployedError('Azure AI Search',
-    'AI Search is not yet provisioned in this deployment (eastus2 capacity hold). Set LOOM_AI_SEARCH_SERVICE to a deployed service name once available.');
+    "Set LOOM_AI_SEARCH_SERVICE to the bare service name (e.g. search-loom-abc123). " +
+    "Grant the Console UAMI 'Search Index Data Contributor' " +
+    "(8ebe5a00-799e-43f5-93ac-243d3dce84a7) on the search service. " +
+    'See platform/fiab/bicep/modules/admin-plane/ai-search.bicep.');
   return s;
 }
 
 async function searchToken(): Promise<string> {
-  const t = await credential.getToken('https://search.azure.com/.default');
+  const t = await credential.getToken(SEARCH_AAD_SCOPE);
   if (!t?.token) throw new Error('Failed to acquire token for AI Search');
   return t.token;
 }
@@ -1113,7 +1116,7 @@ export interface SearchIndexSummary {
 export async function listIndexes(): Promise<SearchIndexSummary[]> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`https://${svc}.search.windows.net/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (!res.ok) {
@@ -1131,7 +1134,7 @@ export async function listIndexes(): Promise<SearchIndexSummary[]> {
 export async function getIndex(name: string): Promise<any | null> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (res.status === 404) return null;
@@ -1156,7 +1159,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
       return rest;
     });
   }
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(cleaned),
@@ -1171,7 +1174,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
 export async function searchIndex(name: string, query: string, top = 25): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ search: query, top }),
@@ -1196,7 +1199,7 @@ export async function uploadDocuments(name: string, docs: any[]): Promise<{ uplo
   const svc = searchService();
   const tok = await searchToken();
   const value = docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d }));
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -1227,7 +1230,7 @@ export async function vectorSearch(name: string, opts: {
   };
   if (opts.text) body.search = opts.text;
   if (opts.select) body.select = opts.select;
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

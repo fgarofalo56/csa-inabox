@@ -943,6 +943,9 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     deployGovernanceIndex: false
     scriptIdentityId: identity.outputs.uamiConsoleId
     scriptIdentityClientId: identity.outputs.uamiConsoleClientId
+    // Search Index Data Contributor → Console UAMI so the BFF can run the
+    // vector-store data-plane ops (index PUT / docs index / docs search).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
 }
 
