@@ -99,7 +99,36 @@ interface ImportResponse {
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px', maxWidth: '1100px' },
-  steps: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  steps: {
+    display: 'flex',
+    gap: '4px',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    padding: '12px 16px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  step: { display: 'flex', alignItems: 'center', gap: '8px' },
+  stepDot: {
+    width: '24px',
+    height: '24px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '12px',
+    fontWeight: tokens.fontWeightSemibold,
+    backgroundColor: tokens.colorNeutralBackground4,
+    color: tokens.colorNeutralForeground3,
+    flexShrink: 0,
+  },
+  stepDotActive: { backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand },
+  stepDotDone: { backgroundColor: tokens.colorPaletteGreenBackground3, color: tokens.colorNeutralForegroundOnBrand },
+  stepLabelActive: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
+  stepLabelIdle: { color: tokens.colorNeutralForeground3 },
+  stepConnector: { width: '28px', height: '2px', backgroundColor: tokens.colorNeutralStroke2, margin: '0 4px' },
+  stepConnectorDone: { backgroundColor: tokens.colorPaletteGreenBackground3 },
   dropZone: {
     border: `2px dashed ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -116,9 +145,27 @@ const useStyles = makeStyles({
   dropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
   countGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' },
   countCard: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '2px' },
-  countValue: { fontSize: '24px', fontWeight: tokens.fontWeightSemibold },
+  countValue: { fontSize: '24px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: '1.1' },
+  countLabel: { color: tokens.colorNeutralForeground3 },
   actions: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   scriptArea: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px', width: '100%' },
+  findingsToolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' },
+  sevChip: { cursor: 'pointer', userSelect: 'none' },
+  emptyFindings: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+    padding: '24px', marginTop: '8px',
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3,
+  },
+  monoCode: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace',
+    fontSize: '12px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: '1px 5px',
+    borderRadius: tokens.borderRadiusSmall,
+  },
 });
 
 function severityBadge(sev: Severity) {
@@ -140,6 +187,7 @@ export function SqlMigrationWizard() {
   const [scanError, setScanError] = useState<string | null>(null);
 
   const [selectedKinds, setSelectedKinds] = useState<Set<DdlStatement['kind']>>(new Set(KIND_ORDER));
+  const [sevFilter, setSevFilter] = useState<Set<Severity>>(new Set(['error', 'warning', 'info']));
   const [importing, setImporting] = useState(false);
   const [importResp, setImportResp] = useState<ImportResponse | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -147,6 +195,16 @@ export function SqlMigrationWizard() {
   const reset = useCallback(() => {
     setScan(null); setScanError(null); setImportResp(null); setImportError(null);
     setSelectedKinds(new Set(KIND_ORDER));
+    setSevFilter(new Set<Severity>(['error', 'warning', 'info']));
+  }, []);
+
+  const toggleSev = useCallback((sev: Severity) => {
+    setSevFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(sev)) next.delete(sev); else next.add(sev);
+      // never allow an empty filter — re-enable all when the last is removed
+      return next.size === 0 ? new Set<Severity>(['error', 'warning', 'info']) : next;
+    });
   }, []);
 
   const pickFile = useCallback((f: File | null) => {
@@ -242,6 +300,13 @@ export function SqlMigrationWizard() {
   const errorFindings = report?.findings.filter((f) => f.severity === 'error') ?? [];
   const warnFindings = report?.findings.filter((f) => f.severity === 'warning') ?? [];
   const infoFindings = report?.findings.filter((f) => f.severity === 'info') ?? [];
+  const orderedFindings = [...errorFindings, ...warnFindings, ...infoFindings];
+  const visibleFindings = orderedFindings.filter((f) => sevFilter.has(f.severity));
+
+  // Step state drives the progress rail: 1 upload → 2 assess → 3 import.
+  const importDone = !!importResp?.summary;
+  const assessDone = !!report;
+  const currentStep = importDone ? 3 : assessDone ? 3 : file ? 2 : 1;
 
   return (
     <div className={s.root}>
@@ -254,6 +319,29 @@ export function SqlMigrationWizard() {
           schema. No Microsoft Fabric required — the warehouse is backed by Azure
           Synapse.
         </Text>
+      </div>
+
+      {/* Progress rail */}
+      <div className={s.steps} role="list" aria-label="Migration steps">
+        {([
+          [1, 'Upload', !!file],
+          [2, 'Assess', assessDone],
+          [3, 'Import', importDone],
+        ] as const).map(([n, label, done], idx) => {
+          const active = currentStep === n && !done;
+          const prevDone = ([!!file, assessDone] as const)[idx - 1];
+          return (
+            <span key={n} className={s.step} role="listitem" aria-current={active ? 'step' : undefined}>
+              {idx > 0 && <span className={`${s.stepConnector} ${prevDone ? s.stepConnectorDone : ''}`} aria-hidden />}
+              <span className={s.step}>
+                <span className={`${s.stepDot} ${done ? s.stepDotDone : active ? s.stepDotActive : ''}`}>
+                  {done ? <CheckmarkCircle20Filled style={{ fontSize: 16 }} /> : n}
+                </span>
+                <Text size={300} className={active || done ? s.stepLabelActive : s.stepLabelIdle}>{label}</Text>
+              </span>
+            </span>
+          );
+        })}
       </div>
 
       {/* Step 1 — Upload */}
@@ -335,41 +423,76 @@ export function SqlMigrationWizard() {
             ] as const).map(([label, val]) => (
               <Card key={label} className={s.countCard} appearance="subtle">
                 <Text className={s.countValue}>{val}</Text>
-                <Text size={200}>{label}</Text>
+                <Text size={200} className={s.countLabel}>{label}</Text>
               </Card>
             ))}
           </div>
 
           <Divider style={{ margin: '16px 0' }} />
 
-          <Text weight="semibold">
-            Findings ({errorFindings.length} errors · {warnFindings.length} warnings · {infoFindings.length} info)
-          </Text>
+          <Text weight="semibold">Findings</Text>
           {report.findings.length === 0 ? (
             <MessageBar intent="success" style={{ marginTop: 8 }}>
-              <MessageBarBody>No compatibility issues found.</MessageBarBody>
+              <MessageBarBody>
+                <MessageBarTitle>No compatibility issues found</MessageBarTitle>
+                Every object in the package maps cleanly to the Dedicated SQL pool.
+              </MessageBarBody>
             </MessageBar>
           ) : (
-            <Table size="small" aria-label="Compatibility findings" style={{ marginTop: 8 }}>
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Severity</TableHeaderCell>
-                  <TableHeaderCell>Object</TableHeaderCell>
-                  <TableHeaderCell>Issue</TableHeaderCell>
-                  <TableHeaderCell>Handling</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {[...errorFindings, ...warnFindings, ...infoFindings].map((f, i) => (
-                  <TableRow key={`${f.object}-${f.rule}-${i}`}>
-                    <TableCell>{severityBadge(f.severity)}</TableCell>
-                    <TableCell><code>{f.object}</code></TableCell>
-                    <TableCell>{f.message}</TableCell>
-                    <TableCell>{f.remediation || '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <>
+              {/* Severity filter chips — click to show / hide a severity. */}
+              <div className={s.findingsToolbar} role="group" aria-label="Filter findings by severity">
+                {([
+                  ['error', 'danger', errorFindings.length, 'Errors'],
+                  ['warning', 'warning', warnFindings.length, 'Warnings'],
+                  ['info', 'informative', infoFindings.length, 'Info'],
+                ] as const).map(([sev, color, count, label]) => {
+                  const on = sevFilter.has(sev);
+                  return (
+                    <Badge
+                      key={sev}
+                      className={s.sevChip}
+                      color={color}
+                      appearance={on ? 'filled' : 'outline'}
+                      role="checkbox"
+                      aria-checked={on}
+                      tabIndex={0}
+                      onClick={() => toggleSev(sev)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSev(sev); } }}
+                    >
+                      {count} {label}
+                    </Badge>
+                  );
+                })}
+              </div>
+              {visibleFindings.length === 0 ? (
+                <div className={s.emptyFindings}>
+                  <Info20Regular />
+                  <Text size={200}>No findings match the selected severities.</Text>
+                </div>
+              ) : (
+                <Table size="small" aria-label="Compatibility findings" style={{ marginTop: 8 }}>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell style={{ width: 110 }}>Severity</TableHeaderCell>
+                      <TableHeaderCell style={{ width: 220 }}>Object</TableHeaderCell>
+                      <TableHeaderCell>Issue</TableHeaderCell>
+                      <TableHeaderCell>Handling</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleFindings.map((f, i) => (
+                      <TableRow key={`${f.object}-${f.rule}-${i}`}>
+                        <TableCell>{severityBadge(f.severity)}</TableCell>
+                        <TableCell><span className={s.monoCode}>{f.object}</span></TableCell>
+                        <TableCell>{f.message}</TableCell>
+                        <TableCell>{f.remediation || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </>
           )}
 
           {scan?.ddl?.script && (
@@ -469,7 +592,7 @@ export function SqlMigrationWizard() {
                           : <Badge color="danger" appearance="tint" icon={<Warning20Filled />}>Failed</Badge>}
                       </TableCell>
                       <TableCell>{r.kind}</TableCell>
-                      <TableCell><code>{r.name}</code></TableCell>
+                      <TableCell><span className={s.monoCode}>{r.name}</span></TableCell>
                       <TableCell>{r.error || (r.status === 'applied' ? 'OK' : '—')}</TableCell>
                     </TableRow>
                   ))}
