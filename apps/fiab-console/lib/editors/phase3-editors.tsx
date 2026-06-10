@@ -7684,13 +7684,25 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
             <DialogBody>
               <DialogTitle>Add alert (linked Activator)</DialogTitle>
               <DialogContent>
-                <Caption1>
-                  Creates an <strong>Activator</strong> alert linked to this Eventstream and
-                  pre-seeds it with the stream&apos;s source. Loom maps the alert to a real
-                  Azure Monitor scheduled-query rule (Azure-native default — no Microsoft
-                  Fabric Reflex required). The rule fires when the condition below matches
-                  this stream&apos;s events.
-                </Caption1>
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: tokens.spacingHorizontalS,
+                    padding: tokens.spacingVerticalS,
+                    borderRadius: tokens.borderRadiusMedium,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    background: tokens.colorNeutralBackground2,
+                  }}
+                >
+                  <Flash20Regular style={{ flexShrink: 0, marginTop: 2, color: tokens.colorBrandForeground1 }} />
+                  <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                    Creates an <strong>Activator</strong> alert linked to this Eventstream and
+                    pre-seeds it with the stream&apos;s source. Loom maps the alert to a real
+                    Azure Monitor scheduled-query rule (Azure-native default — no Microsoft
+                    Fabric Reflex required). The rule fires when the condition below matches
+                    this stream&apos;s events.
+                  </Caption1>
+                </div>
                 <Field label="Alert name" style={{ marginTop: 12 }}>
                   <Input
                     value={alertName}
@@ -7755,6 +7767,26 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                     />
                   </Field>
                 </div>
+                {/* Live rule preview — mirrors Azure portal's alert condition summary. */}
+                <div
+                  aria-live="polite"
+                  style={{
+                    marginTop: 12,
+                    padding: tokens.spacingVerticalS,
+                    borderRadius: tokens.borderRadiusMedium,
+                    background: tokens.colorNeutralBackground3,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  }}
+                >
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Rule preview</Caption1>
+                  <div style={{ marginTop: 4, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
+                    Fire when <strong>{(alertProperty.trim() || 'value')}</strong>{' '}
+                    {{ gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠' }[alertOperator]}{' '}
+                    <strong>{(alertThreshold.trim() || '0')}</strong>, evaluated every{' '}
+                    {{ PT1M: '1 minute', PT5M: '5 minutes', PT15M: '15 minutes', PT1H: '1 hour' }[alertFrequency]}
+                    {alertEmail.trim() ? <> → email <strong>{alertEmail.trim()}</strong></> : null}.
+                  </div>
+                </div>
                 {alertErr && (
                   <MessageBar intent={alertHint ? 'warning' : 'error'} style={{ marginTop: 12 }}>
                     <MessageBarBody>
@@ -7780,7 +7812,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setAlertOpen(false)} disabled={alertBusy}>Close</Button>
-                <Button appearance="primary" onClick={doAddAlert} disabled={alertBusy}>
+                <Button appearance="primary" icon={<Flash20Regular />} onClick={doAddAlert} disabled={alertBusy || !alertThreshold.trim()}>
                   {alertBusy ? 'Creating…' : 'Create alert'}
                 </Button>
               </DialogActions>
