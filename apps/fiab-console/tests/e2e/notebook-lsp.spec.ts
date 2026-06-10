@@ -20,7 +20,7 @@
  *     tests/e2e/notebook-lsp.spec.ts --trace on
  *
  * Real-data note (no-vaporware): no completion list is mocked. Member rows come
- * from pylsp (pyright) over the WebSocket bridge served at /api/notebook/*/lsp.
+ * from pylsp (pyright) over the WebSocket bridge served at /api/notebook/<id>/lsp.
  */
 import { test, expect } from '@playwright/test';
 import { BASE, signIn, trackConsoleErrors } from './_shared';
