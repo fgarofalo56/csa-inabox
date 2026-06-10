@@ -31,13 +31,14 @@ import {
   Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, Drawer, DrawerHeader,
   DrawerHeaderTitle, DrawerBody, Caption1, Subtitle2, Body1, Field, Input,
-  makeStyles, tokens,
+  Tab, TabList, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
   PlugConnected20Regular, Flow20Regular, Dismiss20Regular, ArrowSync20Regular,
   Pulse24Regular, Flash24Regular,
 } from '@fluentui/react-icons';
+import { BusinessEventsView } from './business-events-view';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -100,6 +101,9 @@ export function RealTimeHubView() {
   const [loadErr, setLoadErr] = useState<{ error: string; hint?: string } | null>(null);
 
   const [q, setQ] = useState('');
+
+  // Top-level Real-Time hub tab: data streams vs business events (Fabric parity).
+  const [hubTab, setHubTab] = useState<'streams' | 'business'>('streams');
 
   // Connect-source dialog (controlled by the on-page gallery / quick action)
   const [connectOpen, setConnectOpen] = useState(false);
@@ -262,6 +266,15 @@ export function RealTimeHubView() {
     <>
       {unauth && <SignInRequired subject="Real-Time hub" />}
 
+      <TabList selectedValue={hubTab} onTabSelect={(_, d) => setHubTab(d.value as typeof hubTab)} style={{ marginBottom: 16 }}>
+        <Tab value="streams" icon={<Pulse24Regular style={{ width: 18, height: 18 }} />}>All data streams</Tab>
+        <Tab value="business" icon={<Flash24Regular style={{ width: 18, height: 18 }} />}>Business events</Tab>
+      </TabList>
+
+      {hubTab === 'business' && <BusinessEventsView />}
+
+      {hubTab === 'streams' && (
+      <>
       {/* Summary stats */}
       <div className={styles.stats}>
         <div className={styles.stat}>
@@ -380,6 +393,8 @@ export function RealTimeHubView() {
           />
         )}
       </Section>
+      </>
+      )}
 
       {/* Controlled connect-source dialog (opened from the gallery / quick action) */}
       <ConnectSourceDialog

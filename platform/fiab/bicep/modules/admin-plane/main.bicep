@@ -421,6 +421,12 @@ param loomEhSchemaGroup string = ''
 @description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
 param loomExtraSubscriptions string = ''
 
+@description('Default Event Hub for Real-Time-hub "Business events" publishing (Activator publishing of structured governed signals). Created by modules/landing-zone/eventhubs.bicep (businessEventsHubName). Maps to LOOM_BUSINESS_EVENTS_HUB on the console. Empty falls back to the conventional loom-business-events name at runtime.')
+param loomBusinessEventsHub string = 'loom-business-events'
+
+@description('Optional Event Grid custom-topic endpoint (hostname or https URL) for business-event consumer fan-out. When set, each published business event is also posted to this topic so webhooks / Logic Apps / Functions / Service Bus subscriptions can route on eventType. Maps to LOOM_BUSINESS_EVENTS_EGTOPIC. Empty disables fan-out (Event Hubs delivery still works).')
+param loomBusinessEventsEgTopic string = ''
+
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
 
@@ -1591,6 +1597,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
+            // Real-Time-hub Business events (Activator publishing of structured
+            // governed signals) — default transport hub + optional Event Grid
+            // consumer fan-out. Azure-native; no Microsoft Fabric dependency.
+            { name: 'LOOM_BUSINESS_EVENTS_HUB', value: loomBusinessEventsHub }
+            { name: 'LOOM_BUSINESS_EVENTS_EGTOPIC', value: loomBusinessEventsEgTopic }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
             // Capture form pre-fill (Event Hubs navigator "Configure capture"

@@ -151,6 +151,35 @@ resource telemetryConsumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consume
 }
 
 // ---------------------------------------------------------------------
+// Business events hub — the default durable, capacity-metered transport for
+// Real-Time-hub "Business events" (Activator publishing of structured governed
+// signals). The console publishes CloudEvents to this hub via the HTTPS data
+// plane (LOOM_BUSINESS_EVENTS_HUB defaults to this name). Azure-native parity
+// for Fabric business events — no Microsoft Fabric dependency.
+// ---------------------------------------------------------------------
+@description('Business-events Event Hub name (Real-Time-hub Activator business-event publishing). Maps to LOOM_BUSINESS_EVENTS_HUB on the console. Empty skips creation (events can still target any hub created at runtime).')
+param businessEventsHubName string = 'loom-business-events'
+
+@minValue(1)
+@maxValue(32)
+@description('Partition count for the business-events hub.')
+param businessEventsHubPartitionCount int = 4
+
+@minValue(1)
+@maxValue(7)
+@description('Message retention (days) for the business-events hub. Governed signals are kept long enough for late consumers to catch up.')
+param businessEventsHubRetentionDays int = 7
+
+resource businessEventsHub 'Microsoft.EventHub/namespaces/eventhubs@2024-05-01-preview' = if (!empty(businessEventsHubName)) {
+  parent: ns
+  name: businessEventsHubName
+  properties: {
+    partitionCount: businessEventsHubPartitionCount
+    messageRetentionInDays: businessEventsHubRetentionDays
+  }
+}
+
+// ---------------------------------------------------------------------
 // Schema group — backs the Loom Event Schema Set editor's OPT-IN
 // server-side compatibility enforcement (Avro). When the console app is
 // given LOOM_EH_SCHEMA_GROUP = this group's name, registering a new schema
@@ -340,6 +369,9 @@ output loomSchemaGroupName string = empty(schemaGroupName) ? '' : loomSchemaGrou
 output namespaceFqdn string = '${ns.name}.servicebus.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'usgovcloudapi.net' : 'windows.net'}'
 output telemetryHubName string = telemetryHub.name
 output telemetryConsumerGroupName string = telemetryConsumerGroup.name
+// Business-events hub name — consumed as LOOM_BUSINESS_EVENTS_HUB on the console
+// app so Real-Time-hub business-event publishing targets this metered hub.
+output businessEventsHubName string = empty(businessEventsHubName) ? '' : businessEventsHub.name
 // Capture form pre-fill (consumed as LOOM_EVENTHUB_CAPTURE_STORAGE_ID /
 // LOOM_EVENTHUB_CAPTURE_CONTAINER in the console app env). Capture itself is
 // configured per-hub at runtime via the console; these only seed the form.

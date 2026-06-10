@@ -149,6 +149,9 @@ let _workspaceSparkConfig: Container | null = null;
 let _embedCodes: Container | null = null;
 // F23 — org-visuals metadata (tenant-wide custom visuals), PK /tenantId.
 let _orgVisuals: Container | null = null;
+// Business events — governed signal definitions (schema + transport binding),
+// PK /tenantId. The Real-Time-hub "Business events" publisher/consumer surface.
+let _businessEvents: Container | null = null;
 let _ensured = false;
 
 /**
@@ -567,6 +570,11 @@ async function ensure() {
   // needs no extra ARM/Bicep step beyond the account+database.
   _embedCodes = await mk('embed-codes', '/tenantId');
   _orgVisuals = await mk('org-visuals', '/tenantId');
+  // Business events — one doc per governed signal definition (name, schema set,
+  // transport binding to an Event Hub + optional Event Grid topic). PK /tenantId
+  // so the tenant's business-event catalog hits a single physical partition.
+  // Created lazily; no ARM/Bicep pre-step beyond the account+database.
+  _businessEvents = await mk('business-events', '/tenantId');
   _ensured = true;
 }
 
@@ -617,6 +625,8 @@ export async function workspaceSparkConfigContainer(): Promise<Container> { awai
 export async function embedCodesContainer(): Promise<Container> { await ensure(); return _embedCodes!; }
 /** F23 — org-visuals metadata (tenant-wide custom visuals) — PK /tenantId. */
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
+/** Business events — governed signal definitions (Real-Time hub), PK /tenantId. */
+export async function businessEventsContainer(): Promise<Container> { await ensure(); return _businessEvents!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
