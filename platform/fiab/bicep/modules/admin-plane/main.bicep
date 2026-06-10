@@ -678,6 +678,9 @@ param loomMsalTenantId string = subscription().tenantId
 @description('Azure AD app (client) ID of the Entra app registration backing MSAL. When empty, MSAL env vars omitted (Console runs unauth).')
 param loomMsalClientId string = ''
 
+@description('Optional default Power Platform environment id (GUID) preselected when publishing a data agent to Microsoft 365 Copilot via Copilot Studio. Empty = first Dataverse-backed environment.')
+param loomCopilotStudioEnv string = ''
+
 @description('Azure AD app client secret stored in Key Vault as secret "loom-msal-client-secret". When empty, MSAL env vars omitted.')
 @secure()
 param loomMsalClientSecret string = ''
@@ -2190,6 +2193,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
+            // Default Power Platform environment (GUID) preselected when
+            // publishing a data agent to Microsoft 365 Copilot via Copilot
+            // Studio. Optional — the editor lists every Dataverse-backed
+            // environment and the maker can pick another. Empty = first env.
+            { name: 'LOOM_COPILOT_STUDIO_ENV', value: loomCopilotStudioEnv }
             // Power Apps canvas web-player base for the in-Loom "Play / embed"
             // tab + Studio tab (powerplatform-client.powerAppPlayerEmbedUri).
             // Commercial = apps.powerapps.com (the code default). Sovereign

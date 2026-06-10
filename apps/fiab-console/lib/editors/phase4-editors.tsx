@@ -2354,6 +2354,57 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     finally { setPublishing(false); }
   }, [id, save, reload, dirty, lastSaveError, state.description, state.alias]);
 
+  // ---- publish to Microsoft 365 Copilot (Copilot Studio agent + M365 channel) ----
+  const [m365Loading, setM365Loading] = useState(false);
+  const [m365Gate, setM365Gate] = useState<{ error?: string; missing?: string } | null>(null);
+  const [m365Envs, setM365Envs] = useState<{ id: string; displayName: string }[]>([]);
+  const [m365Env, setM365Env] = useState<string>('');
+  const [m365Published, setM365Published] = useState<any>(null);
+  const [m365Publishing, setM365Publishing] = useState(false);
+  const [m365Result, setM365Result] = useState<any>(null);
+  const loadM365 = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setM365Loading(true); setM365Gate(null);
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/m365-copilot`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.configured === false) { setM365Gate(j.gate || { error: 'Copilot Studio not configured' }); setM365Published(j.published || null); return; }
+      if (j?.ok) {
+        const envs = Array.isArray(j.environments) ? j.environments : [];
+        setM365Envs(envs);
+        setM365Published(j.published || null);
+        setM365Env((cur) => cur || j.defaultEnvId || j.published?.envId || envs[0]?.id || '');
+      }
+    } catch (e: any) { setM365Gate({ error: e?.message || String(e) }); }
+    finally { setM365Loading(false); }
+  }, [id]);
+  const publishM365 = useCallback(async () => {
+    if (!m365Env) { setM365Result({ ok: false, error: 'Select a Power Platform environment first.' }); return; }
+    setM365Publishing(true); setM365Result(null);
+    try {
+      if (dirty) {
+        const saved = await save();
+        if (!saved) { setM365Result({ ok: false, error: `Couldn't save before publishing: ${lastSaveError() || 'unknown save error'}` }); return; }
+      }
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/m365-copilot`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          envId: m365Env,
+          displayName: state.alias || undefined,
+          description: state.description || undefined,
+          instructions: state.instructions || undefined,
+        }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (!r.ok && j && j.ok === undefined) j.ok = false;
+      setM365Result(j);
+      if (j.ok) { setM365Published(j.linkage || null); await reload(); }
+      else if (j.configured === false) setM365Gate(j.gate || { error: j.error });
+    } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
+    finally { setM365Publishing(false); }
+  }, [id, m365Env, dirty, save, reload, lastSaveError, state.alias, state.description, state.instructions]);
+  useEffect(() => { if (tab === 'publish') void loadM365(); }, [tab, loadM365]);
+
   // ---- delete this agent (owner-scoped via the item DELETE route) ----
   const [deleting, setDeleting] = useState(false);
   const deleteAgent = useCallback(async () => {
@@ -2730,6 +2781,86 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
                   </MessageBarBody>
                 </MessageBar>
+              )}
+
+              {/* ---- Publish to Microsoft 365 Copilot ---- */}
+              <div style={{ height: 1, backgroundColor: tokens.colorNeutralStroke2, margin: '20px 0 12px' }} aria-hidden />
+              <Subtitle2>Publish to Microsoft 365 Copilot</Subtitle2>
+              <Caption1>
+                Makes this data agent discoverable and chatable in Microsoft 365 Copilot. Loom creates a Copilot Studio
+                agent (grounded on these instructions), adds the Microsoft 365 Copilot + Teams channel, and publishes it.
+                Copilot Studio agents live in Dataverse — no Microsoft Fabric or Power BI workspace required.
+              </Caption1>
+
+              {m365Loading ? (
+                <div style={{ marginTop: 8 }}><Spinner size="tiny" label="Checking Copilot Studio…" /></div>
+              ) : m365Gate ? (
+                <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Copilot Studio (Dataverse) not configured</MessageBarTitle>
+                    <div>{m365Gate.error}</div>
+                    {m365Gate.missing && <div style={{ marginTop: 4, fontSize: 12 }}>Required: <code>{m365Gate.missing}</code></div>}
+                    <div style={{ marginTop: 4, fontSize: 12 }}>Bicep: <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code> · Doc: <code>docs/fiab/dataverse-app-user.md</code></div>
+                  </MessageBarBody>
+                </MessageBar>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                    <Field label="Power Platform environment" style={{ minWidth: 320 }}>
+                      <Dropdown
+                        placeholder={m365Envs.length ? 'Select an environment' : 'No Dataverse environments found'}
+                        value={m365Envs.find((e) => e.id === m365Env)?.displayName || ''}
+                        selectedOptions={m365Env ? [m365Env] : []}
+                        onOptionSelect={(_, d) => setM365Env(d.optionValue || '')}
+                        disabled={m365Publishing || m365Envs.length === 0}
+                      >
+                        {m365Envs.map((e) => <Option key={e.id} value={e.id} text={e.displayName}>{e.displayName}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Button
+                      appearance="primary"
+                      onClick={publishM365}
+                      disabled={m365Publishing || saving || !m365Env || !state.instructions?.trim()}
+                    >
+                      {m365Publishing ? 'Publishing…' : m365Published ? 'Republish to M365 Copilot' : 'Publish to M365 Copilot'}
+                    </Button>
+                    <Button appearance="subtle" onClick={() => void loadM365()} disabled={m365Loading || m365Publishing}>Refresh</Button>
+                  </div>
+
+                  {m365Published && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                      <Badge appearance="filled" color="brand">M365 Copilot</Badge>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        agent {String(m365Published.agentId).slice(0, 8)}… · published {m365Published.publishedAt ? new Date(m365Published.publishedAt).toLocaleString() : ''}
+                      </Caption1>
+                    </div>
+                  )}
+
+                  {m365Result && (
+                    <MessageBar intent={m365Result.ok ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>{m365Result.ok ? 'Published to Microsoft 365 Copilot' : 'Publish failed'}</MessageBarTitle>
+                        {m365Result.ok ? (
+                          <div style={{ marginTop: 4 }}>
+                            {m365Result.message || 'Published.'}
+                            <div style={{ fontFamily: 'monospace', fontSize: 12, marginTop: 4 }}>
+                              Copilot Studio agent id: <strong>{m365Result.agentId}</strong><br />
+                              environment: <strong>{m365Result.envId}</strong>{m365Result.created ? ' · (created)' : ' · (updated)'}
+                            </div>
+                            {m365Result.adminReviewRequired && (
+                              <Caption1 style={{ marginTop: 6, display: 'block' }}>
+                                Admin step: an M365 admin approves it in Microsoft 365 admin centre → Agents → Requests.
+                                After approval it appears in Agent Store → Built by your org and is chatable in M365 Copilot.
+                              </Caption1>
+                            )}
+                          </div>
+                        ) : (
+                          <div>{m365Result.error}{m365Result.gate?.missing ? ` (set ${m365Result.gate.missing})` : ''}</div>
+                        )}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </>
               )}
             </>
           )}

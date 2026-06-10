@@ -665,6 +665,194 @@ export async function publishToChannel(
 }
 
 // ============================================================
+// Publish to Microsoft 365 Copilot (M365 + Teams channel)
+// ============================================================
+//
+// In Copilot Studio, making an agent "discoverable / chatable in Microsoft 365
+// Copilot" is a two-step operation against Dataverse:
+//
+//   1. Add the Microsoft 365 Copilot + Teams channel to the agent
+//      (msdyn_botchannel, type 'teams' — the same channel record powers both
+//      the Teams personal app and the M365 Copilot agent surface; M365
+//      availability is a flag inside the channel configuration).
+//   2. Publish the agent (msdyn_PublishCopilot bound action) so the channel
+//      goes live. Publishing applies to ALL connected channels at once.
+//
+// After publishing, the agent appears in the Microsoft 365 admin center under
+// Agents → All agents → Requests for the tenant admin to approve, after which
+// it is discoverable + chatable for the selected audience in M365 Copilot.
+// See Learn: "Set up Agent Store in Microsoft 365 Copilot" and
+// "Publish agents to channels and clients".
+
+/**
+ * Reports whether Copilot Studio (Dataverse) is reachable for writes, or an
+ * honest gate message when the Dataverse application-user credentials aren't
+ * configured. Used by the BFF to render a MessageBar instead of a dead button.
+ */
+export function copilotStudioConfigGate(): { configured: boolean; message?: string; missing?: string } {
+  if (!dataverseCredential) {
+    return {
+      configured: false,
+      missing: 'LOOM_DATAVERSE_CLIENT_ID + LOOM_DATAVERSE_CLIENT_SECRET + LOOM_DATAVERSE_TENANT_ID',
+      message:
+        'Publishing to Microsoft 365 Copilot writes to Dataverse (Copilot Studio agents live there). ' +
+        'The console UAMI cannot be a Dataverse Application User, so configure the MSAL Web App SP as a ' +
+        'Dataverse Application User (System Customizer / Copilot Studio Maker role) and set ' +
+        'LOOM_DATAVERSE_CLIENT_ID / LOOM_DATAVERSE_CLIENT_SECRET / LOOM_DATAVERSE_TENANT_ID. ' +
+        'See docs/fiab/dataverse-app-user.md.',
+    };
+  }
+  return { configured: true };
+}
+
+/** Optional default Copilot Studio environment id (Power Platform env GUID). */
+export function defaultCopilotStudioEnvId(): string | undefined {
+  return process.env.LOOM_COPILOT_STUDIO_ENV || undefined;
+}
+
+export interface M365PublishInput {
+  /** Power Platform environment id (GUID). */
+  envId: string;
+  /** Display name shown in the M365 Copilot agent gallery. */
+  displayName: string;
+  /** Short description shown to end users + admins. */
+  description?: string;
+  /** Agent instructions (system prompt). */
+  instructions?: string;
+  /**
+   * An existing Copilot Studio agent id to reuse. When omitted, the agent is
+   * resolved by display name (or created if none matches).
+   */
+  existingAgentId?: string;
+  /** Conversation starters surfaced in M365 Copilot. */
+  starterPrompts?: string[];
+}
+
+export interface M365PublishResult {
+  ok: true;
+  /** The Copilot Studio agent id (msdyn_copilotid) backing the M365 agent. */
+  agentId: string;
+  agentSchemaName?: string;
+  /** Whether a new Copilot Studio agent was created (vs. reusing existing). */
+  created: boolean;
+  /** The M365 / Teams channel record. */
+  channelId: string;
+  channelEnabled: boolean;
+  /** Power Platform environment the agent lives in. */
+  envId: string;
+  /** ISO timestamp the publish action completed. */
+  publishedAt: string;
+  /**
+   * After publish the agent surfaces in M365 admin centre →
+   * Agents → Requests for tenant approval before users can chat it.
+   */
+  adminReviewRequired: boolean;
+}
+
+/**
+ * Find an existing Copilot Studio agent by display name in the environment, so
+ * republishing the same data agent reuses its agent rather than creating dupes.
+ */
+async function findAgentByName(envId: string, name: string): Promise<CopilotAgent | null> {
+  const host = await envHost(envId);
+  const safe = name.replace(/'/g, "''");
+  const j = await rawCall<{ value: any[] }>(
+    dvUrl(host, '/msdyn_copilots', {
+      $select: AGENT_SELECT,
+      $filter: `msdyn_name eq '${safe}'`,
+      $top: '1',
+    }),
+    { scope: dvScope(host) },
+  );
+  const row = (j.value || [])[0];
+  return row ? mapAgent(row) : null;
+}
+
+/** Find the Teams/M365 channel already attached to an agent, if any. */
+async function findM365Channel(envId: string, agentId: string): Promise<CopilotChannel | null> {
+  const channels = await listChannels(envId, agentId);
+  return channels.find((c) => c.type === 'teams' || c.type === 'm365') || null;
+}
+
+/**
+ * High-level orchestration: ensure a Copilot Studio agent exists for the data
+ * agent, attach the Microsoft 365 Copilot + Teams channel, and publish it.
+ *
+ * Real Dataverse REST end-to-end — no mocks. Throws CopilotStudioError on any
+ * failure (including the 503 "Copilot Studio not enabled" surfaced by rawCall),
+ * so the BFF can pass the precise error to the editor.
+ */
+export async function publishDataAgentToM365(input: M365PublishInput): Promise<M365PublishResult> {
+  const { envId } = input;
+  const displayName = (input.displayName || '').slice(0, 100).trim() || 'Loom data agent';
+  const description = (input.description || '').slice(0, 1000) || undefined;
+  const instructions = input.instructions?.slice(0, 8000) || undefined;
+
+  // 1) Resolve or create the Copilot Studio agent.
+  let agent: CopilotAgent | null = null;
+  let created = false;
+  if (input.existingAgentId) {
+    agent = await getAgent(envId, input.existingAgentId);
+  } else {
+    agent = await findAgentByName(envId, displayName);
+  }
+  if (!agent) {
+    agent = await createAgent(envId, { name: displayName, description, instructions });
+    created = true;
+  } else if (description || instructions) {
+    // Keep the existing agent's definition in sync on republish.
+    agent = await updateAgent(envId, agent.id, { description, instructions });
+  }
+
+  // 2) Add (or reuse) the Microsoft 365 Copilot + Teams channel. The channel
+  //    configuration carries the M365 availability + display metadata.
+  let channel = await findM365Channel(envId, agent.id);
+  const channelConfig: Record<string, any> = {
+    microsoft365: { enabled: true, displayName, description },
+    teams: { enabled: true, scope: 'personal' },
+    starterPrompts: (input.starterPrompts || []).filter(Boolean).slice(0, 6),
+  };
+  if (!channel) {
+    channel = await publishToChannel(envId, agent.id, 'teams', channelConfig);
+  }
+
+  // 3) Publish the agent — this lights up all connected channels, including the
+  //    M365 Copilot surface, and queues the agent for M365 admin-centre review.
+  await publishAgent(envId, agent.id);
+
+  return {
+    ok: true,
+    agentId: agent.id,
+    agentSchemaName: agent.schemaName,
+    created,
+    channelId: channel.id,
+    channelEnabled: channel.enabled,
+    envId,
+    publishedAt: new Date().toISOString(),
+    adminReviewRequired: true,
+  };
+}
+
+/**
+ * Read the current M365-publish status for a data agent's backing Copilot
+ * Studio agent (if one exists). Returns null when no matching agent is found.
+ */
+export async function getM365PublishStatus(
+  envId: string,
+  agentIdOrName: { agentId?: string; displayName?: string },
+): Promise<{ agentId: string; state?: string; m365ChannelEnabled: boolean } | null> {
+  let agent: CopilotAgent | null = null;
+  if (agentIdOrName.agentId) {
+    try { agent = await getAgent(envId, agentIdOrName.agentId); } catch { agent = null; }
+  } else if (agentIdOrName.displayName) {
+    agent = await findAgentByName(envId, agentIdOrName.displayName);
+  }
+  if (!agent) return null;
+  const channel = await findM365Channel(envId, agent.id);
+  return { agentId: agent.id, state: agent.state, m365ChannelEnabled: Boolean(channel?.enabled) };
+}
+
+// ============================================================
 // Analytics (Power Platform admin analytics REST)
 // ============================================================
 

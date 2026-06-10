@@ -103,6 +103,39 @@ All four should flip from `B` (env doesn't have Dataverse / 403 not a member) to
 | `404 environment .. has no Dataverse` | Env doesn't have a Dataverse DB | Add database via PPAC env detail → **+ Add Dataverse** (separate step, see v3-tenant-bootstrap.md) |
 | Loom returns 401 on calls that worked before | Client secret rotated or expired | Rotate KV `loom-msal-client-secret`; the Container App reads it via secretRef so a restart pulls the new value |
 
+## Publishing a Loom data agent to Microsoft 365 Copilot
+
+Once the Dataverse Application User is in place (above), the **Data Agent editor →
+Publish tab → "Publish to Microsoft 365 Copilot"** surface becomes live. It:
+
+1. Creates (or reuses) a **Copilot Studio agent** in the selected Power Platform
+   environment, grounded on the data agent's instructions
+   (`POST /api/items/data-agent/{id}/m365-copilot` → `publishDataAgentToM365`).
+2. Adds the **Microsoft 365 Copilot + Teams channel** to that agent
+   (`msdyn_botchannel`, type `teams`).
+3. **Publishes** the agent (`msdyn_PublishCopilot` bound action), which lights up
+   the M365 Copilot surface and queues the agent for tenant review.
+
+### One-time / per-tenant requirements
+
+| Requirement | Why | How |
+|---|---|---|
+| Dataverse Application User (System Customizer or Copilot Studio Maker role minimum) | Create/publish `msdyn_copilot` + `msdyn_botchannel` rows | Steps 1–2 above |
+| **Copilot Studio enabled** in the target environment | The `msdyn_copilots` table only exists when CS is enabled | PPAC → Environments → <env> → Settings → Product → Features → "Copilot Studio" |
+| **Teams + M365 connector policy** allows publishing | Tenant may block M365/Teams channel | Power Platform admin → [advanced connector policies](https://learn.microsoft.com/power-platform/admin/advanced-connector-policies) |
+| **M365 admin approval** of the published agent | Agents from Copilot Studio require admin review before users see them | M365 admin centre → Agents → All agents → **Requests** → Publish (choose audience) |
+
+After admin approval the agent appears under **Agents → All agents → Built by your
+org** in the M365 Copilot Agent Store and is discoverable + chatable in M365 Copilot.
+
+### Optional: pin a default environment
+
+Set `LOOM_COPILOT_STUDIO_ENV` (a Power Platform environment GUID) on the Console
+Container App to preselect the publish target. Wired through
+`platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomCopilotStudioEnv`
+param, default empty). When unset, the editor lists every Dataverse-backed
+environment and defaults to the first.
+
 ## Why this can't be fully automated yet
 
 The PPAC App User creation API exists at `https://api.powerapps.com/providers/Microsoft.PowerApps/scopes/admin/environments/{envId}/applicationUsers` — but **only the env's own existing System Administrators can call it**. There's no bootstrap path: the first SA on a fresh Dataverse DB has to be added by a Global Admin via PPAC. After that, Loom could be granted permissions to add additional SPs to other envs — but the v3 release doesn't include that flow. Tracked for a later release.
