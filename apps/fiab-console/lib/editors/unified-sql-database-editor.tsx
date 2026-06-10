@@ -44,7 +44,7 @@ import {
   PeopleTeam20Regular, BranchFork20Regular,
   Stop20Regular, ChartMultiple20Regular,
   Sparkle20Regular, Sparkle20Filled, Bug20Regular, TextBulletListSquare20Regular,
-  ArrowEnter20Regular, Dismiss20Regular,
+  ArrowEnter20Regular, Dismiss20Regular, Search20Regular,
   BookmarkMultiple20Regular, Save20Regular, Rename20Regular, DocumentCopy20Regular,
   MoreHorizontal20Regular, Folder20Regular, Open20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
@@ -57,6 +57,7 @@ import { registerInlineCompletion } from '@/lib/components/editor/inline-complet
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
+import { SqlSearchPanel } from '@/lib/panes/sql-search-panel';
 import { ShareDialog } from './components/share-dialog';
 import { SqlScalePanel } from './components/sql-scale-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
@@ -795,7 +796,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'queries' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data' | 'share' | 'git'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'queries' | 'schema' | 'admin' | 'security' | 'search' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data' | 'share' | 'git'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -1377,6 +1378,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
+      { label: 'Search', actions: [
+        { label: 'Full-text / Vector', onClick: (server && database && family === 'azure-sql') ? () => setTab('search') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Manage full-text catalogs / indexes and DiskANN vector indexes' },
+      ]},
       { label: 'Share', actions: [
         { label: 'Manage access', onClick: (server && database && family === 'azure-sql') ? () => setTab('share') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Assign Azure RBAC roles on this database (Access control / IAM)' },
       ]},
@@ -1485,6 +1489,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             {family === 'azure-sql' && <Tab value="security" icon={<ShieldKeyhole20Regular />}>SQL security</Tab>}
+            {family === 'azure-sql' && <Tab value="search" icon={<Search20Regular />}>Search</Tab>}
             {family === 'azure-sql' && <Tab value="performance" icon={<ChartMultiple20Regular />}>Performance</Tab>}
             {family === 'azure-sql' && <Tab value="share" icon={<PeopleTeam20Regular />}>Share</Tab>}
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
@@ -1963,6 +1968,22 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   <MessageBarBody>
                     <MessageBarTitle>T-SQL security wizards apply to Azure SQL</MessageBarTitle>
                     Object/column GRANT, Row-Level Security and Dynamic Data Masking are T-SQL features. Select an Azure SQL database to use them; PostgreSQL uses its own role/RLS model.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
+          {/* ---------------- Search (full-text + vector index management) ---------------- */}
+          {tab === 'search' && (
+            family === 'azure-sql'
+              ? (server && database
+                  ? <SqlSearchPanel itemType="azure-sql-database" itemId={id} server={server} database={database} />
+                  : <Caption1>Pick a server + database on the <strong>Connect</strong> tab to manage full-text catalogs / indexes and DiskANN vector indexes.</Caption1>)
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Search management applies to Azure SQL</MessageBarTitle>
+                    Full-text search and native DiskANN vector indexes are Azure SQL Database data-plane features. Select an Azure SQL database to use them; PostgreSQL uses its own <code>tsvector</code> / <code>pgvector</code> extensions.
                   </MessageBarBody>
                 </MessageBar>
               )

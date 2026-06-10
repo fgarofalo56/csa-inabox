@@ -28,11 +28,12 @@ import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
-  ArrowSync20Regular, Dismiss20Regular,
+  ArrowSync20Regular, Dismiss20Regular, Search20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
+import { SqlSearchPanel } from '@/lib/panes/sql-search-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { useJobsStore } from '@/lib/state/jobs-store';
@@ -649,7 +650,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const [server, setServer] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER || '');
   const [database, setDatabase] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB || '');
   const dbs = useSqlDatabases(server);
-  const [tab, setTab] = useState<'query' | 'mirroring' | 'replication' | 'sql2025'>('query');
+  const [tab, setTab] = useState<'query' | 'mirroring' | 'replication' | 'search' | 'sql2025'>('query');
   const [sqlText, setSqlText] = useState<string>(
     `-- Azure SQL database — TDS over AAD MI from the Loom Console BFF.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, @@VERSION AS version;`,
   );
@@ -808,6 +809,9 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
       { label: 'Replication', actions: [
         { label: 'Add geo-replica', onClick: canRun ? openGeo : undefined, disabled: !canRun, title: !canRun ? 'pick server + database' : undefined },
       ]},
+      { label: 'Search', actions: [
+        { label: 'Full-text / Vector', onClick: canRun ? () => setTab('search') : undefined, disabled: !canRun, title: !canRun ? 'pick server + database first' : 'Manage full-text catalogs / indexes and DiskANN vector indexes' },
+      ]},
       { label: '2025', actions: [
         { label: 'Probe engine', onClick: canRun ? probe2025 : undefined, disabled: !canRun },
       ]},
@@ -941,6 +945,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>
             <Tab value="replication" icon={<Globe20Regular />}>Replication</Tab>
+            <Tab value="search" icon={<Search20Regular />}>Search</Tab>
             <Tab value="sql2025" icon={<Sparkle20Regular />}>SQL 2025</Tab>
           </TabList>
           {tab === 'query' && (
@@ -992,6 +997,11 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Geo-replica accepted</MessageBarTitle>{geoOk}</MessageBarBody></MessageBar>
               )}
             </>
+          )}
+          {tab === 'search' && (
+            server && database
+              ? <SqlSearchPanel itemType="azure-sql-database" itemId={id} server={server} database={database} />
+              : <Caption1>Select a server + database in the left pane to manage full-text catalogs / indexes and DiskANN vector indexes.</Caption1>
           )}
           {tab === 'sql2025' && (
             <>
