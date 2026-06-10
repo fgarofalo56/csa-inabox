@@ -1465,4 +1465,101 @@ factory itself is gated by the existing `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` /
 
 No Microsoft Fabric / OneLake tenant is required for any part of this.
 
+---
+
+## Fabric IQ — unified MCP tool surface for external agents {#fabric-iq-mcp}
+
+CSA Loom exposes a single **Model Context Protocol (MCP)** endpoint —
+`POST /api/iq/mcp` — that packages the organization's **ontology** (conceptual
+entity model), **semantic** layer (curated tables + measures), and **live
+signals** (Azure Data Explorer telemetry) into one tool surface. External
+agents — **Microsoft Agent 365**, **Azure AI Foundry agents**, **Copilot
+Studio** — register this endpoint as an MCP server and ground their answers on
+the org's governed knowledge. This is the *server* side of MCP (the inverse of
+the "External MCP Tools" admin panel, which lets Loom *call* external servers).
+
+All three layers are **Azure-native** — no Microsoft Fabric / Power BI workspace
+is required (per `no-fabric-dependency.md`). Ontology + semantic data come from
+the Loom `ontology` / `semantic-model` Cosmos items; live signals come from the
+ADX cluster (`LOOM_ADX_CLUSTER_URI`).
+
+### Tools exposed (`tools/list`)
+
+| Tool | What it returns |
+| --- | --- |
+| `iq_overview` | One-call discovery of every ontology, semantic model, and whether signals are available. |
+| `iq_search` | Cross-layer search of entity / table / measure names. |
+| `iq_list_ontologies` / `iq_get_ontology` | Ontology summaries; full entity hierarchy + IS_A relationships + data bindings. |
+| `iq_list_semantic_models` / `iq_get_semantic_model` | Semantic-model summaries; full tables + measures (DAX) + relationships. |
+| `iq_list_signal_tables` | ADX tables available for real-time querying. |
+| `iq_query_signals` | Run a **read-only** KQL query against ADX (control/management commands are rejected). |
+
+### Auth
+
+Two credentials are accepted:
+
+1. **MSAL cookie session** — Console users (and the in-app self-test) always
+   reach the endpoint with their session; the acting tenant is the session
+   `oid`. This path needs **no** env var.
+2. **Bearer token** — external agents present
+   `Authorization: Bearer <token>` plus an `x-user-oid` header naming the
+   tenant to act on behalf of. The token is `LOOM_IQ_MCP_TOKEN` if set,
+   otherwise the shared `LOOM_INTERNAL_TOKEN`. **The token path only works when
+   `LOOM_IQ_MCP_ENABLED=true`.**
+
+`GET /api/iq/mcp` returns an unauthenticated discovery document (server name,
+protocol version, tool list, whether external access is enabled) so registration
+UIs can verify the URL — it never exposes tenant data.
+
+### Enable the external-agent path
+
+Set the bicep param `loomIqMcpEnabled=true` (default `false`). This injects
+`LOOM_IQ_MCP_ENABLED=true` and wires `LOOM_INTERNAL_TOKEN` (the deterministic
+`guid(resourceGroup().id, 'loom-maf-internal-token-v1')`) as the default Bearer
+secret on the Console app. To use a dedicated rotating secret instead, set
+`LOOM_IQ_MCP_TOKEN` on the Console app and hand the same value to the agent.
+
+### Register with an external agent
+
+Point the agent's MCP-server configuration at
+`https://<console-host>/api/iq/mcp` with:
+
+```
+Authorization: Bearer <LOOM_IQ_MCP_TOKEN or LOOM_INTERNAL_TOKEN>
+x-user-oid: <the tenant oid the agent acts for>
+```
+
+### Verify
+
+```
+# Discovery (no auth):
+curl -s https://<console-host>/api/iq/mcp | jq '{server, externalAccessEnabled, tools: [.tools[].name]}'
+
+# tools/list (Bearer):
+curl -s -X POST https://<console-host>/api/iq/mcp \
+  -H 'authorization: Bearer <token>' -H 'x-user-oid: <oid>' \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
+
+# tools/call → unified overview:
+curl -s -X POST https://<console-host>/api/iq/mcp \
+  -H 'authorization: Bearer <token>' -H 'x-user-oid: <oid>' \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"iq_overview","arguments":{}}}'
+```
+
+### Bicep sync
+
+- Param + env var + secret wiring: `platform/fiab/bicep/modules/admin-plane/main.bicep`
+  (`loomIqMcpEnabled`, `LOOM_IQ_MCP_ENABLED`, `LOOM_INTERNAL_TOKEN` /
+  `loom-internal-token`).
+- Server route: `apps/fiab-console/app/api/iq/mcp/route.ts`; tool catalog +
+  dispatcher: `apps/fiab-console/lib/azure/iq-mcp-tools.ts`; data layer:
+  `apps/fiab-console/lib/azure/iq-mcp.ts`.
+
+In **GCC-High / DoD** the IQ surface works the same; the live-signals layer
+requires an ADX cluster in the Gov cloud (`iq_list_signal_tables` /
+`iq_query_signals` return an honest gate naming `LOOM_ADX_CLUSTER_URI` when one
+isn't provisioned). Ontology + semantic layers work with no extra infra.
+
 

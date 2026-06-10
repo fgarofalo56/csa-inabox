@@ -220,6 +220,9 @@ param appImageTags object = {
 @description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
+@description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
+param loomIqMcpEnabled bool = false
+
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
@@ -2375,6 +2378,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
             { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
+            // Fabric IQ unified MCP tool surface (/api/iq/mcp). Off → the
+            // token (external-agent) path is rejected; Console-session callers
+            // always work. On → Agent 365 / Foundry can ground on ontology +
+            // semantic + live-signals via the shared internal Bearer token.
+            { name: 'LOOM_IQ_MCP_ENABLED', value: string(loomIqMcpEnabled) }
           ],
           // MAF orchestration tier (GCC-High / IL5). When the loom-copilot-maf
           // Container App deploys, set LOOM_MAF_ENDPOINT so copilot-orchestrator
@@ -2382,6 +2390,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // authenticate the MAF → Console tool-dispatch callback.
           copilotMafActive ? [
             { name: 'LOOM_MAF_ENDPOINT', value: copilotMaf!.outputs.mafInternalEndpoint }
+          ] : [],
+          // Shared internal trust token — wired when EITHER the MAF tier is
+          // active OR the IQ MCP external-agent path is enabled. Used as the
+          // default IQ MCP Bearer secret (LOOM_IQ_MCP_TOKEN overrides if set).
+          (copilotMafActive || loomIqMcpEnabled) ? [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
           ] : []
         )
@@ -2408,8 +2421,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // Shared internal trust token for the MAF → Console tool-dispatch
-          // callback (GCC-High / IL5). Same deterministic value the MAF app gets.
-          copilotMafActive ? [
+          // callback (GCC-High / IL5) AND the default Bearer secret for the IQ
+          // MCP external-agent path. Same deterministic value the MAF app gets.
+          (copilotMafActive || loomIqMcpEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
           ] : []
         )
