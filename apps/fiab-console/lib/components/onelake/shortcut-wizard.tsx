@@ -75,6 +75,10 @@ import {
   Folder20Regular,
   Key16Regular,
   PlugConnected20Regular,
+  Globe20Regular,
+  Person20Regular,
+  Search20Regular,
+  Link20Regular,
 } from '@fluentui/react-icons';
 import type { ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 
@@ -756,6 +760,7 @@ export interface ShortcutSourceCard {
 export const SHORTCUT_SOURCE_CARDS: ShortcutSourceCard[] = [
   { type: 'internal', label: 'Internal Loom lakehouse', blurb: 'Another medallion container in this deployment', uamiReady: true },
   { type: 'adls', label: 'ADLS Gen2 / Azure Blob', blurb: 'Any storage account the Console UAMI can read', uamiReady: true },
+  { type: 'sharepoint', label: 'SharePoint / OneDrive', blurb: 'Document libraries & OneDrive folders via Microsoft Graph', uamiReady: true },
   { type: 's3', label: 'Amazon S3', blurb: 'Bucket via access key/secret or IAM role', uamiReady: false },
   { type: 'gcs', label: 'Google Cloud Storage', blurb: 'Bucket via a service-account JSON', uamiReady: false },
   { type: 'dataverse', label: 'Dataverse', blurb: 'Tables via the Synapse-Link ADLS export', uamiReady: false },
@@ -804,6 +809,16 @@ export function ShortcutSourceLogo({ type, size = 28 }: { type: ShortcutTargetTy
         <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="Delta Sharing">
           <path d="M6 22l10-16 10 16H6z" fill="#FF3621" />
           <path d="M11 22l5-8 5 8h-10z" fill="#fff" opacity="0.9" />
+        </svg>
+      );
+    case 'sharepoint':
+      return (
+        <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="SharePoint / OneDrive">
+          <circle cx="12" cy="10" r="6.5" fill="#036C70" />
+          <circle cx="20.5" cy="14.5" r="6" fill="#1A9BA1" />
+          <circle cx="14.5" cy="21" r="5.5" fill="#37C6D0" />
+          <path d="M11 7.5h5.5a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H11a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2z" fill="#fff" opacity="0.92" />
+          <path d="M11.4 10.6h3.6v1.1h-3.6zm0 2.1h3.6v1.1h-3.6zm0 2.1h2.4v1.1h-2.4z" fill="#036C70" />
         </svg>
       );
     case 'internal':
@@ -1189,6 +1204,300 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
       >
         {renderLevel('')}
       </Tree>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SharePointBrowser — site/OneDrive → drive → folder navigation over Microsoft
+// Graph. Azure-native parity with Fabric OneLake's OneDrive/SharePoint shortcut
+// browse, NO Fabric dependency. Every call hits the real Graph BFF
+// (/api/lakehouse/shortcuts/sharepoint); the only non-functional state is the
+// honest 503 gate naming LOOM_SHAREPOINT_SHORTCUTS_ENABLED + the Graph app-roles.
+// ---------------------------------------------------------------------------
+
+interface SpSite { id: string; displayName: string; webUrl?: string; name?: string }
+interface SpDrive { id: string; name: string; driveType?: string; webUrl?: string; owner?: string }
+interface SpItem { id: string; name: string; path: string; isFolder: boolean; size?: number; lastModified?: string; webUrl?: string }
+
+export interface SharePointSelection {
+  driveId: string;
+  driveName: string;
+  /** Drive-relative path of the selected folder/file ('' = drive root). */
+  path: string;
+  isFolder: boolean;
+}
+
+export interface SharePointBrowserProps {
+  /** Called whenever the user picks a folder/file (or the drive root). */
+  onSelect: (sel: SharePointSelection) => void;
+  /** Current selection (drive id + path) for highlight. */
+  selected?: { driveId: string; path: string };
+}
+
+const SP_BASE = '/api/lakehouse/shortcuts/sharepoint';
+
+/**
+ * Three-stage Graph navigator: (1) pick a source — a SharePoint site (searched
+ * by keyword), your OneDrive, or paste a link; (2) pick the document library
+ * (drive) on a site; (3) drill the folder tree and Select a folder/file.
+ */
+export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps) {
+  const styles = useStyles();
+  const [mode, setMode] = useState<'site' | 'onedrive' | 'link'>('site');
+
+  // Site search
+  const [siteQuery, setSiteQuery] = useState('');
+  const [sites, setSites] = useState<SpSite[] | null>(null);
+  const [siteBusy, setSiteBusy] = useState(false);
+  const [activeSite, setActiveSite] = useState<SpSite | null>(null);
+
+  // Drives (site libraries or OneDrive)
+  const [drives, setDrives] = useState<SpDrive[] | null>(null);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [activeDrive, setActiveDrive] = useState<SpDrive | null>(null);
+
+  // Folder tree
+  const [prefix, setPrefix] = useState('');
+  const [items, setItems] = useState<SpItem[] | null>(null);
+  const [itemsBusy, setItemsBusy] = useState(false);
+
+  // Paste a link
+  const [link, setLink] = useState('');
+
+  const [gate, setGate] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const call = useCallback(async (qs: string): Promise<any> => {
+    setError(null);
+    const { status, body } = await jfetch(`${SP_BASE}?${qs}`);
+    if (status === 503) { setGate(body?.error || 'SharePoint shortcuts are not configured.'); return null; }
+    setGate(null);
+    if (!body?.ok) { setError(body?.error || `Request failed (HTTP ${status}).`); return null; }
+    return body.data;
+  }, []);
+
+  const searchSites = useCallback(async () => {
+    setSiteBusy(true);
+    const d = await call(`action=sites&q=${encodeURIComponent(siteQuery)}`);
+    setSiteBusy(false);
+    if (d) setSites(d.sites || []);
+  }, [call, siteQuery]);
+
+  const openSite = useCallback(async (site: SpSite) => {
+    setActiveSite(site); setActiveDrive(null); setItems(null); setPrefix('');
+    setDriveBusy(true);
+    const d = await call(`action=siteDrives&siteId=${encodeURIComponent(site.id)}`);
+    setDriveBusy(false);
+    if (d) setDrives(d.drives || []);
+  }, [call]);
+
+  const openOneDrive = useCallback(async () => {
+    setMode('onedrive'); setActiveSite(null); setActiveDrive(null); setItems(null); setPrefix('');
+    setDriveBusy(true);
+    const d = await call('action=userDrives');
+    setDriveBusy(false);
+    if (d) setDrives(d.drives || []);
+  }, [call]);
+
+  const openDrive = useCallback(async (drive: SpDrive, px = '') => {
+    setActiveDrive(drive); setPrefix(px);
+    setItemsBusy(true);
+    const d = await call(`action=children&driveId=${encodeURIComponent(drive.id)}&prefix=${encodeURIComponent(px)}`);
+    setItemsBusy(false);
+    if (d) setItems(d.entries || []);
+  }, [call]);
+
+  const resolveLink = useCallback(async () => {
+    if (!link.trim()) return;
+    setItemsBusy(true);
+    const d = await call(`action=resolveUrl&url=${encodeURIComponent(link.trim())}`);
+    setItemsBusy(false);
+    if (d?.item) {
+      const it = d.item as SpItem;
+      onSelect({ driveId: d.driveId, driveName: 'Shared item', path: it.path, isFolder: it.isFolder });
+    }
+  }, [call, link, onSelect]);
+
+  const crumbs = useMemo(() => {
+    const segs = prefix.split('/').filter(Boolean);
+    const acc: { label: string; prefix: string }[] = [{ label: activeDrive?.name || 'root', prefix: '' }];
+    let cur = '';
+    for (const sgmt of segs) { cur = cur ? `${cur}/${sgmt}` : sgmt; acc.push({ label: sgmt, prefix: cur }); }
+    return acc;
+  }, [prefix, activeDrive]);
+
+  if (gate) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>SharePoint / OneDrive shortcuts not configured</MessageBarTitle>
+          {gate}
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <TabList selectedValue={mode} onTabSelect={(_, d) => {
+        const m = d.value as 'site' | 'onedrive' | 'link';
+        setMode(m); setError(null);
+        if (m === 'onedrive') openOneDrive();
+        if (m !== 'onedrive') { setDrives(null); setActiveDrive(null); setItems(null); }
+      }}>
+        <Tab value="site" icon={<Globe20Regular />}>SharePoint site</Tab>
+        <Tab value="onedrive" icon={<Person20Regular />}>My OneDrive</Tab>
+        <Tab value="link" icon={<Link20Regular />}>Paste a link</Tab>
+      </TabList>
+
+      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+
+      {mode === 'link' && (
+        <>
+          <Field label="SharePoint / OneDrive link" hint="Paste a sharing link or the page URL of a folder or file.">
+            <Input
+              value={link}
+              onChange={(_, d) => setLink(d.value)}
+              placeholder="https://contoso.sharepoint.com/sites/Finance/Shared%20Documents/Reports"
+              contentAfter={<Button size="small" appearance="primary" icon={<Link20Regular />} onClick={resolveLink} disabled={!link.trim() || itemsBusy}>Resolve</Button>}
+            />
+          </Field>
+          {itemsBusy && <Spinner size="tiny" label="Resolving link…" />}
+          {selected?.driveId && (
+            <MessageBar intent="success"><MessageBarBody>Linked item selected. Continue to name + place the shortcut.</MessageBarBody></MessageBar>
+          )}
+        </>
+      )}
+
+      {mode === 'site' && (
+        <Field label="Find a SharePoint site">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Input
+              className={styles.grow}
+              value={siteQuery}
+              onChange={(_, d) => setSiteQuery(d.value)}
+              placeholder="Search sites by name (e.g. Finance)"
+              onKeyDown={(e) => { if (e.key === 'Enter') searchSites(); }}
+            />
+            <Button appearance="primary" icon={<Search20Regular />} onClick={searchSites} disabled={siteBusy}>Search</Button>
+          </div>
+        </Field>
+      )}
+
+      {/* Site results */}
+      {mode === 'site' && (siteBusy ? (
+        <Spinner size="tiny" label="Searching sites…" />
+      ) : sites && sites.length === 0 ? (
+        <Caption1>No sites matched. Try a different keyword.</Caption1>
+      ) : sites ? (
+        <div className={styles.cardGrid}>
+          {sites.map((site) => (
+            <div
+              key={site.id}
+              className={`${styles.card} ${activeSite?.id === site.id ? styles.cardSelected : ''}`}
+              role="button" tabIndex={0}
+              onClick={() => openSite(site)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openSite(site); }}
+            >
+              <Globe20Regular />
+              <div style={{ minWidth: 0 }}>
+                <Body1>{site.displayName}</Body1>
+                {site.webUrl && <Caption1 style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{site.webUrl}</Caption1>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null)}
+
+      {/* Drives (document libraries or OneDrive) */}
+      {(mode === 'onedrive' || (mode === 'site' && activeSite)) && (
+        driveBusy ? (
+          <Spinner size="tiny" label="Loading document libraries…" />
+        ) : drives && drives.length === 0 ? (
+          <Caption1>No document libraries found.</Caption1>
+        ) : drives ? (
+          <Field label={mode === 'onedrive' ? 'OneDrive' : `Document library — ${activeSite?.displayName}`}>
+            <div className={styles.cardGrid}>
+              {drives.map((dr) => (
+                <div
+                  key={dr.id}
+                  className={`${styles.card} ${activeDrive?.id === dr.id ? styles.cardSelected : ''}`}
+                  role="button" tabIndex={0}
+                  onClick={() => openDrive(dr)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openDrive(dr); }}
+                >
+                  <Folder20Regular />
+                  <div style={{ minWidth: 0 }}>
+                    <Body1>{dr.name}</Body1>
+                    <Caption1>{dr.driveType === 'personal' ? 'OneDrive' : 'Document library'}</Caption1>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Field>
+        ) : null
+      )}
+
+      {/* Folder browser for the active drive */}
+      {activeDrive && (
+        <div className={styles.browser}>
+          <div className={styles.crumbs}>
+            {crumbs.map((c, i) => (
+              <span key={c.prefix} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {i > 0 && <ChevronRight16Regular />}
+                <Link onClick={() => openDrive(activeDrive, c.prefix)}>{c.label}</Link>
+              </span>
+            ))}
+            <span style={{ flex: 1 }} />
+            <Button
+              size="small"
+              appearance={selected?.driveId === activeDrive.id && selected?.path === prefix ? 'primary' : 'secondary'}
+              onClick={() => onSelect({ driveId: activeDrive.id, driveName: activeDrive.name, path: prefix, isFolder: true })}
+            >
+              Use this folder
+            </Button>
+          </div>
+          {itemsBusy ? (
+            <div className={styles.empty}><Spinner size="tiny" label="Listing…" /></div>
+          ) : items && items.length === 0 ? (
+            <div className={styles.empty}><Caption1>Empty folder. Use &quot;Use this folder&quot; above to point the shortcut here.</Caption1></div>
+          ) : (
+            (items || []).map((it) => {
+              const isSel = selected?.driveId === activeDrive.id && selected?.path === it.path;
+              return (
+                <div key={it.id} className={`${styles.entryRow} ${isSel ? styles.entryRowSel : ''}`}>
+                  {it.isFolder ? <Folder20Regular /> : <Document20Regular />}
+                  <span
+                    className={styles.entryName}
+                    onClick={() => (it.isFolder ? openDrive(activeDrive, it.path) : undefined)}
+                    role={it.isFolder ? 'button' : undefined}
+                    tabIndex={it.isFolder ? 0 : undefined}
+                    onKeyDown={(ev) => { if (it.isFolder && (ev.key === 'Enter' || ev.key === ' ')) openDrive(activeDrive, it.path); }}
+                  >
+                    <Body1>{it.name}</Body1>
+                  </span>
+                  <Button
+                    size="small"
+                    appearance={isSel ? 'primary' : 'secondary'}
+                    onClick={() => onSelect({ driveId: activeDrive.id, driveName: activeDrive.name, path: it.path, isFolder: it.isFolder })}
+                  >
+                    {isSel ? 'Selected' : 'Select'}
+                  </Button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {selected?.driveId && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Target: <span className={styles.mono}>sharepoint://{selected.driveId}/{selected.path}</span>
+          </MessageBarBody>
+        </MessageBar>
+      )}
     </div>
   );
 }

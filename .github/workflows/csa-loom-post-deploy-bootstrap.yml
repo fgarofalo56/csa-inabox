@@ -588,6 +588,19 @@ jobs:
           bash scripts/csa-loom/grant-identity-graph-approles.sh || \
             echo "  Identity Picker AppRole grant step reported a non-zero status (likely already granted)."
 
+          # Grant the Console UAMI the two Microsoft Graph application
+          # permissions required by OneLake shortcuts to SharePoint / OneDrive
+          # (lakehouse editor -> New shortcut -> SharePoint / OneDrive):
+          #   - Sites.Read.All (enumerate SharePoint sites + document libraries)
+          #   - Files.Read.All (list + read OneDrive / SharePoint drive items)
+          #
+          # Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts;
+          # NO Fabric dependency. Idempotent — re-runs cleanly. Until a Tenant
+          # Administrator grants admin consent, the SharePoint source renders its
+          # honest-gate MessageBar naming exactly these grants.
+          bash scripts/csa-loom/grant-shortcut-graph-approles.sh || \
+            echo "  SharePoint shortcut AppRole grant step reported a non-zero status (likely already granted)."
+
 
       - name: Summary
         if: always()

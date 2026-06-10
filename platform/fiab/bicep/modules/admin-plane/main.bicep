@@ -669,6 +669,9 @@ param loomIdentityPickerEnabled bool = false
 @description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt.')
 param loomWorkspaceM365LinkEnabled bool = false
 
+@description('Enable OneLake-shortcut sources to SharePoint document libraries and OneDrive folders via Microsoft Graph (lakehouse editor → New shortcut → SharePoint / OneDrive). When true, sets LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the Console and documents the Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs (scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent). Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts; NO Fabric dependency. When false, the SharePoint source renders but the browse/create return 503 with the exact remediation (no mock data).')
+param loomSharepointShortcutsEnabled bool = false
+
 @description('Resource-group name prefix for dedicated per-workspace backing resource groups created from the workspace create wizard (Advanced → "Provision a dedicated resource group"). The wizard appends a short workspace id. The Console UAMI needs Contributor at subscription scope to create them.')
 param loomWorkspaceRgPrefix string = 'rg-loom-ws-'
 
@@ -2084,6 +2087,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomWorkspaceM365LinkEnabled ? [
             { name: 'LOOM_WORKSPACE_M365_LINK', value: 'true' }
           ] : [],
+          // OneLake shortcuts → SharePoint document libraries / OneDrive folders
+          // via Microsoft Graph (lakehouse editor → New shortcut → SharePoint /
+          // OneDrive). Needs the Console UAMI's Sites.Read.All + Files.Read.All
+          // Graph AppRoles (documented by identity-graph-rbac.bicep). When false
+          // the SharePoint source renders but the browse/create return 503 with
+          // the exact remediation (no mock data) — per no-vaporware.md.
+          loomSharepointShortcutsEnabled ? [
+            { name: 'LOOM_SHAREPOINT_SHORTCUTS_ENABLED', value: 'true' }
+          ] : [],
           // Dedicated per-workspace backing resource-group name prefix used by
           // the workspace create wizard (Advanced → provision a dedicated RG).
           // The Console UAMI needs Contributor at subscription scope to create
@@ -2714,13 +2726,15 @@ module iotHubRbac 'iothub-rbac.bicep' = if (!empty(loomIotHubResourceId) && !ski
 // out-of-band by grant-identity-graph-approles.sh (ARM can't grant Graph
 // AppRoles); this module surfaces the required grants + sovereign Graph
 // endpoint as deterministic outputs for the post-deploy bootstrap.
-module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled) {
+module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled || loomSharepointShortcutsEnabled) {
   name: 'console-identity-graph-rbac'
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     boundary: boundary
     skipRoleGrants: skipRoleGrants
     workspaceM365LinkEnabled: loomWorkspaceM365LinkEnabled
+    sharepointShortcutsEnabled: loomSharepointShortcutsEnabled
+    identityPickerEnabled: loomIdentityPickerEnabled
   }
 }
 

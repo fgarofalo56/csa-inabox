@@ -517,6 +517,51 @@ If the volume is absent, a Tables Delta Sharing shortcut honest-gates
 (`delta_sharing_needs_uc_volume`) with the exact `CREATE VOLUME` remediation; a
 Files Delta Sharing shortcut works without Databricks entirely.
 
+## SharePoint / OneDrive shortcuts (Microsoft Graph) {#sharepoint-shortcuts}
+
+A **SharePoint / OneDrive** lakehouse shortcut (Lakehouse editor → Shortcuts →
+New shortcut → *SharePoint / OneDrive*) virtualizes a SharePoint document-library
+folder/file or a OneDrive item zero-copy under **Files** — Azure-native parity
+with Fabric OneLake's OneDrive/SharePoint shortcut, with **NO Fabric / Power BI
+dependency**. The data plane is **Microsoft Graph**, called app-only on the
+Console UAMI; it works with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET.
+
+One-time tenant bootstrap:
+
+1. **Grant the Console UAMI two Graph application AppRoles** (out-of-band — ARM
+   can't grant Graph AppRoles):
+
+   ```bash
+   CONSOLE_UAMI_PRINCIPAL=<console-uami-object-id> \
+     scripts/csa-loom/grant-shortcut-graph-approles.sh
+   # Sovereign clouds: GRAPH_HOST=https://graph.microsoft.us (GCC-High) /
+   #                   https://dod-graph.microsoft.us (IL5)
+   ```
+
+   - `Sites.Read.All` (`332a536c-c7ef-4017-ab91-336970924f0d`) — enumerate
+     SharePoint sites + their document libraries (drives).
+   - `Files.Read.All` (`01d4889c-1287-42c6-ac1f-5d1e02578ef6`) — list + read
+     OneDrive / SharePoint drive items the shortcut points at.
+
+2. **A Tenant Administrator grants admin consent** at *Entra ID → Enterprise
+   applications → Console UAMI → Permissions → Grant admin consent*. Until
+   consented every Graph call returns `403` and the SharePoint source renders its
+   honest-gate MessageBar (no mock data).
+
+3. **Enable the feature**: set `loomSharepointShortcutsEnabled=true` in the
+   admin-plane bicepparam (wires `LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true` into the
+   Console Container App) and redeploy, or set the env var directly. The Graph
+   AppRole grant is also performed automatically by the post-deploy bootstrap
+   workflow (`csa-loom-post-deploy-bootstrap.yml`).
+
+The `LOOM_GRAPH_BASE` env var (already injected by the admin-plane bicep for the
+identity picker) determines the sovereign Graph host + token scope, so GCC-High /
+IL5 mint a sovereign-scoped token. **SharePoint/OneDrive shortcuts are Files-only**
+(Graph is a file API — a *Tables* shortcut honest-gates `sharepoint_files_only`).
+Browse supports a SharePoint site search, your OneDrive, or pasting a sharing
+link. The **Test** action re-reads the targeted drive item via Graph (a `404` ⇒
+the document moved/was deleted; a `403` ⇒ consent/AppRole revoked).
+
 ## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
 
 The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a

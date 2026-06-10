@@ -16,6 +16,7 @@ import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,6 +117,31 @@ export async function POST(req: NextRequest) {
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'engine_unreachable', data: updated }, { status: 502 });
+    }
+  }
+
+  // SharePoint / OneDrive: re-read the targeted drive item via Microsoft Graph
+  // on the Console UAMI (HEAD-equivalent). A 404 => the document/folder moved or
+  // was deleted; a 403 => the Graph app-role/consent was revoked.
+  if (sc.targetType === 'sharepoint') {
+    const gate = graphDriveConfigGate();
+    if (gate) {
+      const updated = await updateShortcutStatus(lakehouseId, id, 'pending', gate.hint.followUp);
+      return NextResponse.json({ ok: false, code: gate.code, error: gate.hint.followUp, hint: gate.hint.followUp, data: updated }, { status: 503 });
+    }
+    const parsed = parseSharepointUri(sc.targetUri);
+    if (!parsed) {
+      const updated = await updateShortcutStatus(lakehouseId, id, 'error', `Invalid SharePoint target: ${sc.targetUri}`);
+      return NextResponse.json({ ok: false, code: 'bad_target', error: `Invalid SharePoint target: ${sc.targetUri}`, data: updated }, { status: 400 });
+    }
+    try {
+      await headDriveItem(parsed.driveId, parsed.path);
+      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      return NextResponse.json({ ok: true, data: updated });
+    } catch (e: any) {
+      const msg = sanitize(e);
+      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      return NextResponse.json({ ok: false, error: msg, code: e?.code || 'graph_drive_error', data: updated }, { status: e?.status || 502 });
     }
   }
 
