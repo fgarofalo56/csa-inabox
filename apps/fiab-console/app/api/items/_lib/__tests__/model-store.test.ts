@@ -11,7 +11,7 @@ vi.mock('../item-crud', () => ({ loadOwnedItem: vi.fn(), updateOwnedItem: vi.fn(
 
 import {
   normalizeRelationship, upsertRelationship, removeRelationship,
-  normalizeMeasure, upsertMeasure, tvfDdl,
+  normalizeMeasure, upsertMeasure, tvfDdl, applyDescriptions,
   type LoomModelState,
 } from '../model-store';
 
@@ -91,5 +91,48 @@ describe('tvfDdl', () => {
     expect(ddl).toMatch(/RETURNS TABLE/);
     expect(ddl).toContain('SELECT SUM(Amount) AS T FROM dbo.Sales');
     expect(ddl.trimEnd().endsWith(');')).toBe(true);
+  });
+});
+
+describe('applyDescriptions', () => {
+  const baseModel = (): LoomModelState => ({
+    relationships: [],
+    measures: [
+      upsertMeasure(empty(), normalizeMeasure({ name: 'fn_Total', expression: 'SELECT 1' }, 'tvf')).measures[0],
+      upsertMeasure(empty(), normalizeMeasure({ name: 'fn_Avg', expression: 'SELECT 2' }, 'tvf')).measures[0],
+    ],
+    tableDescriptions: { 'dbo.Existing': 'kept' },
+  });
+
+  it('stamps descriptions onto matched measures only and counts updates', () => {
+    const { next, measuresUpdated, tablesUpdated } = applyDescriptions(
+      baseModel(),
+      [{ name: 'fn_Total', description: 'Total of x.' }, { name: 'not_there', description: 'ignored' }],
+      [],
+    );
+    expect(measuresUpdated).toBe(1);
+    expect(tablesUpdated).toBe(0);
+    expect(next.measures.find((m) => m.name === 'fn_Total')?.description).toBe('Total of x.');
+    expect(next.measures.find((m) => m.name === 'fn_Avg')?.description).toBeUndefined();
+  });
+
+  it('merges table descriptions, preserving existing keys', () => {
+    const { next, tablesUpdated } = applyDescriptions(
+      baseModel(),
+      [],
+      [{ name: 'dbo.Sales', description: 'Fact at line grain.' }],
+    );
+    expect(tablesUpdated).toBe(1);
+    expect(next.tableDescriptions).toEqual({ 'dbo.Existing': 'kept', 'dbo.Sales': 'Fact at line grain.' });
+  });
+
+  it('skips table entries with empty id or description', () => {
+    const { next, tablesUpdated } = applyDescriptions(
+      baseModel(),
+      [],
+      [{ name: '', description: 'no id' }, { name: 'dbo.X', description: '   ' }],
+    );
+    expect(tablesUpdated).toBe(0);
+    expect(next.tableDescriptions).toEqual({ 'dbo.Existing': 'kept' });
   });
 });

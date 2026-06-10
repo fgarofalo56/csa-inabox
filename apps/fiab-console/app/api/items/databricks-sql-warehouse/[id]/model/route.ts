@@ -21,6 +21,10 @@ import {
   normalizeMeasure, upsertMeasure,
   type StoredMeasure, type StoredRelationship,
 } from '../../../_lib/model-store';
+import {
+  handleDescribeAll, handleSaveDescriptions,
+  type SaveDescriptionsBody,
+} from '../../../_lib/model-describe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -159,6 +163,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       tables: [],
       relationships: model.relationships,
       measures: model.measures,
+      tableDescriptions: model.tableDescriptions || {},
       computeReady: false,
       notice: 'Select a warehouse, catalog, and schema in the Query tab to load tables into the Model view.',
     });
@@ -171,6 +176,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       tables: [],
       relationships: model.relationships,
       measures: model.measures,
+      tableDescriptions: model.tableDescriptions || {},
       computeReady: false,
       notice: `Warehouse is ${w?.state || 'UNKNOWN'} — start it to load live tables and create relationships.`,
     });
@@ -181,11 +187,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       readTables(warehouseId, catalog, schema),
       readUcRelationships(warehouseId, catalog, schema),
     ]);
+    const tdesc = model.tableDescriptions || {};
+    const tablesWithDesc = tables.map((t) => (tdesc[t.id] ? { ...t, description: tdesc[t.id] } : t));
     return NextResponse.json({
       ok: true,
-      tables,
+      tables: tablesWithDesc,
       relationships: mergeRelationships(model.relationships, ucRels),
       measures: model.measures,
+      tableDescriptions: tdesc,
       computeReady: true,
     });
   } catch (e: any) {
@@ -205,6 +214,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const { state: model, itemFound } = await readModelState(id, ITEM_TYPE, session.claims.oid);
   if (!itemFound) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+
+  // Bulk AI auto-description — propose descriptions for every measure + table.
+  if (kind === 'describe-all') {
+    let tables: ModelTable[] = [];
+    if (warehouseId && defCatalog && defSchema) {
+      const w = await getWarehouse(warehouseId).catch(() => null);
+      if (w?.state === 'RUNNING') {
+        tables = await readTables(warehouseId, defCatalog, defSchema).catch(() => []);
+      }
+    }
+    return handleDescribeAll({ itemId: id, itemType: ITEM_TYPE, tenantId: session.claims.oid, tables });
+  }
+
+  // Persist approved measure + table descriptions to the model catalog.
+  if (kind === 'save-descriptions') {
+    return handleSaveDescriptions({
+      itemId: id, itemType: ITEM_TYPE, tenantId: session.claims.oid, body: body as SaveDescriptionsBody,
+    });
+  }
 
   if (kind === 'measure') {
     let measure: StoredMeasure;

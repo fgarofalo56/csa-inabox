@@ -50,6 +50,14 @@ export interface StoredMeasure {
 export interface LoomModelState {
   relationships: StoredRelationship[];
   measures: StoredMeasure[];
+  /**
+   * Business-friendly table descriptions keyed by the table id (`schema.table`
+   * for Synapse/Warehouse, `catalog.schema.table` for Databricks). Tables in the
+   * Synapse / Unity Catalog backends are read live, so their AI-authored
+   * descriptions are persisted Azure-native here on the Cosmos item — no Power
+   * BI / Fabric dependency. Optional for backward compatibility.
+   */
+  tableDescriptions?: Record<string, string>;
 }
 
 const CARDINALITIES: Cardinality[] = ['one-to-many', 'many-to-one', 'one-to-one', 'many-to-many'];
@@ -69,6 +77,10 @@ export async function readModelState(
     state: {
       relationships: Array.isArray(raw?.relationships) ? (raw!.relationships as StoredRelationship[]) : [],
       measures: Array.isArray(raw?.measures) ? (raw!.measures as StoredMeasure[]) : [],
+      tableDescriptions:
+        raw?.tableDescriptions && typeof raw.tableDescriptions === 'object'
+          ? (raw.tableDescriptions as Record<string, string>)
+          : {},
     },
   };
 }
@@ -173,4 +185,53 @@ export function tvfDdl(measure: StoredMeasure): string {
   const name = measure.name.replace(/[[\]]/g, '');
   const body = measure.expression.trim().replace(/;+\s*$/, '');
   return `CREATE OR ALTER FUNCTION [${schema}].[${name}]()\nRETURNS TABLE\nAS RETURN (\n${body}\n);`;
+}
+
+/** A description to persist against a measure (by name) or a table (by id). */
+export interface DescriptionUpdate {
+  /** The measure name OR the table id the description applies to. */
+  name: string;
+  description: string;
+}
+
+/**
+ * Merge approved AI / hand-authored descriptions into a model state. Measure
+ * descriptions match a stored measure by name (case-insensitive on a unique
+ * name); table descriptions are written into `tableDescriptions` keyed by table
+ * id. Returns the next state plus how many of each were applied so the BFF can
+ * report an honest count (never a fake "saved!" — per no-vaporware.md).
+ *
+ * Pure (no I/O) so it is unit-testable; the caller persists via writeModelState.
+ */
+export function applyDescriptions(
+  model: LoomModelState,
+  measureDescriptions: DescriptionUpdate[],
+  tableDescriptions: DescriptionUpdate[],
+): { next: LoomModelState; measuresUpdated: number; tablesUpdated: number } {
+  const now = new Date().toISOString();
+  const measureMap = new Map(measureDescriptions.map((d) => [String(d.name), String(d.description)]));
+  let measuresUpdated = 0;
+  const measures: StoredMeasure[] = model.measures.map((m) => {
+    if (measureMap.has(m.name)) {
+      measuresUpdated += 1;
+      return { ...m, description: measureMap.get(m.name)!, updatedAt: now };
+    }
+    return m;
+  });
+
+  const tableDesc: Record<string, string> = { ...(model.tableDescriptions || {}) };
+  let tablesUpdated = 0;
+  for (const d of tableDescriptions) {
+    const id = String(d.name || '').trim();
+    const desc = String(d.description || '').trim();
+    if (!id || !desc) continue;
+    tableDesc[id] = desc;
+    tablesUpdated += 1;
+  }
+
+  return {
+    next: { ...model, measures, tableDescriptions: tableDesc },
+    measuresUpdated,
+    tablesUpdated,
+  };
 }

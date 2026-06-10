@@ -26,13 +26,6 @@
  *   LOOM_UAMI_CLIENT_ID — Console UAMI client id
  */
 
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-
-import { cogScope } from '@/lib/azure/cloud-endpoints';
 import { executeQuery, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import {
   readModelState,
@@ -41,88 +34,13 @@ import {
   type LoomModelState,
 } from '@/app/api/items/_lib/model-store';
 import { buildTSqlProbe, stripFence } from '@/lib/copilot/dax-probe';
-import type { LoomToolRegistry, ToolContext, AoaiTarget } from '@/lib/azure/copilot-orchestrator';
+import { aoaiChat, proposeMeasureDescriptions } from '@/lib/copilot/dax-describe';
+import type { LoomToolRegistry, ToolContext } from '@/lib/azure/copilot-orchestrator';
 
-// ---------- AOAI credential (mirrors copilot-orchestrator.ts) ----------
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
-
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token for the DAX Copilot.');
-  return t.token;
-}
-
-/**
- * Resolve the AOAI chat target for a caller. Loads the tenant's admin-selected
- * Copilot config (account + deployment) and feeds it to the orchestrator's
- * resolver, which falls back to env / Foundry discovery. Dynamic import breaks
- * the static cycle with copilot-orchestrator.
- */
-async function getAoaiTarget(userOid: string): Promise<AoaiTarget> {
-  const [{ resolveAoaiTarget }, { loadTenantCopilotConfig }] = await Promise.all([
-    import('@/lib/azure/copilot-orchestrator'),
-    import('@/lib/azure/copilot-config-store'),
-  ]);
-  const cfg = await loadTenantCopilotConfig(userOid).catch(() => null);
-  return resolveAoaiTarget(cfg);
-}
-
-/** One-shot AOAI chat completion (no tools). Cloud-portable via getAoaiTarget. */
-async function aoaiChat(
-  userOid: string,
-  system: string,
-  user: string,
-  opts: { maxTokens?: number; temperature?: number; jsonObject?: boolean } = {},
-): Promise<string> {
-  const target = await getAoaiTarget(userOid);
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const payload: Record<string, unknown> = {
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    max_tokens: opts.maxTokens ?? 400,
-  };
-  if (opts.temperature !== undefined) payload.temperature = opts.temperature;
-  if (opts.jsonObject) payload.response_format = { type: 'json_object' };
-
-  const send = (body: Record<string, unknown>) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-  let res = await send(payload);
-  // Newer reasoning models reject non-default temperature — retry without it.
-  if (res.status === 400 && opts.temperature !== undefined) {
-    const t = await res.text();
-    if (/temperature|top_p|unsupported_value|does not support/i.test(t)) {
-      const { temperature, ...rest } = payload;
-      res = await send(rest);
-    } else {
-      throw new Error(`AOAI chat failed 400: ${t.slice(0, 300)}`);
-    }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI chat failed ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const body = await res.json();
-  return String(body?.choices?.[0]?.message?.content ?? '').trim();
-}
-
-/** Strip ```dax / ``` fences a model sometimes wraps an expression in. */
-// (moved to ./dax-probe — imported above)
+// AOAI chat + the bulk auto-describe orchestration live in ./dax-describe — the
+// SAME backend the Model-view catalog "Generate descriptions" action calls — so
+// the conversational and bulk surfaces stay consistent. stripFence + the
+// DAX→T-SQL probe live in ./dax-probe (dependency-free, unit-tested).
 
 // ---------- model context ----------
 
@@ -274,27 +192,12 @@ async function handleDescribeModel(
   if (!state.measures.length) {
     return { proposals: [], note: 'No measures found on this model. Add measures first, then re-run describe.' };
   }
-  const measuresList = state.measures
-    .map((m, i) => `${i + 1}. [${m.name}] = ${(m.expression || '').slice(0, 160)}`)
-    .join('\n');
-
-  const raw = await aoaiChat(
+  // Reuse the shared bulk auto-describe (same AOAI backend as the Model-view
+  // "Generate descriptions" catalog action).
+  const proposals = await proposeMeasureDescriptions(
+    state.measures.map((m) => ({ name: m.name, expression: m.expression, description: m.description })),
     ctx.userOid,
-    'You are a data catalog writer. For each DAX measure listed, write a concise (1-2 sentence) business-friendly description. Respond with a JSON object {"measures":[{"name":"...","description":"..."}]} only — no prose, no code fence.',
-    `Write descriptions for these DAX measures:\n${measuresList}`,
-    { maxTokens: 700, temperature: 0.3, jsonObject: true },
   );
-
-  let proposals: Array<{ name: string; description: string }> = [];
-  try {
-    const parsed = JSON.parse(raw || '{}');
-    const arr = Array.isArray(parsed) ? parsed : (parsed?.measures ?? parsed?.items ?? []);
-    proposals = (Array.isArray(arr) ? arr : [])
-      .filter((p: any) => p && typeof p.name === 'string' && typeof p.description === 'string')
-      .map((p: any) => ({ name: p.name, description: p.description }));
-  } catch {
-    /* non-JSON — return empty proposals with the raw note below */
-  }
 
   return {
     proposals,

@@ -28,6 +28,10 @@ import {
   normalizeMeasure, upsertMeasure, tvfDdl,
   type LoomModelState, type StoredMeasure,
 } from './model-store';
+import {
+  handleDescribeAll, handleSaveDescriptions,
+  type SaveDescriptionsBody,
+} from './model-describe';
 
 interface ModelTable {
   id: string;
@@ -113,6 +117,7 @@ export function makeSynapseModelHandlers(itemType: string) {
         tables: [],
         relationships: model.relationships,
         measures: model.measures,
+        tableDescriptions: model.tableDescriptions || {},
         computeReady: false,
         notice: `Warehouse compute is ${pool?.state || 'offline'} — resume the Dedicated SQL pool to load live tables.`,
       });
@@ -120,11 +125,16 @@ export function makeSynapseModelHandlers(itemType: string) {
 
     try {
       const [tables, liveMeasures] = await Promise.all([readTables(), readFunctionMeasures()]);
+      // Stamp persisted AI/hand-authored descriptions onto the live tables so the
+      // Model view shows them inline.
+      const tdesc = model.tableDescriptions || {};
+      const tablesWithDesc = tables.map((t) => (tdesc[t.id] ? { ...t, description: tdesc[t.id] } : t));
       return NextResponse.json({
         ok: true,
-        tables,
+        tables: tablesWithDesc,
         relationships: model.relationships,
         measures: mergeMeasures(model.measures, liveMeasures),
+        tableDescriptions: tdesc,
         computeReady: true,
       });
     } catch (e: any) {
@@ -141,6 +151,25 @@ export function makeSynapseModelHandlers(itemType: string) {
 
     const { state: model, itemFound } = await readModelState(id, itemType, session.claims.oid);
     if (!itemFound) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+
+    // Bulk AI auto-description — propose descriptions for every measure + table.
+    if (kind === 'describe-all') {
+      // Load live tables when the pool is online so tables can be described too;
+      // when offline we still describe the persisted measures (honest partial).
+      let tables: ModelTable[] = [];
+      const pool = await getPoolState().catch(() => null);
+      if (pool?.state === 'Online') {
+        tables = await readTables().catch(() => []);
+      }
+      return handleDescribeAll({ itemId: id, itemType, tenantId: session.claims.oid, tables });
+    }
+
+    // Persist approved measure + table descriptions to the model catalog.
+    if (kind === 'save-descriptions') {
+      return handleSaveDescriptions({
+        itemId: id, itemType, tenantId: session.claims.oid, body: body as SaveDescriptionsBody,
+      });
+    }
 
     if (kind === 'measure') {
       let measure: StoredMeasure;

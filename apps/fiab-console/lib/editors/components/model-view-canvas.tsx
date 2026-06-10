@@ -37,13 +37,14 @@ import {
   Badge, Button, Caption1, Text, Tooltip, Spinner, Field, Input, Dropdown, Option, Switch,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  Checkbox, Textarea, Link as FluentLink,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   FullScreenMaximize20Regular, Organization20Regular,
   DocumentTable16Regular, Key16Regular, Add20Regular, Delete16Regular,
-  MathFormula20Regular, Play16Regular,
+  MathFormula20Regular, Play16Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
@@ -65,6 +66,8 @@ export interface ModelTable {
   name: string;
   columns: ModelColumn[];
   rowCount?: number;
+  /** Business-friendly description (AI-authored or hand-edited), persisted in Cosmos. */
+  description?: string;
 }
 
 export interface ModelRelationship {
@@ -88,6 +91,8 @@ export interface ModelMeasure {
   expression: string;
   kind: MeasureKind;
   createdAt?: string;
+  /** Business-friendly description (AI-authored or hand-edited), persisted in Cosmos. */
+  description?: string;
 }
 
 const CARDINALITIES: Cardinality[] = ['one-to-many', 'many-to-one', 'one-to-one', 'many-to-many'];
@@ -147,6 +152,22 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
         <Text size={200} weight="semibold" truncate wrap={false} style={{ flex: 1 }}>{table.name}</Text>
         <Badge size="extra-small" appearance="tint" color="informative">{table.schema}</Badge>
       </div>
+
+      {/* AI / hand-authored table description, when present. */}
+      {table.description && (
+        <Tooltip content={table.description} relationship="description">
+          <Caption1
+            style={{
+              padding: '4px 10px', color: tokens.colorNeutralForeground3,
+              borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {table.description}
+          </Caption1>
+        </Tooltip>
+      )}
 
       {/* Whole-card target/source handles (used as a fallback when a precise
           column handle isn't grabbed). */}
@@ -534,6 +555,8 @@ interface ModelResponse {
   tables?: ModelTable[];
   relationships?: ModelRelationship[];
   measures?: ModelMeasure[];
+  tableDescriptions?: Record<string, string>;
+  computeReady?: boolean;
   error?: string;
   message?: string;
   state?: string;
@@ -566,7 +589,31 @@ function buildUrl(engine: ModelEngine, id: string, query?: Record<string, string
 const panelStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: 12 },
   measuresHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  spacer: { flex: 1 },
+  descTableWrap: { maxHeight: 420, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
 });
+
+/** One proposed description row in the review dialog (measure or table). */
+interface DescribeRow {
+  kind: 'measure' | 'table';
+  /** measure name OR table id — the save key. */
+  name: string;
+  /** display label (schema-qualified for measures, table name for tables). */
+  label: string;
+  description: string;
+  selected: boolean;
+}
+
+interface DescribeProposalLite { name: string; description: string }
+interface DescribeAllResponse {
+  ok: boolean;
+  proposals?: { measures: DescribeProposalLite[]; tables: DescribeProposalLite[] };
+  aiUnavailable?: boolean;
+  missing?: string;
+  detail?: string;
+  note?: string;
+  error?: string;
+}
 
 export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, measureKind, onUseInQuery }: ModelViewPanelProps) {
   const ps = panelStyles();
@@ -589,6 +636,15 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
   );
   const [mBusy, setMBusy] = useState(false);
   const [mErr, setMErr] = useState<string | null>(null);
+
+  // Bulk AI auto-description (the "Generate descriptions" catalog action).
+  const [descOpen, setDescOpen] = useState(false);
+  const [descBusy, setDescBusy] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [descErr, setDescErr] = useState<string | null>(null);
+  const [aiGate, setAiGate] = useState<string | null>(null);
+  const [descRows, setDescRows] = useState<DescribeRow[]>([]);
+  const [descNote, setDescNote] = useState<string | null>(null);
 
   const queryKey = JSON.stringify(query || {});
 
@@ -663,6 +719,81 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
     }
   }, [engine, id, query, mName, mSchema, mExpr, measureKind, load]);
 
+  // Bulk AI auto-description: ask the BFF to propose descriptions for every
+  // measure + table, then open the review dialog so the user approves/edits
+  // before anything is persisted (no silent write — parity with the Copilot's
+  // approve-then-save flow).
+  const generateDescriptions = useCallback(async () => {
+    setDescBusy(true); setDescErr(null); setAiGate(null); setDescRows([]); setDescNote(null);
+    setDescOpen(true);
+    try {
+      const r = await fetch(buildUrl(engine, id, query, { kind: 'describe-all' }), { method: 'POST' });
+      const j = (await r.json()) as DescribeAllResponse;
+      if (j.aiUnavailable) {
+        setAiGate(j.detail || `AI auto-description is not configured (set ${j.missing || 'LOOM_AOAI_ENDPOINT'}).`);
+        return;
+      }
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const measureProposals = j.proposals?.measures ?? [];
+      const tableProposals = j.proposals?.tables ?? [];
+      const curTables = data?.tables ?? [];
+      const curMeasures = data?.measures ?? [];
+      const rows: DescribeRow[] = [];
+      for (const p of measureProposals) {
+        const m = curMeasures.find((x) => x.name === p.name);
+        rows.push({
+          kind: 'measure',
+          name: p.name,
+          label: m?.schema ? `${m.schema}.${m.name}` : p.name,
+          description: p.description,
+          selected: true,
+        });
+      }
+      for (const p of tableProposals) {
+        const t = curTables.find((x) => x.id === p.name);
+        rows.push({
+          kind: 'table',
+          name: p.name,
+          label: t?.name || p.name,
+          description: p.description,
+          selected: true,
+        });
+      }
+      setDescRows(rows);
+      if (rows.length === 0) {
+        setDescNote(j.note || 'No descriptions were proposed. Add measures or resume the compute to load tables, then try again.');
+      }
+    } catch (e: any) {
+      setDescErr(e?.message || String(e));
+    } finally {
+      setDescBusy(false);
+    }
+  }, [engine, id, query, data]);
+
+  const saveDescriptions = useCallback(async () => {
+    const chosen = descRows.filter((r) => r.selected && r.description.trim());
+    if (chosen.length === 0) { setDescErr('Select at least one description to save.'); return; }
+    setSaveBusy(true); setDescErr(null);
+    try {
+      const r = await fetch(buildUrl(engine, id, query, { kind: 'save-descriptions' }), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          measures: chosen.filter((c) => c.kind === 'measure').map((c) => ({ name: c.name, description: c.description.trim() })),
+          tables: chosen.filter((c) => c.kind === 'table').map((c) => ({ name: c.name, description: c.description.trim() })),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setDescOpen(false);
+      await load();
+    } catch (e: any) {
+      setDescErr(e?.message || String(e));
+    } finally {
+      setSaveBusy(false);
+    }
+  }, [engine, id, query, descRows, load]);
+
   const usageSql = useCallback((m: ModelMeasure): string => {
     if (m.kind === 'tvf' || m.kind === 'scalar') {
       const sch = (m.schema || 'dbo').replace(/[[\]]/g, '');
@@ -708,6 +839,19 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
       <div className={ps.measuresHead}>
         <MathFormula20Regular />
         <Text weight="semibold">Measures ({measures.length})</Text>
+        <div className={ps.spacer} />
+        <Tooltip
+          content="Use Azure OpenAI to draft business-friendly descriptions for every measure and table, then review before saving to the catalog."
+          relationship="label"
+        >
+          <Button
+            size="small" appearance="secondary" icon={<Sparkle20Regular />}
+            onClick={() => void generateDescriptions()}
+            disabled={descBusy || (measures.length === 0 && tables.length === 0)}
+          >
+            {descBusy ? 'Generating…' : 'Generate descriptions'}
+          </Button>
+        </Tooltip>
         <Button
           size="small" appearance="primary" icon={<Add20Regular />}
           onClick={() => { setMErr(null); setMName(''); setMOpen(true); }}
@@ -723,19 +867,25 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
             <TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Kind</TableHeaderCell>
+              <TableHeaderCell>Description</TableHeaderCell>
               <TableHeaderCell>Definition</TableHeaderCell>
               <TableHeaderCell>Use</TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
             {measures.length === 0 && (
-              <TableRow><TableCell colSpan={4}><Caption1>No measures yet. Click “New measure”.</Caption1></TableCell></TableRow>
+              <TableRow><TableCell colSpan={5}><Caption1>No measures yet. Click “New measure”.</Caption1></TableCell></TableRow>
             )}
             {measures.map((m) => (
               <TableRow key={m.id}>
                 <TableCell>{m.schema ? `${m.schema}.${m.name}` : m.name}</TableCell>
                 <TableCell><Badge appearance="outline" color={m.kind === 'cosmos' ? 'informative' : 'brand'}>{m.kind}</Badge></TableCell>
-                <TableCell style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <TableCell style={{ maxWidth: 280 }}>
+                  {m.description
+                    ? <Caption1>{m.description}</Caption1>
+                    : <Caption1 style={{ fontStyle: 'italic', color: tokens.colorNeutralForeground3 }}>—</Caption1>}
+                </TableCell>
+                <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <code style={{ fontSize: 11 }}>{m.expression.slice(0, 160)}</code>
                 </TableCell>
                 <TableCell>
@@ -755,6 +905,103 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           </TableBody>
         </Table>
       </div>
+
+      {/* Bulk AI auto-description review dialog */}
+      <Dialog open={descOpen} onOpenChange={(_, d) => { if (!descBusy && !saveBusy) setDescOpen(d.open); }}>
+        <DialogSurface style={{ maxWidth: 860 }}>
+          <DialogBody>
+            <DialogTitle>AI-generated descriptions</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {descBusy && <Spinner size="tiny" label="Generating descriptions with Azure OpenAI…" labelPosition="after" />}
+                {descErr && (
+                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not generate descriptions</MessageBarTitle>{descErr}</MessageBarBody></MessageBar>
+                )}
+                {aiGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>AI auto-description not configured</MessageBarTitle>
+                      {aiGate}
+                    </MessageBarBody>
+                    <MessageBarActions>
+                      <FluentLink href="https://learn.microsoft.com/azure/ai-services/openai/how-to/role-based-access-control" target="_blank">
+                        Azure OpenAI RBAC docs
+                      </FluentLink>
+                    </MessageBarActions>
+                  </MessageBar>
+                )}
+                {descNote && !descBusy && !aiGate && (
+                  <MessageBar intent="info"><MessageBarBody>{descNote}</MessageBarBody></MessageBar>
+                )}
+                {!descBusy && !aiGate && descRows.length > 0 && (
+                  <>
+                    <Caption1>
+                      Review and edit the proposed descriptions, then save. Only the checked rows are written
+                      to the model catalog (Cosmos) — nothing is saved until you click “Save descriptions”.
+                    </Caption1>
+                    <div className={ps.descTableWrap}>
+                      <Table aria-label="Proposed descriptions" size="small">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell style={{ width: 44 }}> </TableHeaderCell>
+                            <TableHeaderCell style={{ width: 90 }}>Type</TableHeaderCell>
+                            <TableHeaderCell style={{ width: 200 }}>Object</TableHeaderCell>
+                            <TableHeaderCell>Description</TableHeaderCell>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {descRows.map((row, i) => (
+                            <TableRow key={`${row.kind}:${row.name}`}>
+                              <TableCell>
+                                <Checkbox
+                                  checked={row.selected}
+                                  aria-label={`Include ${row.label}`}
+                                  onChange={(_, d) =>
+                                    setDescRows((prev) => prev.map((r, j) => (j === i ? { ...r, selected: !!d.checked } : r)))
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Badge appearance="outline" color={row.kind === 'measure' ? 'brand' : 'informative'}>{row.kind}</Badge>
+                              </TableCell>
+                              <TableCell style={{ wordBreak: 'break-word' }}><Caption1>{row.label}</Caption1></TableCell>
+                              <TableCell>
+                                <Textarea
+                                  value={row.description}
+                                  resize="vertical"
+                                  style={{ width: '100%' }}
+                                  aria-label={`Description for ${row.label}`}
+                                  onChange={(_, d) =>
+                                    setDescRows((prev) => prev.map((r, j) => (j === i ? { ...r, description: d.value } : r)))
+                                  }
+                                />
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDescOpen(false)} disabled={descBusy || saveBusy}>
+                {aiGate || descRows.length === 0 ? 'Close' : 'Cancel'}
+              </Button>
+              {!aiGate && descRows.length > 0 && (
+                <Button
+                  appearance="primary"
+                  onClick={() => void saveDescriptions()}
+                  disabled={saveBusy || descBusy || descRows.every((r) => !r.selected || !r.description.trim())}
+                >
+                  {saveBusy ? 'Saving…' : `Save descriptions (${descRows.filter((r) => r.selected && r.description.trim()).length})`}
+                </Button>
+              )}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* New-measure dialog */}
       <Dialog open={mOpen} onOpenChange={(_, d) => setMOpen(d.open)}>
