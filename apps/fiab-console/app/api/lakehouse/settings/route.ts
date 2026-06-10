@@ -6,9 +6,15 @@
  *       merged in from Microsoft.Storage when available.
  * PUT /api/lakehouse/settings
  *     body: { container, displayName?, defaultSparkPool?, sparkConfig?,
- *             timeTravelDays?, deltaDefaults?, description? }
+ *             timeTravelDays?, deltaDefaults?, description?, liquidClustering?,
+ *             icebergEndpoint?, fabricToggles? }
  *     — upsert the Loom-side settings doc in the `tenant-settings`
- *       Cosmos container, partitioned by tenantId.
+ *       Cosmos container, partitioned by tenantId. When `liquidClustering` or
+ *       `icebergEndpoint` are present, also runs the corresponding real
+ *       ALTER TABLE DDL via a Databricks SQL Warehouse (Azure-native, no
+ *       Fabric). The Iceberg V2 endpoint enables Delta UniForm so the Delta
+ *       table is readable by Apache Iceberg readers — the 1:1 of OneLake's
+ *       Delta→Iceberg virtualization.
  *
  * Storage account-level features (lifecycle/version policy) require the
  * caller to hold Storage Account Contributor; settings persisted here are
@@ -34,6 +40,23 @@ interface LiquidClustering {
   columns: string[];           // e.g. ["player_id", "filing_timestamp"]
 }
 
+interface IcebergEndpoint {
+  // Delta UniForm — the Azure-native 1:1 of OneLake's Delta→Iceberg
+  // virtualization. When enabled, Loom runs a real
+  //   ALTER TABLE … SET TBLPROPERTIES (
+  //     'delta.enableIcebergCompatV2' = 'true',
+  //     'delta.universalFormat.enabledFormats' = 'iceberg')
+  // against the named Delta table via a Databricks SQL Warehouse. Databricks
+  // then writes Apache Iceberg V2 metadata (a `metadata/` folder with
+  // `*.metadata.json`) into the table directory alongside the Delta log, so the
+  // same Delta data is readable by Iceberg readers (Snowflake, Trino, Spark,
+  // BigQuery, etc.) — exactly like OneLake virtualizing Delta tables as Iceberg.
+  // No Fabric capacity, OneLake API, or Power BI workspace is touched.
+  enabled: boolean;
+  tableName: string;           // Delta table under /Tables/ (or Tables/<schema>/)
+  schema?: string;             // optional schema for schema-enabled lakehouses
+}
+
 interface FabricToggles {
   // Persisted preferences. Each is effective ONLY on a Fabric Spark runtime
   // (opt-in). On the Azure-native default path (Synapse Spark / Databricks)
@@ -56,6 +79,7 @@ interface LakehouseSettingsDoc {
   deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
   schemasEnabled?: boolean;    // multi-schema namespace (workspace.lakehouse.schema.table)
   liquidClustering?: LiquidClustering;
+  icebergEndpoint?: IcebergEndpoint;
   fabricToggles?: FabricToggles;
   updatedAt?: string;
   updatedBy?: string;
@@ -86,6 +110,14 @@ function parseLiquidClustering(v: any): LiquidClustering | undefined {
     ? v.columns.map((c: any) => String(c).trim()).filter((c: string) => c.length > 0)
     : [];
   return { tableName: v.tableName.trim(), columns };
+}
+
+function parseIcebergEndpoint(v: any): IcebergEndpoint | undefined {
+  if (!v || typeof v !== 'object' || typeof v.tableName !== 'string' || !v.tableName.trim()) {
+    return undefined;
+  }
+  const schema = typeof v.schema === 'string' && v.schema.trim() ? v.schema.trim() : undefined;
+  return { enabled: !!v.enabled, tableName: v.tableName.trim(), schema };
 }
 
 function parseFabricToggles(v: any): FabricToggles | undefined {
@@ -152,6 +184,7 @@ export async function PUT(req: NextRequest) {
     deltaDefaults: body.deltaDefaults && typeof body.deltaDefaults === 'object' ? body.deltaDefaults : { autoOptimize: true },
     schemasEnabled: typeof body.schemasEnabled === 'boolean' ? body.schemasEnabled : undefined,
     liquidClustering: parseLiquidClustering(body.liquidClustering),
+    icebergEndpoint: parseIcebergEndpoint(body.icebergEndpoint),
     fabricToggles: parseFabricToggles(body.fabricToggles),
     updatedAt: new Date().toISOString(),
     updatedBy: session.claims.upn,
@@ -209,6 +242,72 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    // Iceberg V2 endpoint (Delta UniForm) — run a REAL ALTER TABLE … SET
+    // TBLPROPERTIES to enable / disable Apache Iceberg V2 metadata generation
+    // for the named Delta table, via a Databricks SQL Warehouse. This is the
+    // Azure-native 1:1 of OneLake's Delta→Iceberg virtualization — the same
+    // Delta data becomes readable by Iceberg readers. No Fabric dependency.
+    let icebergApplied = false;
+    let icebergEnabled = false;
+    let icebergSql: string | undefined;
+    let icebergGate: string | undefined;
+    let icebergError: string | undefined;
+    let icebergCatalogUrl: string | undefined;
+    let icebergAdlsPath: string | undefined;
+    let icebergMetadataPath: string | undefined;
+
+    const ice = doc.icebergEndpoint;
+    if (ice?.tableName) {
+      icebergEnabled = ice.enabled;
+      const account = getAccountName();
+      const cleanTable = ice.tableName.replace(/^\/+/, '').replace(/^Tables\//i, '');
+      const tablePrefix = ice.schema ? `Tables/${ice.schema}/${cleanTable}` : `Tables/${cleanTable}`;
+      const abfss = `abfss://${container}@${account}.dfs.core.windows.net/${tablePrefix}`;
+      // ADLS path (https form) the operator can hand to an Iceberg reader, plus
+      // the conventional metadata folder Databricks UniForm writes into.
+      icebergAdlsPath = `https://${account}.dfs.core.windows.net/${container}/${tablePrefix}`;
+      icebergMetadataPath = `${icebergAdlsPath}/metadata`;
+      // Iceberg REST Catalog (IRC) endpoint Unity Catalog exposes for UniForm
+      // tables — opt-in; surfaced for readers that prefer catalog discovery.
+      const host = (process.env.LOOM_DATABRICKS_HOSTNAME || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      if (host) icebergCatalogUrl = `https://${host}/api/2.1/unity-catalog/iceberg`;
+
+      const sql = ice.enabled
+        ? `ALTER TABLE delta.\`${abfss}\` SET TBLPROPERTIES (` +
+          `'delta.columnMapping.mode' = 'name', ` +
+          `'delta.enableIcebergCompatV2' = 'true', ` +
+          `'delta.universalFormat.enabledFormats' = 'iceberg')`
+        : `ALTER TABLE delta.\`${abfss}\` UNSET TBLPROPERTIES (` +
+          `'delta.universalFormat.enabledFormats', 'delta.enableIcebergCompatV2')`;
+      icebergSql = sql;
+
+      const gate = databricksConfigGate();
+      if (gate) {
+        icebergGate =
+          `The Iceberg V2 endpoint runs a real ALTER TABLE … SET TBLPROPERTIES (Delta UniForm) ` +
+          `via a Databricks SQL Warehouse. Set ${gate.missing} (and optionally LOOM_DATABRICKS_SQL_WAREHOUSE_ID) ` +
+          `in the admin-plane env vars to enable it. Your selection is saved and applies on the next save once the warehouse is configured.`;
+      } else {
+        try {
+          const whs = await listWarehouses();
+          const preferred = process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
+          const wh =
+            (preferred && whs.find((w) => w.id === preferred)) ||
+            whs.find((w) => w.state === 'RUNNING') ||
+            whs[0];
+          if (!wh) {
+            icebergGate =
+              'No Databricks SQL Warehouse exists in the workspace. Create one (Databricks navigator → SQL Warehouses) to enable the Iceberg V2 endpoint.';
+          } else {
+            await executeStatement(wh.id, sql);
+            icebergApplied = true;
+          }
+        } catch (e: any) {
+          icebergError = e?.message || String(e);
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       cloud: cloudEnv(),
@@ -217,6 +316,14 @@ export async function PUT(req: NextRequest) {
       clusteringSql,
       clusteringGate,
       clusteringError,
+      icebergApplied,
+      icebergEnabled,
+      icebergSql,
+      icebergGate,
+      icebergError,
+      icebergCatalogUrl,
+      icebergAdlsPath,
+      icebergMetadataPath,
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

@@ -405,6 +405,7 @@ export function LakehouseEditor({ item, id }: Props) {
     deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
     schemasEnabled?: boolean;
     liquidClustering?: { tableName: string; columns: string[] };
+    icebergEndpoint?: { enabled: boolean; tableName: string; schema?: string };
     fabricToggles?: { vorder: boolean; autotune: boolean; nativeExecution: boolean };
   }
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -419,6 +420,18 @@ export function LakehouseEditor({ item, id }: Props) {
   const [lcSql, setLcSql] = useState<string | null>(null);
   const [lcGate, setLcGate] = useState<string | null>(null);
   const [lcError, setLcError] = useState<string | null>(null);
+  // Iceberg V2 endpoint form state (OneLake Delta→Iceberg parity → real Delta
+  // UniForm ALTER TABLE … SET TBLPROPERTIES via a Databricks SQL Warehouse).
+  const [iceEnabled, setIceEnabled] = useState(false);
+  const [iceTableName, setIceTableName] = useState('');
+  const [iceSchema, setIceSchema] = useState('dbo');   // used only when schemas enabled
+  const [iceApplied, setIceApplied] = useState<boolean | null>(null);
+  const [iceSql, setIceSql] = useState<string | null>(null);
+  const [iceGate, setIceGate] = useState<string | null>(null);
+  const [iceError, setIceError] = useState<string | null>(null);
+  const [iceAdlsPath, setIceAdlsPath] = useState<string | null>(null);
+  const [iceMetadataPath, setIceMetadataPath] = useState<string | null>(null);
+  const [iceCatalogUrl, setIceCatalogUrl] = useState<string | null>(null);
   // Cloud boundary (commercial | gcc | gcch | il5) — drives honest per-cloud
   // disclosures for the Fabric-only acceleration gates.
   const [cloud, setCloud] = useState<'commercial' | 'gcc' | 'gcch' | 'il5'>('commercial');
@@ -1256,6 +1269,11 @@ export function LakehouseEditor({ item, id }: Props) {
       setLcTableName(j.settings?.liquidClustering?.tableName || '');
       setLcColumns((j.settings?.liquidClustering?.columns || []).join(', '));
       setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
+      setIceEnabled(j.settings?.icebergEndpoint?.enabled ?? false);
+      setIceTableName(j.settings?.icebergEndpoint?.tableName || '');
+      setIceSchema(j.settings?.icebergEndpoint?.schema || 'dbo');
+      setIceApplied(null); setIceSql(null); setIceGate(null); setIceError(null);
+      setIceAdlsPath(null); setIceMetadataPath(null); setIceCatalogUrl(null);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
@@ -1300,6 +1318,8 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
     setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
+    setIceApplied(null); setIceSql(null); setIceGate(null); setIceError(null);
+    setIceAdlsPath(null); setIceMetadataPath(null); setIceCatalogUrl(null);
     try {
       const sparkConfig: Record<string, string> = {};
       for (const line of settingsSparkConfText.split(/\r?\n/)) {
@@ -1310,6 +1330,10 @@ export function LakehouseEditor({ item, id }: Props) {
       const trimmedTable = lcTableName.trim();
       const liquidClustering = trimmedTable
         ? { tableName: trimmedTable, columns: lcColumns.split(',').map((c) => c.trim()).filter(Boolean) }
+        : undefined;
+      const trimmedIceTable = iceTableName.trim();
+      const icebergEndpoint = trimmedIceTable
+        ? { enabled: iceEnabled, tableName: trimmedIceTable, schema: schemasEnabled ? iceSchema || undefined : undefined }
         : undefined;
       const r = await fetch(`/api/lakehouse/settings`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1323,6 +1347,7 @@ export function LakehouseEditor({ item, id }: Props) {
           deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
           schemasEnabled: settings.schemasEnabled ?? false,
           liquidClustering,
+          icebergEndpoint,
           fabricToggles: settings.fabricToggles,
         }),
       });
@@ -1330,6 +1355,9 @@ export function LakehouseEditor({ item, id }: Props) {
         ok: boolean; error?: string; settings?: LakehouseSettings;
         clusteringApplied?: boolean; clusteringSql?: string;
         clusteringGate?: string; clusteringError?: string;
+        icebergApplied?: boolean; icebergEnabled?: boolean; icebergSql?: string;
+        icebergGate?: string; icebergError?: string;
+        icebergCatalogUrl?: string; icebergAdlsPath?: string; icebergMetadataPath?: string;
       }>(r, 'Save settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || settings);
@@ -1338,13 +1366,24 @@ export function LakehouseEditor({ item, id }: Props) {
       setLcSql(j.clusteringSql || null);
       setLcGate(j.clusteringGate || null);
       setLcError(j.clusteringError || null);
+      setIceApplied(j.icebergApplied ?? null);
+      setIceSql(j.icebergSql || null);
+      setIceGate(j.icebergGate || null);
+      setIceError(j.icebergError || null);
+      setIceAdlsPath(j.icebergAdlsPath || null);
+      setIceMetadataPath(j.icebergMetadataPath || null);
+      setIceCatalogUrl(j.icebergCatalogUrl || null);
       setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
-      // Keep the dialog open when clustering needs the user's attention (gate or
-      // error) so the MessageBar is visible; otherwise close as before.
-      if (!j.clusteringGate && !j.clusteringError) setSettingsOpen(false);
+      // Keep the dialog open when clustering or the Iceberg endpoint needs the
+      // user's attention (gate, error, or freshly-shown paths) so the
+      // MessageBar is visible; otherwise close as before.
+      const needsAttention =
+        j.clusteringGate || j.clusteringError ||
+        j.icebergGate || j.icebergError || j.icebergApplied;
+      if (!needsAttention) setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns]);
+  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns, iceEnabled, iceTableName, iceSchema, schemasEnabled]);
 
   // ---- reference lakehouses: load / mutate / browse / preview ---------
   const loadReferences = useCallback(async () => {
@@ -4373,6 +4412,103 @@ export function LakehouseEditor({ item, id }: Props) {
                         <MessageBarTitle>Clustering applied</MessageBarTitle>
                         ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
                         {lcSql ? <><br /><code style={{ fontSize: 11 }}>{lcSql}</code></> : null}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ---- Iceberg V2 endpoint (OneLake Delta→Iceberg parity → real Delta UniForm) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>Iceberg V2 endpoint</Subtitle2>
+                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                    <MessageBarBody>
+                      Expose a Delta table as <strong>Apache Iceberg V2</strong> so Iceberg readers
+                      (Snowflake, Trino, Spark, BigQuery) can read the same data — the Azure-native 1:1 of
+                      OneLake's Delta→Iceberg virtualization. On save, Loom runs a real{' '}
+                      <code>ALTER TABLE delta.`abfss://…` SET TBLPROPERTIES (delta.universalFormat.enabledFormats=&apos;iceberg&apos;)</code>{' '}
+                      (Delta UniForm) via a Databricks SQL Warehouse. Databricks then writes an Iceberg{' '}
+                      <code>metadata/</code> folder beside the Delta log — no Fabric, no data copy. Requires{' '}
+                      <strong>LOOM_DATABRICKS_HOSTNAME</strong> to be set.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Field label="Expose table as Iceberg">
+                    <Switch
+                      checked={iceEnabled}
+                      onChange={(_, d) => setIceEnabled(d.checked)}
+                      label={iceEnabled ? 'Iceberg readers enabled' : 'Disabled (Delta only)'}
+                    />
+                  </Field>
+                  {schemasEnabled && (
+                    <Field label="Schema" hint="Schema namespace this table lives under (schemas-enabled lakehouse).">
+                      {schemas && schemas.length > 0 ? (
+                        <Dropdown
+                          selectedOptions={iceSchema ? [iceSchema] : []}
+                          value={iceSchema}
+                          placeholder="Select a schema"
+                          onOptionSelect={(_, d) => setIceSchema(d.optionValue || 'dbo')}
+                        >
+                          {schemas.map((s) => (<Option key={s.name} value={s.name}>{s.name}</Option>))}
+                        </Dropdown>
+                      ) : (
+                        <Input value={iceSchema} onChange={(_, d) => setIceSchema(d.value)} placeholder="dbo" />
+                      )}
+                    </Field>
+                  )}
+                  <Field label="Delta table" hint="Delta table under /Tables/ in this container to virtualize as Iceberg.">
+                    {(() => {
+                      const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                      const liveNames = Array.isArray(listing)
+                        ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
+                        : [];
+                      const bundleNames = bundleDeltaTables.map((t) => t.name);
+                      const allNames = Array.from(new Set([...liveNames, ...bundleNames])).sort();
+                      if (allNames.length > 0) {
+                        return (
+                          <Dropdown
+                            selectedOptions={iceTableName ? [iceTableName] : []}
+                            value={iceTableName}
+                            placeholder="Select a Delta table"
+                            onOptionSelect={(_, d) => setIceTableName(d.optionValue || '')}
+                          >
+                            {allNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                          </Dropdown>
+                        );
+                      }
+                      return (
+                        <Input
+                          value={iceTableName}
+                          onChange={(_, d) => setIceTableName(d.value)}
+                          placeholder="bronze_player_profile"
+                        />
+                      );
+                    })()}
+                  </Field>
+                  {iceGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody><MessageBarTitle>Iceberg endpoint gate</MessageBarTitle>{iceGate}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {iceError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>ALTER TABLE failed</MessageBarTitle>{iceError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {iceApplied && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>
+                        <MessageBarTitle>{iceEnabled ? 'Iceberg endpoint enabled' : 'Iceberg endpoint disabled'}</MessageBarTitle>
+                        {iceEnabled
+                          ? 'Delta UniForm is on — the table now generates Iceberg V2 metadata and is readable by Iceberg readers.'
+                          : 'Delta UniForm removed — Iceberg metadata generation stopped.'}
+                        {iceSql ? <><br /><code style={{ fontSize: 11 }}>{iceSql}</code></> : null}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {(iceAdlsPath || iceMetadataPath || iceCatalogUrl) && (
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Iceberg endpoint paths</MessageBarTitle>
+                        {iceAdlsPath && (<><strong>ADLS path:</strong> <code style={{ fontSize: 11 }}>{iceAdlsPath}</code><br /></>)}
+                        {iceMetadataPath && (<><strong>Iceberg metadata:</strong> <code style={{ fontSize: 11 }}>{iceMetadataPath}</code><br /></>)}
+                        {iceCatalogUrl && (<><strong>Iceberg REST catalog:</strong> <code style={{ fontSize: 11 }}>{iceCatalogUrl}</code></>)}
                       </MessageBarBody>
                     </MessageBar>
                   )}
