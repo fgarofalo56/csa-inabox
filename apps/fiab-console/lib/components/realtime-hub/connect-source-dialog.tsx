@@ -18,11 +18,11 @@ import Link from 'next/link';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Subtitle2, Body1, Caption1, makeStyles, tokens,
+  Subtitle2, Body1, Caption1, Spinner, Dropdown, Option, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowLeft20Regular, Open20Regular, PlugConnected20Regular, Search20Regular } from '@fluentui/react-icons';
 import {
-  SOURCE_CONNECTORS, SOURCE_CATEGORIES, type SourceConnector, type SourceCategory,
+  SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual, type SourceConnector, type SourceCategory,
 } from './source-catalog';
 
 const useStyles = makeStyles({
@@ -40,14 +40,31 @@ const useStyles = makeStyles({
   catItemActive: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, fontWeight: 600 },
   rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
   grid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '10px',
-    overflowY: 'auto', paddingRight: '4px',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+    gap: tokens.spacingHorizontalS, alignContent: 'start',
+    overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS,
   },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px', padding: '12px',
-    cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '4px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalM,
+    cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1, textAlign: 'left',
     ':hover': { borderColor: tokens.colorBrandStroke1, boxShadow: tokens.shadow4 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
+  },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  chip: {
+    flexShrink: 0, width: '32px', height: '32px',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  cardName: { fontWeight: tokens.fontWeightSemibold, lineHeight: 1.2 },
+  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.4 },
+  cardTags: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
+  formHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  emptyGrid: {
+    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL, textAlign: 'center',
+    color: tokens.colorNeutralForeground3,
   },
   form: { display: 'flex', flexDirection: 'column', gap: '12px' },
 });
@@ -200,21 +217,32 @@ export function ConnectSourceDialog({
                 <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={() => { setPicked(null); setSuccess(null); }}>
                   Back to sources
                 </Button>
-                <Caption1>{picked.description}</Caption1>
+                {(() => {
+                  const v = sourceVisual(picked);
+                  const Icon = v.icon;
+                  return (
+                    <div className={styles.formHead}>
+                      <span className={styles.chip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
+                        <Icon style={{ width: 20, height: 20, color: v.color }} />
+                      </span>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{picked.description}</Caption1>
+                    </div>
+                  );
+                })()}
                 <Field label="Eventstream name" required>
                   <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} />
                 </Field>
                 <Field label="Workspace" required
                   hint="The Loom workspace to create the eventstream in (Azure-native — Event Hubs backed).">
-                  <select
+                  <Dropdown
                     aria-label="Workspace"
-                    value={workspaceId}
-                    onChange={(e) => setWorkspaceId(e.target.value)}
-                    style={{ padding: '6px 8px', borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke1}` }}
+                    placeholder="Select a workspace…"
+                    selectedOptions={workspaceId ? [workspaceId] : []}
+                    value={workspaces.find((w) => w.id === workspaceId)?.name || ''}
+                    onOptionSelect={(_, d) => setWorkspaceId(d.optionValue || '')}
                   >
-                    <option value="">Select a workspace…</option>
-                    {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                  </select>
+                    {workspaces.map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+                  </Dropdown>
                 </Field>
                 {picked.fields.map((f) => (
                   <Field key={f.key} label={f.label} required={f.required} hint={f.help}>
@@ -268,17 +296,29 @@ export function ConnectSourceDialog({
                   <Input contentBefore={<Search20Regular />} placeholder="Search sources"
                     value={query} onChange={(_, d) => setQuery(d.value)} />
                   <div className={styles.grid}>
-                    {connectors.map((c) => (
-                      <button key={c.id} type="button" className={styles.card} onClick={() => pick(c)}>
-                        <Subtitle2>{c.name}</Subtitle2>
-                        <Body1 style={{ fontSize: 13 }}>{c.description}</Body1>
-                        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                          <Badge appearance="outline" size="small">{c.sourceType}</Badge>
-                          {c.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
-                        </div>
-                      </button>
-                    ))}
-                    {connectors.length === 0 && <Body1>No matching sources.</Body1>}
+                    {connectors.map((c) => {
+                      const v = sourceVisual(c);
+                      const Icon = v.icon;
+                      return (
+                        <button key={c.id} type="button" className={styles.card}
+                          onClick={() => pick(c)} aria-label={`Connect ${c.name}`}>
+                          <div className={styles.cardHead}>
+                            <span className={styles.chip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
+                              <Icon style={{ width: 20, height: 20, color: v.color }} />
+                            </span>
+                            <Subtitle2 className={styles.cardName}>{c.name}</Subtitle2>
+                          </div>
+                          <Body1 className={styles.cardDesc}>{c.description}</Body1>
+                          <div className={styles.cardTags}>
+                            <Badge appearance="outline" size="small">{c.sourceType}</Badge>
+                            {c.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {connectors.length === 0 && (
+                      <Body1 className={styles.emptyGrid}>No sources match &quot;{query}&quot;.</Body1>
+                    )}
                   </div>
                 </div>
               </div>
@@ -287,7 +327,9 @@ export function ConnectSourceDialog({
           <DialogActions>
             <Button appearance="secondary" onClick={() => { setOpen(false); reset(); }}>Close</Button>
             {picked && (
-              <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={!canConnect} onClick={connect}>
+              <Button appearance="primary"
+                icon={busy ? <Spinner size="tiny" /> : <PlugConnected20Regular />}
+                disabled={!canConnect} onClick={connect}>
                 {busy ? 'Connecting…' : 'Connect'}
               </Button>
             )}

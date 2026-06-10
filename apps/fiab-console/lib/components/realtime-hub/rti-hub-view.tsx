@@ -89,6 +89,28 @@ const useStyles = makeStyles({
   },
   name: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.fontWeightSemibold },
   tabs: { marginBottom: tokens.spacingVerticalM },
+  loading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: tokens.spacingVerticalXXL, minHeight: '160px',
+  },
+  empty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, textAlign: 'center', lineHeight: 1.5,
+    padding: tokens.spacingVerticalXXL,
+    borderRadius: tokens.borderRadiusXLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+  },
+  emptyIcon: {
+    width: '48px', height: '48px',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalXS,
+  },
+  emptyText: { maxWidth: '440px' },
 });
 
 /** Resolve the catalog connector that matches a row's source type. */
@@ -401,16 +423,19 @@ export function RtiHubView() {
         )}
 
         {loading ? (
-          <Spinner label="Discovering streams across subscriptions…" />
+          <div className={styles.loading}>
+            <Spinner label="Discovering streams across subscriptions…" />
+          </div>
         ) : rows.length === 0 ? (
-          <div style={{
-            padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
-            backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
-            fontSize: 14, textAlign: 'center', lineHeight: 1.6,
-          }}>
-            {tab === 'dataStreams'
-              ? 'No streams discovered in scope yet. Provision an Event Hubs namespace, IoT Hub, or ADX cluster — or create a Loom eventstream — and it will appear here.'
-              : 'No connectors in this tab.'}
+          <div className={styles.empty}>
+            <span className={styles.emptyIcon} aria-hidden>
+              <DataUsage24Regular />
+            </span>
+            <span className={styles.emptyText}>
+              {tab === 'dataStreams'
+                ? 'No streams discovered in scope yet. Provision an Event Hubs namespace, IoT Hub, or ADX cluster — or create a Loom eventstream — and it will appear here.'
+                : 'No connectors in this tab.'}
+            </span>
           </div>
         ) : (
           <LoomDataTable
