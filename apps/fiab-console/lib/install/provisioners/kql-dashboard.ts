@@ -159,6 +159,10 @@ function buildDashboardJson(
   return {
     schema_version: '52',
     title,
+    // Fabric RTD's own minimum auto-refresh interval is 30s (a real Fabric
+    // constraint, preserved here for the opt-in Fabric export). The Loom-native
+    // ADX editor supports a tighter 5s live cadence guarded against query
+    // pile-up — see REFRESH_INTERVALS in phase3-editors.tsx.
     autoRefresh: { enabled: true, defaultInterval: '5m', minInterval: '30s' },
     pages: [{ id: pageId, name: title }],
     dataSources: [
