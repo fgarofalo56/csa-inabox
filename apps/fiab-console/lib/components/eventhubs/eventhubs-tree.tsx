@@ -65,9 +65,18 @@ const useDataExplorerStyles = makeStyles({
   row: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
   grow: { flexGrow: '1', minWidth: '160px' },
   gridWrap: { maxHeight: '320px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  stickyHead: {
+    position: 'sticky', top: '0', zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+  },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
   bodyCell: { maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   hint: { color: tokens.colorNeutralForeground3, display: 'block' },
+  clickRow: {
+    cursor: 'pointer',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
 });
 
 const HUBS_ROUTE = '/api/eventhubs/hubs';
@@ -314,7 +323,7 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
                 {events.length > 0 && (
                   <div className={d.gridWrap}>
                     <Table size="extra-small" aria-label="Peeked events">
-                      <TableHeader>
+                      <TableHeader className={d.stickyHead}>
                         <TableRow>
                           <TableHeaderCell>Seq #</TableHeaderCell>
                           <TableHeaderCell>Offset</TableHeaderCell>
@@ -327,7 +336,7 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
                           const bodyStr = typeof ev.body === 'string' ? ev.body : JSON.stringify(ev.body);
                           const isOpen = !!expanded[i];
                           return (
-                            <TableRow key={`${ev.sequenceNumber ?? i}`} onClick={() => setExpanded((m) => ({ ...m, [i]: !m[i] }))} style={{ cursor: 'pointer' }}>
+                            <TableRow key={`${ev.sequenceNumber ?? i}`} className={d.clickRow} onClick={() => setExpanded((m) => ({ ...m, [i]: !m[i] }))} aria-expanded={isOpen}>
                               <TableCell><span className={d.mono}>{ev.sequenceNumber ?? '—'}</span></TableCell>
                               <TableCell><span className={d.mono}>{ev.offset ?? '—'}</span></TableCell>
                               <TableCell><Caption1>{ev.enqueuedTime ?? '—'}</Caption1></TableCell>

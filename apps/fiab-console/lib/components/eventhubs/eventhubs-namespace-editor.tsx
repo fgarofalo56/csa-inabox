@@ -33,7 +33,7 @@ import {
 import {
   Archive20Regular, Globe20Regular, Key20Regular, LinkSquare20Regular,
   Eye20Regular, ArrowSync16Regular, Delete16Regular, Add20Regular,
-  Checkmark16Regular, Dismiss16Regular,
+  Checkmark16Regular, Dismiss16Regular, Copy16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -43,9 +43,37 @@ const useStyles = makeStyles({
   hint: { color: tokens.colorNeutralForeground3, display: 'block' },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
   gridWrap: { maxHeight: '340px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  stickyHead: {
+    position: 'sticky', top: '0', zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+  },
   actionsCell: { display: 'flex', gap: '4px', alignItems: 'center' },
   sectionTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, marginTop: '4px' },
+  keyCell: { display: 'flex', gap: '4px', alignItems: 'center', minWidth: '0' },
+  keyVal: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
+
+/** Small icon button that copies text to the clipboard and flashes a checkmark. */
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [done, setDone] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(true);
+      setTimeout(() => setDone(false), 1400);
+    } catch { /* clipboard unavailable (insecure context) — no-op */ }
+  }, [value]);
+  return (
+    <Tooltip content={done ? 'Copied' : label} relationship="label">
+      <Button
+        size="small" appearance="subtle"
+        icon={done ? <Checkmark16Regular /> : <Copy16Regular />}
+        onClick={copy} aria-label={label}
+      />
+    </Tooltip>
+  );
+}
 
 const CAPTURE_ROUTE = '/api/eventhubs/capture';
 const GEODR_ROUTE = '/api/eventhubs/geodr';
@@ -345,7 +373,7 @@ function GeoDrTab({ onSaved }: { onSaved?: () => void }) {
         rows.length === 0 ? <Caption1 className={s.hint}>No Geo-DR alias configured. Create a pairing to fail over to a secondary namespace.</Caption1> : (
           <div className={s.gridWrap}>
             <Table size="small" aria-label="Geo-DR configs">
-              <TableHeader>
+              <TableHeader className={s.stickyHead}>
                 <TableRow>
                   <TableHeaderCell>Alias</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
@@ -492,7 +520,7 @@ function SasTab({ hub, onSaved }: { hub: string; onSaved?: () => void }) {
         rules.length === 0 ? <Caption1 className={s.hint}>No SAS policies at this scope.</Caption1> : (
           <div className={s.gridWrap}>
             <Table size="small" aria-label="SAS rules">
-              <TableHeader>
+              <TableHeader className={s.stickyHead}>
                 <TableRow>
                   <TableHeaderCell>Policy</TableHeaderCell>
                   <TableHeaderCell>Rights</TableHeaderCell>
@@ -511,9 +539,16 @@ function SasTab({ hub, onSaved }: { hub: string; onSaved?: () => void }) {
                         {k ? (
                           k.localAuthDisabled ? (
                             <Caption1 style={{ color: tokens.colorPaletteYellowForeground1 }}>Entra-only (SAS disabled)</Caption1>
-                          ) : (
-                            <span className={s.mono}>{(k.primaryConnectionString || k.primaryKey || '—').slice(0, 48)}…</span>
-                          )
+                          ) : (() => {
+                            const conn = k.primaryConnectionString || k.primaryKey || '';
+                            return (
+                              <span className={s.keyCell}>
+                                <span className={s.keyVal} title={conn || undefined}>{conn ? `${conn.slice(0, 44)}…` : '—'}</span>
+                                {conn && <CopyButton value={conn} label="Copy primary connection string" />}
+                                {k.secondaryConnectionString && <CopyButton value={k.secondaryConnectionString} label="Copy secondary connection string" />}
+                              </span>
+                            );
+                          })()
                         ) : <Caption1 className={s.hint}>hidden</Caption1>}
                       </TableCell>
                       <TableCell>
@@ -632,7 +667,7 @@ function PrivateEndpointsTab({ onSaved }: { onSaved?: () => void }) {
         rows.length === 0 ? <Caption1 className={s.hint}>No private endpoint connections. The namespace private endpoint provisioned by eventhubs.bicep auto-approves; manual or cross-tenant requests appear here for approval.</Caption1> : (
           <div className={s.gridWrap}>
             <Table size="small" aria-label="Private endpoint connections">
-              <TableHeader>
+              <TableHeader className={s.stickyHead}>
                 <TableRow>
                   <TableHeaderCell>Name</TableHeaderCell>
                   <TableHeaderCell>Private endpoint</TableHeaderCell>
