@@ -9455,7 +9455,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                       </MessageBarBody>
                     </MessageBar>
                   ) : accelQ.isLoading ? (
-                    <Spinner size="small" label="Reading backend acceleration capability…" labelPosition="after" />
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: `${tokens.spacingVerticalXXL} 0` }}>
+                      <Spinner size="small" label="Reading backend acceleration capability…" labelPosition="after" />
+                    </div>
                   ) : !accelQ.data?.ok ? (
                     <MessageBar intent="error">
                       <MessageBarBody>
@@ -9464,8 +9466,19 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                       </MessageBarBody>
                     </MessageBar>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: tokens.spacingHorizontalS,
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          padding: tokens.spacingVerticalM,
+                          border: `1px solid ${tokens.colorNeutralStroke2}`,
+                          borderRadius: tokens.borderRadiusMedium,
+                          backgroundColor: tokens.colorNeutralBackground2,
+                        }}
+                      >
                         <Badge appearance="outline">
                           Backend: {accelQ.data.backend === 'fabric-warehouse'
                             ? 'Fabric Warehouse (opt-in)'
@@ -9491,17 +9504,28 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                        * switch on either backend, and we never present a fake
                        * GPU-on control. The honest scaling action follows.
                        */}
-                      <Switch
-                        checked={!!accelQ.data.accelerationEnabled}
-                        disabled={!accelQ.data.userToggleable}
-                        label={
-                          accelQ.data.accelerationModel === 'serverless-autoscale'
-                            ? 'Serverless auto-scale acceleration (managed by Fabric — always on)'
-                            : accelQ.data.accelerationModel === 'dwu-sku'
-                              ? `DWU-based acceleration (governed by the pool SKU${accelQ.data.sku && accelQ.data.sku !== 'unknown' ? ` · ${accelQ.data.sku}` : ''})`
-                              : 'Acceleration (backend unknown)'
-                        }
-                      />
+                      <div
+                        title={!accelQ.data.userToggleable
+                          ? 'Read-only — acceleration is governed by the backend, not a per-query switch'
+                          : undefined}
+                      >
+                        <Switch
+                          checked={!!accelQ.data.accelerationEnabled}
+                          disabled={!accelQ.data.userToggleable}
+                          label={
+                            accelQ.data.accelerationModel === 'serverless-autoscale'
+                              ? 'Serverless auto-scale acceleration (managed by Fabric — always on)'
+                              : accelQ.data.accelerationModel === 'dwu-sku'
+                                ? `DWU-based acceleration (governed by the pool SKU${accelQ.data.sku && accelQ.data.sku !== 'unknown' ? ` · ${accelQ.data.sku}` : ''})`
+                                : 'Acceleration (backend unknown)'
+                          }
+                        />
+                        {!accelQ.data.userToggleable && (
+                          <Caption1 style={{ display: 'block', marginLeft: '40px', color: tokens.colorNeutralForeground3 }}>
+                            Read-only — this reflects the live backend state; there is no per-query acceleration switch.
+                          </Caption1>
+                        )}
+                      </div>
 
                       <MessageBar intent="warning">
                         <MessageBarBody>
