@@ -30,6 +30,7 @@ import {
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
+  ChevronDown16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePoliciesDialog } from './components/manage-policies-dialog';
@@ -1170,6 +1171,11 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Key regeneration — real ARM POST regenerate{Primary,Secondary}Key + listSecrets
   // via /api/marketplace/subscriptions/[sid]/keys/regenerate?which=...
   const [subRegenBusy, setSubRegenBusy] = useState<{ sid: string; which: 'primary' | 'secondary' } | null>(null);
+  // Confirmation gate for destructive ops (Cancel subscription / regenerate key).
+  // Both immediately revoke access, so they mirror the portal's confirm dialog
+  // rather than firing on a single click.
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
+  const [confirmRegen, setConfirmRegen] = useState<{ sid: string; which: 'primary' | 'secondary' } | null>(null);
 
   const revealSubKeys = useCallback(async (sid: string) => {
     // Toggle off if already revealed.
@@ -1519,25 +1525,29 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                                       appearance="outline"
                                       color={sub.state === 'active' ? 'success' : 'warning'}
                                       style={{ cursor: 'pointer' }}
+                                      icon={subStateBusy === sub.name ? <Spinner size="extra-tiny" /> : <ChevronDown16Regular />}
+                                      iconPosition="after"
                                     >
-                                      {sub.state}{subStateBusy === sub.name ? ' …' : ' ▾'}
+                                      {sub.state}
                                     </Badge>
                                   </Tooltip>
                                 </MenuTrigger>
                                 <MenuPopover>
                                   <MenuList>
                                     {sub.state === 'suspended' && (
-                                      <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'active')}>Activate</MenuItem>
+                                      <MenuItem icon={<Play20Regular />} disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'active')}>Activate</MenuItem>
                                     )}
                                     {sub.state === 'active' && (
-                                      <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'suspended')}>Suspend</MenuItem>
+                                      <MenuItem icon={<Warning20Filled />} disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'suspended')}>Suspend</MenuItem>
                                     )}
-                                    <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'cancelled')}>Cancel</MenuItem>
+                                    <MenuItem icon={<Delete20Regular />} disabled={subStateBusy === sub.name} onClick={() => setConfirmCancel(sub.name)}>Cancel</MenuItem>
                                   </MenuList>
                                 </MenuPopover>
                               </Menu>
                               {subStateErr && subStateErr.sid === sub.name && (
-                                <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{subStateErr.msg}</Caption1>
+                                <MessageBar intent="error" style={{ maxWidth: 280 }}>
+                                  <MessageBarBody>{subStateErr.msg}</MessageBarBody>
+                                </MessageBar>
                               )}
                             </div>
                           ) : (
@@ -1556,7 +1566,11 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                             >
                               {subKeyBusy === sub.name ? 'Revealing…' : revealed ? 'Hide keys' : 'Show keys'}
                             </Button>
-                            {subKeyErr && subKeyErr.sid === sub.name && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{subKeyErr.msg}</Caption1>}
+                            {subKeyErr && subKeyErr.sid === sub.name && (
+                              <MessageBar intent="error" style={{ maxWidth: 320 }}>
+                                <MessageBarBody>{subKeyErr.msg}</MessageBarBody>
+                              </MessageBar>
+                            )}
                             {revealed && (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {(['primaryKey', 'secondaryKey'] as const).map((k) => (
@@ -1570,16 +1584,18 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                                       const which = k === 'primaryKey' ? 'primary' : 'secondary';
                                       const busy = !!subRegenBusy && subRegenBusy.sid === sub.name && subRegenBusy.which === which;
                                       return (
-                                        <Button
-                                          size="small"
-                                          appearance="transparent"
-                                          icon={<ArrowSync20Regular />}
-                                          disabled={!!subRegenBusy}
-                                          aria-label={`Regenerate ${which} key for ${sub.name}`}
-                                          onClick={() => regenKey(sub.name, which)}
-                                        >
-                                          {busy ? 'Regenerating…' : 'Regen'}
-                                        </Button>
+                                        <Tooltip content={`Rotate the ${which} key — the current value is revoked immediately`} relationship="label">
+                                          <Button
+                                            size="small"
+                                            appearance="transparent"
+                                            icon={busy ? <Spinner size="extra-tiny" /> : <ArrowSync20Regular />}
+                                            disabled={!!subRegenBusy}
+                                            aria-label={`Regenerate ${which} key for ${sub.name}`}
+                                            onClick={() => setConfirmRegen({ sid: sub.name, which })}
+                                          >
+                                            {busy ? 'Regenerating…' : 'Regen'}
+                                          </Button>
+                                        </Tooltip>
                                       );
                                     })()}
                                   </div>
@@ -1594,6 +1610,63 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                 </TableBody>
               </Table>
             )}
+
+            {/* Confirm: Cancel subscription (irreversible — revokes the consumer's access). */}
+            <Dialog open={!!confirmCancel} onOpenChange={(_, d) => { if (!d.open) setConfirmCancel(null); }}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Cancel subscription?</DialogTitle>
+                  <DialogContent>
+                    <Body1>
+                      Cancelling <code>{confirmCancel}</code> immediately revokes the consumer&apos;s access through
+                      both keys. This calls real ARM (<code>PATCH .../subscriptions/&#123;sid&#125;</code> with
+                      {' '}<code>state: cancelled</code>) and cannot be undone from here.
+                    </Body1>
+                  </DialogContent>
+                  <DialogActions>
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Keep subscription</Button>
+                    </DialogTrigger>
+                    <Button
+                      appearance="primary"
+                      icon={<Delete20Regular />}
+                      onClick={() => { const sid = confirmCancel; setConfirmCancel(null); if (sid) changeSubState(sid, 'cancelled'); }}
+                    >
+                      Cancel subscription
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Confirm: Regenerate key (irreversible — the current key is revoked immediately). */}
+            <Dialog open={!!confirmRegen} onOpenChange={(_, d) => { if (!d.open) setConfirmRegen(null); }}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Regenerate {confirmRegen?.which} key?</DialogTitle>
+                  <DialogContent>
+                    <Body1>
+                      Rotating the {confirmRegen?.which} key for <code>{confirmRegen?.sid}</code> revokes the current
+                      value immediately — any client still using it will start failing. This calls real ARM
+                      {' '}(<code>regenerate{confirmRegen?.which === 'primary' ? 'Primary' : 'Secondary'}Key</code>),
+                      then re-reads the pair via <code>listSecrets</code>.
+                    </Body1>
+                  </DialogContent>
+                  <DialogActions>
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Keep current key</Button>
+                    </DialogTrigger>
+                    <Button
+                      appearance="primary"
+                      icon={<ArrowSync20Regular />}
+                      onClick={() => { const c = confirmRegen; setConfirmRegen(null); if (c) regenKey(c.sid, c.which); }}
+                    >
+                      Regenerate key
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
           </div>
         )}
       </div>
