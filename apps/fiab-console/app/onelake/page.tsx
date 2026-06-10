@@ -74,6 +74,7 @@ import {
   BinRecycle20Regular,
   ShieldCheckmark20Regular,
   ShieldKeyhole16Regular,
+  Storage20Regular,
   MoreHorizontal20Regular,
   Copy16Regular,
   Link16Regular,
@@ -92,6 +93,7 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
 import { SecureView } from '@/lib/components/onelake/secure-view';
 import { GovernView } from '@/lib/components/onelake/govern-view';
+import { StorageView } from '@/lib/components/onelake/storage-view';
 import { PropertiesPanel } from '@/lib/components/onelake/properties-panel';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { RecycleView } from '@/lib/components/onelake/recycle-view';
@@ -859,7 +861,7 @@ export default function OneLakeCatalogPage() {
   const [unauth, setUnauth] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
-  const [pageTab, setPageTab] = useState<'explore' | 'secure' | 'govern'>('explore');
+  const [pageTab, setPageTab] = useState<'explore' | 'secure' | 'govern' | 'storage'>('explore');
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
   const [typeFilter, setTypeFilter] = useState<string>('all'); // 'all' | itemType slug
@@ -1071,17 +1073,19 @@ export default function OneLakeCatalogPage() {
       <div className={styles.pageTabBar}>
         <TabList
           selectedValue={pageTab}
-          onTabSelect={(_e, d) => setPageTab(d.value as 'explore' | 'secure' | 'govern')}
+          onTabSelect={(_e, d) => setPageTab(d.value as 'explore' | 'secure' | 'govern' | 'storage')}
           size="medium"
         >
           <Tab value="explore" icon={<AppsList20Regular />}>Explore</Tab>
           <Tab value="secure" icon={<ShieldKeyhole16Regular />}>Secure</Tab>
           <Tab value="govern" icon={<ShieldCheckmark20Regular />}>Govern</Tab>
+          <Tab value="storage" icon={<Storage20Regular />}>Storage</Tab>
         </TabList>
       </div>
 
       {pageTab === 'secure' && <SecureView workspaces={workspaces} items={items ?? []} />}
       {pageTab === 'govern' && <GovernView />}
+      {pageTab === 'storage' && <StorageView workspaceId={wsFilter} />}
 
       {pageTab === 'explore' && (
         <>

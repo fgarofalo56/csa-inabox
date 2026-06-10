@@ -387,6 +387,117 @@ export async function countParquetFiles(
   return { count, bytes, capped };
 }
 
+// ============================================================
+// OneLake item-size reporting — recursive prefix byte aggregation.
+//
+// Parity with Fabric "OneLake — item storage" (workspace storage usage per
+// item, including system files + soft-deleted data). The Azure-native backend
+// walks the item's ADLS Gen2 prefix:
+//
+//   - LIVE usage   : recursive DataLake listPaths (recursive=true) over the
+//                    prefix, summing EVERY file's contentLength — system files
+//                    (Delta `_delta_log/`, checkpoints, `_SUCCESS`, `_metadata`)
+//                    are INCLUDED (Fabric counts them toward item storage).
+//   - SOFT-DELETED : blob listBlobsFlat({ prefix, includeDeleted:true }) over
+//                    the SAME prefix on the .blob endpoint, summing the
+//                    contentLength of blobs whose `deleted === true`. These are
+//                    the bytes still billed during the soft-delete retention
+//                    window (HNS blob soft-delete enabled by storage.bicep).
+//
+// No Fabric dependency — both surfaces are the storage account itself, reached
+// via the sovereign-correct .dfs / .blob hosts. Required role: Storage Blob
+// Data Reader on the account/container (the Console UAMI already holds it).
+// Docs: https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-overview
+// ============================================================
+
+export interface PrefixUsage {
+  /** Live (non-deleted) bytes under the prefix, system files INCLUDED. */
+  liveBytes: number;
+  /** Live (non-deleted) file count under the prefix. */
+  liveFiles: number;
+  /** Bytes of system/metadata files (Delta `_delta_log/`, checkpoints) — a
+   *  subset of liveBytes, surfaced so the UI can break the total apart. */
+  systemBytes: number;
+  /** Soft-deleted bytes still billed during the retention window. */
+  deletedBytes: number;
+  /** Soft-deleted blob count. */
+  deletedFiles: number;
+  /** liveBytes + deletedBytes — total billed storage for the item. */
+  totalBytes: number;
+  /** True when the walk hit `cap` and the numbers are a lower bound. */
+  capped: boolean;
+}
+
+const SYSTEM_PATH_RE = /(^|\/)(_delta_log|_metadata|_SUCCESS|_committed_|_started_|_temporary)/i;
+
+/**
+ * Recursively aggregate the ADLS Gen2 storage a single OneLake item consumes
+ * under `prefix` (its `state.rootPath` inside `state.container`). Counts live
+ * bytes (system files included) plus soft-deleted bytes. Never throws on a
+ * missing prefix — a never-materialised item returns all-zero. The `cap` bounds
+ * each of the two walks so a pathological tree cannot hang the request.
+ */
+export async function aggregatePrefixUsage(
+  container: string,
+  prefix: string,
+  account?: string,
+  cap = 250_000,
+): Promise<PrefixUsage> {
+  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const out: PrefixUsage = {
+    liveBytes: 0,
+    liveFiles: 0,
+    systemBytes: 0,
+    deletedBytes: 0,
+    deletedFiles: 0,
+    totalBytes: 0,
+    capped: false,
+  };
+
+  // ── Live walk (DataLake recursive listPaths — system files included) ──
+  try {
+    const fs = getFileSystem(container, account);
+    const iter = fs.listPaths({ path: cleanPrefix || undefined, recursive: true });
+    for await (const p of iter) {
+      if (p.isDirectory) continue;
+      const name = p.name ?? '';
+      const sz = typeof p.contentLength === 'number' ? p.contentLength : Number(p.contentLength ?? 0);
+      out.liveBytes += sz;
+      out.liveFiles += 1;
+      if (SYSTEM_PATH_RE.test(name)) out.systemBytes += sz;
+      if (out.liveFiles >= cap) { out.capped = true; break; }
+    }
+  } catch (e: any) {
+    // A 404 means the prefix never materialised (item created but no data yet) —
+    // that is a legitimate all-zero result, not an error. Anything else
+    // (auth/network) propagates so the BFF can surface an honest gate.
+    if (e?.statusCode !== 404) throw e;
+  }
+
+  // ── Soft-deleted walk (.blob listBlobsFlat with includeDeleted) ──
+  try {
+    const cc = getBlobServiceClient(account).getContainerClient(container);
+    const dprefix = cleanPrefix ? `${cleanPrefix}/` : undefined;
+    let seen = 0;
+    for await (const b of cc.listBlobsFlat({ prefix: dprefix, includeDeleted: true })) {
+      if (!b.deleted) continue;
+      out.deletedBytes += b.properties?.contentLength ?? 0;
+      out.deletedFiles += 1;
+      seen += 1;
+      if (seen >= cap) { out.capped = true; break; }
+    }
+  } catch (e: any) {
+    // Soft-delete may not be enabled (no deleted blobs to enumerate) or the
+    // account is blob-only without the flag — treat as zero soft-deleted bytes
+    // rather than failing the whole item. The 404/feature-not-enabled cases are
+    // benign; only re-throw genuine auth failures (403) so the gate fires.
+    if (e?.statusCode === 403) throw e;
+  }
+
+  out.totalBytes = out.liveBytes + out.deletedBytes;
+  return out;
+}
+
 export interface PathMetadata {
   exists: boolean;
   size: number;
