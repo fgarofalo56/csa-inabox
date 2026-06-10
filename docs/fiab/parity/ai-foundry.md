@@ -46,7 +46,7 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 |---|---|---|---|
 | A1 | **Model catalog** (`/explore/models`) — search, 7 filters, leaderboards, compare, ~11.5k cards, model-card → detail → Deploy | built ✅ search + 7 filters + leaderboard strip + compare + paginated cards + detail + Deploy dialog | `GET /api/foundry/models-catalog` → CS `{account}/models` (account-deployable set, **not** the 11.5k AML-registry superset — that superset is deep-linked, not rendered) |
 | A2 | **Playgrounds — Chat** | built ✅ 3-pane Setup/Chat/Config, params, View code | `POST /api/foundry/chat` → AOAI `chat/completions` |
-| A3 | **Playgrounds — Images / Audio / Speech / Video / Language / Translator / Assistants** (7 more) | gated ⚠️ tiles that deep-link to ai.azure.com ("deploy a `<type>` model first"); none run in-Loom | none (deep-link only) |
+| A3 | **Playgrounds — Images / Audio / Speech / Video / Language / Translator / Assistants** (7 more) | partial ⚠️ **Images** + **Audio** now run in-Loom (`ImagesPlaygroundPanel` / `AudioPlaygroundPanel`, real AOAI data-plane, honest gate when no model of that modality is deployed); Speech (TTS) is an honest deep-link (needs in-browser audio playback); Video/Language/Translator/Assistants remain deep-links | Images `POST /api/foundry/images` → AOAI `images/generations`; Audio `POST /api/foundry/audio` → AOAI `audio/transcriptions` |
 | A4 | **Agents** (build agent: model + instructions + tools + knowledge + memory + guardrails; Chat/YAML/Code tabs; threads; preview; publish; AgentOps traces/evals) — **the headline of new Foundry** | built ✅ (rev.2) — `FoundryAgentsPanel` (`lib/components/foundry/foundry-agents.tsx`): builder (list + create/edit/delete; name, model-deployment picker, instructions, tools multi-select = code_interpreter/file_search/function) + playground (pick agent → ask → run with thread/run/**steps** inspector + answer). Wired as the hub **Agents** tab + navigator g-agents leaf. ⚠️ partial vs full portal: no knowledge/memory/guardrails attach, no YAML/Code tabs, no publish/versioning, no AgentOps eval dashboards — but the core build+test loop is real. | `GET/POST /api/foundry/agents` → `listAgents`/`createOrUpdateAgent` (Agent Service `{project}/agents` POST/PATCH/GET REST); `DELETE /api/foundry/agents/{name}`; `POST /api/foundry/agents/run` → `runAgentAndInspect` (threads→messages→runs→steps REST). Honest 501 gate on `LOOM_FOUNDRY_PROJECT_ENDPOINT` (the live state). |
 | A5 | **Templates** gallery (`/resource/build/templates` — code/solution starter templates) | MISSING ❌ | none |
 | A6 | **Monitoring / Observability — Application analytics** dashboard (token consumption, latency, exceptions, response quality via App Insights workbooks) | MISSING ❌ (only a raw trace table exists, see C-Tracing) | none |
@@ -75,10 +75,10 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 | C1 | **Model deployments** — list / deploy / **delete** / edit capacity / view state | partial ⚠️ list + deploy + delete (navigator) wired; **no edit-capacity / no scale-in-place**; deployment detail panel is read-only | `GET/POST/DELETE /api/foundry/model-deployments` → CS deployments |
 | C2 | **Online endpoints** (managed) — list + scoring URI | partial ⚠️ read-only list; no create/test/swap-traffic | `GET /api/foundry/deployments` (MLS) |
 | C3 | **Connections** — list + **create / edit / delete** (AOAI, AI Search, Blob, etc.) | partial ⚠️ read-only list only; **no create/edit/delete** despite portal supporting full CRUD | `GET /api/foundry/connections` |
-| C4 | **Fine-tuning** — submit a fine-tune job (base model, training/validation data, hyperparams), monitor loss/accuracy charts, deploy fine-tuned model | MISSING ❌ (only a greyed "coming" navigator row) | none |
+| C4 | **Fine-tuning** — submit a fine-tune job (base model, training/validation data, hyperparams), monitor loss/accuracy, deploy fine-tuned model | built ✅ `FoundryHubEditor` **Fine-tuning** tab: upload JSONL training/validation files, pick a fine-tunable base model, set suffix + hyperparams (epochs/batch/LR), create job, monitor jobs table + per-step training/validation-loss events, cancel a running job. (Deploying the resulting fine-tuned model reuses the existing Models-deployments deploy flow.) | files `POST /api/foundry/fine-tuning/files`; jobs `GET/POST /api/foundry/fine-tuning`; detail+events+cancel `GET/POST /api/foundry/fine-tuning/{jobId}` → AOAI `fine_tuning/jobs` data-plane. Role: Cognitive Services OpenAI Contributor (granted in `ai-foundry.bicep`). |
 | C5 | **Evaluations** — create eval (dataset + evaluators + target model), run, view metrics, compare runs | partial ⚠️ EvaluationEditor lists + creates + shows metrics table; **no** AI-quality/risk-safety evaluator picker UI, no run-to-run compare, no charts | `/api/items/evaluation/*` |
 | C6 | **Prompt flow** — DAG designer (LLM/Python/Prompt nodes), connections, run, batch run, deploy | partial ⚠️ `PromptFlowBuilder` DAG editor + create/save/run wired; no batch-run, no deploy-as-endpoint, no flow-from-template gallery | `/api/items/prompt-flow/*` (AML data-plane) |
-| C7 | **Tracing** (Operate) — connect App Insights, span/trace explorer, trace detail with run steps/tool calls | partial ⚠️ flat trace table (time/op/duration/success); **no** App-Insights connect wizard, no span tree, no trace-detail drill | `GET /api/items/tracing` (App Insights query) |
+| C7 | **Tracing** (Operate) — connect App Insights, span/trace explorer, trace detail with run steps/tool calls | built ✅ flat trace table + **per-trace span tree drill** ("View spans" → reconstructed parent→child tree from App Insights dependencies+requests; per-span model, GenAI token usage in/out, duration, success). App-Insights binding surfaced via the hub Overview tab (honest disclosure of `applicationInsights`). | list `GET /api/items/tracing`; detail `GET /api/items/tracing/{traceId}` → `queryTraceDetail` (App Insights KQL union over `operation_Id`) |
 | C8 | **Guardrails / Content filters (RAI policies)** — create/edit content-filter policies (hate/sexual/self-harm/violence + prompt-shields + groundedness + PII), attach per deployment | partial ⚠️ ContentSafetyEditor runs ad-hoc text/image moderation (real Content Safety call); **no** RAI-policy CRUD, **no** per-deployment attach UI (deploy dialog only picks a preset name) | `/api/items/content-safety` (Content Safety analyze); raiPolicyName passthrough on deploy |
 | C9 | **Quota + usage** — per-region usages, request quota increase | built ✅ usages table + one-click gpt-4o-mini deploy | `GET/POST /api/foundry/quota` (CS usages) |
 | C10 | **Networking** — public-access toggle + private endpoints | built ✅ PNA Switch (real PATCH) + PE list | `GET/PATCH /api/foundry/networking` |
@@ -106,12 +106,17 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 
 ## Summary counts (by inventory row, 44 graded) — rev.2
 
-- **built ✅**: 17 (A4 Agents now built; the core is full 1:1 + real backend, broader portal agent features still partial)
-- **partial ⚠️**: 17
-- **gated ⚠️**: 3
-- **MISSING ❌**: 7
+- **built ✅**: 20 (audit-t19: + C4 Fine-tuning, + C7 Tracing span-tree; A3 Images/Audio now in-Loom)
+- **partial ⚠️**: 17 (A3 now partial — Images/Audio built, 5 modalities deep-link)
+- **gated ⚠️**: 2
+- **MISSING ❌**: 5 (A5 Templates, A6 Observability dashboard, A10 portal chrome, B8 carousel, + remaining playground modalities under A3)
 
-## The honest verdict — **C+** (functional but rough; flagship Agents now built)
+## The honest verdict — **B-** (functional; flagship Agents, Fine-tuning, Tracing span-tree, Images/Audio playgrounds now built)
+
+> 2026-06-10 (audit-t19): Fine-tuning (C4) shipped end-to-end (upload→job→loss
+> events→cancel) with the Cognitive Services OpenAI Contributor grant added to
+> `ai-foundry.bicep`; Tracing (C7) gained a real per-trace span-tree drill; the
+> Images + Audio playgrounds (A3) now call the real AOAI data-plane in-Loom.
 
 What's genuinely good (B/A-grade in isolation): the **model catalog + Deploy
 flow** and the **chat playground** are real and wired to live Azure REST /

@@ -45,7 +45,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | A3 | Account picker scopes the list (name + region badge) | ✅ built | `acct` selector; account badge |
 | A4 | Reload | ✅ built | Reload button |
 | A5 | Honest gate when account isn't Foundry / Evals-preview | ✅ built | `GateBar` (notDeployed) + 404 preview hint |
-| A6 | Delete an evaluation | ❌ MISSING | no delete |
+| A6 | Delete an evaluation | ✅ built | "Delete" row action → `DELETE …?evalId=` `deleteEval` |
 | A7 | Open eval detail (data schema / criteria view) | ❌ MISSING | runs-only drill |
 
 ### B. Create evaluation
@@ -56,9 +56,9 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | B2 | Grader: **String check** (exact/reference match, reference template) | ✅ built | string_check criteria + reference field |
 | B3 | Grader: **Label model** (LLM-graded pass/fail) | ✅ built | label_model criteria (gpt-4o-mini grader) |
 | B4 | Data-source schema (custom item schema: input/expected) | ✅ built | `dataSourceConfig` posted with the eval |
-| B5 | Other graders: **text similarity, BLEU/ROUGE/METEOR, F1, groundedness, relevance, coherence, fluency, similarity, custom code** | ❌ MISSING | 2 grader types only |
-| B6 | Multiple testing criteria per eval | ⚠️ partial | BFF accepts an array; dialog authors exactly one |
-| B7 | Map graders to **AI-assisted / risk-&-safety** evaluators (content harm, jailbreak) | ❌ MISSING | not surfaced |
+| B5 | Other graders: **text similarity (BLEU/ROUGE/METEOR/F1/fuzzy), string contains, model-graded (groundedness/relevance/…)** | ✅ built | 4 grader types in the criteria repeater (`text_similarity`, `string_check`, `string_contains`, `label_model`) |
+| B6 | Multiple testing criteria per eval | ✅ built | "+ Add criterion" repeater; each row maps to a real `testing_criteria` entry |
+| B7 | Map graders to **AI-assisted / risk-&-safety** evaluators (content harm, jailbreak) | ⚠️ partial | model-graded (`label_model`) covers AI-assisted; dedicated risk-&-safety evaluator set not yet a preset |
 | B8 | Custom data-source schema editor (arbitrary item fields) | ⚠️ partial | fixed input/expected schema; not editable in the dialog |
 
 ### C. Runs
@@ -68,10 +68,10 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | C1 | List runs for an evaluation | ✅ built | "View runs" → `GET …?evalId=` `listEvalRuns` |
 | C2 | Run row: name · status · model · passed/failed/total · report link | ✅ built | runs table; status color badge |
 | C3 | Open the run **report** (deep link) | ✅ built | `reportUrl` "Open" link |
-| C4 | **Start a run** (attach a JSONL dataset + model) | ❌ MISSING | honest copy: "start a run via the Evals REST API or the Foundry Evaluation surface" |
-| C5 | **Upload a JSONL dataset** for a run | ❌ MISSING | not surfaced |
-| C6 | Per-row results table (input/output/grade/passed) | ❌ MISSING | aggregate counts only |
-| C7 | Cancel / delete a run | ❌ MISSING | not surfaced |
+| C4 | **Start a run** (attach a JSONL dataset + model) | ✅ built | `StartRunDialog` → `POST /api/foundry/evaluations` `{action:'start_run'}` `createEvalRun` |
+| C5 | **Upload a JSONL dataset** for a run | ✅ built | file picker → `POST /api/foundry/evaluations/files` `uploadEvalsFile` (purpose=evals) |
+| C6 | Per-row results table (input/output/grade/passed) | ✅ built | "Results" drill → `GET …&items=1` `getEvalRunOutputItems`; per-criterion pass/fail/score badges |
+| C7 | Cancel / delete a run | ✅ built | "Delete" run action → `DELETE …?evalId=&runId=` `deleteEvalRun` |
 | C8 | Metric charts / pass-rate trend across runs | ❌ MISSING | counts only, no charts |
 | C9 | Compare runs side-by-side | ❌ MISSING | not surfaced |
 
@@ -79,12 +79,20 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 ## Coverage tally
 
-- **built ✅: 13**
-- **partial ⚠️: 2**
+- **built ✅: 21**
+- **partial ⚠️: 2** (B7 risk-&-safety evaluator presets; B8 custom item-schema editor)
 - **honest-gate ⚠️: 1** (the Evals-preview / notDeployed account gate)
-- **MISSING ❌: 11**
+- **MISSING ❌: 3** (C8 metric charts, C9 compare-runs, A7 eval-detail schema view)
 
-## Honest grade: **C+**
+## Honest grade: **B+**
+
+> 2026-06-10 (audit-t19): C4/C5/C6/C7 + A6 + B5/B6 shipped — start-a-run with
+> JSONL upload, per-row output items, delete eval/run, a multi-criterion grader
+> repeater (string_check, text_similarity BLEU/ROUGE/METEOR/F1, string_contains,
+> model-graded). Remaining ❌ are charts/compare/detail-view — visualization, not
+> backend. Pre-audit grade below is retained for history.
+
+## Pre-audit grade: **C+**
 
 The Evaluations panel is **functional and honest**: it lists real evals, creates a
 real eval with a valid Evals testing-criteria schema (two grader types), and shows

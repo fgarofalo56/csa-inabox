@@ -742,6 +742,27 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 // 5. TracingEditor
 // =====================================================================
 
+interface TraceSpan { id: string; parentId?: string; name?: string; kind?: string; timestamp?: string; duration?: number; success?: boolean; resultCode?: string; genAiModel?: string; inputTokens?: number; outputTokens?: number }
+
+/** Build an ordered, depth-tagged flat list from a span set keyed by parentId. */
+function buildSpanTree(spans: TraceSpan[]): { span: TraceSpan; depth: number }[] {
+  const byParent = new Map<string, TraceSpan[]>();
+  const ids = new Set(spans.map((s) => s.id));
+  for (const sp of spans) {
+    const key = sp.parentId && ids.has(sp.parentId) ? sp.parentId : '__root__';
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(sp);
+  }
+  const out: { span: TraceSpan; depth: number }[] = [];
+  const walk = (key: string, depth: number) => {
+    const kids = (byParent.get(key) || []).sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+    for (const k of kids) { out.push({ span: k, depth }); walk(k.id, depth + 1); }
+  };
+  walk('__root__', 0);
+  // Any spans whose parent wasn't captured fall under root via the byParent key.
+  return out;
+}
+
 export function TracingEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [hours, setHours] = useState(24);
@@ -749,17 +770,33 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
   const url = `/api/items/tracing?hours=${hours}${op ? `&operation=${encodeURIComponent(op)}` : ''}`;
   const [state, reload] = useApi<{ traces: any[] }>(url, [hours, op]);
 
-  // Traces live in the backing Application Insights resource. Without an ARM
-  // id on the response, the Foundry tracing surface itself is the cleanest
-  // deep-link.
+  // Drill: select a trace (operation_Id) → fetch its full span tree.
+  const [traceId, setTraceId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ loading: boolean; spans: TraceSpan[]; error?: string; hint?: string; notDeployed?: boolean }>({ loading: false, spans: [] });
+
+  const loadDetail = useCallback(async (tid: string) => {
+    setDetail({ loading: true, spans: [] });
+    try {
+      const r = await fetch(`/api/items/tracing/${encodeURIComponent(tid)}`);
+      const j = await r.json();
+      if (!j.ok) { setDetail({ loading: false, spans: [], error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
+      setDetail({ loading: false, spans: Array.isArray(j.spans) ? j.spans : [] });
+    } catch (e: any) { setDetail({ loading: false, spans: [], error: e?.message || String(e) }); }
+  }, []);
+
+  useEffect(() => { if (traceId) loadDetail(traceId); else setDetail({ loading: false, spans: [] }); }, [traceId, loadDetail]);
+
   const ribbon = useMemo(
     () => buildBaseRibbon(reload, 'https://ai.azure.com/tracing'),
     [reload],
   );
 
+  const tree = useMemo(() => buildSpanTree(detail.spans), [detail.spans]);
+
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <Subtitle2>Foundry traces</Subtitle2>
+      <Caption1>GenAI traces from the hub’s Application Insights. Click a trace to drill into its full span tree (model calls, tool calls, token usage).</Caption1>
       <div className={s.toolbar}>
         <Field label="Window (hrs)"><Input type="number" value={String(hours)} onChange={(_, d) => setHours(Number(d.value) || 24)} /></Field>
         <Field label="Operation"><Input value={op} onChange={(_, d) => setOp(d.value)} placeholder="(any)" /></Field>
@@ -772,21 +809,62 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
               <TableHeaderCell>Time</TableHeaderCell><TableHeaderCell>Operation</TableHeaderCell>
               <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Duration (ms)</TableHeaderCell>
               <TableHeaderCell>Success</TableHeaderCell><TableHeaderCell>Result</TableHeaderCell>
+              <TableHeaderCell>Trace</TableHeaderCell>
             </TableRow></TableHeader>
             <TableBody>
               {(state.data?.traces || []).map((t: any, i: number) => (
-                <TableRow key={i}>
+                <TableRow key={i} style={{ background: traceId && traceId === t.operationId ? tokens.colorNeutralBackground2 : undefined }}>
                   <TableCell className={s.cell}>{t.timestamp}</TableCell>
                   <TableCell className={s.cell}>{t.operationName || '—'}</TableCell>
                   <TableCell className={s.cell}>{t.name || '—'}</TableCell>
                   <TableCell className={s.cell}>{t.duration ?? '—'}</TableCell>
                   <TableCell className={s.cell}>{t.success === false ? <Badge color="danger">false</Badge> : t.success === true ? <Badge color="success">true</Badge> : '—'}</TableCell>
                   <TableCell className={s.cell}>{t.resultCode || '—'}</TableCell>
+                  <TableCell className={s.cell}>
+                    {t.operationId ? <Button size="small" appearance="subtle" onClick={() => setTraceId(t.operationId)}>View spans</Button> : '—'}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </div>
+      )}
+
+      {traceId && (
+        <>
+          <div className={s.toolbar} style={{ marginTop: 12 }}>
+            <Subtitle2>Span tree · {traceId.slice(0, 16)}…</Subtitle2>
+            <Button size="small" onClick={() => loadDetail(traceId)}>Reload spans</Button>
+            <Button size="small" appearance="subtle" onClick={() => setTraceId(null)}>Close</Button>
+          </div>
+          {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : tree.length === 0 ? (
+            <div className={s.empty}>No spans found for this trace.</div>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Span tree">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Span</TableHeaderCell><TableHeaderCell>Kind</TableHeaderCell>
+                  <TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Tokens (in/out)</TableHeaderCell>
+                  <TableHeaderCell>Duration (ms)</TableHeaderCell><TableHeaderCell>Success</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {tree.map(({ span, depth }) => (
+                    <TableRow key={span.id}>
+                      <TableCell className={s.cell} style={{ paddingLeft: 8 + depth * 16 }}>
+                        {depth > 0 ? '↳ ' : ''}{span.name || span.id}
+                      </TableCell>
+                      <TableCell className={s.cell}>{span.kind || '—'}</TableCell>
+                      <TableCell className={s.cell}>{span.genAiModel || '—'}</TableCell>
+                      <TableCell className={s.cell}>{span.inputTokens !== undefined || span.outputTokens !== undefined ? `${span.inputTokens ?? '—'} / ${span.outputTokens ?? '—'}` : '—'}</TableCell>
+                      <TableCell className={s.cell}>{span.duration ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{span.success === false ? <Badge color="danger">false</Badge> : span.success === true ? <Badge color="success">true</Badge> : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
       )}
     </div>
   </Shell>;

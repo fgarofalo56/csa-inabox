@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Switch,
+  Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Switch, Textarea, Tooltip,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -37,7 +37,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel } from './foundry-playground';
+import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, ImagesPlaygroundPanel, AudioPlaygroundPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
@@ -784,21 +784,63 @@ function fmtEpoch(s?: number): string {
   try { return new Date(s * 1000).toLocaleString(); } catch { return String(s); }
 }
 
+// A single grader (testing_criteria) row in the create-eval repeater.
+interface CriterionRow {
+  type: 'string_check' | 'text_similarity' | 'label_model' | 'string_contains';
+  name: string;
+  reference: string;
+  operation: string;     // string_check op (eq/ne/like/ilike) or similarity metric
+  graderModel: string;   // label_model deployment
+}
+
+const GRADER_LABEL: Record<CriterionRow['type'], string> = {
+  string_check: 'String check (exact / reference match)',
+  text_similarity: 'Text similarity (BLEU / ROUGE / F1)',
+  label_model: 'Model-graded (LLM pass/fail — groundedness, relevance, …)',
+  string_contains: 'String contains (substring match)',
+};
+
+function defaultCriterion(type: CriterionRow['type'], idx: number): CriterionRow {
+  return {
+    type,
+    name: `${type}-${idx + 1}`,
+    reference: '{{item.expected}}',
+    operation: type === 'text_similarity' ? 'fuzzy_match' : 'eq',
+    graderModel: 'gpt-4o-mini',
+  };
+}
+
+/** Map a CriterionRow → a real AOAI Evals testing_criteria object. */
+function toTestingCriterion(c: CriterionRow): unknown {
+  switch (c.type) {
+    case 'label_model':
+      return { type: 'label_model', name: c.name, model: c.graderModel, input: [{ role: 'user', content: `Grade the answer {{sample.output_text}} against ${c.reference}. Reply pass or fail.` }], labels: ['pass', 'fail'], passing_labels: ['pass'] };
+    case 'text_similarity':
+      return { type: 'text_similarity', name: c.name, input: '{{sample.output_text}}', reference: c.reference, evaluation_metric: c.operation, pass_threshold: 0.5 };
+    case 'string_contains':
+      return { type: 'string_check', name: c.name, input: '{{sample.output_text}}', reference: c.reference, operation: 'like' };
+    case 'string_check':
+    default:
+      return { type: 'string_check', name: c.name, input: '{{sample.output_text}}', reference: c.reference, operation: c.operation };
+  }
+}
+
 function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; onClose: () => void; onCreated: () => void; acct: FoundryAccount | null }) {
   const [name, setName] = useState('');
-  const [grader, setGrader] = useState('string_check');
-  const [reference, setReference] = useState('{{item.expected}}');
+  const [rows, setRows] = useState<CriterionRow[]>([defaultCriterion('string_check', 0)]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
 
+  useEffect(() => { if (open) { setName(''); setRows([defaultCriterion('string_check', 0)]); setMsg(null); } }, [open]);
+
+  const setRow = (i: number, patch: Partial<CriterionRow>) => setRows((rs) => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows((rs) => [...rs, defaultCriterion('label_model', rs.length)]);
+  const removeRow = (i: number) => setRows((rs) => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs);
+
   const submit = async () => {
     setBusy(true); setMsg(null);
-    // Minimal but REAL AOAI Evals schema: a custom data source + one grader.
-    // string_check compares model output to a reference field; label_model uses
-    // a model grader. Both are valid testing_criteria per the Evals REST schema.
-    const testingCriteria = grader === 'label_model'
-      ? [{ type: 'label_model', name: 'quality', model: 'gpt-4o-mini', input: [{ role: 'user', content: 'Grade the answer {{sample.output_text}} against {{item.expected}}. Reply pass or fail.' }], labels: ['pass', 'fail'], passing_labels: ['pass'] }]
-      : [{ type: 'string_check', name: 'exact-match', input: '{{sample.output_text}}', reference, operation: 'eq' }];
+    // REAL AOAI Evals schema: a custom data source + one OR MORE graders.
+    const testingCriteria = rows.map(toTestingCriterion);
     const dataSourceConfig = { type: 'custom', item_schema: { type: 'object', properties: { input: { type: 'string' }, expected: { type: 'string' } } }, include_sample_schema: true };
     try {
       const r = await fetch('/api/foundry/evaluations', {
@@ -815,24 +857,55 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
-      <DialogSurface>
+      <DialogSurface style={{ maxWidth: 640 }}>
         <DialogBody>
           <DialogTitle>Create an evaluation</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <Caption1>Defines an evaluation structure (data schema + a grader). After creating, upload a JSONL dataset and start a run from the Foundry Evaluation surface or the Evals REST API.</Caption1>
+              <Caption1>Defines an evaluation structure (data schema + one or more graders). After creating, upload a JSONL dataset and start a run from the Runs section below — no portal hop required.</Caption1>
               <Field label="Evaluation name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="qa-accuracy-eval" /></Field>
-              <Field label="Grader (testing criteria)">
-                <Dropdown value={grader} selectedOptions={[grader]} onOptionSelect={(_, d) => d.optionValue && setGrader(d.optionValue)}>
-                  <Option value="string_check">String check (exact / reference match)</Option>
-                  <Option value="label_model">Label model (LLM-graded pass/fail)</Option>
-                </Dropdown>
-              </Field>
-              {grader === 'string_check' && (
-                <Field label="Reference template (compared to sample output)">
-                  <Input value={reference} onChange={(_, d) => setReference(d.value)} placeholder="{{item.expected}}" />
-                </Field>
-              )}
+              <Body1 style={{ fontWeight: 600 }}>Testing criteria (graders)</Body1>
+              {rows.map((c, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <Field label="Grader type" style={{ flex: 1 }}>
+                      <Dropdown value={GRADER_LABEL[c.type]} selectedOptions={[c.type]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { type: d.optionValue as CriterionRow['type'] })}>
+                        {(Object.keys(GRADER_LABEL) as CriterionRow['type'][]).map((t) => <Option key={t} value={t}>{GRADER_LABEL[t]}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Criterion name"><Input value={c.name} onChange={(_, d) => setRow(i, { name: d.value })} /></Field>
+                    <Button appearance="subtle" disabled={rows.length <= 1} onClick={() => removeRow(i)} title="Remove this criterion">−</Button>
+                  </div>
+                  <Field label="Reference template (compared to {{sample.output_text}})">
+                    <Input value={c.reference} onChange={(_, d) => setRow(i, { reference: d.value })} placeholder="{{item.expected}}" />
+                  </Field>
+                  {c.type === 'string_check' && (
+                    <Field label="Operation">
+                      <Dropdown value={c.operation} selectedOptions={[c.operation]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { operation: d.optionValue })}>
+                        <Option value="eq">Equals</Option>
+                        <Option value="ne">Not equals</Option>
+                        <Option value="like">Like (case-sensitive contains)</Option>
+                        <Option value="ilike">ILike (case-insensitive contains)</Option>
+                      </Dropdown>
+                    </Field>
+                  )}
+                  {c.type === 'text_similarity' && (
+                    <Field label="Similarity metric">
+                      <Dropdown value={c.operation} selectedOptions={[c.operation]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { operation: d.optionValue })}>
+                        <Option value="fuzzy_match">Fuzzy match</Option>
+                        <Option value="bleu">BLEU</Option>
+                        <Option value="rouge_l">ROUGE-L</Option>
+                        <Option value="meteor">METEOR</Option>
+                        <Option value="f1_score">F1 score</Option>
+                      </Dropdown>
+                    </Field>
+                  )}
+                  {c.type === 'label_model' && (
+                    <Field label="Grader model (deployment)"><Input value={c.graderModel} onChange={(_, d) => setRow(i, { graderModel: d.value })} placeholder="gpt-4o-mini" /></Field>
+                  )}
+                </div>
+              ))}
+              <Button appearance="secondary" onClick={addRow}>+ Add criterion</Button>
               {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
@@ -846,12 +919,102 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
   );
 }
 
+// ---- Start-run dialog: upload JSONL → start a grading run on a deployment ----
+
+function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
+  open: boolean; onClose: () => void; onStarted: () => void; evalItem: EvalSummary | null; acct: FoundryAccount | null;
+}) {
+  const [dep] = useLazyFetch<{ ok: boolean; deployments: { name: string; modelName?: string }[] }>(`/api/foundry/model-deployments`, open, 0, acct);
+  const [runName, setRunName] = useState('');
+  const [model, setModel] = useState('');
+  const [fileId, setFileId] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
+  const deployments = dep.data?.deployments || [];
+
+  useEffect(() => { if (open) { setRunName(''); setFileId(''); setFileName(''); setMsg(null); } }, [open]);
+  useEffect(() => { if (deployments[0] && !model) setModel(deployments[0].name); }, [deployments, model]);
+
+  const upload = async (f: File) => {
+    setUploading(true); setMsg(null);
+    try {
+      const form = new FormData();
+      form.append('file', f, f.name);
+      const ab = acctBody(acct);
+      if (ab.account) form.append('account', ab.account);
+      if (ab.rg) form.append('rg', ab.rg);
+      const r = await fetch('/api/foundry/evaluations/files', { method: 'POST', body: form });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setFileId(j.file?.id || ''); setFileName(f.name);
+      setMsg({ intent: 'success', text: `Uploaded ${f.name} (${j.file?.bytes ?? '?'} bytes) → ${j.file?.id}` });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setUploading(false); }
+  };
+
+  const start = async () => {
+    if (!evalItem || !fileId || !model) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/foundry/evaluations', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start_run', evalId: evalItem.id, fileId, model, name: runName.trim() || undefined, ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setMsg({ intent: 'success', text: `Started run "${j.run?.name || j.run?.id}" (${j.run?.status || 'queued'}).` });
+      onStarted();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Start a run · {evalItem?.name || evalItem?.id}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Caption1>Upload a JSONL dataset (one object per line with an <code>input</code> and <code>expected</code> field), pick the deployment to grade, and start. The run samples the model per row, then applies this evaluation’s graders.</Caption1>
+              <Field label="Run name (optional)"><Input value={runName} onChange={(_, d) => setRunName(d.value)} placeholder="baseline-run" /></Field>
+              <Field label="Deployment to grade" required>
+                <Dropdown value={model} selectedOptions={model ? [model] : []} placeholder={deployments.length ? 'Select a deployment' : 'No deployments'}
+                  onOptionSelect={(_, d) => d.optionValue && setModel(d.optionValue)}>
+                  {deployments.map((d) => <Option key={d.name} value={d.name}>{`${d.name}${d.modelName ? ` (${d.modelName})` : ''}`}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="JSONL dataset" required>
+                <input type="file" accept=".jsonl,.json,application/jsonl,text/plain" disabled={uploading}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+              </Field>
+              {fileId ? <Caption1>Uploaded file: <code>{fileName}</code> ({fileId})</Caption1> : null}
+              {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onClose}>Close</Button>
+            <Button appearance="primary" disabled={busy || uploading || !fileId || !model} onClick={start}>{busy ? 'Starting…' : 'Start run'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+interface EvalOutputItem { id: string; status?: string; model?: string; datasourceItemIndex?: number; results: { name?: string; passed?: boolean; score?: number }[]; sampleOutput?: string }
+
 function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
   const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; evals: EvalSummary[] }>(`/api/foundry/evaluations`, active, nonce, acct);
   const [selected, setSelected] = useState<EvalSummary | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
   const [runs, setRuns] = useState<{ loading: boolean; list: EvalRunSummary[]; error?: string; hint?: string }>({ loading: false, list: [] });
+  const [selectedRun, setSelectedRun] = useState<EvalRunSummary | null>(null);
+  const [items, setItems] = useState<{ loading: boolean; list: EvalOutputItem[]; error?: string; hint?: string }>({ loading: false, list: [] });
+  const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const loadRuns = useCallback(async (e: EvalSummary) => {
     setRuns({ loading: true, list: [] });
@@ -863,9 +1026,45 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
     } catch (err: any) { setRuns({ loading: false, list: [], error: err?.message || String(err) }); }
   }, [acct]);
 
-  // Drop the open eval when the account changes / panel reloads.
-  useEffect(() => { setSelected(null); setRuns({ loading: false, list: [] }); }, [acct, nonce]);
-  useEffect(() => { if (selected) loadRuns(selected); }, [selected, loadRuns]);
+  const loadItems = useCallback(async (evalId: string, run: EvalRunSummary) => {
+    setItems({ loading: true, list: [] });
+    try {
+      const r = await fetch(withAccount(`/api/foundry/evaluations?evalId=${encodeURIComponent(evalId)}&runId=${encodeURIComponent(run.id)}&items=1`, acct));
+      const j = await r.json();
+      if (!j.ok) { setItems({ loading: false, list: [], error: j.error, hint: j.hint }); return; }
+      setItems({ loading: false, list: Array.isArray(j.items) ? j.items : [] });
+    } catch (err: any) { setItems({ loading: false, list: [], error: err?.message || String(err) }); }
+  }, [acct]);
+
+  // Drop the open eval/run when the account changes / panel reloads.
+  useEffect(() => { setSelected(null); setSelectedRun(null); setRuns({ loading: false, list: [] }); setItems({ loading: false, list: [] }); }, [acct, nonce]);
+  useEffect(() => { if (selected) loadRuns(selected); setSelectedRun(null); setItems({ loading: false, list: [] }); }, [selected, loadRuns]);
+  useEffect(() => { if (selected && selectedRun) loadItems(selected.id, selectedRun); }, [selected, selectedRun, loadItems]);
+
+  const delEval = async (e: EvalSummary) => {
+    setActionMsg(null);
+    try {
+      const r = await fetch(withAccount(`/api/foundry/evaluations?evalId=${encodeURIComponent(e.id)}`, acct), { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setActionMsg({ intent: 'success', text: `Deleted evaluation "${e.name || e.id}".` });
+      if (selected?.id === e.id) setSelected(null);
+      reload();
+    } catch (err: any) { setActionMsg({ intent: 'error', text: err?.message || String(err) }); }
+  };
+
+  const delRun = async (run: EvalRunSummary) => {
+    if (!selected) return;
+    setActionMsg(null);
+    try {
+      const r = await fetch(withAccount(`/api/foundry/evaluations?evalId=${encodeURIComponent(selected.id)}&runId=${encodeURIComponent(run.id)}`, acct), { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setActionMsg({ intent: 'success', text: `Deleted run "${run.name || run.id}".` });
+      if (selectedRun?.id === run.id) setSelectedRun(null);
+      loadRuns(selected);
+    } catch (err: any) { setActionMsg({ intent: 'error', text: err?.message || String(err) }); }
+  };
 
   if (!active) return null;
   const evals = Array.isArray(st.data?.evals) ? st.data!.evals : [];
@@ -873,13 +1072,15 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
   return (
     <div className={s.pad}>
       <CreateEvalDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={reload} acct={acct} />
+      <StartRunDialog open={runOpen} onClose={() => setRunOpen(false)} onStarted={() => { if (selected) loadRuns(selected); }} evalItem={selected} acct={acct} />
       <div className={s.toolbar}>
         <Subtitle2>Evaluations</Subtitle2>
         <Button appearance="primary" onClick={() => setCreateOpen(true)}>+ New evaluation</Button>
         <Button onClick={reload}>Reload</Button>
         {st.data?.account && <Badge appearance="outline">{st.data.account.name}{st.data.account.location ? ` · ${st.data.account.location}` : ''}</Badge>}
       </div>
-      <Caption1>Quality, safety and performance evaluations against your deployed models (Azure OpenAI Evals). Select an evaluation to view its grading runs.</Caption1>
+      <Caption1>Quality, safety and performance evaluations against your deployed models (Azure OpenAI Evals). Select an evaluation to view its grading runs, start a new run, or drill into per-row results.</Caption1>
+      {actionMsg && <MessageBar intent={actionMsg.intent}><MessageBarBody>{actionMsg.text}</MessageBarBody></MessageBar>}
       {st.loading ? <Spinner size="small" /> : st.error ? <GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /> : evals.length === 0 ? (
         <EmptyText>No evaluations on this account yet. Click “New evaluation”.</EmptyText>
       ) : (
@@ -897,6 +1098,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
                   <TableCell className={s.cell}>{fmtEpoch(e.createdAt)}</TableCell>
                   <TableCell className={s.cell}>
                     <Button size="small" appearance="subtle" onClick={() => setSelected(e)}>View runs</Button>
+                    <Button size="small" appearance="subtle" onClick={() => delEval(e)}>Delete</Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -907,9 +1109,13 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
 
       {selected && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Runs · {selected.name || selected.id}</Subtitle2>
+          <div className={s.toolbar} style={{ marginTop: 12 }}>
+            <Subtitle2>Runs · {selected.name || selected.id}</Subtitle2>
+            <Button size="small" appearance="primary" onClick={() => setRunOpen(true)}>+ Start a run</Button>
+            <Button size="small" onClick={() => loadRuns(selected)}>Reload runs</Button>
+          </div>
           {runs.loading ? <Spinner size="small" /> : runs.error ? <GateBar msg={runs.error} hint={runs.hint} /> : runs.list.length === 0 ? (
-            <EmptyText>No runs for this evaluation yet. Start a run with a JSONL dataset via the Evals REST API or the Foundry Evaluation surface.</EmptyText>
+            <EmptyText>No runs for this evaluation yet. Click “Start a run”, upload a JSONL dataset and pick a deployment to grade.</EmptyText>
           ) : (
             <div className={s.tableWrap}>
               <Table aria-label="Evaluation runs" size="small">
@@ -917,11 +1123,11 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
                   <TableHeaderCell>Run</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
                   <TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Passed</TableHeaderCell>
                   <TableHeaderCell>Failed</TableHeaderCell><TableHeaderCell>Total</TableHeaderCell>
-                  <TableHeaderCell>Report</TableHeaderCell>
+                  <TableHeaderCell>Report</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
                   {runs.list.map((r) => (
-                    <TableRow key={r.id}>
+                    <TableRow key={r.id} style={{ background: selectedRun?.id === r.id ? tokens.colorNeutralBackground2 : undefined }}>
                       <TableCell className={s.cell}><strong>{r.name || r.id}</strong></TableCell>
                       <TableCell className={s.cell}>
                         <Badge appearance="tint" color={r.status === 'completed' ? 'success' : r.status === 'failed' ? 'danger' : 'informative'}>{r.status || '—'}</Badge>
@@ -931,6 +1137,287 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
                       <TableCell className={s.cell}>{r.resultCounts?.failed ?? '—'}</TableCell>
                       <TableCell className={s.cell}>{r.resultCounts?.total ?? '—'}</TableCell>
                       <TableCell className={s.cell}>{r.reportUrl ? <a href={r.reportUrl} target="_blank" rel="noopener noreferrer">Open</a> : '—'}</TableCell>
+                      <TableCell className={s.cell}>
+                        <Button size="small" appearance="subtle" onClick={() => setSelectedRun(r)}>Results</Button>
+                        <Button size="small" appearance="subtle" onClick={() => delRun(r)}>Delete</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+
+      {selected && selectedRun && (
+        <>
+          <Subtitle2 style={{ marginTop: 12 }}>Per-row results · {selectedRun.name || selectedRun.id}</Subtitle2>
+          {items.loading ? <Spinner size="small" /> : items.error ? <GateBar msg={items.error} hint={items.hint} /> : items.list.length === 0 ? (
+            <EmptyText>No output items for this run yet. Items appear once the run completes grading.</EmptyText>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table aria-label="Run output items" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Row</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Criteria results</TableHeaderCell><TableHeaderCell>Sample output</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {items.list.map((it) => (
+                    <TableRow key={it.id}>
+                      <TableCell className={s.cell}>{it.datasourceItemIndex ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{it.status || '—'}</TableCell>
+                      <TableCell className={s.cell}>
+                        {it.results.length ? it.results.map((r, i) => (
+                          <Badge key={i} appearance="tint" color={r.passed === true ? 'success' : r.passed === false ? 'danger' : 'informative'} style={{ marginRight: 4 }}>
+                            {(r.name || 'grader')}{r.score !== undefined ? ` ${r.score.toFixed(2)}` : ''}{r.passed === true ? ' ✓' : r.passed === false ? ' ✗' : ''}
+                          </Badge>
+                        )) : '—'}
+                      </TableCell>
+                      <TableCell className={s.cell}>{it.sampleOutput ? it.sampleOutput.slice(0, 120) : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Fine-tuning: upload training data → create job → monitor jobs + events ----
+
+interface FineTuningFile { id: string; filename?: string; bytes?: number; status?: string }
+interface FineTuningJob { id: string; status?: string; model?: string; fineTunedModel?: string | null; trainingFile?: string; validationFile?: string | null; createdAt?: number; hyperparameters?: { n_epochs?: number | string; batch_size?: number | string; learning_rate_multiplier?: number | string }; trainedTokens?: number | null; error?: { message?: string } | null }
+interface FineTuningEvent { createdAt?: number; level?: string; message?: string; step?: number; trainingLoss?: number; validationLoss?: number }
+
+function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
+  const s = useStyles();
+  const [jobsState, reloadJobs] = useLazyFetch<{ ok: boolean; account?: any; jobs: FineTuningJob[] }>(`/api/foundry/fine-tuning`, active, nonce, acct);
+  const [filesState, reloadFiles] = useLazyFetch<{ ok: boolean; files: FineTuningFile[] }>(`/api/foundry/fine-tuning?files=1`, active, nonce, acct);
+  const [catalog] = useLazyFetch<{ ok: boolean; models: { name: string; version?: string }[] }>(`/api/foundry/models-catalog`, active, nonce, acct);
+
+  const [model, setModel] = useState('');
+  const [trainingFileId, setTrainingFileId] = useState('');
+  const [validationFileId, setValidationFileId] = useState('');
+  const [suffix, setSuffix] = useState('');
+  const [epochs, setEpochs] = useState('');
+  const [batchSize, setBatchSize] = useState('');
+  const [lrMult, setLrMult] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
+
+  // Selected job → events drill.
+  const [selectedJob, setSelectedJob] = useState<FineTuningJob | null>(null);
+  const [events, setEvents] = useState<{ loading: boolean; list: FineTuningEvent[]; error?: string }>({ loading: false, list: [] });
+
+  const files = filesState.data?.files || [];
+  const jobs = jobsState.data?.jobs || [];
+  // Fine-tunable model heuristic (same family list as the catalog Fine-tuning filter).
+  const fineTunable = useMemo(() => (catalog.data?.models || []).filter((m) => /gpt-4o|gpt-4\.1|gpt-35|gpt-3.5|phi|mistral|llama/i.test(m.name)), [catalog.data]);
+
+  useEffect(() => { if (fineTunable[0] && !model) setModel(fineTunable[0].name); }, [fineTunable, model]);
+  useEffect(() => { if (files[0] && !trainingFileId) setTrainingFileId(files[0].id); }, [files, trainingFileId]);
+  useEffect(() => { setModel(''); setTrainingFileId(''); setValidationFileId(''); setSelectedJob(null); }, [acct]);
+
+  const loadEvents = useCallback(async (job: FineTuningJob) => {
+    setEvents({ loading: true, list: [] });
+    try {
+      const r = await fetch(withAccount(`/api/foundry/fine-tuning/${encodeURIComponent(job.id)}`, acct));
+      const j = await r.json();
+      if (!j.ok) { setEvents({ loading: false, list: [], error: j.error }); return; }
+      setEvents({ loading: false, list: Array.isArray(j.events) ? j.events : [] });
+    } catch (e: any) { setEvents({ loading: false, list: [], error: e?.message || String(e) }); }
+  }, [acct]);
+
+  useEffect(() => { if (selectedJob) loadEvents(selectedJob); }, [selectedJob, loadEvents]);
+
+  const upload = async (f: File) => {
+    setUploading(true); setMsg(null);
+    try {
+      const form = new FormData();
+      form.append('file', f, f.name);
+      const ab = acctBody(acct);
+      if (ab.account) form.append('account', ab.account);
+      if (ab.rg) form.append('rg', ab.rg);
+      const r = await fetch('/api/foundry/fine-tuning/files', { method: 'POST', body: form });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setMsg({ intent: 'success', text: `Uploaded ${f.name} → ${j.file?.id}` });
+      setTrainingFileId(j.file?.id || trainingFileId);
+      reloadFiles();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setUploading(false); }
+  };
+
+  const createJob = async () => {
+    if (!model || !trainingFileId) return;
+    setCreating(true); setMsg(null);
+    const hyperparameters: any = {};
+    if (epochs.trim()) hyperparameters.n_epochs = Number(epochs) || epochs;
+    if (batchSize.trim()) hyperparameters.batch_size = Number(batchSize) || batchSize;
+    if (lrMult.trim()) hyperparameters.learning_rate_multiplier = Number(lrMult) || lrMult;
+    try {
+      const r = await fetch('/api/foundry/fine-tuning', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model, trainingFileId,
+          validationFileId: validationFileId || undefined,
+          suffix: suffix.trim() || undefined,
+          hyperparameters: Object.keys(hyperparameters).length ? hyperparameters : undefined,
+          ...acctBody(acct),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setMsg({ intent: 'success', text: `Created fine-tuning job "${j.job?.id}" (${j.job?.status || 'queued'}).` });
+      reloadJobs();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setCreating(false); }
+  };
+
+  const cancelJob = async (job: FineTuningJob) => {
+    setMsg(null);
+    try {
+      const r = await fetch(withAccount(`/api/foundry/fine-tuning/${encodeURIComponent(job.id)}`, acct), {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cancel', ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setMsg({ intent: 'success', text: `Cancelled job "${job.id}".` });
+      reloadJobs();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+  };
+
+  if (!active) return null;
+
+  return (
+    <div className={s.pad}>
+      <div className={s.toolbar}>
+        <Subtitle2>Fine-tuning</Subtitle2>
+        <Badge appearance="tint" color="brand">Preview</Badge>
+        <Button onClick={() => { reloadJobs(); reloadFiles(); }}>Reload</Button>
+        {jobsState.data?.account && <Badge appearance="outline">{jobsState.data.account.name}{jobsState.data.account.location ? ` · ${jobsState.data.account.location}` : ''}</Badge>}
+      </div>
+      <Caption1>Customize a base model on your own JSONL training data (Azure OpenAI fine-tuning). Standard / RegionalStandard SKUs only — Global training jobs are not supported.</Caption1>
+      {jobsState.error && <GateBar msg={jobsState.error} hint={jobsState.hint} notDeployed={jobsState.notDeployed} />}
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' }}>
+        {/* Upload training data */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+          <Body1 style={{ fontWeight: 600 }}>Upload training data</Body1>
+          <Caption1>JSONL with chat-format examples (one <code>{'{ "messages": [...] }'}</code> per line).</Caption1>
+          <input type="file" accept=".jsonl,.json,text/plain" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+          {filesState.loading ? <Spinner size="tiny" /> : files.length === 0 ? <Caption1>No fine-tune files uploaded yet.</Caption1> : (
+            <div className={s.tableWrap} style={{ maxHeight: 180 }}>
+              <Table size="small" aria-label="Fine-tune files">
+                <TableHeader><TableRow><TableHeaderCell>File</TableHeaderCell><TableHeaderCell>ID</TableHeaderCell><TableHeaderCell>Bytes</TableHeaderCell></TableRow></TableHeader>
+                <TableBody>
+                  {files.map((f) => (
+                    <TableRow key={f.id}><TableCell className={s.cell}>{f.filename || '—'}</TableCell><TableCell className={s.cell}>{f.id}</TableCell><TableCell className={s.cell}>{f.bytes ?? '—'}</TableCell></TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+
+        {/* Create job */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+          <Body1 style={{ fontWeight: 600 }}>Create a fine-tuning job</Body1>
+          <Field label="Base model">
+            {fineTunable.length ? (
+              <Dropdown value={model} selectedOptions={model ? [model] : []} placeholder="Select a fine-tunable model" onOptionSelect={(_, d) => d.optionValue && setModel(d.optionValue)}>
+                {fineTunable.map((m) => <Option key={m.name} value={m.name}>{`${m.name}${m.version ? ` (v${m.version})` : ''}`}</Option>)}
+              </Dropdown>
+            ) : (
+              <Input value={model} onChange={(_, d) => setModel(d.value)} placeholder="gpt-4o-mini" />
+            )}
+          </Field>
+          <Field label="Training file" required>
+            <Dropdown value={files.find((f) => f.id === trainingFileId)?.filename || trainingFileId} selectedOptions={trainingFileId ? [trainingFileId] : []}
+              placeholder={files.length ? 'Select a training file' : 'Upload a file first'} onOptionSelect={(_, d) => d.optionValue && setTrainingFileId(d.optionValue)}>
+              {files.map((f) => <Option key={f.id} value={f.id}>{f.filename || f.id}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Validation file (optional)">
+            <Dropdown value={validationFileId ? (files.find((f) => f.id === validationFileId)?.filename || validationFileId) : ''} selectedOptions={validationFileId ? [validationFileId] : []}
+              placeholder="(none)" onOptionSelect={(_, d) => setValidationFileId(d.optionValue ?? '')}>
+              <Option value="">(none)</Option>
+              {files.map((f) => <Option key={f.id} value={f.id}>{f.filename || f.id}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Suffix (optional — names the fine-tuned model)"><Input value={suffix} onChange={(_, d) => setSuffix(d.value)} placeholder="my-tuned" /></Field>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+            <Field label="Epochs"><Input type="number" value={epochs} onChange={(_, d) => setEpochs(d.value)} placeholder="auto" /></Field>
+            <Field label="Batch size"><Input type="number" value={batchSize} onChange={(_, d) => setBatchSize(d.value)} placeholder="auto" /></Field>
+            <Field label="LR multiplier"><Input type="number" value={lrMult} onChange={(_, d) => setLrMult(d.value)} placeholder="auto" /></Field>
+          </div>
+          <Button appearance="primary" disabled={creating || uploading || !model || !trainingFileId} onClick={createJob}>{creating ? 'Creating…' : 'Create fine-tuning job'}</Button>
+        </div>
+      </div>
+
+      <Subtitle2 style={{ marginTop: 8 }}>Fine-tuning jobs</Subtitle2>
+      {jobsState.loading ? <Spinner size="small" /> : jobs.length === 0 ? (
+        <EmptyText>No fine-tuning jobs yet. Upload training data and create a job above.</EmptyText>
+      ) : (
+        <div className={s.tableWrap}>
+          <Table size="small" aria-label="Fine-tuning jobs">
+            <TableHeader><TableRow>
+              <TableHeaderCell>Job</TableHeaderCell><TableHeaderCell>Base model</TableHeaderCell>
+              <TableHeaderCell>Fine-tuned model</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Created</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow></TableHeader>
+            <TableBody>
+              {jobs.map((j) => (
+                <TableRow key={j.id} style={{ background: selectedJob?.id === j.id ? tokens.colorNeutralBackground2 : undefined }}>
+                  <TableCell className={s.cell}><strong>{j.id}</strong></TableCell>
+                  <TableCell className={s.cell}>{j.model || '—'}</TableCell>
+                  <TableCell className={s.cell}>{j.fineTunedModel || '—'}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Badge appearance="tint" color={j.status === 'succeeded' ? 'success' : (j.status === 'failed' || j.status === 'cancelled') ? 'danger' : 'informative'}>{j.status || '—'}</Badge>
+                  </TableCell>
+                  <TableCell className={s.cell}>{fmtEpoch(j.createdAt)}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Button size="small" appearance="subtle" onClick={() => setSelectedJob(j)}>Events</Button>
+                    {(j.status === 'running' || j.status === 'queued' || j.status === 'pending' || j.status === 'validating_files' || j.status === 'created') ? (
+                      <Button size="small" appearance="subtle" onClick={() => cancelJob(j)}>Cancel</Button>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {selectedJob && (
+        <>
+          <Subtitle2 style={{ marginTop: 12 }}>Training events · {selectedJob.id}</Subtitle2>
+          {selectedJob.error?.message ? <GateBar msg={selectedJob.error.message} /> : null}
+          {events.loading ? <Spinner size="small" /> : events.error ? <GateBar msg={events.error} /> : events.list.length === 0 ? (
+            <EmptyText>No training events yet. Loss metrics appear here as the job trains.</EmptyText>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Fine-tuning events">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Time</TableHeaderCell><TableHeaderCell>Level</TableHeaderCell>
+                  <TableHeaderCell>Step</TableHeaderCell><TableHeaderCell>Train loss</TableHeaderCell>
+                  <TableHeaderCell>Valid loss</TableHeaderCell><TableHeaderCell>Message</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {events.list.map((ev, i) => (
+                    <TableRow key={i}>
+                      <TableCell className={s.cell}>{fmtEpoch(ev.createdAt)}</TableCell>
+                      <TableCell className={s.cell}>{ev.level || '—'}</TableCell>
+                      <TableCell className={s.cell}>{ev.step ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{ev.trainingLoss !== undefined ? ev.trainingLoss.toFixed(4) : '—'}</TableCell>
+                      <TableCell className={s.cell}>{ev.validationLoss !== undefined ? ev.validationLoss.toFixed(4) : '—'}</TableCell>
+                      <TableCell className={s.cell}>{ev.message || '—'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1070,6 +1557,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
       { label: 'Models', actions: [
         { label: 'Models + deployments', onClick: () => setTab('models') },
+        { label: 'Fine-tuning', onClick: () => setTab('fine-tuning') },
         { label: 'Evaluations', onClick: () => setTab('evaluations') },
         { label: 'Quota + deploy gpt-4o-mini', onClick: () => setTab('quota') },
       ]},
@@ -1106,8 +1594,11 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
             <Tab value="catalog">Model catalog</Tab>
             <Tab value="playgrounds">Playgrounds</Tab>
             <Tab value="chat">Chat</Tab>
+            <Tab value="images">Images</Tab>
+            <Tab value="audio">Audio</Tab>
             <Tab value="connections">Connections</Tab>
             <Tab value="models">Models + endpoints</Tab>
+            <Tab value="fine-tuning">Fine-tuning</Tab>
             <Tab value="evaluations">Evaluations</Tab>
             <Tab value="quota">Quota + usage</Tab>
             <Tab value="networking">Networking</Tab>
@@ -1122,10 +1613,13 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}
         <FoundryAgentsPanel active={tab === 'agents'} nonce={nonce} acct={acct} />
         <ModelCatalogPanel active={tab === 'catalog'} nonce={nonce} acct={acct} />
-        <PlaygroundsLandingPanel active={tab === 'playgrounds'} onOpenChat={() => setTab('chat')} />
+        <PlaygroundsLandingPanel active={tab === 'playgrounds'} onOpenChat={() => setTab('chat')} onOpenImages={() => setTab('images')} onOpenAudio={() => setTab('audio')} />
         <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} acct={acct} />
+        <ImagesPlaygroundPanel active={tab === 'images'} nonce={nonce} acct={acct} />
+        <AudioPlaygroundPanel active={tab === 'audio'} nonce={nonce} acct={acct} />
         <ConnectionsPanel active={tab === 'connections'} nonce={nonce} />
         <ModelsPanel active={tab === 'models'} nonce={nonce} acct={acct} />
+        <FineTuningPanel active={tab === 'fine-tuning'} nonce={nonce} acct={acct} />
         <EvaluationsPanel active={tab === 'evaluations'} nonce={nonce} acct={acct} />
         <QuotaPanel active={tab === 'quota'} nonce={nonce} acct={acct} />
         <NetworkingPanel active={tab === 'networking'} nonce={nonce} acct={acct} />

@@ -688,19 +688,21 @@ const useLandingStyles = makeStyles({
   tileHead: { display: 'flex', alignItems: 'center', gap: 10 },
 });
 
-export function PlaygroundsLandingPanel({ active, onOpenChat }: { active: boolean; onOpenChat: () => void }) {
+export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOpenAudio }: {
+  active: boolean; onOpenChat: () => void; onOpenImages?: () => void; onOpenAudio?: () => void;
+}) {
   const s = useLandingStyles();
   if (!active) return null;
   const tiles = [
     { key: 'chat', icon: <ChatMultiple24Regular />, title: 'Chat playground', desc: 'Test a deployed chat model with system prompt, parameters and conversation history.', action: <Button appearance="primary" onClick={onOpenChat}>Open chat</Button> },
-    { key: 'images', icon: <Image24Regular />, title: 'Images playground', desc: 'Generate images from prompts. Requires a DALL·E / image model deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/images', '_blank', 'noopener,noreferrer')}>Deploy an image model first</Button> },
-    { key: 'audio', icon: <MicRecord24Regular />, title: 'Audio playground', desc: 'Transcribe or translate audio. Requires a Whisper / audio model deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/audio', '_blank', 'noopener,noreferrer')}>Deploy an audio model first</Button> },
-    { key: 'speech', icon: <Speaker224Regular />, title: 'Speech playground', desc: 'Text-to-speech and speech-to-text. Requires a Speech / TTS deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/speech', '_blank', 'noopener,noreferrer')}>Deploy a speech model first</Button> },
+    { key: 'images', icon: <Image24Regular />, title: 'Images playground', desc: 'Generate images from prompts against a deployed gpt-image model. Honest gate when no image model is deployed.', action: <Button appearance="primary" onClick={() => onOpenImages?.()}>Open images</Button> },
+    { key: 'audio', icon: <MicRecord24Regular />, title: 'Audio playground', desc: 'Transcribe audio against a deployed Whisper model. Honest gate when no audio model is deployed.', action: <Button appearance="primary" onClick={() => onOpenAudio?.()}>Open audio</Button> },
+    { key: 'speech', icon: <Speaker224Regular />, title: 'Speech (TTS) playground', desc: 'Text-to-speech requires a deployed TTS model + in-browser audio playback — open the Foundry speech playground.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/speech', '_blank', 'noopener,noreferrer')}>Open in Foundry</Button> },
   ];
   return (
     <div className={s.root}>
       <Subtitle1>Playgrounds</Subtitle1>
-      <Caption1>Try your deployed models before wiring them into an app. Chat is fully functional; the others gate on a model of that modality being deployed.</Caption1>
+      <Caption1>Try your deployed models before wiring them into an app. Chat, Images and Audio call the real Azure OpenAI data-plane; each gates honestly on a model of that modality being deployed.</Caption1>
       <div className={s.grid}>
         {tiles.map((t) => (
           <Card key={t.key} className={s.tile}>
@@ -711,6 +713,263 @@ export function PlaygroundsLandingPanel({ active, onOpenChat }: { active: boolea
           </Card>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ============================================================ Images playground
+
+const useMediaStyles = makeStyles({
+  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
+  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' },
+  panel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16 },
+  // Result panel keeps a stable height so the empty / loading placeholder reads
+  // as an intentional, centered drop-zone rather than a collapsed card.
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 320 },
+  resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
+  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: 24 },
+});
+
+/** Heuristic: which deployed models can generate images. */
+function imageDeployments(list: DeployedModel[]): DeployedModel[] {
+  return list.filter((d) => /gpt-image|dall-?e|image/i.test(`${d.modelName || ''} ${d.name}`));
+}
+/** Heuristic: which deployed models can transcribe audio. */
+function audioDeployments(list: DeployedModel[]): DeployedModel[] {
+  return list.filter((d) => /whisper/i.test(`${d.modelName || ''} ${d.name}`));
+}
+
+function useDeployments(active: boolean, nonce: number, acct: FoundryAccount | null) {
+  const [deps, setDeps] = useState<{ loading: boolean; list: DeployedModel[] | null; error?: string; hint?: string; notDeployed?: boolean }>({ loading: false, list: null });
+  const load = useCallback(async () => {
+    setDeps({ loading: true, list: null });
+    try {
+      const r = await fetch(withAccount('/api/foundry/model-deployments', acct));
+      const j = await r.json();
+      if (!j.ok) { setDeps({ loading: false, list: null, error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
+      setDeps({ loading: false, list: Array.isArray(j.deployments) ? j.deployments : [] });
+    } catch (e: any) { setDeps({ loading: false, list: null, error: e?.message || String(e) }); }
+  }, [acct]);
+  useEffect(() => { if (active && deps.list === null && !deps.loading && !deps.error) load(); }, [active, deps.list, deps.loading, deps.error, load]);
+  useEffect(() => { if (nonce > 0) setDeps({ loading: false, list: null }); }, [nonce]);
+  useEffect(() => { setDeps({ loading: false, list: null }); }, [acct]);
+  return deps;
+}
+
+export function ImagesPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = useMediaStyles();
+  const deps = useDeployments(active, nonce, acct);
+  const list = deps.list || [];
+  const imgDeps = useMemo(() => imageDeployments(list), [list]);
+  const [deployment, setDeployment] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [size, setSize] = useState('1024x1024');
+  const [quality, setQuality] = useState('standard');
+  const [style, setStyle] = useState('vivid');
+  const [n, setN] = useState('1');
+  const [busy, setBusy] = useState(false);
+  const [images, setImages] = useState<{ url?: string; b64_json?: string; revised_prompt?: string }[]>([]);
+  const [msg, setMsg] = useState<{ intent: 'error' | 'warning'; text: string; hint?: string } | null>(null);
+  const [showCode, setShowCode] = useState(false);
+
+  useEffect(() => { if (imgDeps[0] && !deployment) setDeployment(imgDeps[0].name); }, [imgDeps, deployment]);
+  useEffect(() => { setDeployment(''); setImages([]); }, [acct]);
+
+  const generate = async () => {
+    if (!deployment || !prompt.trim()) return;
+    setBusy(true); setMsg(null); setImages([]);
+    try {
+      const r = await fetch('/api/foundry/images', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deployment, prompt: prompt.trim(), n: Number(n) || 1, size, quality, style, ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setImages(Array.isArray(j.images) ? j.images : []);
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const codeSnippet = useMemo(() => `from openai import AzureOpenAI
+
+client = AzureOpenAI(azure_endpoint="https://<acct>.openai.azure.com", api_version="2024-10-21", azure_ad_token_provider=token_provider)
+result = client.images.generate(
+    model="${deployment || '<deployment>'}",
+    prompt=${JSON.stringify(prompt || 'a photo of ...')},
+    n=${Number(n) || 1}, size="${size}", quality="${quality}", style="${style}",
+)
+print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
+
+  if (!active) return null;
+  if (deps.loading) return <div className={s.root}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
+
+  const noImageModel = !deps.error && imgDeps.length === 0;
+
+  return (
+    <div className={s.root}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Image24Regular /><Subtitle1>Images playground</Subtitle1>
+        <Badge appearance="tint" color="brand">Preview</Badge>
+      </div>
+      {deps.error && <GateBar title="Could not list deployments" msg={deps.error} hint={deps.hint} intent={deps.notDeployed ? 'warning' : 'error'} />}
+      {noImageModel && (
+        <GateBar title="No image model deployed" intent="warning"
+          msg="There is no image-generation model deployed on this account."
+          hint="Open the Model catalog tab, pick an image-generation model (e.g. gpt-image-1) and Deploy it, then return here. (dall-e-3 retired 2026-03-04.)" />
+      )}
+      {!noImageModel && (
+        <div className={s.twoCol}>
+          <Card className={s.panel}>
+            <Field label="Deployment">
+              <Dropdown value={deployment} selectedOptions={deployment ? [deployment] : []} placeholder="Select an image deployment"
+                onOptionSelect={(_, d) => d.optionValue && setDeployment(d.optionValue)}>
+                {imgDeps.map((d) => <Option key={d.name} value={d.name}>{`${d.name}${d.modelName ? ` (${d.modelName})` : ''}`}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Prompt" required>
+              <Textarea value={prompt} onChange={(_, d) => setPrompt(d.value)} resize="vertical" rows={4} placeholder="A watercolor painting of a lighthouse at dawn" />
+            </Field>
+            <Field label="Size">
+              <Dropdown value={size} selectedOptions={[size]} onOptionSelect={(_, d) => d.optionValue && setSize(d.optionValue)}>
+                <Option value="1024x1024">1024×1024 (square)</Option>
+                <Option value="1792x1024">1792×1024 (landscape)</Option>
+                <Option value="1024x1792">1024×1792 (portrait)</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Quality">
+              <Dropdown value={quality} selectedOptions={[quality]} onOptionSelect={(_, d) => d.optionValue && setQuality(d.optionValue)}>
+                <Option value="standard">Standard</Option>
+                <Option value="hd">HD</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Style">
+              <Dropdown value={style} selectedOptions={[style]} onOptionSelect={(_, d) => d.optionValue && setStyle(d.optionValue)}>
+                <Option value="vivid">Vivid</Option>
+                <Option value="natural">Natural</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Number of images">
+              <Input type="number" value={n} onChange={(_, d) => setN(d.value)} min={1} max={4} />
+            </Field>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button appearance="primary" icon={<Image24Regular />} disabled={busy || !deployment || !prompt.trim()} onClick={generate}>{busy ? 'Generating…' : 'Generate'}</Button>
+              <Button icon={<Code20Regular />} onClick={() => setShowCode(true)}>View code</Button>
+            </div>
+            {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+          </Card>
+          <Card className={s.resultPanel}>
+            <Subtitle2>Result</Subtitle2>
+            {busy ? <div className={s.empty}><Spinner size="small" label="Generating image…" labelPosition="after" /></div> : images.length === 0 ? (
+              <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: 8 }}>Generated images appear here.</Body1></div>
+            ) : (
+              <div className={s.resultGrid}>
+                {images.map((img, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <img className={s.img} alt={img.revised_prompt || `Generated image ${i + 1}`}
+                      src={img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '')} />
+                    {img.revised_prompt ? <Caption1>{img.revised_prompt}</Caption1> : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      <Dialog open={showCode} onOpenChange={(_, d) => { if (!d.open) setShowCode(false); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
+            <DialogContent>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{codeSnippet}</pre>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
+              <Button appearance="primary" onClick={() => setShowCode(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
+  );
+}
+
+// ============================================================ Audio playground
+
+export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = useMediaStyles();
+  const deps = useDeployments(active, nonce, acct);
+  const list = deps.list || [];
+  const audDeps = useMemo(() => audioDeployments(list), [list]);
+  const [deployment, setDeployment] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState<{ intent: 'error' | 'warning'; text: string; hint?: string } | null>(null);
+
+  useEffect(() => { if (audDeps[0] && !deployment) setDeployment(audDeps[0].name); }, [audDeps, deployment]);
+  useEffect(() => { setDeployment(''); setText(''); setFile(null); }, [acct]);
+
+  const transcribe = async () => {
+    if (!deployment || !file) return;
+    setBusy(true); setMsg(null); setText('');
+    try {
+      const form = new FormData();
+      form.append('deployment', deployment);
+      form.append('file', file, file.name);
+      const ab = acctBody(acct);
+      if (ab.account) form.append('account', ab.account);
+      if (ab.rg) form.append('rg', ab.rg);
+      const r = await fetch('/api/foundry/audio', { method: 'POST', body: form });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setText(j.text || '(empty transcript)');
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  if (!active) return null;
+  if (deps.loading) return <div className={s.root}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
+
+  const noAudioModel = !deps.error && audDeps.length === 0;
+
+  return (
+    <div className={s.root}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <MicRecord24Regular /><Subtitle1>Audio playground</Subtitle1>
+        <Badge appearance="tint" color="brand">Preview</Badge>
+      </div>
+      {deps.error && <GateBar title="Could not list deployments" msg={deps.error} hint={deps.hint} intent={deps.notDeployed ? 'warning' : 'error'} />}
+      {noAudioModel && (
+        <GateBar title="No audio model deployed" intent="warning"
+          msg="There is no Whisper / audio-transcription model deployed on this account."
+          hint="Open the Model catalog tab, pick a Whisper model and Deploy it, then return here to transcribe audio." />
+      )}
+      {!noAudioModel && (
+        <div className={s.twoCol}>
+          <Card className={s.panel}>
+            <Field label="Deployment">
+              <Dropdown value={deployment} selectedOptions={deployment ? [deployment] : []} placeholder="Select an audio deployment"
+                onOptionSelect={(_, d) => d.optionValue && setDeployment(d.optionValue)}>
+                {audDeps.map((d) => <Option key={d.name} value={d.name}>{`${d.name}${d.modelName ? ` (${d.modelName})` : ''}`}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Audio file (mp3 / wav / m4a / ogg / flac)" required>
+              <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            </Field>
+            {file ? <Caption1>{file.name} · {(file.size / 1024).toFixed(0)} KB</Caption1> : null}
+            <Button appearance="primary" icon={<MicRecord24Regular />} disabled={busy || !deployment || !file} onClick={transcribe}>{busy ? 'Transcribing…' : 'Transcribe'}</Button>
+            {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+          </Card>
+          <Card className={s.resultPanel}>
+            <Subtitle2>Transcript</Subtitle2>
+            {busy ? <div className={s.empty}><Spinner size="small" label="Transcribing…" labelPosition="after" /></div> : (
+              <Textarea value={text} readOnly resize="vertical" rows={12} placeholder="The transcript appears here after you upload an audio file and click Transcribe." />
+            )}
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
