@@ -48,6 +48,7 @@ import {
   DataBarVertical20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
+  ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -13178,9 +13179,9 @@ function ReportLikeEditor({
             )}
             {kind === 'paginated' && powerBiConfigured && (
               <>
-                <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
-                <Button appearance="outline" onClick={() => exportReport('XLSX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel'}</Button>
-                <Button appearance="outline" onClick={() => exportReport('DOCX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word'}</Button>
+                <Button appearance="outline" icon={exportBusy === 'PDF' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy} title="export the paginated report to PDF via Power BI REST">{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
+                <Button appearance="outline" icon={exportBusy === 'XLSX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('XLSX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Excel (.xlsx) via Power BI REST">{exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel'}</Button>
+                <Button appearance="outline" icon={exportBusy === 'DOCX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('DOCX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Word (.docx) via Power BI REST">{exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word'}</Button>
               </>
             )}
           </div>
@@ -13295,7 +13296,9 @@ function ReportLikeEditor({
                     </MessageBarBody>
                   </MessageBar>
                 ) : (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading paginated embed…</Caption1>
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+                    <Spinner size="medium" label="Loading paginated report embed…" labelPosition="below" />
+                  </div>
                 )
               ) : embedErr ? (
                 <MessageBar intent="error">

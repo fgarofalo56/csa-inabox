@@ -103,7 +103,22 @@ export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height
   }
 
   if (!models) {
-    return <Spinner size="small" label="Loading Power BI SDK…" labelPosition="after" />;
+    return (
+      <div
+        style={{
+          width: '100%',
+          height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: `1px solid ${tokens.colorNeutralStroke2}`,
+          borderRadius: tokens.borderRadiusMedium,
+          backgroundColor: tokens.colorNeutralBackground2,
+        }}
+      >
+        <Spinner size="medium" label="Loading Power BI SDK…" labelPosition="below" />
+      </div>
+    );
   }
 
   // Paginated reports (RDL) load through IPaginatedReportLoadConfiguration.
@@ -160,8 +175,9 @@ export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height
         width: '100%',
         height,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
-        borderRadius: 4,
+        borderRadius: tokens.borderRadiusMedium,
         overflow: 'hidden',
+        backgroundColor: tokens.colorNeutralBackground1,
       }}
     >
       <LazyEmbed
