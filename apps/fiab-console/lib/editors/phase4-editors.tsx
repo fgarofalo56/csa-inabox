@@ -29,7 +29,12 @@ import {
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular, Link20Regular, Flash20Regular, Dismiss16Regular } from '@fluentui/react-icons';
+import {
+  Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular,
+  Link20Regular, Flash20Regular, Dismiss16Regular,
+  ShieldCheckmark20Regular, Mail16Regular, ArrowSync16Regular,
+  DataUsage20Regular, ArrowUpload16Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
@@ -1662,6 +1667,9 @@ function PlanApprovalPanel({
   const statusColor: Record<PlanApprovalStatus, 'informative' | 'warning' | 'success' | 'danger'> = {
     none: 'informative', pending: 'warning', approved: 'success', rejected: 'danger',
   };
+  const statusLabel: Record<PlanApprovalStatus, string> = {
+    none: 'Not requested', pending: 'Pending', approved: 'Approved', rejected: 'Rejected',
+  };
 
   const requestApproval = useCallback(async () => {
     if (!approver.trim()) { setMsg({ intent: 'error', text: 'Enter an approver email first.' }); return; }
@@ -1729,39 +1737,102 @@ function PlanApprovalPanel({
   }, [linkedModel, tasks, status, state, setState, save]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+        padding: tokens.spacingVerticalL,
+        border: `1px solid ${tokens.colorNeutralStroke2}`,
+        borderRadius: tokens.borderRadiusLarge,
+        background: tokens.colorNeutralBackground2,
+        boxShadow: tokens.shadow2,
+      }}
+    >
+      {/* Section header — leading icon, title, status pill, inline timestamp/reason. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+        <ShieldCheckmark20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
         <Subtitle2>Approval workflow</Subtitle2>
-        <Badge appearance="filled" color={statusColor[status]}>{status}</Badge>
-        {status === 'approved' && state.approvedBy && <Caption1>by {String(state.approvedBy)}{state.approvedAt ? ` · ${new Date(String(state.approvedAt)).toLocaleString()}` : ''}</Caption1>}
-        {status === 'rejected' && state.approvalReason && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{String(state.approvalReason)}</Caption1>}
+        <Badge appearance="filled" color={statusColor[status]}>{statusLabel[status]}</Badge>
+        {status === 'approved' && state.approvedBy && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            by {String(state.approvedBy)}{state.approvedAt ? ` · ${new Date(String(state.approvedAt)).toLocaleString()}` : ''}
+          </Caption1>
+        )}
+        {status === 'rejected' && state.approvalReason && (
+          <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{String(state.approvalReason)}</Caption1>
+        )}
         {status === 'pending' && (
-          <Button size="small" appearance="subtle" onClick={refreshStatus}>Refresh status</Button>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<ArrowSync16Regular />}
+            onClick={refreshStatus}
+            style={{ marginLeft: 'auto' }}
+          >
+            Refresh status
+          </Button>
         )}
       </div>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-        Routes this plan through the Azure-native approval Logic App (Office 365 approval email). On approval, plan metrics can be written into a linked semantic model via XMLA — no Microsoft Fabric / Power Automate required.
+
+      <Caption1 style={{ color: tokens.colorNeutralForeground3, lineHeight: tokens.lineHeightBase200 }}>
+        Routes this plan through the Azure-native approval Logic App (Office 365 approval email). On approval, plan
+        metrics can be written into a linked semantic model via XMLA — no Microsoft Fabric / Power Automate required.
       </Caption1>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <Field label="Approver email" style={{ minWidth: 240 }}>
-          <Input type="email" value={approver} placeholder="approver@contoso.com" onChange={(_, d) => setApprover(d.value)} disabled={status === 'pending'} />
+
+      <div style={{ height: 1, background: tokens.colorNeutralStroke2, alignSelf: 'stretch' }} />
+
+      {/* Request approval row. */}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Approver email" style={{ flex: '1 1 260px', minWidth: 240 }}>
+          <Input
+            type="email"
+            value={approver}
+            placeholder="approver@contoso.com"
+            contentBefore={<Mail16Regular />}
+            onChange={(_, d) => setApprover(d.value)}
+            disabled={status === 'pending'}
+          />
         </Field>
-        <Button appearance="primary" onClick={requestApproval} disabled={busy !== null || status === 'pending'}>
+        <Button
+          appearance="primary"
+          icon={busy === 'request' ? <Spinner size="tiny" /> : <Mail16Regular />}
+          onClick={requestApproval}
+          disabled={busy !== null || status === 'pending'}
+        >
           {busy === 'request' ? 'Sending…' : status === 'pending' ? 'Awaiting response…' : status === 'approved' ? 'Re-request approval' : 'Request approval'}
         </Button>
       </div>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <Field label="Linked semantic model (item id)" style={{ minWidth: 280 }}
-          hint="Plan metrics (_PlanTasks + _PlanMetrics measures) are written here on approval.">
-          <Input value={linkedModel} placeholder="semantic-model item id" onChange={(_, d) => setLinkedModel(d.value)} />
+
+      {/* Semantic-model writeback row. */}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field
+          label="Linked semantic model (item id)"
+          hint="Plan metrics (_PlanTasks + _PlanMetrics measures) are written here on approval."
+          style={{ flex: '1 1 300px', minWidth: 280 }}
+        >
+          <Input
+            value={linkedModel}
+            placeholder="semantic-model item id"
+            contentBefore={<DataUsage20Regular />}
+            onChange={(_, d) => setLinkedModel(d.value)}
+          />
         </Field>
-        <Button onClick={pushMetrics} disabled={busy !== null}>
+        <Button
+          icon={busy === 'push' ? <Spinner size="tiny" /> : <ArrowUpload16Regular />}
+          onClick={pushMetrics}
+          disabled={busy !== null}
+        >
           {busy === 'push' ? 'Pushing…' : 'Push plan metrics'}
         </Button>
       </div>
+
       {msg && (
         <MessageBar intent={msg.intent}>
-          <MessageBarBody>{msg.text}</MessageBarBody>
+          <MessageBarBody>
+            <MessageBarTitle>
+              {msg.intent === 'success' ? 'Done' : msg.intent === 'error' ? 'Could not complete' : msg.intent === 'warning' ? 'Action needed' : 'Status'}
+            </MessageBarTitle>
+            {msg.text}
+          </MessageBarBody>
         </MessageBar>
       )}
     </div>
