@@ -28,7 +28,8 @@ import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
-  ArrowSync20Regular, Dismiss20Regular,
+  ArrowSync20Regular, Dismiss20Regular, Search20Regular, TextField20Regular,
+  BrainCircuit20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -643,13 +644,403 @@ function useSqlDatabases(server: string) {
   return { databases, error, loading };
 }
 
+// ── Search & Vector tab ─────────────────────────────────────────────────────
+// FTS catalogs/indexes + DiskANN vector indexes inventory and creation, all via
+// real T-SQL DDL over TDS (Azure-native, no Fabric). The create dialogs are
+// structured (dropdowns from the live catalog) — no raw-JSON config — per
+// .claude/rules/loom_no_freeform_config + ui-parity.
+
+interface VectorIndexInfo { schemaName: string; tableName: string; indexName: string; columnName: string; metric?: string; indexVersion?: string }
+interface FullTextCatalogInfo { catalogName: string; isDefault: boolean; isAccentSensitive?: boolean }
+interface FullTextIndexInfo { schemaName: string; tableName: string; catalogName: string; keyIndexName?: string; changeTracking?: string; isEnabled: boolean; columns: string[] }
+interface VectorColumnCandidate { schemaName: string; tableName: string; columnName: string; dimensions?: number }
+interface FtsColumnCandidate { schemaName: string; tableName: string; columnName: string; dataType: string }
+interface UniqueKeyIndexCandidate { schemaName: string; tableName: string; indexName: string }
+interface SearchInventory {
+  engineMajor: number; productVersion: string;
+  vectorIndexes: VectorIndexInfo[]; fullTextCatalogs: FullTextCatalogInfo[]; fullTextIndexes: FullTextIndexInfo[];
+  vectorColumns: VectorColumnCandidate[]; ftsColumns: FtsColumnCandidate[]; uniqueKeyIndexes: UniqueKeyIndexCandidate[];
+}
+
+function SearchVectorTab({ id, server, database }: { id: string; server: string; database: string }) {
+  const s = useStyles();
+  const [inv, setInv] = useState<SearchInventory | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!server || !database) return;
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-index?server=${encodeURIComponent(server)}&database=${encodeURIComponent(database)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setInv(j.inventory);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id, server, database]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Create-vector-index dialog state ──
+  const [vecOpen, setVecOpen] = useState(false);
+  const [vecCol, setVecCol] = useState('');           // "schema.table.column" key
+  const [vecName, setVecName] = useState('');
+  const [vecMetric, setVecMetric] = useState<'cosine' | 'dot' | 'euclidean'>('cosine');
+  const [vecBusy, setVecBusy] = useState(false);
+  const [vecError, setVecError] = useState<string | null>(null);
+  const [vecOk, setVecOk] = useState<string | null>(null);
+
+  const submitVector = useCallback(async () => {
+    const cand = (inv?.vectorColumns || []).find((c) => `${c.schemaName}.${c.tableName}.${c.columnName}` === vecCol);
+    if (!cand || !vecName.trim()) { setVecError('pick a column and name the index'); return; }
+    setVecBusy(true); setVecError(null); setVecOk(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-index`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server, database, kind: 'vector-index', spec: {
+          indexName: vecName.trim(), schema: cand.schemaName, table: cand.tableName, column: cand.columnName, metric: vecMetric,
+        } }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setVecOk(`Vector index created. Executed: ${j.sql}`);
+      setVecName('');
+      await load();
+    } catch (e: any) { setVecError(e?.message || String(e)); }
+    finally { setVecBusy(false); }
+  }, [id, server, database, inv, vecCol, vecName, vecMetric, load]);
+
+  // ── Create-FTS-catalog dialog state ──
+  const [catOpen, setCatOpen] = useState(false);
+  const [catName, setCatName] = useState('');
+  const [catDefault, setCatDefault] = useState(false);
+  const [catBusy, setCatBusy] = useState(false);
+  const [catError, setCatError] = useState<string | null>(null);
+  const [catOk, setCatOk] = useState<string | null>(null);
+
+  const submitCatalog = useCallback(async () => {
+    if (!catName.trim()) { setCatError('catalog name required'); return; }
+    setCatBusy(true); setCatError(null); setCatOk(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-index`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server, database, kind: 'fts-catalog', spec: { catalogName: catName.trim(), asDefault: catDefault } }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setCatOk(`Full-text catalog created. Executed: ${j.sql}`);
+      setCatName('');
+      await load();
+    } catch (e: any) { setCatError(e?.message || String(e)); }
+    finally { setCatBusy(false); }
+  }, [id, server, database, catName, catDefault, load]);
+
+  // ── Create-FTS-index dialog state ──
+  const [ftsOpen, setFtsOpen] = useState(false);
+  const [ftsTable, setFtsTable] = useState('');       // "schema.table"
+  const [ftsCols, setFtsCols] = useState<string[]>([]);
+  const [ftsKeyIndex, setFtsKeyIndex] = useState('');
+  const [ftsCatalog, setFtsCatalog] = useState('');
+  const [ftsChange, setFtsChange] = useState<'AUTO' | 'MANUAL' | 'OFF'>('AUTO');
+  const [ftsBusy, setFtsBusy] = useState(false);
+  const [ftsError, setFtsError] = useState<string | null>(null);
+  const [ftsOk, setFtsOk] = useState<string | null>(null);
+
+  // Distinct "schema.table" choices that have at least one FTS-eligible column.
+  const ftsTables = useMemo(() => {
+    const set = new Set<string>();
+    (inv?.ftsColumns || []).forEach((c) => set.add(`${c.schemaName}.${c.tableName}`));
+    return [...set].sort();
+  }, [inv]);
+  const ftsTableColumns = useMemo(
+    () => (inv?.ftsColumns || []).filter((c) => `${c.schemaName}.${c.tableName}` === ftsTable),
+    [inv, ftsTable],
+  );
+  const ftsTableKeyIndexes = useMemo(
+    () => (inv?.uniqueKeyIndexes || []).filter((i) => `${i.schemaName}.${i.tableName}` === ftsTable),
+    [inv, ftsTable],
+  );
+
+  const submitFtsIndex = useCallback(async () => {
+    if (!ftsTable || ftsCols.length === 0 || !ftsKeyIndex) { setFtsError('table, ≥1 column, and a unique key index are required'); return; }
+    const [schema, table] = ftsTable.split('.');
+    setFtsBusy(true); setFtsError(null); setFtsOk(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-index`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server, database, kind: 'fts-index', spec: {
+          schema, table, columns: ftsCols.map((name) => ({ name })),
+          keyIndexName: ftsKeyIndex, catalogName: ftsCatalog || undefined, changeTracking: ftsChange,
+        } }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setFtsOk(`Full-text index created. Executed: ${j.sql}`);
+      setFtsCols([]); setFtsKeyIndex('');
+      await load();
+    } catch (e: any) { setFtsError(e?.message || String(e)); }
+    finally { setFtsBusy(false); }
+  }, [id, server, database, ftsTable, ftsCols, ftsKeyIndex, ftsCatalog, ftsChange, load]);
+
+  const vectorSupported = !inv || inv.engineMajor >= 17;
+
+  return (
+    <>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Search &amp; vector indexes (Azure-native)</MessageBarTitle>
+          Manage <strong>full-text search</strong> catalogs/indexes and <strong>DiskANN vector indexes</strong> via real
+          T-SQL DDL over TDS — no Microsoft Fabric. The Console identity needs <code>db_ddladmin</code> (or
+          <code> db_owner</code>) and <code>REFERENCES</code> on the catalog. Vector indexes require SQL Server 2025 /
+          Azure SQL Database (engine major ≥ 17).
+        </MessageBarBody>
+      </MessageBar>
+
+      <div className={s.toolbar}>
+        <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load} disabled={loading}>Refresh</Button>
+        <Button appearance="primary" icon={<Add20Regular />} onClick={() => { setCatOk(null); setCatError(null); setCatOpen(true); }}>New full-text catalog</Button>
+        <Button appearance="primary" icon={<TextField20Regular />} onClick={() => { setFtsOk(null); setFtsError(null); setFtsOpen(true); }}
+          disabled={(inv?.ftsColumns?.length ?? 0) === 0}
+          title={(inv?.ftsColumns?.length ?? 0) === 0 ? 'No char/text/xml/varbinary columns to index' : undefined}>
+          New full-text index
+        </Button>
+        <Button appearance="primary" icon={<BrainCircuit20Regular />} onClick={() => { setVecOk(null); setVecError(null); setVecOpen(true); }}
+          disabled={!vectorSupported || (inv?.vectorColumns?.length ?? 0) === 0}
+          title={!vectorSupported ? 'Engine older than SQL 2025' : (inv?.vectorColumns?.length ?? 0) === 0 ? 'No vector-typed columns found' : undefined}>
+          New vector index
+        </Button>
+        {loading && <Spinner size="tiny" label="Reading catalog…" labelPosition="after" />}
+        {inv && <Caption1 style={{ marginLeft: 'auto' }}>Engine v{inv.productVersion || '?'}</Caption1>}
+      </div>
+
+      {error && <BackendStateBar error={error} title="Search & vector catalog" />}
+      {!vectorSupported && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Vector indexes require SQL Server 2025</MessageBarTitle>
+            This engine reports v{inv?.productVersion}. Vector index creation is disabled; full-text search is available.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Vector indexes */}
+      <Subtitle2 style={{ marginTop: 8 }}><BrainCircuit20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Vector indexes ({inv?.vectorIndexes.length ?? 0})</Subtitle2>
+      <div className={s.tableWrap}>
+        <Table aria-label="Vector indexes" size="small">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Index</TableHeaderCell><TableHeaderCell>Table</TableHeaderCell>
+            <TableHeaderCell>Column</TableHeaderCell><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Version</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(inv?.vectorIndexes.length ?? 0) === 0 && (
+              <TableRow><TableCell colSpan={5}><Caption1>No vector indexes.</Caption1></TableCell></TableRow>
+            )}
+            {(inv?.vectorIndexes || []).map((v) => (
+              <TableRow key={`${v.schemaName}.${v.tableName}.${v.indexName}`}>
+                <TableCell><strong>{v.indexName}</strong></TableCell>
+                <TableCell>{v.schemaName}.{v.tableName}</TableCell>
+                <TableCell>{v.columnName}</TableCell>
+                <TableCell>{v.metric || '—'}</TableCell>
+                <TableCell>{v.indexVersion || '—'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* FTS catalogs */}
+      <Subtitle2 style={{ marginTop: 12 }}><Search20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Full-text catalogs ({inv?.fullTextCatalogs.length ?? 0})</Subtitle2>
+      <div className={s.tableWrap}>
+        <Table aria-label="Full-text catalogs" size="small">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Catalog</TableHeaderCell><TableHeaderCell>Default</TableHeaderCell><TableHeaderCell>Accent sensitive</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(inv?.fullTextCatalogs.length ?? 0) === 0 && (
+              <TableRow><TableCell colSpan={3}><Caption1>No full-text catalogs.</Caption1></TableCell></TableRow>
+            )}
+            {(inv?.fullTextCatalogs || []).map((c) => (
+              <TableRow key={c.catalogName}>
+                <TableCell><strong>{c.catalogName}</strong></TableCell>
+                <TableCell>{c.isDefault ? <Badge appearance="filled" color="brand">default</Badge> : '—'}</TableCell>
+                <TableCell>{c.isAccentSensitive == null ? '—' : c.isAccentSensitive ? 'yes' : 'no'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* FTS indexes */}
+      <Subtitle2 style={{ marginTop: 12 }}><TextField20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Full-text indexes ({inv?.fullTextIndexes.length ?? 0})</Subtitle2>
+      <div className={s.tableWrap}>
+        <Table aria-label="Full-text indexes" size="small">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Table</TableHeaderCell><TableHeaderCell>Columns</TableHeaderCell>
+            <TableHeaderCell>Catalog</TableHeaderCell><TableHeaderCell>Key index</TableHeaderCell>
+            <TableHeaderCell>Change tracking</TableHeaderCell><TableHeaderCell>Enabled</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(inv?.fullTextIndexes.length ?? 0) === 0 && (
+              <TableRow><TableCell colSpan={6}><Caption1>No full-text indexes.</Caption1></TableCell></TableRow>
+            )}
+            {(inv?.fullTextIndexes || []).map((f) => (
+              <TableRow key={`${f.schemaName}.${f.tableName}`}>
+                <TableCell><strong>{f.schemaName}.{f.tableName}</strong></TableCell>
+                <TableCell>{f.columns.join(', ') || '—'}</TableCell>
+                <TableCell>{f.catalogName}</TableCell>
+                <TableCell>{f.keyIndexName || '—'}</TableCell>
+                <TableCell>{f.changeTracking || '—'}</TableCell>
+                <TableCell>{f.isEnabled ? 'yes' : 'no'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* ── Create vector index dialog ── */}
+      <Dialog open={vecOpen} onOpenChange={(_, d) => setVecOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Create vector index</DialogTitle>
+            <DialogContent>
+              <Caption1>
+                Builds <code>CREATE VECTOR INDEX … WITH (METRIC, TYPE = &apos;DiskANN&apos;)</code>. The table needs ≥ 100
+                rows of non-null vectors (engine requirement).
+              </Caption1>
+              <Field label="Vector column" required>
+                <Dropdown className={s.fullWidth} value={vecCol} selectedOptions={vecCol ? [vecCol] : []}
+                  placeholder="Select a vector-typed column"
+                  onOptionSelect={(_, d) => setVecCol(d.optionValue || '')} aria-label="Vector column">
+                  {(inv?.vectorColumns || []).map((c) => {
+                    const k = `${c.schemaName}.${c.tableName}.${c.columnName}`;
+                    return <Option key={k} value={k}>{`${k}${c.dimensions ? ` · vector(${c.dimensions})` : ''}`}</Option>;
+                  })}
+                </Dropdown>
+              </Field>
+              <Field label="Index name" required>
+                <Input value={vecName} onChange={(_, d) => setVecName(d.value)} placeholder="vec_idx_embedding" />
+              </Field>
+              <Field label="Distance metric" required>
+                <Dropdown className={s.fullWidth} value={vecMetric} selectedOptions={[vecMetric]}
+                  onOptionSelect={(_, d) => setVecMetric((d.optionValue as any) || 'cosine')} aria-label="Distance metric">
+                  {VECTOR_METRICS.map((m) => <Option key={m} value={m}>{m}</Option>)}
+                </Dropdown>
+              </Field>
+              {vecError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{vecError}</MessageBarBody></MessageBar>}
+              {vecOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{vecOk}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setVecOpen(false)} disabled={vecBusy}>Close</Button>
+              <Button appearance="primary" onClick={submitVector} disabled={vecBusy || !vecCol || !vecName.trim()}>
+                {vecBusy ? 'Creating…' : 'Create vector index'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Create FTS catalog dialog ── */}
+      <Dialog open={catOpen} onOpenChange={(_, d) => setCatOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Create full-text catalog</DialogTitle>
+            <DialogContent>
+              <Caption1>Builds <code>CREATE FULLTEXT CATALOG</code>. A catalog is required before a full-text index.</Caption1>
+              <Field label="Catalog name" required>
+                <Input value={catName} onChange={(_, d) => setCatName(d.value)} placeholder="ft_catalog" />
+              </Field>
+              <Field label="Set as default catalog">
+                <Dropdown className={s.fullWidth} value={catDefault ? 'yes' : 'no'} selectedOptions={[catDefault ? 'yes' : 'no']}
+                  onOptionSelect={(_, d) => setCatDefault(d.optionValue === 'yes')} aria-label="Set as default catalog">
+                  <Option value="no">No</Option>
+                  <Option value="yes">Yes — AS DEFAULT</Option>
+                </Dropdown>
+              </Field>
+              {catError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{catError}</MessageBarBody></MessageBar>}
+              {catOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{catOk}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCatOpen(false)} disabled={catBusy}>Close</Button>
+              <Button appearance="primary" onClick={submitCatalog} disabled={catBusy || !catName.trim()}>
+                {catBusy ? 'Creating…' : 'Create catalog'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Create FTS index dialog ── */}
+      <Dialog open={ftsOpen} onOpenChange={(_, d) => setFtsOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: '640px', width: '90vw' }}>
+          <DialogBody>
+            <DialogTitle>Create full-text index</DialogTitle>
+            <DialogContent>
+              <Caption1>
+                Builds <code>CREATE FULLTEXT INDEX … KEY INDEX … WITH (CHANGE_TRACKING)</code>. The table needs a unique,
+                single-column, non-null index (the KEY INDEX).
+              </Caption1>
+              <Field label="Table" required>
+                <Dropdown className={s.fullWidth} value={ftsTable} selectedOptions={ftsTable ? [ftsTable] : []}
+                  placeholder="Select a table"
+                  onOptionSelect={(_, d) => { setFtsTable(d.optionValue || ''); setFtsCols([]); setFtsKeyIndex(''); }} aria-label="Table">
+                  {ftsTables.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Columns to index" required hint="char / varchar / nchar / nvarchar / text / xml / varbinary">
+                <Dropdown className={s.fullWidth} multiselect selectedOptions={ftsCols}
+                  value={ftsCols.join(', ')} placeholder="Select one or more columns"
+                  onOptionSelect={(_, d) => setFtsCols(d.selectedOptions)} disabled={!ftsTable} aria-label="Columns to index">
+                  {ftsTableColumns.map((c) => <Option key={c.columnName} value={c.columnName}>{`${c.columnName} · ${c.dataType}`}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Unique key index" required>
+                <Dropdown className={s.fullWidth} value={ftsKeyIndex} selectedOptions={ftsKeyIndex ? [ftsKeyIndex] : []}
+                  placeholder={ftsTableKeyIndexes.length ? 'Select a unique key index' : 'No eligible unique index on this table'}
+                  onOptionSelect={(_, d) => setFtsKeyIndex(d.optionValue || '')} disabled={!ftsTable || ftsTableKeyIndexes.length === 0}
+                  aria-label="Unique key index">
+                  {ftsTableKeyIndexes.map((i) => <Option key={i.indexName} value={i.indexName}>{i.indexName}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Catalog (blank = default)">
+                <Dropdown className={s.fullWidth} value={ftsCatalog} selectedOptions={ftsCatalog ? [ftsCatalog] : []}
+                  placeholder="Use default catalog"
+                  onOptionSelect={(_, d) => setFtsCatalog(d.optionValue || '')} aria-label="Catalog">
+                  <Option value="">Use default catalog</Option>
+                  {(inv?.fullTextCatalogs || []).map((c) => <Option key={c.catalogName} value={c.catalogName}>{`${c.catalogName}${c.isDefault ? ' (default)' : ''}`}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Change tracking">
+                <Dropdown className={s.fullWidth} value={ftsChange} selectedOptions={[ftsChange]}
+                  onOptionSelect={(_, d) => setFtsChange((d.optionValue as any) || 'AUTO')} aria-label="Change tracking">
+                  <Option value="AUTO">AUTO</Option>
+                  <Option value="MANUAL">MANUAL</Option>
+                  <Option value="OFF">OFF</Option>
+                </Dropdown>
+              </Field>
+              {ftsError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{ftsError}</MessageBarBody></MessageBar>}
+              {ftsOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{ftsOk}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setFtsOpen(false)} disabled={ftsBusy}>Close</Button>
+              <Button appearance="primary" onClick={submitFtsIndex} disabled={ftsBusy || !ftsTable || ftsCols.length === 0 || !ftsKeyIndex}>
+                {ftsBusy ? 'Creating…' : 'Create full-text index'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
+
 export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const srv = useSqlServers();
   const [server, setServer] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER || '');
   const [database, setDatabase] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB || '');
   const dbs = useSqlDatabases(server);
-  const [tab, setTab] = useState<'query' | 'mirroring' | 'replication' | 'sql2025'>('query');
+  const [tab, setTab] = useState<'query' | 'search' | 'mirroring' | 'replication' | 'sql2025'>('query');
   const [sqlText, setSqlText] = useState<string>(
     `-- Azure SQL database — TDS over AAD MI from the Loom Console BFF.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, @@VERSION AS version;`,
   );
@@ -802,6 +1193,9 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
         { label: 'New T-SQL', onClick: newTsql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
       ]},
+      { label: 'Search & vector', actions: [
+        { label: 'Manage indexes', onClick: canRun ? () => setTab('search') : undefined, disabled: !canRun, title: !canRun ? 'pick server + database' : 'Open the full-text + vector index tab' },
+      ]},
       { label: 'Mirroring', actions: [
         { label: 'Toggle Fabric mirror', onClick: canRun ? toggleMirror : undefined, disabled: !canRun },
       ]},
@@ -939,6 +1333,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
         <div className={s.pad}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="search" icon={<Search20Regular />}>Search &amp; vector</Tab>
             <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>
             <Tab value="replication" icon={<Globe20Regular />}>Replication</Tab>
             <Tab value="sql2025" icon={<Sparkle20Regular />}>SQL 2025</Tab>
@@ -961,6 +1356,18 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
               <ResultsPanel result={result} loading={loading} />
             </>
+          )}
+          {tab === 'search' && (
+            !server || !database ? (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Pick a server and database first</MessageBarTitle>
+                  Select a server and database in the left pane to inventory and create full-text and vector indexes.
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <SearchVectorTab id={id} server={server} database={database} />
+            )
           )}
           {tab === 'mirroring' && (
             <>

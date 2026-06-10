@@ -1003,6 +1003,267 @@ export async function enableSqlServer2025Features(
 }
 
 // ============================================================
+// Vector index + Full-Text Search catalog management
+//
+// Azure-native (SQL Server 2025 / Azure SQL DB) — NO Microsoft Fabric. Vector
+// indexes (DiskANN) and full-text search are first-class T-SQL DDL surfaces.
+// The editor's "Search & Vector" tab inventories existing objects via the
+// system catalog (sys.vector_indexes, sys.fulltext_catalogs,
+// sys.fulltext_indexes) and builds CREATE statements from structured dialog
+// fields — every identifier is brace-quoted with quoteIdent() so no dialog
+// value reaches the engine as raw SQL. See:
+//   https://learn.microsoft.com/sql/t-sql/statements/create-vector-index-transact-sql
+//   https://learn.microsoft.com/sql/t-sql/statements/create-fulltext-index-transact-sql
+// ============================================================
+
+/**
+ * Quote a SQL identifier as [name], escaping embedded ] (per the T-SQL
+ * delimited-identifier rule). Rejects NUL. Used for every catalog/object/column
+ * name that comes from the editor's create dialogs.
+ */
+export function quoteIdent(name: string): string {
+  const s = String(name ?? '').trim();
+  if (!s) throw new AzureSqlError('identifier is required', 400);
+  if (s.includes('\0')) throw new AzureSqlError('invalid identifier', 400);
+  return `[${s.replace(/]/g, ']]')}]`;
+}
+
+/** schema.object → "[schema].[object]" (defaults schema to dbo). */
+function quoteTwoPart(schema: string | undefined, object: string): string {
+  return `${quoteIdent((schema || 'dbo'))}.${quoteIdent(object)}`;
+}
+
+export interface VectorIndexInfo {
+  schemaName: string;
+  tableName: string;
+  indexName: string;
+  columnName: string;
+  metric?: string;
+  indexVersion?: string;
+}
+
+export interface FullTextCatalogInfo {
+  catalogName: string;
+  isDefault: boolean;
+  isAccentSensitive?: boolean;
+}
+
+export interface FullTextIndexInfo {
+  schemaName: string;
+  tableName: string;
+  catalogName: string;
+  keyIndexName?: string;
+  changeTracking?: string;
+  isEnabled: boolean;
+  columns: string[];
+}
+
+/** Vector-typed column candidates for the create-vector-index dialog. */
+export interface VectorColumnCandidate { schemaName: string; tableName: string; columnName: string; dimensions?: number }
+/** FTS-eligible (char/text/xml/varbinary) columns for the create-FTS dialog. */
+export interface FtsColumnCandidate { schemaName: string; tableName: string; columnName: string; dataType: string }
+/** Unique single-column non-null indexes — the required FTS KEY INDEX. */
+export interface UniqueKeyIndexCandidate { schemaName: string; tableName: string; indexName: string }
+
+export interface SearchInventory {
+  /** Engine major version; vector index needs ≥ 17 (SQL 2025). */
+  engineMajor: number;
+  productVersion: string;
+  vectorIndexes: VectorIndexInfo[];
+  fullTextCatalogs: FullTextCatalogInfo[];
+  fullTextIndexes: FullTextIndexInfo[];
+  vectorColumns: VectorColumnCandidate[];
+  ftsColumns: FtsColumnCandidate[];
+  uniqueKeyIndexes: UniqueKeyIndexCandidate[];
+}
+
+/**
+ * Read the full search/vector inventory in one round-trip (multi-recordset
+ * batch). Each catalog query degrades gracefully: on engines without
+ * sys.vector_indexes (pre-2025) that recordset comes back empty rather than
+ * erroring, because we guard with OBJECT_ID('sys.vector_indexes').
+ */
+export async function getSearchInventory(server: string, database: string): Promise<SearchInventory> {
+  const batch = `
+SET NOCOUNT ON;
+SELECT SERVERPROPERTY('ProductVersion') AS pv;
+
+-- Vector indexes (SQL 2025+). Guarded so older engines return an empty set.
+IF OBJECT_ID('sys.vector_indexes') IS NOT NULL
+BEGIN
+  EXEC('
+    SELECT s.name AS schemaName, t.name AS tableName, i.name AS indexName,
+           c.name AS columnName,
+           JSON_VALUE(v.build_parameters, ''$.Metric'') AS metric,
+           JSON_VALUE(v.build_parameters, ''$.Version'') AS indexVersion
+    FROM sys.vector_indexes v
+    JOIN sys.indexes i ON v.object_id = i.object_id AND v.index_id = i.index_id
+    JOIN sys.tables t ON v.object_id = t.object_id
+    JOIN sys.schemas s ON t.schema_id = s.schema_id
+    LEFT JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+    LEFT JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    ORDER BY s.name, t.name, i.name;');
+END
+ELSE SELECT TOP 0 CAST(NULL AS sysname) AS schemaName, CAST(NULL AS sysname) AS tableName,
+                  CAST(NULL AS sysname) AS indexName, CAST(NULL AS sysname) AS columnName,
+                  CAST(NULL AS nvarchar(64)) AS metric, CAST(NULL AS nvarchar(64)) AS indexVersion;
+
+-- Full-text catalogs
+SELECT name AS catalogName,
+       CAST(FULLTEXTCATALOGPROPERTY(name, 'IsDefault') AS int) AS isDefault,
+       CAST(is_accent_sensitivity_on AS int) AS isAccentSensitive
+FROM sys.fulltext_catalogs ORDER BY name;
+
+-- Full-text indexes (one row per indexed table, columns aggregated)
+SELECT s.name AS schemaName, t.name AS tableName, cat.name AS catalogName,
+       ki.name AS keyIndexName, fi.change_tracking_state_desc AS changeTracking,
+       CAST(fi.is_enabled AS int) AS isEnabled,
+       STUFF((SELECT ',' + c.name
+              FROM sys.fulltext_index_columns fic
+              JOIN sys.columns c ON fic.object_id = c.object_id AND fic.column_id = c.column_id
+              WHERE fic.object_id = fi.object_id
+              FOR XML PATH('')), 1, 1, '') AS columns
+FROM sys.fulltext_indexes fi
+JOIN sys.tables t ON fi.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+JOIN sys.fulltext_catalogs cat ON fi.fulltext_catalog_id = cat.fulltext_catalog_id
+LEFT JOIN sys.indexes ki ON fi.object_id = ki.object_id AND fi.unique_index_id = ki.index_id
+ORDER BY s.name, t.name;
+
+-- Candidate vector columns (vector user type)
+SELECT s.name AS schemaName, t.name AS tableName, c.name AS columnName,
+       CAST(c.max_length AS int) AS dimensions
+FROM sys.columns c
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+JOIN sys.tables t ON c.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE ty.name = 'vector'
+ORDER BY s.name, t.name, c.name;
+
+-- Candidate FTS columns (char/text/xml/varbinary families)
+SELECT s.name AS schemaName, t.name AS tableName, c.name AS columnName, ty.name AS dataType
+FROM sys.columns c
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+JOIN sys.tables t ON c.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE ty.name IN ('char','varchar','nchar','nvarchar','text','ntext','xml','image','varbinary')
+ORDER BY s.name, t.name, c.name;
+
+-- Candidate unique single-column non-null KEY INDEX choices for FTS
+SELECT s.name AS schemaName, t.name AS tableName, i.name AS indexName
+FROM sys.indexes i
+JOIN sys.tables t ON i.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE i.is_unique = 1 AND i.is_disabled = 0 AND i.type IN (1,2)
+  AND (SELECT COUNT(*) FROM sys.index_columns ic WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id) = 1
+  AND NOT EXISTS (
+    SELECT 1 FROM sys.index_columns ic
+    JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+    WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND col.is_nullable = 1)
+ORDER BY s.name, t.name, i.name;`;
+
+  const r = await executeQueryBatch(server, database, batch);
+  const sets = r.recordsets;
+  const asObjs = (idx: number): Record<string, unknown>[] => {
+    const rs = sets[idx];
+    if (!rs) return [];
+    return rs.rows.map((row) => Object.fromEntries(rs.columns.map((c, j) => [c, row[j]])));
+  };
+  const pv = String((sets[0]?.rows?.[0]?.[0]) ?? '');
+  const engineMajor = Number(pv.split('.')[0] || 0);
+
+  return {
+    engineMajor,
+    productVersion: pv,
+    vectorIndexes: asObjs(1).map((o) => ({
+      schemaName: String(o.schemaName ?? 'dbo'), tableName: String(o.tableName ?? ''),
+      indexName: String(o.indexName ?? ''), columnName: String(o.columnName ?? ''),
+      metric: o.metric != null ? String(o.metric) : undefined,
+      indexVersion: o.indexVersion != null ? String(o.indexVersion) : undefined,
+    })).filter((v) => v.tableName),
+    fullTextCatalogs: asObjs(2).map((o) => ({
+      catalogName: String(o.catalogName ?? ''), isDefault: Number(o.isDefault) === 1,
+      isAccentSensitive: o.isAccentSensitive != null ? Number(o.isAccentSensitive) === 1 : undefined,
+    })).filter((c) => c.catalogName),
+    fullTextIndexes: asObjs(3).map((o) => ({
+      schemaName: String(o.schemaName ?? 'dbo'), tableName: String(o.tableName ?? ''),
+      catalogName: String(o.catalogName ?? ''),
+      keyIndexName: o.keyIndexName != null ? String(o.keyIndexName) : undefined,
+      changeTracking: o.changeTracking != null ? String(o.changeTracking) : undefined,
+      isEnabled: Number(o.isEnabled) === 1,
+      columns: o.columns != null ? String(o.columns).split(',').filter(Boolean) : [],
+    })).filter((f) => f.tableName),
+    vectorColumns: asObjs(4).map((o) => ({
+      schemaName: String(o.schemaName ?? 'dbo'), tableName: String(o.tableName ?? ''),
+      columnName: String(o.columnName ?? ''),
+      dimensions: o.dimensions != null ? Number(o.dimensions) : undefined,
+    })).filter((c) => c.tableName),
+    ftsColumns: asObjs(5).map((o) => ({
+      schemaName: String(o.schemaName ?? 'dbo'), tableName: String(o.tableName ?? ''),
+      columnName: String(o.columnName ?? ''), dataType: String(o.dataType ?? ''),
+    })).filter((c) => c.tableName),
+    uniqueKeyIndexes: asObjs(6).map((o) => ({
+      schemaName: String(o.schemaName ?? 'dbo'), tableName: String(o.tableName ?? ''),
+      indexName: String(o.indexName ?? ''),
+    })).filter((i) => i.indexName),
+  };
+}
+
+export interface CreateVectorIndexSpec {
+  indexName: string;
+  schema?: string;
+  table: string;
+  column: string;
+  metric: 'cosine' | 'dot' | 'euclidean';
+  maxdop?: number;
+}
+
+/** Build the CREATE VECTOR INDEX DDL (DiskANN). Identifiers are brace-quoted. */
+export function buildCreateVectorIndexSql(spec: CreateVectorIndexSpec): string {
+  const metric = ['cosine', 'dot', 'euclidean'].includes(spec.metric) ? spec.metric : 'cosine';
+  const withParts = [`METRIC = '${metric}'`, `TYPE = 'DiskANN'`];
+  if (spec.maxdop != null && Number.isInteger(spec.maxdop) && spec.maxdop >= 0) {
+    withParts.push(`MAXDOP = ${spec.maxdop}`);
+  }
+  return `CREATE VECTOR INDEX ${quoteIdent(spec.indexName)}\n  ON ${quoteTwoPart(spec.schema, spec.table)} (${quoteIdent(spec.column)})\n  WITH (${withParts.join(', ')});`;
+}
+
+export interface CreateFullTextCatalogSpec { catalogName: string; asDefault?: boolean }
+
+export function buildCreateFullTextCatalogSql(spec: CreateFullTextCatalogSpec): string {
+  return `CREATE FULLTEXT CATALOG ${quoteIdent(spec.catalogName)}${spec.asDefault ? ' AS DEFAULT' : ''};`;
+}
+
+export interface CreateFullTextIndexSpec {
+  schema?: string;
+  table: string;
+  columns: Array<{ name: string; language?: string }>;
+  keyIndexName: string;
+  catalogName?: string;
+  changeTracking?: 'AUTO' | 'MANUAL' | 'OFF';
+  stoplist?: 'SYSTEM' | 'OFF';
+}
+
+export function buildCreateFullTextIndexSql(spec: CreateFullTextIndexSpec): string {
+  if (!spec.columns?.length) throw new AzureSqlError('at least one column is required', 400);
+  const cols = spec.columns
+    .map((c) => {
+      const lang = (c.language || '').trim();
+      // Language term: integer LCID passes through; otherwise brace-quote.
+      const langClause = lang ? ` LANGUAGE ${/^\d+$/.test(lang) ? lang : quoteIdent(lang)}` : '';
+      return `${quoteIdent(c.name)}${langClause}`;
+    })
+    .join(', ');
+  let sql = `CREATE FULLTEXT INDEX ON ${quoteTwoPart(spec.schema, spec.table)} (${cols})\n  KEY INDEX ${quoteIdent(spec.keyIndexName)}`;
+  if (spec.catalogName) sql += ` ON ${quoteIdent(spec.catalogName)}`;
+  const ct = spec.changeTracking || 'AUTO';
+  sql += `\n  WITH (CHANGE_TRACKING = ${ct}`;
+  if (spec.stoplist) sql += `, STOPLIST = ${spec.stoplist}`;
+  sql += ');';
+  return sql;
+}
+
+// ============================================================
 // Database-scope ARM role assignments (item-level Share dialog)
 //
 // Per .claude/rules/ui-parity.md this mirrors the Azure portal "Access control
