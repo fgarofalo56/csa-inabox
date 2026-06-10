@@ -406,6 +406,9 @@ param loomEventHubRg string = ''
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
 
+@description('Event Hubs Schema Registry schema group name for server-side Avro compatibility enforcement of event-schema-set registrations. When set, the console delegates schema registration to EH Schema Registry (data-plane PUT) and the service enforces compatibility on PUT. Leave empty to use the in-process Avro validator (the Azure-native default; no Fabric, no extra infra). Live default: loom-schemas, created by modules/landing-zone/eventhubs.bicep.')
+param loomEhSchemaGroup string = ''
+
 @description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
 param loomExtraSubscriptions string = ''
 
@@ -1572,6 +1575,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
+            { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
             // RTI hub catalog (/rti-hub -> GET /api/rti-hub) - additional

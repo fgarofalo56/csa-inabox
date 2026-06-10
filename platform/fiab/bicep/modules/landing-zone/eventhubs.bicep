@@ -117,6 +117,36 @@ resource telemetryConsumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consume
   name: telemetryConsumerGroupName
 }
 
+// ---------------------------------------------------------------------
+// Schema group — backs the Loom Event Schema Set editor's OPT-IN
+// server-side compatibility enforcement (Avro). When the console app is
+// given LOOM_EH_SCHEMA_GROUP = this group's name, registering a new schema
+// version PUTs into this group and the service enforces the group's
+// compatibility policy at registration time. When LOOM_EH_SCHEMA_GROUP is
+// unset, the editor falls back to the in-process Avro validator (the
+// Azure-native default, no Fabric / no extra infra). Empty name skips it.
+// ---------------------------------------------------------------------
+@description('Event Hubs schema group name for Loom event-schema-set server-side Avro compatibility enforcement. Empty skips creation (the console uses its in-process Avro validator instead). Live default: loom-schemas.')
+param schemaGroupName string = 'loom-schemas'
+
+@description('Schema group compatibility policy enforced server-side on PUT (Avro only): None | Backward | Forward. The Loom editor still tracks a per-set policy in Cosmos; this is the namespace-level default for the opt-in EH SR path.')
+@allowed([
+  'None'
+  'Backward'
+  'Forward'
+])
+param schemaGroupCompatibility string = 'Backward'
+
+resource loomSchemaGroup 'Microsoft.EventHub/namespaces/schemagroups@2024-05-01-preview' = if (!empty(schemaGroupName)) {
+  parent: ns
+  name: schemaGroupName
+  properties: {
+    schemaType: 'Avro'
+    groupProperties: {}
+    schemaCompatibility: schemaGroupCompatibility
+  }
+}
+
 // Private endpoint
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${ns.name}'
@@ -241,8 +271,26 @@ resource adxEhDataReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+// Schema Registry Contributor — data-plane read/write/delete of schemas in the
+// namespace's schema groups. Required for the Loom console UAMI to PUT schema
+// versions on the EH SR data plane (the opt-in server-side compatibility path).
+// The namespace-scoped Contributor grant above also covers this, but the
+// explicit named role follows least-privilege and documents intent.
+// Role GUID 5dffeca3-4936-4216-b2bc-10343a5abb25 = Schema Registry Contributor.
+resource ehSchemaRegistryContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants && !empty(schemaGroupName)) {
+  scope: ns
+  name: guid(ns.id, consolePrincipalId, '5dffeca3-4936-4216-b2bc-10343a5abb25')
+  properties: {
+    // Schema Registry Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5dffeca3-4936-4216-b2bc-10343a5abb25')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output namespaceId string = ns.id
 output namespaceName string = ns.name
+output loomSchemaGroupName string = empty(schemaGroupName) ? '' : loomSchemaGroup.name
 // Sovereign-cloud Service Bus suffix, derived from the storage suffix the same
 // way main.bicep derives the Cosmos suffix (Commercial/GCC servicebus.windows.net;
 // GCC-High/IL5 servicebus.usgovcloudapi.net) so the FQDN is correct per cloud.

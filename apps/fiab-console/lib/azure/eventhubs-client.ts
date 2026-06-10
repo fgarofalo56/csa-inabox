@@ -28,7 +28,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, serviceBusSuffix } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
@@ -627,4 +627,122 @@ export async function listStreamingResourcesViaGraph(
     skipToken = j?.$skipToken ?? j?.['$skipToken'];
   } while (skipToken && guard < 20);
   return out;
+}
+
+// ============================================================
+// Event Hubs Schema Registry — DATA-plane (schema CRUD + server-side
+// compatibility enforcement).
+//
+// Distinct from the ARM schema-GROUP control plane above (which creates the
+// group). This is the data plane that registers SCHEMAS into a group and lets
+// the service enforce the group's compatibility policy on PUT.
+//
+//   PUT  https://{ns}.{serviceBusSuffix}/$schemagroups/{group}/schemas/{name}
+//        Content-Type: application/json;serialization=Avro  (or Json / Protobuf)
+//        body = the raw schema document
+//        → 200/201 with Schema-Id + Schema-Version headers; 400 when the new
+//          schema violates the group's Backward/Forward compatibility policy.
+//
+// Token scope: the Event Hubs data-plane resource `https://eventhubs.azure.net`
+// (cloud-INVARIANT — same audience in Commercial + USGov, unlike ARM). The
+// FQDN varies per cloud via serviceBusSuffix(). The Console UAMI needs
+// "Schema Registry Contributor" (read/write/delete) on the namespace.
+//
+// Grounded in Learn:
+//   https://learn.microsoft.com/azure/event-hubs/schema-registry-overview
+//   https://learn.microsoft.com/rest/api/schemaregistry/
+//
+// This path is OPT-IN: it is only used when LOOM_EH_SCHEMA_GROUP is set (plus
+// LOOM_EVENTHUB_NAMESPACE). When unset, the route falls through to the
+// in-process Avro validator (schema-compat-validator.ts) — the Azure-native
+// DEFAULT that works with no Fabric and no extra infra.
+// ============================================================
+
+/** Event Hubs Schema Registry data-plane token scope (cloud-invariant). */
+export const EVENTHUBS_DATA_SCOPE = 'https://eventhubs.azure.net/.default';
+
+/** Schema Registry data-plane REST api-version (GA). */
+const SR_API = '2023-07-01';
+
+/** Map a Loom schema format to the EH SR serialization content-type. */
+function srContentType(format: 'Avro' | 'Json' | 'Protobuf'): string {
+  switch (format) {
+    case 'Json': return 'application/json;serialization=Json';
+    case 'Protobuf': return 'text/vnd.ms.protobuf';
+    case 'Avro':
+    default: return 'application/json;serialization=Avro';
+  }
+}
+
+/**
+ * Honest config gate for the Schema Registry data-plane path. Returns the exact
+ * missing env var so the route can decide whether to delegate to EH SR or fall
+ * back to the in-process validator. Returns null only when BOTH the namespace
+ * and the schema group are configured.
+ */
+export function schemaRegistryConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_EVENTHUB_NAMESPACE) return { missing: 'LOOM_EVENTHUB_NAMESPACE' };
+  if (!process.env.LOOM_EH_SCHEMA_GROUP) return { missing: 'LOOM_EH_SCHEMA_GROUP' };
+  return null;
+}
+
+/** Resolved Schema Registry data-plane base URL (no trailing slash). */
+export function ehSchemaRegistryBase(): string {
+  const raw = (process.env.LOOM_EVENTHUB_NAMESPACE || '').trim();
+  if (!raw) throw new EventHubsArmError(503, undefined, 'Event Hubs namespace not configured');
+  const suffix = (process.env.LOOM_EVENTHUB_DATA_SUFFIX || serviceBusSuffix()).replace(/^\.+|\.+$/g, '');
+  const fqdn = raw.includes('.') ? raw.replace(/\/+$/, '') : `${raw}.${suffix}`;
+  return `https://${fqdn}`;
+}
+
+export interface PutSchemaResult {
+  /** Service-assigned schema id (GUID). */
+  schemaId: string;
+  /** Monotonic version number assigned within the schema group. */
+  version: number;
+}
+
+/**
+ * Register (PUT) a schema version on the Event Hubs Schema Registry data plane.
+ *
+ * The service enforces the schema GROUP's compatibility policy at PUT time:
+ * when the group is Backward/Forward and the new schema violates it, the
+ * service returns HTTP 400 with a descriptive body. We surface that verbatim
+ * as an {@link EventHubsArmError} so the route can translate it into a 409 +
+ * violations message. On success the Schema-Id / Schema-Version response
+ * headers are returned. The PUT is idempotent by schema content.
+ */
+export async function putSchemaVersion(
+  schemaGroup: string,
+  schemaName: string,
+  schemaBody: string,
+  format: 'Avro' | 'Json' | 'Protobuf',
+): Promise<PutSchemaResult> {
+  const group = (schemaGroup || '').trim();
+  const name = (schemaName || '').trim();
+  if (!group) throw new EventHubsArmError(400, undefined, 'schemaGroup is required');
+  if (!name) throw new EventHubsArmError(400, undefined, 'schemaName is required');
+  const t = await credential.getToken(EVENTHUBS_DATA_SCOPE);
+  if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire Event Hubs data-plane token');
+  const url = `${ehSchemaRegistryBase()}/$schemagroups/${encodeURIComponent(group)}/schemas/${encodeURIComponent(name)}?api-version=${SR_API}`;
+  const r = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${t.token}`,
+      'content-type': srContentType(format),
+    },
+    body: schemaBody,
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new EventHubsArmError(
+      r.status,
+      text,
+      `putSchemaVersion failed ${r.status}${text ? `: ${text.slice(0, 300)}` : ''}`,
+    );
+  }
+  const schemaId = r.headers.get('Schema-Id') || r.headers.get('schema-id') || '';
+  const versionHeader = r.headers.get('Schema-Version') || r.headers.get('schema-version') || '';
+  const version = Number.parseInt(versionHeader, 10);
+  return { schemaId, version: Number.isFinite(version) ? version : 0 };
 }
