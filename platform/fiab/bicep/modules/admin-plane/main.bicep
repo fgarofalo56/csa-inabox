@@ -335,7 +335,7 @@ param loomShortcutKeyVaultUri string = ''
 @description('Git integration — Azure DevOps host override for on-premises Azure DevOps Server (GCC-High / IL5 / DoD, where ADO Services is unavailable). Empty uses dev.azure.com (commercial/GCC). Example on-prem: https://tfs.agency.gov')
 param loomAdoHost string = ''
 
-@description('Git integration — GitHub Enterprise Server REST API base override. Empty uses api.github.com (commercial/GCC/GCC-High). Example GHES: https://github.agency.gov/api/v3')
+@description('Git integration — default GitHub host for all workspaces. Empty uses public github.com (api.github.com). A GitHub Enterprise Cloud data-residency tenant is its host, e.g. octocorp.ghe.com (resolved to api.octocorp.ghe.com). A self-hosted GitHub Enterprise Server is its host, e.g. github.agency.gov (resolved to /api/v3). Each workspace can override this per-binding in Settings -> Git integration.')
 param loomGitHubHost string = ''
 
 @description('Git integration — Key Vault secret-name prefix for per-workspace PATs. Default loom-git-pat. Change only if sharing the vault with another system that uses the same prefix.')

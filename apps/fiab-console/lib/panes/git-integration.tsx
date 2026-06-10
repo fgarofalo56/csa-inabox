@@ -39,7 +39,7 @@ type AuthMethod = 'pat' | 'spn';
 interface BindingView {
   provider: Provider;
   adoOrg?: string; adoProject?: string; repoId?: string; repoName?: string;
-  githubOwner?: string; githubRepo?: string;
+  githubOwner?: string; githubRepo?: string; githubHost?: string;
   branch: string; folder: string;
   authMethod: AuthMethod;
   status: 'connected' | 'error';
@@ -112,9 +112,10 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
   const [remoteHead, setRemoteHead] = useState<{ commitId: string; commitDate?: string; authorName?: string } | null>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
 
+  const ghHostLabel = binding.githubHost && binding.githubHost.trim() ? binding.githubHost.trim() : 'github.com';
   const repoLabel = binding.provider === 'ado'
     ? `${binding.adoOrg}/${binding.adoProject}/${binding.repoName || binding.repoId}`
-    : `${binding.githubOwner}/${binding.githubRepo}`;
+    : `${ghHostLabel}/${binding.githubOwner}/${binding.githubRepo}`;
 
   const loadStatus = useCallback(async () => {
     const { res, json } = await getJson(`/api/admin/workspaces/${workspaceId}/git/status`);
@@ -149,7 +150,9 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         <Badge appearance="filled" color="brand" icon={<Branch16Regular />}>{binding.branch}</Badge>
         <Body1Strong>{repoLabel}</Body1Strong>
         <Badge appearance="outline" color={binding.provider === 'ado' ? 'informative' : 'subtle'}>
-          {binding.provider === 'ado' ? 'Azure DevOps' : 'GitHub'}
+          {binding.provider === 'ado'
+            ? 'Azure DevOps'
+            : (binding.githubHost && binding.githubHost.trim() ? 'GitHub Enterprise' : 'GitHub')}
         </Badge>
         {binding.status === 'connected'
           ? <Badge appearance="tint" color="success" icon={<Checkmark16Filled />}>Connected</Badge>
@@ -236,6 +239,11 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
   const [ghOwner, setGhOwner] = useState('');
   const [ghRepos, setGhRepos] = useState<{ fullName: string; owner: string; name: string; defaultBranch?: string }[]>([]);
   const [ghRepo, setGhRepo] = useState('');
+  // GitHub host: public github.com (default) or a GitHub Enterprise Cloud
+  // (ghe.com data-residency) / Server host. (Fabric Build 2026 #29.)
+  const [ghHostMode, setGhHostMode] = useState<'public' | 'enterprise'>('public');
+  const [ghHost, setGhHost] = useState('');
+  const ghHostValue = ghHostMode === 'enterprise' ? ghHost.trim() : '';
 
   // Shared.
   const [branches, setBranches] = useState<string[]>([]);
@@ -279,26 +287,29 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
     setBusyAction(null);
   }, [org, project, meta]);
 
+  const ghHostQs = ghHostValue ? `&githubHost=${encodeURIComponent(ghHostValue)}` : '';
+
   const loadGhRepos = useCallback(async () => {
     if (!pat.trim()) { setError('Enter a GitHub PAT first.'); return; }
+    if (ghHostMode === 'enterprise' && !ghHost.trim()) { setError('Enter the GitHub Enterprise host (e.g. octocorp.ghe.com).'); return; }
     setBusyAction('gh-repos'); setError(null);
-    const { res, json } = await meta(`?action=gh-repos&owner=${encodeURIComponent(ghOwner.trim())}`);
+    const { res, json } = await meta(`?action=gh-repos&owner=${encodeURIComponent(ghOwner.trim())}${ghHostQs}`);
     if (!res.ok || !json.ok) setError(json?.error || `HTTP ${res.status}`);
     else { setGhRepos(json.repos || []); setGhRepo(''); setBranches([]); }
     setBusyAction(null);
-  }, [pat, ghOwner, meta]);
+  }, [pat, ghOwner, meta, ghHostMode, ghHost, ghHostQs]);
 
   const loadGhBranches = useCallback(async (owner: string, repo: string) => {
     setBusyAction('gh-branches'); setError(null);
-    const { res, json } = await meta(`?action=gh-branches&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`);
+    const { res, json } = await meta(`?action=gh-branches&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}${ghHostQs}`);
     if (!res.ok || !json.ok) setError(json?.error || `HTTP ${res.status}`);
     else setBranches((json.branches || []).map((b: any) => b.name));
     setBusyAction(null);
-  }, [meta]);
+  }, [meta, ghHostQs]);
 
   const canConnect = pat.trim() && branch.trim() && (
     provider === 'ado' ? org.trim() && project.trim() && repoId.trim()
-      : ghOwner.trim() && ghRepo.trim()
+      : ghRepo.trim() && (ghHostMode === 'public' || ghHost.trim())
   );
 
   const connect = useCallback(async () => {
@@ -311,6 +322,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
     } else {
       const found = ghRepos.find((r) => r.fullName === ghRepo);
       payload.githubOwner = found?.owner || ghOwner.trim(); payload.githubRepo = found?.name || ghRepo;
+      if (ghHostValue) payload.githubHost = ghHostValue;
     }
     const { res, json } = await getJson(`/api/admin/workspaces/${workspaceId}/git`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
@@ -321,7 +333,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
     await getJson(`/api/admin/workspaces/${workspaceId}/git/sync`, { method: 'POST' }).catch(() => {});
     setConnecting(false);
     onConnected();
-  }, [provider, branch, folder, pat, org, project, repoId, repoName, authMethod, spnTenantId, spnClientId, ghRepos, ghRepo, ghOwner, workspaceId, onConnected]);
+  }, [provider, branch, folder, pat, org, project, repoId, repoName, authMethod, spnTenantId, spnClientId, ghRepos, ghRepo, ghOwner, ghHostValue, workspaceId, onConnected]);
 
   return (
     <div className={styles.card}>
@@ -330,9 +342,10 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
         <Body1Strong>Connect to source control</Body1Strong>
       </div>
       <Caption1 className={styles.meta}>
-        Bind this workspace to an Azure DevOps or GitHub repository. &quot;Sync now&quot; commits every
-        item as <span className={styles.mono}>*.item.json</span> to the chosen branch. The token is
-        stored in Key Vault, never in the workspace.
+        Bind this workspace to an Azure DevOps or GitHub repository — including a GitHub Enterprise
+        Cloud (<span className={styles.mono}>ghe.com</span>) or Enterprise Server host. &quot;Sync now&quot;
+        commits every item as <span className={styles.mono}>*.item.json</span> to the chosen branch.
+        The token is stored in Key Vault, never in the workspace.
       </Caption1>
 
       <Field label="Provider">
@@ -401,6 +414,32 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
         </>
       ) : (
         <>
+          <Field label="GitHub host">
+            <RadioGroup
+              value={ghHostMode}
+              layout="horizontal"
+              onChange={(_, d) => {
+                setGhHostMode(d.value as 'public' | 'enterprise');
+                setGhRepos([]); setGhRepo(''); setBranches([]); setError(null);
+              }}
+            >
+              <Radio value="public" label="github.com" />
+              <Radio value="enterprise" label="GitHub Enterprise (ghe.com / Server)" />
+            </RadioGroup>
+          </Field>
+          {ghHostMode === 'enterprise' && (
+            <Field
+              label="Enterprise host"
+              required
+              hint="GitHub Enterprise Cloud with data residency uses <subdomain>.ghe.com (API at api.<subdomain>.ghe.com). A self-hosted GitHub Enterprise Server host (e.g. github.contoso.com) uses /api/v3."
+            >
+              <Input
+                value={ghHost}
+                placeholder="octocorp.ghe.com"
+                onChange={(_, d) => { setGhHost(d.value); setGhRepos([]); setGhRepo(''); setBranches([]); }}
+              />
+            </Field>
+          )}
           <Field label="Personal Access Token (repo scope)" required>
             <Input type="password" value={pat} onChange={(_, d) => setPat(d.value)} placeholder="paste token" />
           </Field>

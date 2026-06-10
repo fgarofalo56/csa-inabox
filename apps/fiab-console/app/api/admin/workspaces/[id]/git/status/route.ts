@@ -58,7 +58,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     } else if (binding.provider === 'github' && binding.githubOwner && binding.githubRepo) {
       const gate = githubCloudGate();
       if (gate) { remoteError = gate.message; }
-      else remoteHead = await githubLastCommit(binding.githubOwner, binding.githubRepo, binding.branch, pat);
+      else remoteHead = await githubLastCommit(binding.githubOwner, binding.githubRepo, binding.branch, pat, binding.githubHost);
     }
   } catch (e: any) {
     remoteError = e instanceof GitIntegrationError ? e.message : (e?.message || 'could not read remote head');

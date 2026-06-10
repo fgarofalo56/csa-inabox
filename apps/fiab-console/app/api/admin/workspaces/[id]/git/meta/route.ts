@@ -54,13 +54,18 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
   const q = req.nextUrl.searchParams;
   const action = q.get('action') || '';
   const inlinePat = q.get('pat') || '';
+  // GitHub Enterprise host (`<sub>.ghe.com` / GHES). Inline (connect wizard)
+  // wins; otherwise it is resolved from the stored binding below. Blank =
+  // public github.com.
+  let githubHost = (q.get('githubHost') || '').trim();
 
   // Resolve the PAT: inline (connect wizard) wins, else from the stored binding.
   let pat = inlinePat;
-  if (!pat) {
+  if (!pat || !githubHost) {
     const binding = await loadBinding(params.id);
     if (binding) {
-      try { pat = await resolveSecret(binding); } catch { /* fall through to 400 */ }
+      if (!pat) { try { pat = await resolveSecret(binding); } catch { /* fall through to 400 */ } }
+      if (!githubHost) githubHost = binding.githubHost || '';
     }
   }
   if (!pat) return fail('A Personal Access Token is required to browse the repository.', 400, { code: 'no_pat' });
@@ -88,7 +93,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
       case 'gh-repos': {
         const gate = githubCloudGate();
         if (gate) return fail(gate.message, gate.status, { code: gate.code });
-        return NextResponse.json({ ok: true, repos: await githubListRepos(q.get('owner') || '', pat) });
+        return NextResponse.json({ ok: true, repos: await githubListRepos(q.get('owner') || '', pat, githubHost) });
       }
       case 'gh-branches': {
         const gate = githubCloudGate();
@@ -96,7 +101,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
         const owner = q.get('owner') || '';
         const repo = q.get('repo') || '';
         if (!owner || !repo) return fail('owner and repo are required', 400);
-        return NextResponse.json({ ok: true, branches: await githubListBranches(owner, repo, pat) });
+        return NextResponse.json({ ok: true, branches: await githubListBranches(owner, repo, pat, githubHost) });
       }
       default:
         return fail(`unknown action "${action}"`, 400);

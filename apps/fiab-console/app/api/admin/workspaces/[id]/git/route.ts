@@ -83,12 +83,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       if (gate) return fail(gate.message, gate.status, { code: gate.code });
       const owner = String(body?.githubOwner || '').trim();
       const repo = String(body?.githubRepo || '').trim();
+      const githubHost = String(body?.githubHost || '').trim();
       if (!owner || !repo) return fail('githubOwner and githubRepo are required for GitHub.', 400);
-      // Live connectivity probe — rejects a bad PAT before we persist anything.
-      await githubListBranches(owner, repo, secret);
+      // Live connectivity probe — rejects a bad PAT (and a wrong ghe.com host)
+      // before we persist anything.
+      await githubListBranches(owner, repo, secret, githubHost);
       const view = await saveBinding({
         workspaceId: params.id, provider, branch, folder, authMethod: 'pat',
-        githubOwner: owner, githubRepo: repo, secret, connectedBy: s.claims.upn || s.claims.email || s.claims.oid,
+        githubOwner: owner, githubRepo: repo, githubHost, secret, connectedBy: s.claims.upn || s.claims.email || s.claims.oid,
       });
       return NextResponse.json({ ok: true, git: view });
     }

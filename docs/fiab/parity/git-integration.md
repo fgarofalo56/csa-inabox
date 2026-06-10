@@ -46,13 +46,34 @@ table below.
 | Surface | Commercial | GCC | GCC-High | DoD / IL5 |
 |---|---|---|---|---|
 | ADO provider | dev.azure.com | dev.azure.com (ADO Services SaaS; no GCC-only instance) | `LOOM_ADO_HOST` (on-prem ADO Server) | `LOOM_ADO_HOST` (on-prem ADO Server) |
-| GitHub provider | api.github.com | api.github.com | api.github.com (or `LOOM_GITHUB_HOST` for GHES) | `LOOM_GITHUB_HOST` (GHES on-prem) |
+| GitHub provider | api.github.com (or per-workspace ghe.com / GHES host) | api.github.com (or per-workspace ghe.com / GHES host) | api.github.com (or per-workspace / `LOOM_GITHUB_HOST` GHES) | `LOOM_GITHUB_HOST` (GHES on-prem) |
 | PAT storage | KV `vault.azure.net` | KV `vault.azure.net` | KV `vault.usgovcloudapi.net` | KV `vault.usgovcloudapi.net` |
 
 > Grounding: Microsoft Learn states Azure DevOps Services isn't available in
 > GCC — "you can use on-premises Azure DevOps or public Azure DevOps services."
 > `LOOM_ADO_HOST` covers every sovereign case without hard-coding a nonexistent
 > gov endpoint.
+
+### GitHub Enterprise Cloud (ghe.com) host — Fabric Build 2026 #29
+
+The F12 Git-integration connect wizard exposes a **GitHub host** selector:
+`github.com` (default) or **GitHub Enterprise (ghe.com / Server)**. When
+Enterprise is chosen the admin enters the host:
+
+| Host entered | Resolved REST base | Notes |
+|---|---|---|
+| *(blank)* / `github.com` | `https://api.github.com` | public GitHub |
+| `octocorp.ghe.com` | `https://api.octocorp.ghe.com` | GitHub Enterprise Cloud with **data residency** (per-tenant API endpoint) |
+| `api.octocorp.ghe.com` | `https://api.octocorp.ghe.com` | already an API host — idempotent |
+| `github.contoso.com` | `https://github.contoso.com/api/v3` | self-hosted GitHub Enterprise **Server** |
+
+Resolution is `githubApiBase(host)` in `lib/clients/git-integration-client.ts`.
+The host is persisted per-binding (`GitBinding.githubHost` in
+`workspace-git`) and threaded into every GitHub REST call (list repos /
+branches, batch commit, last commit). The deployment-wide default comes from
+`LOOM_GITHUB_HOST`; the per-binding host overrides it. The connect probe
+(`githubListBranches`) runs against the chosen host so a wrong ghe.com host or
+PAT is rejected before the binding is saved.
 
 ## Backend per control
 

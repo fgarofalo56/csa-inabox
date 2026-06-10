@@ -120,6 +120,7 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
       }
       const result = await githubBatchCommit({
         owner: binding.githubOwner, repo: binding.githubRepo, branch: binding.branch, files, message: comment, pat,
+        host: binding.githubHost,
       });
       commitId = result.commitId;
     }

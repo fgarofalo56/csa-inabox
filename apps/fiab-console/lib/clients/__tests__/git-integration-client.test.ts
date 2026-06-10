@@ -15,6 +15,9 @@ import {
   normalizeFolder,
   githubCloudGate,
   githubAvailable,
+  githubApiBase,
+  isGitHubEnterprise,
+  githubWebBase,
   ADO_ZERO_OBJECT_ID,
   type WorkspaceManifest,
 } from '../git-integration-client';
@@ -146,6 +149,63 @@ describe('githubCloudGate', () => {
   it('blocks GitHub via legacy AZURE_CLOUD=AzureUSGovernment', () => {
     setCloud(undefined, 'AzureUSGovernment');
     expect(githubAvailable()).toBe(false);
+  });
+});
+
+describe('githubApiBase (GitHub Enterprise / ghe.com host)', () => {
+  const savedHost = process.env.LOOM_GITHUB_HOST;
+  afterEach(() => {
+    if (savedHost === undefined) delete process.env.LOOM_GITHUB_HOST;
+    else process.env.LOOM_GITHUB_HOST = savedHost;
+  });
+
+  it('defaults to public api.github.com when no host', () => {
+    delete process.env.LOOM_GITHUB_HOST;
+    expect(githubApiBase()).toBe('https://api.github.com');
+    expect(githubApiBase('')).toBe('https://api.github.com');
+    expect(githubApiBase('github.com')).toBe('https://api.github.com');
+    expect(githubApiBase('api.github.com')).toBe('https://api.github.com');
+  });
+
+  it('maps a ghe.com data-residency tenant to api.<sub>.ghe.com', () => {
+    expect(githubApiBase('octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+    expect(githubApiBase('https://octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+    expect(githubApiBase('OCTOCORP.GHE.COM')).toBe('https://api.OCTOCORP.GHE.COM');
+  });
+
+  it('is idempotent for an already-correct api host', () => {
+    expect(githubApiBase('api.octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+  });
+
+  it('maps a self-hosted GitHub Enterprise Server host to /api/v3', () => {
+    expect(githubApiBase('github.contoso.com')).toBe('https://github.contoso.com/api/v3');
+  });
+
+  it('strips path/query and trailing slashes', () => {
+    expect(githubApiBase('https://octocorp.ghe.com/some/path?x=1')).toBe('https://api.octocorp.ghe.com');
+  });
+
+  it('falls back to LOOM_GITHUB_HOST when no per-call host', () => {
+    process.env.LOOM_GITHUB_HOST = 'octocorp.ghe.com';
+    expect(githubApiBase()).toBe('https://api.octocorp.ghe.com');
+    // explicit per-call host overrides the env default
+    expect(githubApiBase('other.ghe.com')).toBe('https://api.other.ghe.com');
+  });
+
+  it('isGitHubEnterprise reflects whether the host is non-public', () => {
+    delete process.env.LOOM_GITHUB_HOST;
+    expect(isGitHubEnterprise()).toBe(false);
+    expect(isGitHubEnterprise('github.com')).toBe(false);
+    expect(isGitHubEnterprise('octocorp.ghe.com')).toBe(true);
+    expect(isGitHubEnterprise('github.contoso.com')).toBe(true);
+  });
+
+  it('githubWebBase builds the browser host', () => {
+    delete process.env.LOOM_GITHUB_HOST;
+    expect(githubWebBase()).toBe('https://github.com');
+    expect(githubWebBase('octocorp.ghe.com')).toBe('https://octocorp.ghe.com');
+    expect(githubWebBase('api.octocorp.ghe.com')).toBe('https://octocorp.ghe.com');
+    expect(githubWebBase('github.contoso.com')).toBe('https://github.contoso.com');
   });
 });
 
