@@ -32,6 +32,7 @@ import {
   TableAdd20Regular, Copy20Regular,
   Eye20Regular, MathFormula20Regular,
   ArrowDownload20Regular,
+  Organization20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -41,6 +42,7 @@ import { ConnectionDetailsPanel } from './components/connection-details';
 import { AiFunctionsHelper } from './components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
+import { UcLineagePanel } from '@/lib/components/databricks/uc-lineage-panel';
 import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -292,6 +294,8 @@ interface UcWriteDialogsProps {
   createSchemaOpen: boolean; setCreateSchemaOpen: (v: boolean) => void;
   createTableOpen: boolean; setCreateTableOpen: (v: boolean) => void;
   grantsOpen: boolean; setGrantsOpen: (v: boolean) => void;
+  createVolumeOpen: boolean; setCreateVolumeOpen: (v: boolean) => void;
+  dropOpen: boolean; setDropOpen: (v: boolean) => void;
 }
 
 interface NewColumn { name: string; type_name: string; nullable: boolean; comment: string }
@@ -304,6 +308,8 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     createSchemaOpen, setCreateSchemaOpen,
     createTableOpen, setCreateTableOpen,
     grantsOpen, setGrantsOpen,
+    createVolumeOpen, setCreateVolumeOpen,
+    dropOpen, setDropOpen,
   } = props;
 
   // ---- Create catalog ----
@@ -457,6 +463,78 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const togglePriv = useCallback((p: string) => setGrPrivs((s) => {
     const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n;
   }), []);
+
+  // ---- Create volume ----
+  const [volCatalog, setVolCatalog] = useState(activeCatalog || '');
+  const [volSchema, setVolSchema] = useState(activeSchema || '');
+  const [volName, setVolName] = useState('');
+  const [volType, setVolType] = useState<'MANAGED' | 'EXTERNAL'>('MANAGED');
+  const [volStorage, setVolStorage] = useState('');
+  const [volComment, setVolComment] = useState('');
+  const [volBusy, setVolBusy] = useState(false);
+  const [volErr, setVolErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (createVolumeOpen) { setVolCatalog(activeCatalog || catalogs[0] || ''); setVolSchema(activeSchema || ''); }
+  }, [createVolumeOpen, activeCatalog, activeSchema, catalogs]);
+
+  const createVolume = useCallback(async () => {
+    if (!volCatalog || !volSchema || !volName.trim()) return;
+    if (volType === 'EXTERNAL' && !volStorage.trim()) { setVolErr('EXTERNAL volumes require a storage location (abfss://…).'); return; }
+    setVolBusy(true); setVolErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/volumes', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: volName.trim(), catalog_name: volCatalog, schema_name: volSchema,
+          volume_type: volType, storage_location: volStorage.trim() || undefined,
+          comment: volComment.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setVolErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateVolumeOpen(false); setVolName(''); setVolStorage(''); setVolComment('');
+      onChanged();
+    } catch (e: any) { setVolErr(e?.message || String(e)); }
+    finally { setVolBusy(false); }
+  }, [volCatalog, volSchema, volName, volType, volStorage, volComment, onChanged, setCreateVolumeOpen]);
+
+  // ---- Drop (catalog / schema / table / volume) ----
+  type DropKind = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME';
+  const [dropKind, setDropKind] = useState<DropKind>('TABLE');
+  const [dropName, setDropName] = useState('');
+  const [dropForce, setDropForce] = useState(false);
+  const [dropBusy, setDropBusy] = useState(false);
+  const [dropErr, setDropErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!dropOpen) return;
+    // Seed the most specific securable available from the current tree context.
+    if (activeSchema && activeCatalog) { setDropKind('SCHEMA'); setDropName(`${activeCatalog}.${activeSchema}`); }
+    else if (activeCatalog) { setDropKind('CATALOG'); setDropName(activeCatalog); }
+    setDropErr(null);
+  }, [dropOpen, activeCatalog, activeSchema]);
+
+  const doDrop = useCallback(async () => {
+    const name = dropName.trim();
+    if (!name) { setDropErr('Enter the full name of the object to drop.'); return; }
+    const segs = name.split('.').length;
+    const want = dropKind === 'CATALOG' ? 1 : dropKind === 'SCHEMA' ? 2 : 3;
+    if (segs !== want) { setDropErr(`${dropKind} full name must have ${want} part${want > 1 ? 's' : ''} (${dropKind === 'CATALOG' ? 'catalog' : dropKind === 'SCHEMA' ? 'catalog.schema' : 'catalog.schema.object'}).`); return; }
+    setDropBusy(true); setDropErr(null);
+    try {
+      const route = dropKind === 'CATALOG' ? 'catalogs'
+        : dropKind === 'SCHEMA' ? 'schemas'
+        : dropKind === 'TABLE' ? 'tables' : 'volumes';
+      const qs = new URLSearchParams();
+      if (dropKind === 'CATALOG') qs.set('name', name); else qs.set('full_name', name);
+      if ((dropKind === 'CATALOG' || dropKind === 'SCHEMA') && dropForce) qs.set('force', 'true');
+      const r = await fetch(`/api/databricks/unity-catalog/${route}?${qs.toString()}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setDropErr(j.error || `HTTP ${r.status}`); return; }
+      setDropOpen(false); setDropName('');
+      onChanged();
+    } catch (e: any) { setDropErr(e?.message || String(e)); }
+    finally { setDropBusy(false); }
+  }, [dropKind, dropName, dropForce, onChanged, setDropOpen]);
 
   return (
     <>
@@ -653,6 +731,85 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Create volume */}
+      <Dialog open={createVolumeOpen} onOpenChange={(_, d) => setCreateVolumeOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 560 }}>
+          <DialogBody>
+            <DialogTitle>Create volume</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {volErr && <MessageBar intent="error"><MessageBarBody>{volErr}</MessageBarBody></MessageBar>}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Catalog" required style={{ flex: 1 }}>
+                    <Dropdown value={volCatalog} selectedOptions={volCatalog ? [volCatalog] : []} onOptionSelect={(_, d) => d.optionValue && setVolCatalog(d.optionValue)} placeholder="catalog">
+                      {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Schema" required style={{ flex: 1 }}>
+                    {schemas.length > 0 && volCatalog === activeCatalog ? (
+                      <Dropdown value={volSchema} selectedOptions={volSchema ? [volSchema] : []} onOptionSelect={(_, d) => d.optionValue && setVolSchema(d.optionValue)} placeholder="schema">
+                        {schemas.map((sc) => <Option key={sc} value={sc} text={sc}>{sc}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input value={volSchema} onChange={(_, d) => setVolSchema(d.value)} placeholder="schema" />
+                    )}
+                  </Field>
+                </div>
+                <Field label="Volume name" required><Input value={volName} onChange={(_, d) => setVolName(d.value)} placeholder="landing" /></Field>
+                <Field label="Type">
+                  <Dropdown value={volType} selectedOptions={[volType]} onOptionSelect={(_, d) => d.optionValue && setVolType(d.optionValue as 'MANAGED' | 'EXTERNAL')}>
+                    <Option value="MANAGED" text="MANAGED">MANAGED</Option>
+                    <Option value="EXTERNAL" text="EXTERNAL">EXTERNAL</Option>
+                  </Dropdown>
+                </Field>
+                {volType === 'EXTERNAL' && (
+                  <Field label="Storage location" required hint="abfss://… — must sit under a UC external location">
+                    <Input value={volStorage} onChange={(_, d) => setVolStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
+                  </Field>
+                )}
+                <Field label="Comment"><Input value={volComment} onChange={(_, d) => setVolComment(d.value)} /></Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/volumes</code> — requires CREATE VOLUME + USE SCHEMA + USE CATALOG.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateVolumeOpen(false)} disabled={volBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createVolume} disabled={volBusy || !volCatalog || !volSchema || !volName.trim() || (volType === 'EXTERNAL' && !volStorage.trim())}>{volBusy ? 'Creating…' : 'Create volume'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Drop catalog / schema / table / volume */}
+      <Dialog open={dropOpen} onOpenChange={(_, d) => setDropOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 560 }}>
+          <DialogBody>
+            <DialogTitle>Drop object</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {dropErr && <MessageBar intent="error"><MessageBarBody>{dropErr}</MessageBarBody></MessageBar>}
+                <MessageBar intent="warning"><MessageBarBody>Dropping a Unity Catalog object is permanent. For catalogs/schemas, <strong>force</strong> drops non-empty objects (cascades).</MessageBarBody></MessageBar>
+                <Field label="Object type">
+                  <Dropdown value={dropKind} selectedOptions={[dropKind]} onOptionSelect={(_, d) => { if (d.optionValue) { setDropKind(d.optionValue as DropKind); setDropErr(null); } }}>
+                    {(['CATALOG', 'SCHEMA', 'TABLE', 'VOLUME'] as DropKind[]).map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Full name" required hint={dropKind === 'CATALOG' ? 'catalog' : dropKind === 'SCHEMA' ? 'catalog.schema' : 'catalog.schema.object'}>
+                  <Input value={dropName} onChange={(_, d) => setDropName(d.value)} placeholder={dropKind === 'CATALOG' ? 'sales' : dropKind === 'SCHEMA' ? 'sales.bronze' : 'sales.bronze.orders'} />
+                </Field>
+                {(dropKind === 'CATALOG' || dropKind === 'SCHEMA') && (
+                  <Switch checked={dropForce} label="force (cascade — drop even if not empty)" onChange={(_, d) => setDropForce(!!d.checked)} />
+                )}
+                <Caption1>DELETE <code>/api/2.1/unity-catalog/{dropKind === 'CATALOG' ? 'catalogs' : dropKind === 'SCHEMA' ? 'schemas' : dropKind === 'TABLE' ? 'tables' : 'volumes'}/&#123;name&#125;</code> — requires ownership / MANAGE.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDropOpen(false)} disabled={dropBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={doDrop} disabled={dropBusy || !dropName.trim()}>{dropBusy ? 'Dropping…' : `Drop ${dropKind.toLowerCase()}`}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </>
   );
 }
@@ -697,6 +854,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
+  const [ucCreateVolumeOpen, setUcCreateVolumeOpen] = useState(false);
+  const [ucDropOpen, setUcDropOpen] = useState(false);
   // Query-result alerts (Databricks SQL Alerts on Comm/GCC; Azure Monitor on Gov).
   const [alertsOpen, setAlertsOpen] = useState(false);
   // UC column-mask + row-filter wizards (granular security beyond object grants).
@@ -743,7 +902,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [starting, setStarting] = useState(false);
   // Query | Model — Loom-native Model view; relationships become real Unity
   // Catalog FK constraints. No Power BI dependency.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'lineage'>('query');
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -1427,6 +1586,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create catalog', onClick: () => setUcCreateCatalogOpen(true), title: 'Create a UC catalog (api 2.1 — requires CREATE CATALOG on the metastore)' },
         { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
+        { label: 'Create volume', onClick: () => setUcCreateVolumeOpen(true), title: 'Create a managed/external UC volume (api 2.1)' },
+        { label: 'Drop object', onClick: () => setUcDropOpen(true), title: 'Drop a UC catalog / schema / table / volume (DELETE api 2.1)' },
         { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
             activeCatalog && activeSchema && tables.length > 0
               ? `${activeCatalog}.${activeSchema}.${tables[0]}`
@@ -1472,8 +1633,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Tooltip content="Create table (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateTableOpen(true)}>Table</Button>
             </Tooltip>
+            <Tooltip content="Create volume (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateVolumeOpen(true)}>Volume</Button>
+            </Tooltip>
             <Tooltip content="Manage grants (UC permissions)" relationship="label">
               <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => setUcGrantsOpen(true)} aria-label="Manage grants" />
+            </Tooltip>
+            <Tooltip content="Drop object (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => setUcDropOpen(true)} aria-label="Drop object" />
             </Tooltip>
           </div>
           <Tree aria-label="Unity Catalog" defaultOpenItems={['catalogs']}>
@@ -1540,13 +1707,22 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                 <TreeItemLayout
                                   iconBefore={<DocumentTable20Regular />}
                                   actions={
-                                    <Tooltip content={`Clone ${t}`} relationship="label">
-                                      <Button
-                                        size="small" appearance="subtle" icon={<Copy20Regular />}
-                                        aria-label={`Clone ${t}`}
-                                        onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }}
-                                      />
-                                    </Tooltip>
+                                    <>
+                                      <Tooltip content={`Lineage: ${t}`} relationship="label">
+                                        <Button
+                                          size="small" appearance="subtle" icon={<Organization20Regular />}
+                                          aria-label={`Lineage ${t}`}
+                                          onClick={(e) => { e.stopPropagation(); setStatsTarget({ catalog: c, schema: sch, table: t }); setEditorTab('lineage'); }}
+                                        />
+                                      </Tooltip>
+                                      <Tooltip content={`Clone ${t}`} relationship="label">
+                                        <Button
+                                          size="small" appearance="subtle" icon={<Copy20Regular />}
+                                          aria-label={`Clone ${t}`}
+                                          onClick={(e) => { e.stopPropagation(); openCloneForTable(`${c}.${sch}.${t}`); }}
+                                        />
+                                      </Tooltip>
+                                    </>
                                   }
                                 >
                                   {t}
@@ -1605,13 +1781,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'lineage')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
+            <Tab value="lineage" icon={<Organization20Regular />}>Lineage</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
           </TabList>
           {editorTab === 'monitoring' && (
             <WarehouseMonitoringTab itemId={id} engine="databricks-sql-warehouse" warehouseId={warehouseId || undefined} />
+          )}
+          {editorTab === 'lineage' && (
+            <UcLineagePanel
+              fullName={statsTarget ? `${statsTarget.catalog}.${statsTarget.schema}.${statsTarget.table}` : null}
+            />
           )}
           {editorTab === 'model' && (
             <ModelViewPanel
@@ -2260,6 +2442,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             activeSchema={activeSchema}
             tables={tables}
             onChanged={ucChanged}
+            createVolumeOpen={ucCreateVolumeOpen} setCreateVolumeOpen={setUcCreateVolumeOpen}
+            dropOpen={ucDropOpen} setDropOpen={setUcDropOpen}
             createCatalogOpen={ucCreateCatalogOpen} setCreateCatalogOpen={setUcCreateCatalogOpen}
             createSchemaOpen={ucCreateSchemaOpen} setCreateSchemaOpen={setUcCreateSchemaOpen}
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}

@@ -1869,3 +1869,271 @@ export async function trashDbxAlert(alertId: string): Promise<void> {
   await asJsonOrThrow<unknown>(res, 'trashDbxAlert');
 }
 
+// ============================================================
+// Unity Catalog — Volumes WRITE (managed/external storage volumes)
+//
+// Volumes are UC-governed storage locations under a schema. MANAGED volumes are
+// backed by the catalog/metastore managed-storage root; EXTERNAL volumes point at
+// an abfss:// location governed by an external location + storage credential.
+// REST: POST/DELETE /api/2.1/unity-catalog/volumes
+// Learn: https://learn.microsoft.com/azure/databricks/volumes/
+// ============================================================
+
+export interface UcVolumeCreateSpec {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  volume_type: 'MANAGED' | 'EXTERNAL';
+  storage_location?: string;   // required for EXTERNAL (abfss://…)
+  comment?: string;
+}
+
+/** POST /api/2.1/unity-catalog/volumes — create a managed/external UC volume. */
+export async function createUcVolume(spec: UcVolumeCreateSpec): Promise<UcVolume> {
+  const body: Record<string, unknown> = {
+    name: spec.name,
+    catalog_name: spec.catalog_name,
+    schema_name: spec.schema_name,
+    volume_type: spec.volume_type,
+  };
+  if (spec.volume_type === 'EXTERNAL') {
+    if (!spec.storage_location) throw new Error('createUcVolume: EXTERNAL volumes require storage_location');
+    body.storage_location = spec.storage_location;
+  }
+  if (spec.comment) body.comment = spec.comment;
+  const res = await dbxFetch('/api/2.1/unity-catalog/volumes', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return asJsonOrThrow<UcVolume>(res, 'createUcVolume');
+}
+
+/** DELETE /api/2.1/unity-catalog/volumes/{full_name}  (catalog.schema.volume) */
+export async function deleteUcVolume(fullName: string): Promise<void> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/volumes/${path}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteUcVolume');
+}
+
+// ============================================================
+// Delta Live Tables (Lakeflow Declarative Pipelines) — /api/2.0/pipelines
+//
+// DLT pipelines run a set of notebook/file libraries as a managed, dependency-
+// aware ETL graph. REST surface: list, get, create, start an update, delete.
+// Learn: https://learn.microsoft.com/azure/databricks/delta-live-tables/api-guide
+// ============================================================
+
+export interface DltPipeline {
+  pipeline_id: string;
+  name?: string;
+  state?: string;           // IDLE | RUNNING | DEPLOYING | FAILED | …
+  cluster_id?: string;
+  creator_user_name?: string;
+  catalog?: string;
+  target?: string;
+  latest_updates?: Array<{ update_id: string; state: string; creation_time?: string }>;
+}
+
+export interface DltPipelineLibrary {
+  notebook?: { path: string };
+  file?: { path: string };
+}
+
+export interface DltPipelineCreateSpec {
+  name: string;
+  libraries: DltPipelineLibrary[];
+  continuous?: boolean;
+  development?: boolean;
+  catalog?: string;          // UC target catalog (publishes tables to UC)
+  target?: string;           // target schema
+  configuration?: Record<string, string>;
+}
+
+/** GET /api/2.0/pipelines — list DLT pipelines (paginated next_page_token). */
+export async function listDltPipelines(): Promise<DltPipeline[]> {
+  const out: DltPipeline[] = [];
+  let token: string | undefined;
+  do {
+    const qs = token ? `?page_token=${encodeURIComponent(token)}` : '';
+    const res = await dbxFetch(`/api/2.0/pipelines${qs}`);
+    const body = await asJsonOrThrow<{ statuses?: DltPipeline[]; next_page_token?: string }>(res, 'listDltPipelines');
+    out.push(...(body.statuses || []));
+    token = body.next_page_token;
+  } while (token);
+  return out;
+}
+
+/** GET /api/2.0/pipelines/{id} — full pipeline spec + state. */
+export async function getDltPipeline(pipelineId: string): Promise<DltPipeline & { spec?: unknown }> {
+  const res = await dbxFetch(`/api/2.0/pipelines/${encodeURIComponent(pipelineId)}`);
+  return asJsonOrThrow<DltPipeline & { spec?: unknown }>(res, 'getDltPipeline');
+}
+
+/** POST /api/2.0/pipelines — create a DLT pipeline. Returns { pipeline_id }. */
+export async function createDltPipeline(spec: DltPipelineCreateSpec): Promise<{ pipeline_id: string }> {
+  const body: Record<string, unknown> = {
+    name: spec.name,
+    libraries: spec.libraries,
+    continuous: spec.continuous ?? false,
+    development: spec.development ?? true,
+  };
+  if (spec.catalog) body.catalog = spec.catalog;
+  if (spec.target) body.target = spec.target;
+  if (spec.configuration && Object.keys(spec.configuration).length) body.configuration = spec.configuration;
+  const res = await dbxFetch('/api/2.0/pipelines', { method: 'POST', body: JSON.stringify(body) });
+  return asJsonOrThrow<{ pipeline_id: string }>(res, 'createDltPipeline');
+}
+
+/** POST /api/2.0/pipelines/{id}/updates — trigger a pipeline update (optionally full refresh). */
+export async function startDltUpdate(pipelineId: string, fullRefresh = false): Promise<{ update_id: string }> {
+  const res = await dbxFetch(`/api/2.0/pipelines/${encodeURIComponent(pipelineId)}/updates`, {
+    method: 'POST',
+    body: JSON.stringify({ full_refresh: fullRefresh }),
+  });
+  return asJsonOrThrow<{ update_id: string }>(res, 'startDltUpdate');
+}
+
+/** POST /api/2.0/pipelines/{id}/stop — request the active update to stop. */
+export async function stopDltUpdate(pipelineId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/pipelines/${encodeURIComponent(pipelineId)}/stop`, { method: 'POST' });
+  await asJsonOrThrow<unknown>(res, 'stopDltUpdate');
+}
+
+/** DELETE /api/2.0/pipelines/{id} — delete a DLT pipeline. */
+export async function deleteDltPipeline(pipelineId: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/pipelines/${encodeURIComponent(pipelineId)}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteDltPipeline');
+}
+
+// ============================================================
+// MLflow — experiments + registered models  (/api/2.0/mlflow)
+//
+// Experiments group runs; registered models (UC-governed when a 3-level name is
+// used) version trained models for serving. REST: experiments/search,
+// experiments/create, registered-models/list, registered-models/create, delete.
+// Learn: https://learn.microsoft.com/azure/databricks/mlflow/
+// ============================================================
+
+export interface MlflowExperiment {
+  experiment_id: string;
+  name: string;
+  artifact_location?: string;
+  lifecycle_stage?: string;
+  last_update_time?: number;
+}
+
+/** POST /api/2.0/mlflow/experiments/search — list experiments (paginated). */
+export async function listMlflowExperiments(maxResults = 200): Promise<MlflowExperiment[]> {
+  const res = await dbxFetch('/api/2.0/mlflow/experiments/search', {
+    method: 'POST',
+    body: JSON.stringify({ max_results: maxResults }),
+  });
+  const body = await asJsonOrThrow<{ experiments?: MlflowExperiment[] }>(res, 'listMlflowExperiments');
+  return body.experiments || [];
+}
+
+/** POST /api/2.0/mlflow/experiments/create — create an experiment. Returns { experiment_id }. */
+export async function createMlflowExperiment(name: string, artifactLocation?: string): Promise<{ experiment_id: string }> {
+  const body: Record<string, unknown> = { name };
+  if (artifactLocation) body.artifact_location = artifactLocation;
+  const res = await dbxFetch('/api/2.0/mlflow/experiments/create', { method: 'POST', body: JSON.stringify(body) });
+  return asJsonOrThrow<{ experiment_id: string }>(res, 'createMlflowExperiment');
+}
+
+export interface MlflowRegisteredModel {
+  name: string;
+  user_id?: string;
+  creation_timestamp?: number;
+  last_updated_timestamp?: number;
+  latest_versions?: Array<{ version: string; current_stage?: string; source?: string; status?: string }>;
+}
+
+/** GET /api/2.0/mlflow/registered-models/list — list registered models (paginated). */
+export async function listRegisteredModels(maxResults = 200): Promise<MlflowRegisteredModel[]> {
+  const out: MlflowRegisteredModel[] = [];
+  let token: string | undefined;
+  do {
+    const qs = new URLSearchParams({ max_results: String(maxResults) });
+    if (token) qs.set('page_token', token);
+    const res = await dbxFetch(`/api/2.0/mlflow/registered-models/list?${qs.toString()}`);
+    const body = await asJsonOrThrow<{ registered_models?: MlflowRegisteredModel[]; next_page_token?: string }>(res, 'listRegisteredModels');
+    out.push(...(body.registered_models || []));
+    token = body.next_page_token;
+  } while (token);
+  return out;
+}
+
+/** POST /api/2.0/mlflow/registered-models/create — register a new model. */
+export async function createRegisteredModel(name: string, tags?: Record<string, string>): Promise<MlflowRegisteredModel> {
+  const body: Record<string, unknown> = { name };
+  if (tags && Object.keys(tags).length) body.tags = Object.entries(tags).map(([key, value]) => ({ key, value }));
+  const res = await dbxFetch('/api/2.0/mlflow/registered-models/create', { method: 'POST', body: JSON.stringify(body) });
+  const out = await asJsonOrThrow<{ registered_model?: MlflowRegisteredModel } & MlflowRegisteredModel>(res, 'createRegisteredModel');
+  return (out.registered_model || out) as MlflowRegisteredModel;
+}
+
+/** DELETE /api/2.0/mlflow/registered-models/delete — delete a registered model. */
+export async function deleteRegisteredModel(name: string): Promise<void> {
+  const res = await dbxFetch('/api/2.0/mlflow/registered-models/delete', {
+    method: 'DELETE',
+    body: JSON.stringify({ name }),
+  });
+  await asJsonOrThrow<unknown>(res, 'deleteRegisteredModel');
+}
+
+// ============================================================
+// Model Serving — real-time endpoints  (/api/2.0/serving-endpoints)
+//
+// A serving endpoint hosts one or more model versions behind an HTTPS route with
+// scale-to-zero + workload sizing. REST: list, create, delete.
+// Learn: https://learn.microsoft.com/azure/databricks/machine-learning/model-serving/
+// ============================================================
+
+export interface ServingEndpoint {
+  name: string;
+  state?: { ready?: string; config_update?: string };
+  config?: { served_entities?: Array<{ name?: string; entity_name?: string; entity_version?: string }> };
+  creator?: string;
+}
+
+export interface ServingEndpointCreateSpec {
+  name: string;
+  /** A served model version (UC model name + version). */
+  model_name: string;
+  model_version: string;
+  workload_size?: 'Small' | 'Medium' | 'Large';
+  scale_to_zero_enabled?: boolean;
+}
+
+/** GET /api/2.0/serving-endpoints — list serving endpoints. */
+export async function listServingEndpoints(): Promise<ServingEndpoint[]> {
+  const res = await dbxFetch('/api/2.0/serving-endpoints');
+  const body = await asJsonOrThrow<{ endpoints?: ServingEndpoint[] }>(res, 'listServingEndpoints');
+  return body.endpoints || [];
+}
+
+/** POST /api/2.0/serving-endpoints — create a serving endpoint with one served model. */
+export async function createServingEndpoint(spec: ServingEndpointCreateSpec): Promise<ServingEndpoint> {
+  const body = {
+    name: spec.name,
+    config: {
+      served_entities: [
+        {
+          entity_name: spec.model_name,
+          entity_version: spec.model_version,
+          workload_size: spec.workload_size ?? 'Small',
+          scale_to_zero_enabled: spec.scale_to_zero_enabled ?? true,
+        },
+      ],
+    },
+  };
+  const res = await dbxFetch('/api/2.0/serving-endpoints', { method: 'POST', body: JSON.stringify(body) });
+  return asJsonOrThrow<ServingEndpoint>(res, 'createServingEndpoint');
+}
+
+/** DELETE /api/2.0/serving-endpoints/{name} — delete a serving endpoint. */
+export async function deleteServingEndpoint(name: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/serving-endpoints/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteServingEndpoint');
+}
+
