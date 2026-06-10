@@ -642,6 +642,15 @@ export function aasSuffix(): string {
 }
 
 /**
+ * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
+ * `*` character must appear as the subdomain — it is NOT a wildcard:
+ *   "the audience must have the `*` character as the subdomain"
+ */
+export function aasScope(): string {
+  return `https://*.${aasSuffix()}`;
+}
+
+/**
  * Full AAS connection URI (as it appears in SSMS / Power BI "Analysis Services"
  * data source): `asazure://<region>.<suffix>/<serverName>`.
  */
@@ -935,6 +944,110 @@ export function getKustoSuffix(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Cost Management (ARM resource provider — same base as ARM)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cost Management REST API base (no trailing slash). Cost Management is an
+ * ARM resource provider (Microsoft.CostManagement) so the host is IDENTICAL
+ * to the ARM management endpoint. This getter exists as a named entry point
+ * so cost-client.ts can import the canonical name instead of re-importing
+ * armBase() and aliasing it locally, and so the cloud-matrix test can assert
+ * the four-cloud split without duplicating the ARM test rows.
+ *
+ *   POST {getCostManagementBase()}/subscriptions/{sub}/providers/Microsoft.CostManagement/query?api-version=2023-03-01
+ *
+ * Per-cloud (verified against Microsoft Learn compare-azure-government-global-azure):
+ *   Commercial / GCC : https://management.azure.com
+ *   GCC-High / IL5   : https://management.usgovcloudapi.net
+ *   DoD              : https://management.azure.microsoft.scloud
+ */
+export function getCostManagementBase(): string {
+  return armBase();
+}
+
+/** AAD `.default` scope for Cost Management tokens (same audience as ARM). */
+export function getCostManagementScope(): string {
+  return armScope();
+}
+
+// ---------------------------------------------------------------------------
+// Azure Monitor REST API (ARM resource provider — same base as ARM)
+// ---------------------------------------------------------------------------
+
+/**
+ * Azure Monitor REST API base (no trailing slash). Azure Monitor resources
+ * (Microsoft.Insights/metricAlerts, Microsoft.Insights/scheduledQueryRules,
+ * Microsoft.Insights/actionGroups) are ARM resource providers — the control-
+ * plane host is IDENTICAL to the ARM management endpoint. Getter exists for
+ * the same aliasing reason as getCostManagementBase(). NOTE: the Log Analytics
+ * QUERY data-plane (api.loganalytics.*) is a DISTINCT host — see
+ * getLogAnalyticsHost(); this getter is only the Monitor ARM control plane.
+ */
+export function getMonitorBase(): string {
+  return armBase();
+}
+
+/** AAD `.default` scope for Azure Monitor ARM tokens (same audience as ARM). */
+export function getMonitorScope(): string {
+  return armScope();
+}
+
+// ---------------------------------------------------------------------------
+// Azure DevOps Services (cloud-invariant SaaS)
+// ---------------------------------------------------------------------------
+
+/**
+ * Azure DevOps Services REST API base (no trailing slash). Azure DevOps
+ * Services is a SaaS offering at a SINGLE commercial endpoint — it is NOT
+ * listed in the Azure Government service endpoint mapping table (verified
+ * against Microsoft Learn: compare-azure-government-global-azure). GCC,
+ * GCC-High, and DoD tenants all reach Azure DevOps via `dev.azure.com`
+ * (Microsoft Dynamics 365 GCC docs: "you can use public Azure DevOps services
+ * if you don't have FedRAMP requirements"). `LOOM_DEVOPS_BASE` overrides for
+ * air-gapped Azure DevOps Server deployments — mirrors the escape-hatch
+ * pattern of `LOOM_ARM_ENDPOINT`.
+ *
+ * Used by the SQL schema source-control path (loom-sql-git-* env vars) and
+ * the ADF pipeline trigger AzDO integration (when loomSqlGitProvider='azdo').
+ */
+export function getDevOpsBase(): string {
+  const override = process.env.LOOM_DEVOPS_BASE;
+  if (override) return override.replace(/\/+$/, '');
+  return 'https://dev.azure.com';
+}
+
+// ---------------------------------------------------------------------------
+// Azure App Configuration (data plane)
+// ---------------------------------------------------------------------------
+
+/**
+ * App Configuration data-plane hostname suffix (no leading dot, no account
+ * prefix). From the Microsoft Learn Azure Government endpoint table:
+ *   Commercial / GCC : azconfig.io
+ *   GCC-High / IL5   : azconfig.azure.us
+ * `LOOM_APPCONFIG_SUFFIX` overrides for sovereign clouds not enumerated here.
+ * This centralises the inline `endpoint.includes('.azure.us')` check that
+ * trigger-param-resolver.ts used locally — all callers MUST go through this
+ * getter per the no-vaporware grep gate.
+ */
+export function getAppConfigSuffix(): string {
+  const override = process.env.LOOM_APPCONFIG_SUFFIX;
+  if (override) return override.replace(/^\.+/, '').replace(/\/+$/, '');
+  return isGovCloud() ? 'azconfig.azure.us' : 'azconfig.io';
+}
+
+/** AAD `.default` scope for App Configuration data-plane tokens. */
+export function getAppConfigScope(): string {
+  return `https://${getAppConfigSuffix()}/.default`;
+}
+
+/** Build the App Configuration endpoint URL from a store name. */
+export function appConfigEndpointFromName(storeName: string): string {
+  return `https://${storeName}.${getAppConfigSuffix()}`;
+}
+
+// ---------------------------------------------------------------------------
 // Azure Analysis Services (AAS) data plane — Loom-native report renderer
 // ---------------------------------------------------------------------------
 //
@@ -949,15 +1062,6 @@ export function getKustoSuffix(): string {
 
 // aasSuffix() is declared once above (with LOOM_AAS_HOST_SUFFIX override
 // support) — re-using that single source of truth here.
-
-/**
- * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
- * `*` character must appear as the subdomain — it is NOT a wildcard:
- *   "the audience must have the `*` character as the subdomain"
- */
-export function aasScope(): string {
-  return `https://*.${aasSuffix()}`;
-}
 
 /**
  * Parse a Loom `state.aasServer` value into `{ region, serverName }`.

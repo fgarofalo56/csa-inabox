@@ -129,6 +129,19 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     expect(m.synapseSqlJdbcHostCert()).toBe(`*.${SYN_COM}`);
   });
 
+  it('Cost Management + Monitor share the ARM base/scope; DevOps + App Config are commercial', async () => {
+    const m = await load('AzureCloud');
+    expect(m.getCostManagementBase()).toBe(ARM_COM);
+    expect(m.getCostManagementScope()).toBe(`${ARM_COM}/.default`);
+    expect(m.getMonitorBase()).toBe(ARM_COM);
+    expect(m.getMonitorScope()).toBe(`${ARM_COM}/.default`);
+    expect(m.getDevOpsBase()).toBe(`https://${J('dev', 'azure', 'com')}`);
+    const AC_COM = J('azconfig', 'io');
+    expect(m.getAppConfigSuffix()).toBe(AC_COM);
+    expect(m.getAppConfigScope()).toBe(`https://${AC_COM}/.default`);
+    expect(m.appConfigEndpointFromName('ac-loom')).toBe(`https://ac-loom.${AC_COM}`);
+  });
+
   it('Azure Analysis Services helpers use asazure.windows.net (alias)', async () => {
     const m = await load('AzureCloud');
     const AAS_COM = J('asazure', 'windows', 'net');
@@ -140,7 +153,7 @@ describe('cloud-endpoints — Commercial (AzureCloud)', () => {
     const m = await load('AzureCloud');
     const AAS_COM = J('asazure', 'windows', 'net');
     expect(m.aasSuffix()).toBe(AAS_COM);
-    expect(m.aasScope('eastus')).toBe(`https://eastus.${AAS_COM}/.default`);
+    expect(m.aasScope()).toBe(`https://*.${AAS_COM}`);
     expect(m.pbiXmlaScope()).toBe(`https://${J('analysis', 'windows', 'net')}/powerbi/api/.default`);
   });
 });
@@ -229,6 +242,19 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
     expect(m.synapseSqlJdbcHostCert()).toBe('*.sql.azuresynapse.usgovcloudapi.net');
   });
 
+  it('Cost Management + Monitor follow the Gov ARM host; DevOps stays SaaS; App Config is azure.us', async () => {
+    const m = await load('AzureUSGovernment');
+    expect(m.getCostManagementBase()).toBe('https://management.usgovcloudapi.net');
+    expect(m.getCostManagementScope()).toBe('https://management.usgovcloudapi.net/.default');
+    expect(m.getMonitorBase()).toBe('https://management.usgovcloudapi.net');
+    expect(m.getMonitorScope()).toBe('https://management.usgovcloudapi.net/.default');
+    // Azure DevOps Services is NOT in the Gov endpoint table — same SaaS host.
+    expect(m.getDevOpsBase()).toBe('https://dev.azure.com');
+    expect(m.getAppConfigSuffix()).toBe('azconfig.azure.us');
+    expect(m.getAppConfigScope()).toBe('https://azconfig.azure.us/.default');
+    expect(m.appConfigEndpointFromName('ac-loom')).toBe('https://ac-loom.azconfig.azure.us');
+  });
+
   it('Azure Analysis Services alias getAasSuffix() use asazure.usgovcloudapi.net', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.getAasSuffix()).toBe('asazure.usgovcloudapi.net');
@@ -240,7 +266,7 @@ describe('cloud-endpoints — Government (AzureUSGovernment / GCC-High / IL5)', 
   it('Analysis Services + Power BI XMLA helpers (Gov)', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.aasSuffix()).toBe('asazure.usgovcloudapi.net');
-    expect(m.aasScope('usgovvirginia')).toBe('https://usgovvirginia.asazure.usgovcloudapi.net/.default');
+    expect(m.aasScope()).toBe('https://*.asazure.usgovcloudapi.net');
     expect(m.pbiXmlaScope()).toBe('https://analysis.usgovcloudapi.net/powerbi/api/.default');
   });
 });

@@ -10,6 +10,10 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
+@description('AZURE_CLOUD two-value discriminator. When non-empty, overrides the AZURE_CLOUD env var regardless of boundary. Commercial / GCC deployments pass AzureCloud; GCC-High / IL5 deployments pass AzureUSGovernment. When empty (default), AZURE_CLOUD is derived from boundary (GCC-High|IL5 → AzureUSGovernment; otherwise AzureCloud).')
+@allowed(['', 'AzureCloud', 'AzureUSGovernment'])
+param loomAzureCloud string = ''
+
 @description('Container platform — containerApps or aks')
 @allowed(['containerApps', 'aks'])
 param containerPlatform string
@@ -1657,7 +1661,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SQL_GIT_GITHUB_REPO',       value: loomSqlGitGithubRepo }
             { name: 'LOOM_SQL_GIT_GITHUB_BRANCH',     value: loomSqlGitGithubBranch }
             { name: 'LOOM_SQL_GIT_GITHUB_PAT_SECRET', value: loomSqlGitGithubPatSecretName }
-            { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            { name: 'AZURE_CLOUD', value: !empty(loomAzureCloud) ? loomAzureCloud : (boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud') }
             // Canonical 4-way sovereign discriminator for cloud-endpoints.ts.
             // IL5 collapses to GCC-High (same AzureUSGovernment endpoints); the
             // other boundaries pass through verbatim (Commercial | GCC | GCC-High).

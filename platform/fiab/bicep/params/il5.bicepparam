@@ -20,6 +20,7 @@ using '../main.bicep'
 param environment = 'AzureUSGovernment'
 param location = 'usgovvirginia'
 param boundary = 'IL5'
+param loomAzureCloud = 'AzureUSGovernment'   // Console AZURE_CLOUD discriminator (IL5 runs on AzureUSGovernment endpoints)
 param deploymentMode = 'multi-sub'
 
 // Compute (IL5 differences)

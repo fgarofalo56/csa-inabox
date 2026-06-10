@@ -82,6 +82,18 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
+// Foundation admin containers (shared cloud-endpoints resolver task) — only
+// the two with NO main-side equivalent are declared here. `embed-codes`,
+// `org-visuals`, `task-flows`, and `azure-connections` are all declared
+// further down by parallel feature branches and reused as-is.
+//   loom-workspaces    — admin Workspace Catalog (one row per Loom-managed
+//                        workspace), PK /tenantId so the admin workspace-picker
+//                        hits a single physical partition. Distinct from the
+//                        BFF `workspaces` config container.
+//   workspace-folders  — Loom-native folder hierarchy (OneLake folder parity),
+//                        PK /workspaceId so the Explorer tree hits one partition.
+let _loomWorkspaces: Container | null = null;
+let _workspaceFolders: Container | null = null;
 let _pbiDashboardOverlays: Container | null = null;
 // Paginated-report (RDL) definitions — the Loom-native authoring document for
 // the paginated-report editor (data sources, datasets, tablixes, parameters).
@@ -489,6 +501,12 @@ async function ensure() {
   // (RBAC enforced in the route). Created lazily so a fresh environment needs
   // no extra ARM/Bicep step beyond the account+database.
   _savedQueries = await mk('saved-queries', '/itemId');
+  // Foundation admin containers (shared cloud-endpoints resolver task). ARM-
+  // provisioned in landing-zone/cosmos.bicep for the `loom` database; these
+  // createIfNotExists calls are the idempotent fallback for hotfix deploys that
+  // skip bicep. Partition keys MUST match cosmos.bicep exactly.
+  _loomWorkspaces    = await mk('loom-workspaces',    '/tenantId');
+  _workspaceFolders  = await mk('workspace-folders',  '/workspaceId');
   // Loom-native overlay for Power BI / AAS dashboards: pinned-DAX tiles, Q&A
   // (Copilot→DAX) tiles, streaming (ADX/KQL) tiles, and the grid layout. Stored
   // separately from the Power BI REST tile list so the PBI ACL never gates the
@@ -599,6 +617,15 @@ export async function workspaceSparkConfigContainer(): Promise<Container> { awai
 export async function embedCodesContainer(): Promise<Container> { await ensure(); return _embedCodes!; }
 /** F23 — org-visuals metadata (tenant-wide custom visuals) — PK /tenantId. */
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
+
+// Foundation admin containers (shared cloud-endpoints resolver task).
+/** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
+export async function loomWorkspacesContainer(): Promise<Container>  { await ensure(); return _loomWorkspaces!; }
+/** Workspace-native folder hierarchy (OneLake folder parity), PK /workspaceId. */
+export async function workspaceFoldersContainer(): Promise<Container> { await ensure(); return _workspaceFolders!; }
+// (embedCodesContainer + orgVisualsContainer + taskFlowsContainer +
+//  azureConnectionsContainer accessors live further down — they were declared
+//  by parallel feature branches and are reused as-is.)
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -732,6 +759,8 @@ const KNOWN_CONTAINER_IDS = [
   'scorecard-goals', 'scorecard-checkins',
   'access-request-workflow',
   'saved-queries',
+  // Foundation admin containers (shared cloud-endpoints resolver task).
+  'loom-workspaces', 'workspace-folders',
   'pbi-dashboard-overlays',
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',

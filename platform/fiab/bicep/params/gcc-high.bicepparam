@@ -23,6 +23,7 @@ using '../main.bicep'
 param environment = 'AzureUSGovernment'
 param location = 'usgovvirginia'
 param boundary = 'GCC-High'
+param loomAzureCloud = 'AzureUSGovernment'   // Console AZURE_CLOUD discriminator (GCC-High runs on AzureUSGovernment endpoints)
 param deploymentMode = 'multi-sub'   // most federal customers use multi-sub
 
 // Compute (Gov differences)

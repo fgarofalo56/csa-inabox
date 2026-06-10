@@ -20,6 +20,10 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
+@description('AZURE_CLOUD two-value discriminator for the Console (AzureCloud | AzureUSGovernment). Empty (default) = derived from boundary. Threaded to the admin-plane module so GCC-High / IL5 deployments can set AzureUSGovernment explicitly without relying on the 4-way boundary mapping.')
+@allowed(['', 'AzureCloud', 'AzureUSGovernment'])
+param loomAzureCloud string = ''
+
 @description('Deployment mode')
 @allowed(['single-sub', 'multi-sub'])
 param deploymentMode string
@@ -378,6 +382,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
   params: {
     location: location
     boundary: boundary
+    loomAzureCloud: loomAzureCloud
     containerPlatform: containerPlatform
     functionsHostSku: functionsHostSku
     apimSku: apimSku
