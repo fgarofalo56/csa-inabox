@@ -3,19 +3,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Title2,
-  Body1,
   Caption1,
+  Badge,
   makeStyles,
   tokens,
   Button,
   Tab,
   TabList,
   Spinner,
+  Tooltip,
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
 } from '@fluentui/react-components';
-import { Play24Filled, Flowchart24Regular } from '@fluentui/react-icons';
+import {
+  Play24Filled,
+  Flowchart24Regular,
+  TableSimple20Regular,
+  Timer20Regular,
+  DatabasePlugConnected20Regular,
+  Copy20Regular,
+  Checkmark20Regular,
+} from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
@@ -42,12 +51,38 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '8px',
   },
+  // Results summary strip: tokenized badges (rows / duration / engine).
+  summaryBar: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+  },
+  // Explain-plan viewer: a framed, scrollable monospace surface with a
+  // floating copy action in the top-right corner.
+  planWrap: {
+    position: 'relative',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    overflow: 'hidden',
+  },
+  planCopy: {
+    position: 'absolute',
+    top: tokens.spacingVerticalS,
+    right: tokens.spacingHorizontalS,
+    zIndex: 1,
+  },
   plan: {
-    fontFamily: 'Cascadia Code, Consolas, monospace',
-    fontSize: '12px',
-    whiteSpace: 'pre-wrap',
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    whiteSpace: 'pre',
     overflow: 'auto',
+    maxHeight: '420px',
     margin: 0,
+    padding: tokens.spacingVerticalM,
+    color: tokens.colorNeutralForeground1,
   },
   meta: { color: tokens.colorNeutralForeground3 },
 });
@@ -100,6 +135,7 @@ export function WarehousePane() {
   const [planXml, setPlanXml] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [planCopied, setPlanCopied] = useState(false);
 
   // History tab state — real sys.dm_pdw_exec_requests rows from the live pool.
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
@@ -147,6 +183,7 @@ export function WarehousePane() {
     setPlanning(true);
     setPlanError(null);
     setPlanXml(null);
+    setPlanCopied(false);
     try {
       const res = await fetch('/api/warehouse/explain', {
         method: 'POST',
@@ -234,6 +271,17 @@ export function WarehousePane() {
 
   const durationMs = result ? result.durationMs ?? result.executionMs : undefined;
 
+  const copyPlan = useCallback(async () => {
+    if (!planXml) return;
+    try {
+      await navigator.clipboard.writeText(planXml);
+      setPlanCopied(true);
+      window.setTimeout(() => setPlanCopied(false), 2000);
+    } catch {
+      // Clipboard API can be unavailable (insecure context); fail silently.
+    }
+  }, [planXml]);
+
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -290,11 +338,31 @@ export function WarehousePane() {
             )}
             {result && (
               <>
-                <Body1 className={styles.meta}>
-                  {result.rowCount.toLocaleString()} rows
-                  {typeof durationMs === 'number' ? ` · ${durationMs} ms` : ''}
-                  {result.engine ? ` · engine: ${result.engine}` : ''}
-                </Body1>
+                <div className={styles.summaryBar} aria-label="Query result summary">
+                  <Badge
+                    appearance="tint"
+                    color="brand"
+                    size="large"
+                    icon={<TableSimple20Regular />}
+                  >
+                    {result.rowCount.toLocaleString()} {result.rowCount === 1 ? 'row' : 'rows'}
+                  </Badge>
+                  {typeof durationMs === 'number' && (
+                    <Badge appearance="tint" color="informative" size="large" icon={<Timer20Regular />}>
+                      {durationMs.toLocaleString()} ms
+                    </Badge>
+                  )}
+                  {result.engine && (
+                    <Badge
+                      appearance="outline"
+                      color="subtle"
+                      size="large"
+                      icon={<DatabasePlugConnected20Regular />}
+                    >
+                      {result.engine}
+                    </Badge>
+                  )}
+                </div>
                 <LoomDataTable
                   columns={resultColumns}
                   rows={resultRows}
@@ -327,7 +395,22 @@ export function WarehousePane() {
                 </MessageBarBody>
               </MessageBar>
             )}
-            {planXml !== null && planXml !== '' && <pre className={styles.plan}>{planXml}</pre>}
+            {planXml !== null && planXml !== '' && (
+              <div className={styles.planWrap}>
+                <Tooltip content={planCopied ? 'Copied' : 'Copy plan XML'} relationship="label">
+                  <Button
+                    className={styles.planCopy}
+                    size="small"
+                    appearance="subtle"
+                    icon={planCopied ? <Checkmark20Regular /> : <Copy20Regular />}
+                    onClick={copyPlan}
+                  >
+                    {planCopied ? 'Copied' : 'Copy'}
+                  </Button>
+                </Tooltip>
+                <pre className={styles.plan}>{planXml}</pre>
+              </div>
+            )}
             {planXml === '' && !planning && !planError && (
               <Caption1 className={styles.meta}>The pool returned an empty plan for this statement.</Caption1>
             )}
