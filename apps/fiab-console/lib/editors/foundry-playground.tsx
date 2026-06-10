@@ -35,6 +35,7 @@ import {
   Search24Regular, Rocket20Regular, ChatMultiple24Regular, Image24Regular,
   MicRecord24Regular, Speaker224Regular, Send24Filled, Delete20Regular,
   Code20Regular, ChevronLeft20Regular, Trophy20Regular, ArrowSwap20Regular,
+  TextField24Regular, BrainCircuit24Regular, Bot24Regular, Mic24Regular,
 } from '@fluentui/react-icons';
 
 // ============================================================ shared
@@ -679,6 +680,528 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
   );
 }
 
+// ============================================================ shared deployment loader
+
+/** Lazy-load the account's model deployments; used by every modality playground. */
+function useDeployments(active: boolean, nonce: number, acct: FoundryAccount | null) {
+  const [deps, setDeps] = useState<{ loading: boolean; list: DeployedModel[] | null; error?: string; hint?: string; notDeployed?: boolean }>({ loading: false, list: null });
+  const load = useCallback(async () => {
+    setDeps({ loading: true, list: null });
+    try {
+      const r = await fetch(withAccount('/api/foundry/model-deployments', acct));
+      const j = await r.json();
+      if (!j.ok) { setDeps({ loading: false, list: null, error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
+      setDeps({ loading: false, list: Array.isArray(j.deployments) ? j.deployments : [] });
+    } catch (e: any) { setDeps({ loading: false, list: null, error: e?.message || String(e) }); }
+  }, [acct]);
+  useEffect(() => { if (active && deps.list === null && !deps.loading && !deps.error) load(); }, [active, deps.list, deps.loading, deps.error, load]);
+  useEffect(() => { if (nonce > 0) setDeps({ loading: false, list: null }); }, [nonce]);
+  useEffect(() => { setDeps({ loading: false, list: null }); }, [acct]);
+  return { deps, reload: load };
+}
+
+const mname = (d: DeployedModel) => (d.modelName || d.name || '').toLowerCase();
+
+const usePgStyles = makeStyles({
+  root: { display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
+  left: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, overflow: 'auto', borderRight: `1px solid ${tokens.colorNeutralStroke2}`, minHeight: 0 },
+  main: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, overflow: 'auto', minHeight: 0 },
+  head: { display: 'flex', alignItems: 'center', gap: 8 },
+  imgGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
+  img: { width: '100%', borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  sliderRow: { display: 'flex', flexDirection: 'column', gap: 2 },
+  sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
+});
+
+/** Deployment dropdown filtered to a modality, with an honest gate when none match. */
+function DeploymentSelect({ deps, value, onChange, filter, gate }: {
+  deps: ReturnType<typeof useDeployments>['deps'];
+  value: string; onChange: (v: string) => void;
+  filter: (d: DeployedModel) => boolean;
+  gate: { title: string; msg: string; hint: string };
+}) {
+  const matches = (deps.list || []).filter(filter);
+  useEffect(() => { if (!value && matches[0]) onChange(matches[0].name); }, [matches, value, onChange]);
+  if (deps.loading) return <Spinner size="tiny" label="Loading deployments…" labelPosition="after" />;
+  if (deps.error) return <GateBar title="Could not list deployments" msg={deps.error} hint={deps.hint} intent={deps.notDeployed ? 'warning' : 'error'} />;
+  if (matches.length === 0) return <GateBar title={gate.title} intent="warning" msg={gate.msg} hint={gate.hint} />;
+  return (
+    <Field label="Deployment">
+      <Dropdown value={value} selectedOptions={value ? [value] : []} placeholder="Select a deployment"
+        onOptionSelect={(_, d) => d.optionValue && onChange(d.optionValue)}>
+        {matches.map((d) => <Option key={d.name} value={d.name}>{`${d.name}${d.modelName ? ` (${d.modelName})` : ''}`}</Option>)}
+      </Dropdown>
+    </Field>
+  );
+}
+
+// ============================================================ Images playground
+
+export function ImagesPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [size, setSize] = useState('1024x1024');
+  const [quality, setQuality] = useState('standard');
+  const [style, setStyle] = useState('vivid');
+  const [n, setN] = useState('1');
+  const [busy, setBusy] = useState(false);
+  const [images, setImages] = useState<{ url?: string; b64Json?: string }[]>([]);
+  const [err, setErr] = useState<{ text: string; hint?: string } | null>(null);
+  useEffect(() => { setDeployment(''); setImages([]); setErr(null); }, [acct]);
+  if (!active) return null;
+
+  const run = async () => {
+    if (!deployment || !prompt.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/foundry/images', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deployment, prompt, n: Number(n) || 1, size, quality, style, ...acctBody(acct) }) });
+      const j = await r.json();
+      if (!j.ok) { setErr({ text: j.error, hint: j.hint }); setImages([]); return; }
+      setImages(j.images || []);
+    } catch (e: any) { setErr({ text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><Image24Regular /><Subtitle2>Images</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /dall|image/i.test(mname(d))}
+          gate={{ title: 'No image model deployed', msg: 'No DALL-E / image model is deployed on this account.', hint: 'Open the Model catalog tab, deploy a DALL-E 3 or gpt-image-1 model, then return here.' }} />
+        <Field label="Size">
+          <Dropdown value={size} selectedOptions={[size]} onOptionSelect={(_, d) => d.optionValue && setSize(d.optionValue)}>
+            {['1024x1024', '1792x1024', '1024x1792'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Quality">
+          <Dropdown value={quality} selectedOptions={[quality]} onOptionSelect={(_, d) => d.optionValue && setQuality(d.optionValue)}>
+            {['standard', 'hd'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Style">
+          <Dropdown value={style} selectedOptions={[style]} onOptionSelect={(_, d) => d.optionValue && setStyle(d.optionValue)}>
+            {['vivid', 'natural'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Number of images"><Input type="number" min={1} max={4} value={n} onChange={(_, d) => setN(d.value)} /></Field>
+      </div>
+      <div className={s.main}>
+        <Field label="Prompt">
+          <Textarea value={prompt} onChange={(_, d) => setPrompt(d.value)} rows={3} placeholder="A watercolor painting of a lighthouse at dawn" resize="vertical" />
+        </Field>
+        <div>
+          <Button appearance="primary" icon={<Image24Regular />} disabled={!deployment || !prompt.trim() || busy} onClick={run}>
+            {busy ? 'Generating…' : 'Generate'}
+          </Button>
+        </div>
+        {err && <GateBar title="Generation failed" msg={err.text} hint={err.hint} intent="error" />}
+        {busy && <Spinner size="small" label="Calling the image model…" labelPosition="after" />}
+        {images.length > 0 && (
+          <div className={s.imgGrid}>
+            {images.map((im, i) => (
+              <img key={i} className={s.img} alt={`Generated ${i + 1}`}
+                src={im.url || (im.b64Json ? `data:image/png;base64,${im.b64Json}` : '')} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Audio (transcription) playground
+
+export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [language, setLanguage] = useState('');
+  const [format, setFormat] = useState('json');
+  const [busy, setBusy] = useState(false);
+  const [text, setText] = useState('');
+  const [err, setErr] = useState<{ text: string; hint?: string } | null>(null);
+  useEffect(() => { setDeployment(''); setText(''); setErr(null); }, [acct]);
+  if (!active) return null;
+
+  const run = async () => {
+    if (!deployment || !file || busy) return;
+    setBusy(true); setErr(null); setText('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file); fd.append('deployment', deployment);
+      if (language) fd.append('language', language);
+      fd.append('responseFormat', format);
+      const ab = acctBody(acct);
+      if (ab.account) fd.append('account', ab.account);
+      if (ab.rg) fd.append('rg', ab.rg);
+      const r = await fetch('/api/foundry/audio', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (!j.ok) { setErr({ text: j.error, hint: j.hint }); return; }
+      setText(j.text || '(empty)');
+    } catch (e: any) { setErr({ text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><MicRecord24Regular /><Subtitle2>Audio · transcription</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /whisper|transcri/i.test(mname(d))}
+          gate={{ title: 'No Whisper model deployed', msg: 'No Whisper / audio model is deployed on this account.', hint: 'Open the Model catalog tab, deploy a whisper model, then return here.' }} />
+        <Field label="Audio file">
+          <input type="file" accept="audio/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+        </Field>
+        <Field label="Language (ISO 639-1, optional)"><Input value={language} onChange={(_, d) => setLanguage(d.value)} placeholder="en" /></Field>
+        <Field label="Response format">
+          <Dropdown value={format} selectedOptions={[format]} onOptionSelect={(_, d) => d.optionValue && setFormat(d.optionValue)}>
+            {['json', 'verbose_json', 'text', 'srt', 'vtt'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Button appearance="primary" icon={<Mic24Regular />} disabled={!deployment || !file || busy} onClick={run}>{busy ? 'Transcribing…' : 'Transcribe'}</Button>
+      </div>
+      <div className={s.main}>
+        <Subtitle2>Transcription</Subtitle2>
+        {err && <GateBar title="Transcription failed" msg={err.text} hint={err.hint} intent="error" />}
+        {busy && <Spinner size="small" label="Calling Whisper…" labelPosition="after" />}
+        <Textarea value={text} readOnly rows={16} placeholder="Upload an audio file and click Transcribe." resize="vertical" />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Speech (TTS) playground
+
+export function SpeechPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [input, setInput] = useState('');
+  const [voice, setVoice] = useState('alloy');
+  const [format, setFormat] = useState('mp3');
+  const [speed, setSpeed] = useState(1.0);
+  const [busy, setBusy] = useState(false);
+  const [audioUrl, setAudioUrl] = useState('');
+  const [err, setErr] = useState<{ text: string; hint?: string } | null>(null);
+  useEffect(() => { setDeployment(''); setAudioUrl(''); setErr(null); }, [acct]);
+  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
+  if (!active) return null;
+
+  const run = async () => {
+    if (!deployment || !input.trim() || busy) return;
+    setBusy(true); setErr(null);
+    if (audioUrl) { URL.revokeObjectURL(audioUrl); setAudioUrl(''); }
+    try {
+      const r = await fetch('/api/foundry/speech', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deployment, input, voice, responseFormat: format, speed, ...acctBody(acct) }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); setErr({ text: j.error || `HTTP ${r.status}`, hint: j.hint }); return; }
+      const blob = await r.blob();
+      setAudioUrl(URL.createObjectURL(blob));
+    } catch (e: any) { setErr({ text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><Speaker224Regular /><Subtitle2>Speech · text-to-speech</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /tts|speech/i.test(mname(d))}
+          gate={{ title: 'No TTS model deployed', msg: 'No text-to-speech model is deployed on this account.', hint: 'Open the Model catalog tab, deploy a tts-1 or tts-1-hd model, then return here.' }} />
+        <Field label="Voice">
+          <Dropdown value={voice} selectedOptions={[voice]} onOptionSelect={(_, d) => d.optionValue && setVoice(d.optionValue)}>
+            {['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Format">
+          <Dropdown value={format} selectedOptions={[format]} onOptionSelect={(_, d) => d.optionValue && setFormat(d.optionValue)}>
+            {['mp3', 'wav', 'opus', 'aac', 'flac'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <div className={s.sliderRow}>
+          <div className={s.sliderHead}><Label>Speed</Label><Caption1>{speed.toFixed(2)}×</Caption1></div>
+          <Slider min={0.25} max={4} step={0.05} value={speed} onChange={(_, d) => setSpeed(d.value)} />
+        </div>
+        <Button appearance="primary" icon={<Speaker224Regular />} disabled={!deployment || !input.trim() || busy} onClick={run}>{busy ? 'Synthesizing…' : 'Generate speech'}</Button>
+      </div>
+      <div className={s.main}>
+        <Field label="Text">
+          <Textarea value={input} onChange={(_, d) => setInput(d.value)} rows={5} placeholder="Type the text you want spoken." resize="vertical" />
+        </Field>
+        {err && <GateBar title="Synthesis failed" msg={err.text} hint={err.hint} intent="error" />}
+        {busy && <Spinner size="small" label="Calling the TTS model…" labelPosition="after" />}
+        {audioUrl && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <audio controls src={audioUrl} style={{ width: '100%' }} />
+            <a href={audioUrl} download={`speech.${format}`}><Button size="small">Download audio</Button></a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Completions playground
+
+export function CompletionsPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [maxTokens, setMaxTokens] = useState(256);
+  const [temperature, setTemperature] = useState(0.7);
+  const [topP, setTopP] = useState(1.0);
+  const [stop, setStop] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [output, setOutput] = useState('');
+  const [err, setErr] = useState<{ text: string; hint?: string } | null>(null);
+  useEffect(() => { setDeployment(''); setOutput(''); setErr(null); }, [acct]);
+  if (!active) return null;
+
+  const run = async () => {
+    if (!deployment || !prompt.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/foundry/completions', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deployment, prompt, maxTokens, temperature, topP, stop: stop.split(',').map((x) => x.trim()).filter(Boolean), ...acctBody(acct) }) });
+      const j = await r.json();
+      if (!j.ok) { setErr({ text: j.error, hint: j.hint }); return; }
+      setOutput(j.result?.text || '(empty)');
+    } catch (e: any) { setErr({ text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><TextField24Regular /><Subtitle2>Completions</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={() => true}
+          gate={{ title: 'No model deployed', msg: 'No model is deployed on this account.', hint: 'Open the Model catalog tab and deploy a completions-capable model (e.g. gpt-35-turbo-instruct).' }} />
+        <div className={s.sliderRow}>
+          <div className={s.sliderHead}><Label>Temperature</Label><Caption1>{temperature.toFixed(2)}</Caption1></div>
+          <Slider min={0} max={2} step={0.01} value={temperature} onChange={(_, d) => setTemperature(d.value)} />
+        </div>
+        <Field label="Max tokens"><Input type="number" value={String(maxTokens)} onChange={(_, d) => setMaxTokens(Number(d.value) || 0)} /></Field>
+        <div className={s.sliderRow}>
+          <div className={s.sliderHead}><Label>Top P</Label><Caption1>{topP.toFixed(2)}</Caption1></div>
+          <Slider min={0} max={1} step={0.01} value={topP} onChange={(_, d) => setTopP(d.value)} />
+        </div>
+        <Field label="Stop sequences (comma-separated)"><Input value={stop} onChange={(_, d) => setStop(d.value)} /></Field>
+        <Button appearance="primary" icon={<Send24Filled />} disabled={!deployment || !prompt.trim() || busy} onClick={run}>{busy ? 'Running…' : 'Complete'}</Button>
+      </div>
+      <div className={s.main}>
+        <Field label="Prompt"><Textarea value={prompt} onChange={(_, d) => setPrompt(d.value)} rows={6} placeholder="Once upon a time" resize="vertical" /></Field>
+        {err && <GateBar title="Completion failed" msg={err.text} hint={err.hint} intent="error" />}
+        {busy && <Spinner size="small" label="Calling the model…" labelPosition="after" />}
+        <Field label="Completion"><Textarea value={output} readOnly rows={10} placeholder="Output appears here." resize="vertical" /></Field>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Reasoning (o-series) playground
+
+interface ReasoningMsg { role: 'user' | 'assistant'; content: string; error?: boolean }
+
+export function ReasoningPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium');
+  const [maxCompletionTokens, setMaxCompletionTokens] = useState(2000);
+  const [thread, setThread] = useState<ReasoningMsg[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setDeployment(''); setThread([]); }, [acct]);
+  if (!active) return null;
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || !deployment || busy) return;
+    setInput('');
+    const next: ReasoningMsg[] = [...thread, { role: 'user', content: text }];
+    setThread(next); setBusy(true);
+    try {
+      const r = await fetch('/api/foundry/reasoning', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deployment, messages: next.map((m) => ({ role: m.role, content: m.content })), reasoningEffort: effort, maxCompletionTokens, ...acctBody(acct) }) });
+      const j = await r.json();
+      if (!j.ok) setThread([...next, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
+      else setThread([...next, { role: 'assistant', content: j.result?.content || '(empty response)' }]);
+    } catch (e: any) { setThread([...next, { role: 'assistant', content: e?.message || String(e), error: true }]); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><BrainCircuit24Regular /><Subtitle2>Reasoning (o-series)</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /o1|o3|o4/i.test(mname(d))}
+          gate={{ title: 'No reasoning model deployed', msg: 'No o-series reasoning model is deployed on this account.', hint: 'Open the Model catalog tab, deploy o1, o3, o4-mini or o1-mini, then return here.' }} />
+        <Field label="Reasoning effort">
+          <Dropdown value={effort} selectedOptions={[effort]} onOptionSelect={(_, d) => d.optionValue && setEffort(d.optionValue as any)}>
+            {['low', 'medium', 'high'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Max completion tokens"><Input type="number" value={String(maxCompletionTokens)} onChange={(_, d) => setMaxCompletionTokens(Number(d.value) || 0)} /></Field>
+        <Caption1>o-series models reason internally; temperature is ignored. Effort trades latency for depth.</Caption1>
+      </div>
+      <div className={s.main}>
+        <Subtitle2>Conversation</Subtitle2>
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+          {thread.length === 0 && <Caption1>Ask a reasoning-heavy question (math, code, multi-step logic).</Caption1>}
+          {thread.map((m, i) => (
+            <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%', padding: '10px 14px', borderRadius: 10, whiteSpace: 'pre-wrap',
+              background: m.role === 'user' ? tokens.colorBrandBackground2 : tokens.colorNeutralBackground3, color: m.error ? tokens.colorPaletteRedForeground1 : undefined }}>
+              {m.content}
+            </div>
+          ))}
+          {busy && <Spinner size="tiny" label="Reasoning…" labelPosition="after" />}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <Textarea style={{ flex: 1 }} value={input} onChange={(_, d) => setInput(d.value)} rows={2} resize="none"
+            placeholder={deployment ? `Message ${deployment}…` : 'Deploy an o-series model to chat'} disabled={!deployment || busy}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+          <Button appearance="primary" icon={<Send24Filled />} disabled={!deployment || !input.trim() || busy} onClick={send}>Send</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Real-time Audio playground (honest gate + code)
+
+export function RealtimeAudioPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  useEffect(() => { setDeployment(''); }, [acct]);
+  if (!active) return null;
+  const ep = acct?.endpoint?.replace(/^https?:\/\//, '').replace(/\/$/, '') || '<your-account>.openai.azure.com';
+  const snippet = `// Browser WebSocket to the gpt-realtime model
+const url = "wss://${ep}/openai/realtime" +
+  "?api-version=2024-10-01-preview&deployment=${deployment || '<deployment>'}";
+const ws = new WebSocket(url, ["realtime", "openai-insecure-api-key.<token>"]);
+ws.onopen = () => ws.send(JSON.stringify({ type: "response.create" }));
+ws.onmessage = (e) => console.log(JSON.parse(e.data));`;
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><Mic24Regular /><Subtitle2>Real-time Audio</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /realtime/i.test(mname(d))}
+          gate={{ title: 'No gpt-realtime model deployed', msg: 'No gpt-realtime model is deployed on this account.', hint: 'Open the Model catalog tab, deploy a gpt-realtime model, then return here.' }} />
+        <Button appearance="primary" onClick={() => window.open('https://ai.azure.com/resource/playground/audio', '_blank', 'noopener,noreferrer')}>Open Audio playground in Foundry</Button>
+      </div>
+      <div className={s.main}>
+        <GateBar title="Real-time voice runs over WebSocket" intent="info"
+          msg="The Real-time Audio playground needs a live WebSocket to the gpt-realtime model. Loom's BFF does not proxy WebSocket streams, so the live voice session opens in the Foundry Audio playground."
+          hint="Manage your gpt-realtime deployment here; use the connection snippet below to wire real-time voice into your own app." />
+        <Subtitle2>Connection snippet</Subtitle2>
+        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{snippet}</pre>
+        <Button size="small" onClick={() => navigator.clipboard?.writeText(snippet)}>Copy snippet</Button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================ Assistants playground
+
+export function AssistantsPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
+  const s = usePgStyles();
+  const { deps } = useDeployments(active, nonce, acct);
+  const [deployment, setDeployment] = useState('');
+  const [name, setName] = useState('My assistant');
+  const [instructions, setInstructions] = useState('You are a helpful assistant.');
+  const [codeInterpreter, setCodeInterpreter] = useState(false);
+  const [fileSearch, setFileSearch] = useState(false);
+  const [thread, setThread] = useState<{ role: 'user' | 'assistant'; content: string; error?: boolean }[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [assistantId, setAssistantId] = useState('');
+  const [threadId, setThreadId] = useState('');
+  const [err, setErr] = useState<{ text: string; hint?: string } | null>(null);
+  useEffect(() => { setDeployment(''); setAssistantId(''); setThreadId(''); setThread([]); setErr(null); }, [acct]);
+  if (!active) return null;
+
+  const ensureAssistant = async (): Promise<{ assistantId: string; threadId: string } | null> => {
+    if (assistantId && threadId) return { assistantId, threadId };
+    const tools: string[] = [];
+    if (codeInterpreter) tools.push('code_interpreter');
+    if (fileSearch) tools.push('file_search');
+    const r = await fetch('/api/foundry/assistants', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deployment, name, instructions, tools, ...acctBody(acct) }) });
+    const j = await r.json();
+    if (!j.ok) { setErr({ text: j.error, hint: j.hint }); return null; }
+    setAssistantId(j.assistantId); setThreadId(j.threadId);
+    return { assistantId: j.assistantId, threadId: j.threadId };
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || !deployment || busy) return;
+    setBusy(true); setErr(null);
+    const ids = await ensureAssistant();
+    if (!ids) { setBusy(false); return; }
+    setInput('');
+    const next = [...thread, { role: 'user' as const, content: text }];
+    setThread(next);
+    try {
+      const r = await fetch('/api/foundry/assistants/run', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assistantId: ids.assistantId, threadId: ids.threadId, message: text, ...acctBody(acct) }) });
+      const j = await r.json();
+      if (!j.ok) setThread([...next, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
+      else setThread([...next, { role: 'assistant', content: j.reply || '(no reply)' }]);
+    } catch (e: any) { setThread([...next, { role: 'assistant', content: e?.message || String(e), error: true }]); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={s.root}>
+      <div className={s.left}>
+        <div className={s.head}><Bot24Regular /><Subtitle2>Assistants</Subtitle2></div>
+        <DeploymentSelect deps={deps} value={deployment} onChange={setDeployment}
+          filter={(d) => /gpt|o[134]/i.test(mname(d)) && !/embed|whisper|dall|tts|image/i.test(mname(d))}
+          gate={{ title: 'No assistant-capable model deployed', msg: 'No chat model is deployed for the Assistants API.', hint: 'Open the Model catalog tab and deploy a gpt-4o / gpt-4o-mini model.' }} />
+        <Field label="Name"><Input value={name} onChange={(_, d) => setName(d.value)} disabled={!!assistantId} /></Field>
+        <Field label="Instructions"><Textarea value={instructions} onChange={(_, d) => setInstructions(d.value)} rows={4} resize="vertical" disabled={!!assistantId} /></Field>
+        <Body1Strong>Tools</Body1Strong>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={codeInterpreter} disabled={!!assistantId} onChange={(e) => setCodeInterpreter(e.target.checked)} /><Caption1>Code interpreter</Caption1></label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={fileSearch} disabled={!!assistantId} onChange={(e) => setFileSearch(e.target.checked)} /><Caption1>File search</Caption1></label>
+        </div>
+        {assistantId && <Badge appearance="tint" color="brand">Assistant + thread created</Badge>}
+      </div>
+      <div className={s.main}>
+        <Subtitle2>Thread</Subtitle2>
+        {err && <GateBar title="Assistant error" msg={err.text} hint={err.hint} intent="error" />}
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+          {thread.length === 0 && <Caption1>Send a message to create the assistant + thread and run it.</Caption1>}
+          {thread.map((m, i) => (
+            <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%', padding: '10px 14px', borderRadius: 10, whiteSpace: 'pre-wrap',
+              background: m.role === 'user' ? tokens.colorBrandBackground2 : tokens.colorNeutralBackground3, color: m.error ? tokens.colorPaletteRedForeground1 : undefined }}>
+              {m.content}
+            </div>
+          ))}
+          {busy && <Spinner size="tiny" label="Running…" labelPosition="after" />}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <Textarea style={{ flex: 1 }} value={input} onChange={(_, d) => setInput(d.value)} rows={2} resize="none"
+            placeholder={deployment ? 'Message the assistant…' : 'Deploy a chat model first'} disabled={!deployment || busy}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+          <Button appearance="primary" icon={<Send24Filled />} disabled={!deployment || !input.trim() || busy} onClick={send}>Send</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================ Playgrounds landing
 
 const useLandingStyles = makeStyles({
@@ -688,19 +1211,24 @@ const useLandingStyles = makeStyles({
   tileHead: { display: 'flex', alignItems: 'center', gap: 10 },
 });
 
-export function PlaygroundsLandingPanel({ active, onOpenChat }: { active: boolean; onOpenChat: () => void }) {
+export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenPlayground }: { active: boolean; onOpenChat: () => void; onOpenPlayground?: (key: string) => void }) {
   const s = useLandingStyles();
   if (!active) return null;
-  const tiles = [
-    { key: 'chat', icon: <ChatMultiple24Regular />, title: 'Chat playground', desc: 'Test a deployed chat model with system prompt, parameters and conversation history.', action: <Button appearance="primary" onClick={onOpenChat}>Open chat</Button> },
-    { key: 'images', icon: <Image24Regular />, title: 'Images playground', desc: 'Generate images from prompts. Requires a DALL·E / image model deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/images', '_blank', 'noopener,noreferrer')}>Deploy an image model first</Button> },
-    { key: 'audio', icon: <MicRecord24Regular />, title: 'Audio playground', desc: 'Transcribe or translate audio. Requires a Whisper / audio model deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/audio', '_blank', 'noopener,noreferrer')}>Deploy an audio model first</Button> },
-    { key: 'speech', icon: <Speaker224Regular />, title: 'Speech playground', desc: 'Text-to-speech and speech-to-text. Requires a Speech / TTS deployment.', action: <Button onClick={() => window.open('https://ai.azure.com/resource/playground/speech', '_blank', 'noopener,noreferrer')}>Deploy a speech model first</Button> },
+  const open = (key: string) => () => onOpenPlayground?.(key);
+  const tiles: { key: string; icon: React.ReactNode; title: string; desc: string; action: React.ReactNode }[] = [
+    { key: 'chat', icon: <ChatMultiple24Regular />, title: 'Chat playground', desc: 'Test a deployed chat model with system prompt, parameters and conversation history.', action: <Button appearance="primary" onClick={onOpenChat}>Open</Button> },
+    { key: 'images', icon: <Image24Regular />, title: 'Images playground', desc: 'Generate images from prompts against a deployed DALL-E / gpt-image model.', action: <Button appearance="primary" onClick={open('images')}>Open</Button> },
+    { key: 'audio', icon: <MicRecord24Regular />, title: 'Audio playground', desc: 'Transcribe audio with a deployed Whisper model.', action: <Button appearance="primary" onClick={open('audio')}>Open</Button> },
+    { key: 'speech', icon: <Speaker224Regular />, title: 'Speech playground', desc: 'Text-to-speech with a deployed TTS model — pick a voice, play and download.', action: <Button appearance="primary" onClick={open('speech')}>Open</Button> },
+    { key: 'completions', icon: <TextField24Regular />, title: 'Completions playground', desc: 'Legacy text completions against a deployed model with full parameter control.', action: <Button appearance="primary" onClick={open('completions')}>Open</Button> },
+    { key: 'reasoning', icon: <BrainCircuit24Regular />, title: 'Reasoning playground', desc: 'Chat with an o-series reasoning model using reasoning_effort.', action: <Button appearance="primary" onClick={open('reasoning')}>Open</Button> },
+    { key: 'assistants', icon: <Bot24Regular />, title: 'Assistants playground', desc: 'Create an assistant with tools, start a thread and run it end-to-end.', action: <Button appearance="primary" onClick={open('assistants')}>Open</Button> },
+    { key: 'realtime', icon: <Mic24Regular />, title: 'Real-time Audio', desc: 'Manage your gpt-realtime deployment + get the WebSocket connection snippet.', action: <Button appearance="primary" onClick={open('realtime')}>Open</Button> },
   ];
   return (
     <div className={s.root}>
       <Subtitle1>Playgrounds</Subtitle1>
-      <Caption1>Try your deployed models before wiring them into an app. Chat is fully functional; the others gate on a model of that modality being deployed.</Caption1>
+      <Caption1>Try your deployed models before wiring them into an app. Every playground calls the real Azure OpenAI data-plane and gates honestly when a model of that modality is not deployed.</Caption1>
       <div className={s.grid}>
         {tiles.map((t) => (
           <Card key={t.key} className={s.tile}>
