@@ -89,6 +89,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
 import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
 import { WarehouseAlerts } from './components/warehouse-alerts';
+import { WarehouseAcceleration } from './components/warehouse-acceleration';
 import {
   useWarehouseCopilot,
   WarehouseCopilotActions,
@@ -8863,6 +8864,12 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
   const [secOpen, setSecOpen] = useState(false);
 
+  // Query acceleration dialog — Azure-native parity of Fabric's GPU-accelerated
+  // warehouse. GPU is a Fabric-engine-only capability (honest gate on the
+  // Synapse default); result-set caching is the real Azure-native acceleration
+  // knob (live ALTER DATABASE). Backed by /query-acceleration.
+  const [accelOpen, setAccelOpen] = useState(false);
+
   // Statistics manager (CREATE / UPDATE / DROP STATISTICS) for a selected table.
   const [statsOpen, setStatsOpen] = useState(false);
   const [statsTarget, setStatsTarget] = useState<{ schema: string; table: string } | null>(null);
@@ -9000,6 +9007,12 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             ? `CREATE / UPDATE / DROP STATISTICS on [${statsTarget.schema}].[${statsTarget.table}]`
             : 'Select a table in the explorer first',
         },
+      ]},
+      { label: 'Performance', actions: [
+        // Azure-native parity of Fabric's GPU-accelerated warehouse. GPU is a
+        // Fabric-engine capability surfaced as an honest gate on Synapse;
+        // result-set caching is the real Azure-native acceleration knob.
+        { label: 'Query acceleration', onClick: () => setAccelOpen(true), title: 'GPU acceleration (Fabric-engine, opt-in) and result-set caching (Azure-native) for the warehouse' },
       ]},
       { label: 'Alerts', actions: [
         { label: 'Alerts', onClick: () => setAlertsOpen(true), title: 'Query-result alerts — query + condition + schedule + notification (Azure Monitor scheduled-query rule)' },
@@ -9377,6 +9390,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             />
           )}
           <WarehouseAlerts engine="warehouse" id={id} open={alertsOpen} onOpenChange={setAlertsOpen} />
+          <WarehouseAcceleration id={id} open={accelOpen} onOpenChange={setAccelOpen} />
           <Dialog open={secOpen} onOpenChange={(_, d) => setSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>

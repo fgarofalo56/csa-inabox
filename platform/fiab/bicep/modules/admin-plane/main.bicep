@@ -707,6 +707,9 @@ param loomCopilotBackend string = ''
 @allowed(['synapse-dedicated', 'fabric-warehouse'])
 param loomWarehouseBackend string = 'synapse-dedicated'
 
+@description('Opt-in only: Fabric workspace id that backs the warehouse when loomWarehouseBackend=fabric-warehouse. Required to surface GPU-accelerated query execution; leave empty for the Azure-native Synapse default (result-set caching acceleration).')
+param loomWarehouseFabricWorkspace string = ''
+
 // =====================================================================
 // Azure-native backend selectors (no-fabric-dependency)
 // =====================================================================
@@ -1781,6 +1784,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
+            { name: 'LOOM_WAREHOUSE_FABRIC_WORKSPACE', value: loomWarehouseFabricWorkspace }
             // ----------------------------------------------------------------
             // Azure-native backend selectors (no-fabric-dependency)
             // ----------------------------------------------------------------
