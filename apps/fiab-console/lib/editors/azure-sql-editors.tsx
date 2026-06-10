@@ -28,13 +28,14 @@ import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
-  ArrowSync20Regular, Dismiss20Regular,
+  ArrowSync20Regular, Dismiss20Regular, DocumentSearch20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { FullTextSearchPanel, VectorIndexPanel } from './components/sql-search-management';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -649,7 +650,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const [server, setServer] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER || '');
   const [database, setDatabase] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB || '');
   const dbs = useSqlDatabases(server);
-  const [tab, setTab] = useState<'query' | 'mirroring' | 'replication' | 'sql2025'>('query');
+  const [tab, setTab] = useState<'query' | 'fts' | 'vector' | 'mirroring' | 'replication' | 'sql2025'>('query');
   const [sqlText, setSqlText] = useState<string>(
     `-- Azure SQL database — TDS over AAD MI from the Loom Console BFF.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, @@VERSION AS version;`,
   );
@@ -802,6 +803,10 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
         { label: 'New T-SQL', onClick: newTsql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
       ]},
+      { label: 'Search', actions: [
+        { label: 'Full-text search', onClick: canRun ? () => setTab('fts') : undefined, disabled: !canRun, title: !canRun ? 'pick server + database' : 'Manage full-text catalogs + indexes' },
+        { label: 'Vector indexes', onClick: canRun ? () => setTab('vector') : undefined, disabled: !canRun, title: !canRun ? 'pick server + database' : 'Manage SQL 2025 vector indexes' },
+      ]},
       { label: 'Mirroring', actions: [
         { label: 'Toggle Fabric mirror', onClick: canRun ? toggleMirror : undefined, disabled: !canRun },
       ]},
@@ -939,6 +944,8 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
         <div className={s.pad}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+            <Tab value="fts" icon={<DocumentSearch20Regular />}>Full-text search</Tab>
+            <Tab value="vector" icon={<Sparkle20Regular />}>Vector indexes</Tab>
             <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>
             <Tab value="replication" icon={<Globe20Regular />}>Replication</Tab>
             <Tab value="sql2025" icon={<Sparkle20Regular />}>SQL 2025</Tab>
@@ -961,6 +968,12 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
               <ResultsPanel result={result} loading={loading} />
             </>
+          )}
+          {tab === 'fts' && (
+            <FullTextSearchPanel id={id} server={server} database={database} />
+          )}
+          {tab === 'vector' && (
+            <VectorIndexPanel id={id} server={server} database={database} />
           )}
           {tab === 'mirroring' && (
             <>
