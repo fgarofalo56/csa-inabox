@@ -27,7 +27,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Checkmark16Filled } from '@fluentui/react-icons';
+import { Checkmark16Filled, Info16Regular } from '@fluentui/react-icons';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 
 // SQL-family sources/sinks the wizard supports. Incremental mode requires a
@@ -118,9 +118,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column', gap: '4px',
   },
   cardActive: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
-  cardDisabled: { opacity: 0.5, cursor: 'not-allowed', backgroundColor: tokens.colorNeutralBackgroundDisabled },
-  cardTitle: { fontWeight: 600, fontSize: '13px' },
+  cardDisabled: { opacity: 0.6, cursor: 'not-allowed', backgroundColor: tokens.colorNeutralBackgroundDisabled },
+  cardTitle: { fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' },
   cardDesc: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  cardHint: {
+    fontSize: '11px', marginTop: '2px', display: 'inline-flex', alignItems: 'center', gap: '4px',
+    color: tokens.colorPaletteDarkOrangeForeground1,
+  },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
   body: { display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '54vh', overflowY: 'auto', paddingRight: '4px' },
   summaryLabel: { color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
@@ -289,17 +293,25 @@ export function CopyJobWizard({
                   <div className={styles.cardRow}>
                     {MODES.map((m) => {
                       const disabled = !!m.sqlOnly && !isSqlSource;
+                      const selected = mode === m.kind;
                       return (
                         <div key={m.kind} role="button" tabIndex={disabled ? -1 : 0}
-                          aria-disabled={disabled}
-                          className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''} ${disabled ? styles.cardDisabled : ''}`}
+                          aria-disabled={disabled} aria-pressed={selected}
+                          title={disabled ? 'Requires a SQL-family source — pick one on the Source step.' : undefined}
+                          className={`${styles.card} ${selected ? styles.cardActive : ''} ${disabled ? styles.cardDisabled : ''}`}
                           onClick={() => { if (!disabled) setMode(m.kind); }}
-                          onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) setMode(m.kind); }}>
-                          <span className={styles.cardTitle}>{m.title}</span>
-                          <span className={styles.cardDesc}>
-                            {m.desc}
-                            {disabled ? ' Requires a SQL-family source — pick one on the Source step.' : ''}
+                          onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode(m.kind); } }}>
+                          <span className={styles.cardTitle}>
+                            {m.title}
+                            {m.sqlOnly && <Badge appearance="outline" size="small" color="informative">SQL</Badge>}
                           </span>
+                          <span className={styles.cardDesc}>{m.desc}</span>
+                          {disabled && (
+                            <span className={styles.cardHint}>
+                              <Info16Regular />
+                              Requires a SQL-family source — pick one on the Source step.
+                            </span>
+                          )}
                         </div>
                       );
                     })}
