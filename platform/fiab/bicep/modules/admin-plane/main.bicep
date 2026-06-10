@@ -1684,6 +1684,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
+            // Optional storage connection string for AI Search indexer debug-session
+            // state (ms-az-cognitive-search-debugsession container). Empty by default;
+            // operators set it (or supply per-session in the UI) to enable debug
+            // sessions. The search MSI also needs Storage Blob Data Contributor on
+            // that account (ai-search.bicep debugSessionStorageId). Read by the
+            // /api/ai-search/debug-sessions BFF route.
+            { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: '' }
             // OneLake catalog Explore-tab backend (azure=AI Search/Cosmos default; fabric=opt-in OneLake REST).
             { name: 'LOOM_CATALOG_BACKEND', value: loomCatalogBackend }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.

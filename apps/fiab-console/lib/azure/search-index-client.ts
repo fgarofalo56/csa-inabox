@@ -212,6 +212,17 @@ export {
   isVectorFieldType, fieldRowToApiField, apiFieldToRow, applyFieldRows,
   FIELD_TYPES, ANALYZERS, semanticConfigNames, vectorProfileNames,
   scoringProfileNames, facetableFieldNames,
+  // Indexer schedule designer
+  SCHEDULE_PRESETS, validateScheduleInterval, describeScheduleInterval,
+  // Semantic configuration designer
+  buildSemanticSection, parseSemanticSection, semanticEligibleFieldNames,
+  // Vector search designer
+  VECTOR_METRICS, defaultHnswParameters, buildVectorSearchSection,
+  parseVectorSearchSection, indexHasVectorField,
+} from './search-field-shapes';
+export type {
+  IndexerSchedule, SemanticConfig, SemanticFieldRef,
+  VectorAlgorithm, VectorProfile, VectorMetric,
 } from './search-field-shapes';
 
 /** GET /indexes — list every index on the service (summary form). */
@@ -324,16 +335,54 @@ export async function analyzeText(
 // Indexers / data sources / skillsets
 // ----------------------------------------------------------------------------
 
-/** GET /indexers — list indexers (name, targetIndexName, dataSourceName, schedule). */
-export async function listIndexers(service?: string): Promise<Array<{ name: string; targetIndexName?: string; dataSourceName?: string; skillsetName?: string }>> {
-  const res = await call('/indexers', { service, query: { $select: 'name,targetIndexName,dataSourceName,skillsetName' } });
+/** GET /indexers — list indexers (name, targetIndexName, dataSourceName, schedule, disabled). */
+export async function listIndexers(service?: string): Promise<Array<{ name: string; targetIndexName?: string; dataSourceName?: string; skillsetName?: string; schedule?: { interval: string; startTime?: string } | null; disabled?: boolean }>> {
+  const res = await call('/indexers', { service, query: { $select: 'name,targetIndexName,dataSourceName,skillsetName,schedule,disabled' } });
   const j = await readJsonGuarded(res, 'list indexers');
   return (j?.value || []).map((x: any) => ({
     name: x.name,
     targetIndexName: x.targetIndexName,
     dataSourceName: x.dataSourceName,
     skillsetName: x.skillsetName,
+    schedule: x.schedule ? { interval: x.schedule.interval, startTime: x.schedule.startTime } : null,
+    disabled: !!x.disabled,
   }));
+}
+
+/** GET /indexers/{name} — full indexer definition (incl. schedule + disabled). 404 → null. */
+export async function getIndexer(name: string, service?: string): Promise<any | null> {
+  const res = await call(`/indexers/${encodeURIComponent(name)}`, { service });
+  if (res.status === 404) return null;
+  return readJsonGuarded(res, `get indexer ${name}`);
+}
+
+/**
+ * Update only the schedule (and optional disabled flag) on an existing indexer,
+ * preserving every other property. We GET the current definition, merge the
+ * new schedule, then PUT /indexers/{name}. A null/undefined `schedule` removes
+ * the recurrence (omits the property on the wire). Grounded in Learn:
+ *   https://learn.microsoft.com/azure/search/search-howto-schedule-indexers
+ */
+export async function updateIndexerSchedule(
+  name: string,
+  schedule: { interval: string; startTime?: string } | null,
+  disabled?: boolean,
+  service?: string,
+): Promise<any> {
+  const current = await getIndexer(name, service);
+  if (!current) throw new SearchDataError(404, undefined, `indexer ${name} not found`);
+  const def: any = { ...current };
+  delete def['@odata.context'];
+  delete def['@odata.etag'];
+  if (schedule && schedule.interval) {
+    def.schedule = { interval: schedule.interval, ...(schedule.startTime ? { startTime: schedule.startTime } : {}) };
+  } else {
+    delete def.schedule;
+  }
+  if (typeof disabled === 'boolean') def.disabled = disabled;
+  def.name = name;
+  const res = await call(`/indexers/${encodeURIComponent(name)}`, { service, method: 'PUT', body: def });
+  return readJsonGuarded(res, `update indexer schedule ${name}`);
 }
 
 /** GET /indexers/{name}/status — execution status + last run result. */
@@ -382,7 +431,7 @@ export async function listSkillsets(service?: string): Promise<Array<{ name: str
  * Create Indexer reference, creating also runs it.
  */
 export async function createIndexer(
-  def: { name: string; dataSourceName: string; targetIndexName: string; skillsetName?: string; schedule?: any; parameters?: any },
+  def: { name: string; dataSourceName: string; targetIndexName: string; skillsetName?: string; schedule?: any; disabled?: boolean; parameters?: any },
   service?: string,
 ): Promise<any> {
   if (!def?.name) throw new SearchDataError(400, def, 'create indexer requires name');

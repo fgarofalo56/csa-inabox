@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer, getIndexerStatus,
+  getIndexer, updateIndexerSchedule, validateScheduleInterval,
   SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 import {
@@ -63,10 +64,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
-  if (!['run', 'reset', 'status'].includes(action)) {
-    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset' or 'status'" }, { status: 400 });
+  if (!['run', 'reset', 'status', 'get', 'setSchedule'].includes(action)) {
+    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'status', 'get' or 'setSchedule'" }, { status: 400 });
   }
   if (!indexer) return NextResponse.json({ ok: false, error: 'indexer name is required' }, { status: 400 });
+  // Validate schedule interval up front (before resolving the binding).
+  if (action === 'setSchedule' && body?.schedule && body.schedule.interval) {
+    const err = validateScheduleInterval(String(body.schedule.interval));
+    if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
+  }
   let service: string | undefined;
   try {
     ({ service } = await resolveSearchBinding(id, SEARCH_ITEM_TYPE, session.claims.oid));
@@ -77,6 +83,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     if (action === 'run') { await runIndexer(indexer, service); return NextResponse.json({ ok: true, action: 'run', indexer }); }
     if (action === 'reset') { await resetIndexer(indexer, service); return NextResponse.json({ ok: true, action: 'reset', indexer }); }
+    if (action === 'get') {
+      const def = await getIndexer(indexer, service);
+      if (!def) return NextResponse.json({ ok: false, error: `indexer ${indexer} not found` }, { status: 404 });
+      return NextResponse.json({ ok: true, action: 'get', indexer, definition: def });
+    }
+    if (action === 'setSchedule') {
+      const sched = body?.schedule ?? null;
+      const disabled = typeof body?.disabled === 'boolean' ? body.disabled : undefined;
+      const def = await updateIndexerSchedule(
+        indexer,
+        sched && sched.interval ? { interval: String(sched.interval).toUpperCase(), startTime: sched.startTime || undefined } : null,
+        disabled,
+        service,
+      );
+      return NextResponse.json({ ok: true, action: 'setSchedule', indexer, definition: def });
+    }
     const status = await getIndexerStatus(indexer, service);
     return NextResponse.json({ ok: true, action: 'status', indexer, status });
   } catch (e: any) { return gateOr(e); }

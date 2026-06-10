@@ -237,6 +237,42 @@ describe('indexers / datasources / skillsets', () => {
     expect(out).toEqual({ ok: true });
   });
 
+  it('getIndexer GETs /indexers/{name} and returns the definition; 404 → null', async () => {
+    const calls = captureFetch((url) => url.includes('/indexers/missing')
+      ? ({ status: 404, text: '' })
+      : ({ body: { name: 'ix', schedule: { interval: 'PT1H' }, dataSourceName: 'ds' } }));
+    const { getIndexer } = await import('../search-index-client');
+    const out = await getIndexer('ix');
+    expect(calls[0].url).toMatch(/\/indexers\/ix\?api-version=/);
+    expect(out).toMatchObject({ name: 'ix', schedule: { interval: 'PT1H' } });
+    expect(await getIndexer('missing')).toBeNull();
+  });
+
+  it('updateIndexerSchedule GETs then PUTs the merged definition with the new schedule', async () => {
+    const calls = captureFetch((url, init) => init?.method === 'PUT'
+      ? ({ body: { name: 'ix', schedule: { interval: 'PT2H' } } })
+      : ({ body: { name: 'ix', dataSourceName: 'ds', targetIndexName: 'idx', '@odata.etag': 'x' } }));
+    const { updateIndexerSchedule } = await import('../search-index-client');
+    await updateIndexerSchedule('ix', { interval: 'PT2H', startTime: '2026-01-01T00:00:00Z' }, false);
+    const put = calls.find((c) => c.init?.method === 'PUT')!;
+    expect(put.url).toMatch(/\/indexers\/ix\?api-version=/);
+    const body = JSON.parse(String(put.init?.body));
+    expect(body.schedule).toEqual({ interval: 'PT2H', startTime: '2026-01-01T00:00:00Z' });
+    expect(body.disabled).toBe(false);
+    expect(body.dataSourceName).toBe('ds'); // preserved
+    expect(body['@odata.etag']).toBeUndefined(); // stripped
+  });
+
+  it('updateIndexerSchedule with null schedule removes the recurrence', async () => {
+    const calls = captureFetch((url, init) => init?.method === 'PUT'
+      ? ({ body: { name: 'ix' } })
+      : ({ body: { name: 'ix', dataSourceName: 'ds', schedule: { interval: 'PT1H' } } }));
+    const { updateIndexerSchedule } = await import('../search-index-client');
+    await updateIndexerSchedule('ix', null);
+    const put = calls.find((c) => c.init?.method === 'PUT')!;
+    expect(JSON.parse(String(put.init?.body)).schedule).toBeUndefined();
+  });
+
   it('listDataSources + listSkillsets GET their endpoints', async () => {
     const calls = captureFetch((url) =>
       url.includes('/datasources')

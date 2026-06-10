@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer, getIndexerStatus,
+  getIndexer, updateIndexerSchedule, validateScheduleInterval,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 
@@ -46,16 +47,36 @@ export async function POST(req: NextRequest) {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
 
-  // lifecycle actions
+  // lifecycle + schedule actions
   if (body?.action) {
     const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
     if (!indexer) return NextResponse.json({ ok: false, error: 'indexer name required' }, { status: 400 });
-    if (!['run', 'reset', 'status'].includes(body.action)) {
-      return NextResponse.json({ ok: false, error: "action must be 'run', 'reset' or 'status'" }, { status: 400 });
+    if (!['run', 'reset', 'status', 'get', 'setSchedule'].includes(body.action)) {
+      return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'status', 'get' or 'setSchedule'" }, { status: 400 });
     }
     try {
       if (body.action === 'run') { await runIndexer(indexer); return NextResponse.json({ ok: true, action: 'run', indexer }); }
       if (body.action === 'reset') { await resetIndexer(indexer); return NextResponse.json({ ok: true, action: 'reset', indexer }); }
+      if (body.action === 'get') {
+        const def = await getIndexer(indexer);
+        if (!def) return NextResponse.json({ ok: false, error: `indexer ${indexer} not found` }, { status: 404 });
+        return NextResponse.json({ ok: true, action: 'get', indexer, definition: def });
+      }
+      if (body.action === 'setSchedule') {
+        // schedule:null → remove recurrence; schedule:{interval,startTime} → set it.
+        const sched = body?.schedule ?? null;
+        if (sched && sched.interval) {
+          const err = validateScheduleInterval(String(sched.interval));
+          if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
+        }
+        const disabled = typeof body?.disabled === 'boolean' ? body.disabled : undefined;
+        const def = await updateIndexerSchedule(
+          indexer,
+          sched && sched.interval ? { interval: String(sched.interval).toUpperCase(), startTime: sched.startTime || undefined } : null,
+          disabled,
+        );
+        return NextResponse.json({ ok: true, action: 'setSchedule', indexer, definition: def });
+      }
       const status = await getIndexerStatus(indexer);
       return NextResponse.json({ ok: true, action: 'status', indexer, status });
     } catch (e: any) { return fail(e); }
@@ -68,10 +89,19 @@ export async function POST(req: NextRequest) {
   if (!name || !dataSourceName || !targetIndexName) {
     return NextResponse.json({ ok: false, error: 'name, dataSourceName and targetIndexName are required' }, { status: 400 });
   }
+  // Optional schedule on create — validate the interval up front.
+  let schedule: { interval: string; startTime?: string } | undefined;
+  if (body?.schedule && body.schedule.interval) {
+    const err = validateScheduleInterval(String(body.schedule.interval));
+    if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
+    schedule = { interval: String(body.schedule.interval).toUpperCase(), startTime: body.schedule.startTime || undefined };
+  }
   try {
     const indexer = await createIndexer({
       name, dataSourceName, targetIndexName,
       ...(body?.skillsetName ? { skillsetName: String(body.skillsetName).trim() } : {}),
+      ...(schedule ? { schedule } : {}),
+      ...(typeof body?.disabled === 'boolean' ? { disabled: body.disabled } : {}),
     });
     return NextResponse.json({ ok: true, indexer });
   } catch (e: any) { return fail(e); }

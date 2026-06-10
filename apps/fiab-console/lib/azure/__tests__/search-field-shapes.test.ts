@@ -28,7 +28,19 @@ import {
   vectorProfileNames,
   scoringProfileNames,
   facetableFieldNames,
+  validateScheduleInterval,
+  describeScheduleInterval,
+  buildSemanticSection,
+  parseSemanticSection,
+  semanticEligibleFieldNames,
+  buildVectorSearchSection,
+  parseVectorSearchSection,
+  indexHasVectorField,
+  defaultHnswParameters,
   type FieldRow,
+  type SemanticConfig,
+  type VectorAlgorithm,
+  type VectorProfile,
 } from '../search-field-shapes';
 
 describe('buildSearchBody — Search Explorer query options', () => {
@@ -273,5 +285,99 @@ describe('semanticConfigNames / vectorProfileNames — picker sources', () => {
     };
     expect(facetableFieldNames(index)).toEqual(['category', 'rating']);
     expect(facetableFieldNames({})).toEqual([]);
+  });
+});
+
+describe('validateScheduleInterval — indexer schedule designer', () => {
+  it('accepts valid ISO-8601 durations within 5min..24h', () => {
+    expect(validateScheduleInterval('PT5M')).toBeNull();
+    expect(validateScheduleInterval('PT30M')).toBeNull();
+    expect(validateScheduleInterval('PT2H')).toBeNull();
+    expect(validateScheduleInterval('P1D')).toBeNull();
+    expect(validateScheduleInterval('pt1h')).toBeNull(); // case-insensitive
+  });
+  it('rejects sub-5-minute intervals', () => {
+    expect(validateScheduleInterval('PT4M')).toMatch(/5 minutes/);
+  });
+  it('rejects intervals longer than 24 hours', () => {
+    expect(validateScheduleInterval('P2D')).toMatch(/24 hours/);
+    expect(validateScheduleInterval('PT25H')).toMatch(/24 hours/);
+  });
+  it('rejects empty or malformed durations', () => {
+    expect(validateScheduleInterval('')).toMatch(/required/);
+    expect(validateScheduleInterval('2 hours')).toMatch(/ISO-8601/);
+    expect(validateScheduleInterval('P')).toMatch(/ISO-8601/);
+  });
+  it('describeScheduleInterval maps presets and echoes custom intervals', () => {
+    expect(describeScheduleInterval('PT1H')).toBe('Hourly');
+    expect(describeScheduleInterval('P1D')).toBe('Daily');
+    expect(describeScheduleInterval('PT45M')).toBe('PT45M');
+    expect(describeScheduleInterval(undefined)).toBe('—');
+  });
+});
+
+describe('buildSemanticSection / parseSemanticSection — semantic designer', () => {
+  it('builds index.semantic.configurations from designer configs, dropping empties', () => {
+    const configs: SemanticConfig[] = [{
+      name: 'sc1',
+      prioritizedFields: {
+        titleField: { fieldName: 'title' },
+        prioritizedContentFields: [{ fieldName: 'content' }, { fieldName: '' as any }],
+        prioritizedKeywordsFields: [{ fieldName: 'tags' }],
+      },
+    }];
+    const out = buildSemanticSection(configs);
+    expect(out.configurations).toHaveLength(1);
+    expect(out.configurations[0].name).toBe('sc1');
+    expect(out.configurations[0].prioritizedFields.titleField).toEqual({ fieldName: 'title' });
+    expect(out.configurations[0].prioritizedFields.prioritizedContentFields).toEqual([{ fieldName: 'content' }]);
+    expect(out.configurations[0].prioritizedFields.prioritizedKeywordsFields).toEqual([{ fieldName: 'tags' }]);
+  });
+  it('round-trips through parseSemanticSection', () => {
+    const idx = { semantic: { configurations: [{ name: 'a', prioritizedFields: { titleField: { fieldName: 't' }, prioritizedContentFields: [{ fieldName: 'c' }], prioritizedKeywordsFields: [] } }] } };
+    const parsed = parseSemanticSection(idx);
+    expect(parsed[0].name).toBe('a');
+    expect(parsed[0].prioritizedFields.titleField).toEqual({ fieldName: 't' });
+    expect(parsed[0].prioritizedFields.prioritizedContentFields).toEqual([{ fieldName: 'c' }]);
+    expect(parseSemanticSection({})).toEqual([]);
+  });
+  it('semanticEligibleFieldNames lists only searchable string fields', () => {
+    const idx = { fields: [
+      { name: 'id', type: 'Edm.String', key: true },
+      { name: 'title', type: 'Edm.String', searchable: true },
+      { name: 'vec', type: 'Collection(Edm.Single)', searchable: true },
+      { name: 'count', type: 'Edm.Int32', searchable: false },
+    ] };
+    expect(semanticEligibleFieldNames(idx)).toEqual(['title']);
+  });
+});
+
+describe('buildVectorSearchSection / parseVectorSearchSection — vector designer', () => {
+  it('emits hnsw parameters with defaults and binds profiles to algorithms', () => {
+    const algos: VectorAlgorithm[] = [{ name: 'hnsw-1', kind: 'hnsw', hnswParameters: { m: 8, metric: 'dotProduct' } }];
+    const profiles: VectorProfile[] = [{ name: 'p1', algorithm: 'hnsw-1' }];
+    const out = buildVectorSearchSection(algos, profiles);
+    expect(out.algorithms[0]).toEqual({ name: 'hnsw-1', kind: 'hnsw', hnswParameters: { m: 8, efConstruction: 400, efSearch: 500, metric: 'dotProduct' } });
+    expect(out.profiles[0]).toEqual({ name: 'p1', algorithm: 'hnsw-1' });
+  });
+  it('emits exhaustiveKnn parameters (metric only)', () => {
+    const out = buildVectorSearchSection([{ name: 'ek', kind: 'exhaustiveKnn', exhaustiveKnnParameters: { metric: 'euclidean' } }], []);
+    expect(out.algorithms[0]).toEqual({ name: 'ek', kind: 'exhaustiveKnn', exhaustiveKnnParameters: { metric: 'euclidean' } });
+  });
+  it('drops profiles missing a name or algorithm', () => {
+    const out = buildVectorSearchSection([{ name: 'a', kind: 'hnsw', hnswParameters: defaultHnswParameters() }], [{ name: '', algorithm: 'a' }, { name: 'p', algorithm: '' }]);
+    expect(out.profiles).toEqual([]);
+  });
+  it('round-trips through parseVectorSearchSection', () => {
+    const idx = { vectorSearch: { algorithms: [{ name: 'h', kind: 'hnsw', hnswParameters: { m: 4, efConstruction: 400, efSearch: 500, metric: 'cosine' } }], profiles: [{ name: 'p', algorithm: 'h' }] } };
+    const parsed = parseVectorSearchSection(idx);
+    expect(parsed.algorithms[0].kind).toBe('hnsw');
+    expect(parsed.algorithms[0].hnswParameters?.m).toBe(4);
+    expect(parsed.profiles[0]).toEqual({ name: 'p', algorithm: 'h', vectorizer: undefined });
+  });
+  it('indexHasVectorField gates the vector designer', () => {
+    expect(indexHasVectorField({ fields: [{ name: 'v', type: 'Collection(Edm.Single)' }] })).toBe(true);
+    expect(indexHasVectorField({ fields: [{ name: 's', type: 'Edm.String' }] })).toBe(false);
+    expect(indexHasVectorField({})).toBe(false);
   });
 });

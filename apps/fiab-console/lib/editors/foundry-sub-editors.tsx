@@ -34,8 +34,13 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import {
   type FieldRow, type VectorQuery,
+  type SemanticConfig, type VectorAlgorithm, type VectorProfile, type VectorMetric,
   FIELD_TYPES, ANALYZERS, isVectorFieldType, apiFieldToRow, applyFieldRows,
   semanticConfigNames, vectorProfileNames, scoringProfileNames, facetableFieldNames,
+  SCHEDULE_PRESETS, validateScheduleInterval, describeScheduleInterval,
+  buildSemanticSection, parseSemanticSection, semanticEligibleFieldNames,
+  VECTOR_METRICS, defaultHnswParameters, buildVectorSearchSection,
+  parseVectorSearchSection, indexHasVectorField,
 } from '@/lib/azure/search-field-shapes';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
@@ -880,6 +885,368 @@ function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }
   );
 }
 
+/**
+ * PUT a patched index definition (merge `patch` onto `idx`) via the index route
+ * the editor uses (navigator by-name OR item route). Returns the parsed JSON.
+ */
+async function putIndexDefinition(indexBase: string, definition: any): Promise<any> {
+  const r = await fetch(indexBase, {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
+  });
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
+}
+
+/**
+ * Semantic configuration designer — the visual builder for
+ * index.semantic.configurations[]. Each config prioritizes a title field, up to
+ * 3 content fields, and up to 5 keyword fields (constrained to searchable string
+ * fields). Save issues a real PUT /indexes/{name} merging the section onto the
+ * live definition. Parity with the portal's "Semantic configurations" pane.
+ */
+function SemanticConfigDesigner({
+  idx, indexBase, onSaved,
+}: { idx: any; indexBase: string; onSaved: () => void }) {
+  const s = useStyles();
+  const eligible = useMemo(() => semanticEligibleFieldNames(idx), [idx]);
+  const [configs, setConfigs] = useState<SemanticConfig[]>(() => parseSemanticSection(idx));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Re-sync when the underlying index reloads.
+  useEffect(() => { setConfigs(parseSemanticSection(idx)); setDirty(false); setMsg(null); }, [idx]);
+
+  const patch = (i: number, next: SemanticConfig) => {
+    setConfigs((cs) => cs.map((c, n) => (n === i ? next : c))); setDirty(true);
+  };
+  const addConfig = () => {
+    setConfigs((cs) => [...cs, { name: `semantic-config-${cs.length + 1}`, prioritizedFields: { prioritizedContentFields: [], prioritizedKeywordsFields: [] } }]);
+    setDirty(true);
+  };
+  const removeConfig = (i: number) => { setConfigs((cs) => cs.filter((_, n) => n !== i)); setDirty(true); };
+
+  const setContentField = (ci: number, slot: number, val: string) => {
+    const c = configs[ci];
+    const arr = [...(c.prioritizedFields.prioritizedContentFields || [])];
+    if (val) arr[slot] = { fieldName: val }; else arr.splice(slot, 1);
+    patch(ci, { ...c, prioritizedFields: { ...c.prioritizedFields, prioritizedContentFields: arr.filter((x) => x?.fieldName) } });
+  };
+  const setKeywordField = (ci: number, slot: number, val: string) => {
+    const c = configs[ci];
+    const arr = [...(c.prioritizedFields.prioritizedKeywordsFields || [])];
+    if (val) arr[slot] = { fieldName: val }; else arr.splice(slot, 1);
+    patch(ci, { ...c, prioritizedFields: { ...c.prioritizedFields, prioritizedKeywordsFields: arr.filter((x) => x?.fieldName) } });
+  };
+
+  const save = async () => {
+    if (configs.some((c) => !c.name.trim())) { setMsg({ intent: 'error', text: 'Every semantic configuration needs a name.' }); return; }
+    setSaving(true); setMsg(null);
+    const definition = { ...idx, semantic: buildSemanticSection(configs) };
+    const j = await putIndexDefinition(indexBase, definition);
+    setSaving(false);
+    if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Save failed' });
+    else { setMsg({ intent: 'success', text: 'Semantic configurations saved (PUT /indexes).' }); setDirty(false); onSaved(); }
+  };
+
+  const contentPicker = (ci: number, slot: number, value: string) => (
+    <Dropdown size="small" value={value} selectedOptions={value ? [value] : []} placeholder="(none)" aria-label={`semantic-${ci}-content-${slot}`}
+      onOptionSelect={(_, d) => setContentField(ci, slot, d.optionValue || '')}>
+      <Option value="">(none)</Option>
+      {eligible.map((f) => (<Option key={f} value={f}>{f}</Option>))}
+    </Dropdown>
+  );
+  const keywordPicker = (ci: number, slot: number, value: string) => (
+    <Dropdown size="small" value={value} selectedOptions={value ? [value] : []} placeholder="(none)" aria-label={`semantic-${ci}-keyword-${slot}`}
+      onOptionSelect={(_, d) => setKeywordField(ci, slot, d.optionValue || '')}>
+      <Option value="">(none)</Option>
+      {eligible.map((f) => (<Option key={f} value={f}>{f}</Option>))}
+    </Dropdown>
+  );
+
+  return (
+    <div className={s.card}>
+      <div className={s.toolbar}>
+        <Subtitle2>Semantic configurations ({configs.length})</Subtitle2>
+        <Button size="small" onClick={addConfig} disabled={!eligible.length}>＋ Add configuration</Button>
+      </div>
+      <Caption1>
+        A semantic configuration ranks results by prioritizing a title, content, and keyword fields for the L2
+        semantic re-ranker. Fields are constrained to searchable <code>Edm.String</code> fields. Save issues a real
+        PUT /indexes/{idx.name}. (The service is provisioned with <code>semanticSearch: standard</code>.)
+      </Caption1>
+      {!eligible.length && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>No searchable string fields</MessageBarTitle>
+          Add at least one searchable <code>Edm.String</code> field in the Fields designer before authoring a semantic configuration.
+        </MessageBarBody></MessageBar>
+      )}
+      {configs.map((c, ci) => (
+        <div key={ci} className={s.card} style={{ marginTop: 8 }}>
+          <div className={s.toolbar}>
+            <Field label="Name" style={{ minWidth: 220 }}>
+              <Input size="small" value={c.name} aria-label={`semantic-${ci}-name`}
+                onChange={(_, d) => patch(ci, { ...c, name: d.value })} placeholder="my-semantic-config" />
+            </Field>
+            <Button size="small" appearance="subtle" onClick={() => removeConfig(ci)} aria-label={`semantic-${ci}-delete`}>Delete</Button>
+          </div>
+          <div className={s.optGrid}>
+            <span>Title field</span>
+            <Dropdown size="small" value={c.prioritizedFields.titleField?.fieldName || ''} selectedOptions={c.prioritizedFields.titleField?.fieldName ? [c.prioritizedFields.titleField.fieldName] : []}
+              placeholder="(none)" aria-label={`semantic-${ci}-title`}
+              onOptionSelect={(_, d) => patch(ci, { ...c, prioritizedFields: { ...c.prioritizedFields, titleField: d.optionValue ? { fieldName: d.optionValue } : undefined } })}>
+              <Option value="">(none)</Option>
+              {eligible.map((f) => (<Option key={f} value={f}>{f}</Option>))}
+            </Dropdown>
+            <span>Content fields (up to 3)</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {[0, 1, 2].map((slot) => contentPicker(ci, slot, c.prioritizedFields.prioritizedContentFields?.[slot]?.fieldName || ''))}
+            </div>
+            <span>Keyword fields (up to 5)</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {[0, 1, 2, 3, 4].map((slot) => keywordPicker(ci, slot, c.prioritizedFields.prioritizedKeywordsFields?.[slot]?.fieldName || ''))}
+            </div>
+          </div>
+        </div>
+      ))}
+      <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save semantic configuration'}</Button>
+        {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
+      </div>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
+/**
+ * Vector search designer — the visual builder for index.vectorSearch
+ * (algorithms[] + profiles[]). Algorithms are hnsw (graph, with m /
+ * efConstruction / efSearch / metric) or exhaustiveKnn (brute force, metric
+ * only). Profiles bind a name to an algorithm. Save issues a real PUT
+ * /indexes/{name}. Parity with the portal's vector-profile authoring.
+ */
+function VectorSearchDesigner({
+  idx, indexBase, onSaved,
+}: { idx: any; indexBase: string; onSaved: () => void }) {
+  const s = useStyles();
+  const parsed = useMemo(() => parseVectorSearchSection(idx), [idx]);
+  const [algorithms, setAlgorithms] = useState<VectorAlgorithm[]>(parsed.algorithms);
+  const [profiles, setProfiles] = useState<VectorProfile[]>(parsed.profiles);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    const p = parseVectorSearchSection(idx);
+    setAlgorithms(p.algorithms); setProfiles(p.profiles); setDirty(false); setMsg(null);
+  }, [idx]);
+
+  const algoNames = useMemo(() => algorithms.map((a) => a.name).filter(Boolean), [algorithms]);
+
+  const patchAlgo = (i: number, patch: Partial<VectorAlgorithm>) => {
+    setAlgorithms((as) => as.map((a, n) => (n === i ? { ...a, ...patch } : a))); setDirty(true);
+  };
+  const patchHnsw = (i: number, patch: Partial<NonNullable<VectorAlgorithm['hnswParameters']>>) => {
+    setAlgorithms((as) => as.map((a, n) => (n === i ? { ...a, hnswParameters: { ...(a.hnswParameters || defaultHnswParameters()), ...patch } } : a))); setDirty(true);
+  };
+  const addAlgo = () => { setAlgorithms((as) => [...as, { name: `hnsw-${as.length + 1}`, kind: 'hnsw', hnswParameters: defaultHnswParameters() }]); setDirty(true); };
+  const removeAlgo = (i: number) => { setAlgorithms((as) => as.filter((_, n) => n !== i)); setDirty(true); };
+
+  const patchProfile = (i: number, patch: Partial<VectorProfile>) => {
+    setProfiles((ps) => ps.map((p, n) => (n === i ? { ...p, ...patch } : p))); setDirty(true);
+  };
+  const addProfile = () => { setProfiles((ps) => [...ps, { name: `profile-${ps.length + 1}`, algorithm: algoNames[0] || '' }]); setDirty(true); };
+  const removeProfile = (i: number) => { setProfiles((ps) => ps.filter((_, n) => n !== i)); setDirty(true); };
+
+  const save = async () => {
+    if (algorithms.some((a) => !a.name.trim())) { setMsg({ intent: 'error', text: 'Every algorithm needs a name.' }); return; }
+    if (profiles.some((p) => !p.name.trim() || !p.algorithm)) { setMsg({ intent: 'error', text: 'Every profile needs a name and an algorithm.' }); return; }
+    setSaving(true); setMsg(null);
+    const definition = { ...idx, vectorSearch: buildVectorSearchSection(algorithms, profiles) };
+    const j = await putIndexDefinition(indexBase, definition);
+    setSaving(false);
+    if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Save failed' });
+    else { setMsg({ intent: 'success', text: 'Vector search config saved (PUT /indexes).' }); setDirty(false); onSaved(); }
+  };
+
+  return (
+    <div className={s.card}>
+      <Subtitle2>Vector search</Subtitle2>
+      <Caption1>
+        Author vector algorithms + profiles that vector fields bind to (a field's <em>Vector profile</em> in the Fields
+        designer must name a profile defined here). <strong>HNSW</strong> is the graph index (fast, approximate);{' '}
+        <strong>exhaustiveKnn</strong> is brute-force (exact, slower). Save issues a real PUT /indexes/{idx.name}.
+      </Caption1>
+
+      {/* Algorithms */}
+      <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <Subtitle2 style={{ fontSize: 13 }}>Algorithms ({algorithms.length})</Subtitle2>
+        <Button size="small" onClick={addAlgo}>＋ Add algorithm</Button>
+      </div>
+      <div className={s.tableWrap}>
+        <Table size="small" aria-label="Vector algorithms">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Kind</TableHeaderCell>
+            <TableHeaderCell>m</TableHeaderCell><TableHeaderCell>efConstruction</TableHeaderCell>
+            <TableHeaderCell>efSearch</TableHeaderCell><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {algorithms.map((a, i) => {
+              const isHnsw = a.kind === 'hnsw';
+              const hp = a.hnswParameters || defaultHnswParameters();
+              const metric = isHnsw ? hp.metric : (a.exhaustiveKnnParameters?.metric || 'cosine');
+              return (
+                <TableRow key={i}>
+                  <TableCell><Input size="small" value={a.name} aria-label={`algo-${i}-name`} onChange={(_, d) => patchAlgo(i, { name: d.value })} className={s.fdInput} /></TableCell>
+                  <TableCell>
+                    <Dropdown size="small" value={a.kind} selectedOptions={[a.kind]} aria-label={`algo-${i}-kind`}
+                      onOptionSelect={(_, d) => {
+                        const kind = (d.optionValue as VectorAlgorithm['kind']) || 'hnsw';
+                        patchAlgo(i, kind === 'hnsw'
+                          ? { kind, hnswParameters: a.hnswParameters || defaultHnswParameters(), exhaustiveKnnParameters: undefined }
+                          : { kind, exhaustiveKnnParameters: { metric: metric as VectorMetric }, hnswParameters: undefined });
+                      }}>
+                      <Option value="hnsw">hnsw</Option>
+                      <Option value="exhaustiveKnn">exhaustiveKnn</Option>
+                    </Dropdown>
+                  </TableCell>
+                  <TableCell>{isHnsw ? <Input size="small" type="number" value={String(hp.m ?? 4)} aria-label={`algo-${i}-m`} className={s.fdNum} onChange={(_, d) => patchHnsw(i, { m: Number(d.value) })} /> : '—'}</TableCell>
+                  <TableCell>{isHnsw ? <Input size="small" type="number" value={String(hp.efConstruction ?? 400)} aria-label={`algo-${i}-efc`} className={s.fdNum} onChange={(_, d) => patchHnsw(i, { efConstruction: Number(d.value) })} /> : '—'}</TableCell>
+                  <TableCell>{isHnsw ? <Input size="small" type="number" value={String(hp.efSearch ?? 500)} aria-label={`algo-${i}-efs`} className={s.fdNum} onChange={(_, d) => patchHnsw(i, { efSearch: Number(d.value) })} /> : '—'}</TableCell>
+                  <TableCell>
+                    <Dropdown size="small" value={metric || 'cosine'} selectedOptions={[metric || 'cosine']} aria-label={`algo-${i}-metric`}
+                      onOptionSelect={(_, d) => {
+                        const mv = (d.optionValue as VectorMetric) || 'cosine';
+                        if (isHnsw) patchHnsw(i, { metric: mv });
+                        else patchAlgo(i, { exhaustiveKnnParameters: { metric: mv } });
+                      }}>
+                      {VECTOR_METRICS.map((m) => (<Option key={m} value={m}>{m}</Option>))}
+                    </Dropdown>
+                  </TableCell>
+                  <TableCell><Button size="small" appearance="subtle" onClick={() => removeAlgo(i)} aria-label={`algo-${i}-delete`}>Delete</Button></TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Profiles */}
+      <div className={s.toolbar} style={{ marginTop: 12 }}>
+        <Subtitle2 style={{ fontSize: 13 }}>Profiles ({profiles.length})</Subtitle2>
+        <Button size="small" onClick={addProfile} disabled={!algoNames.length}>＋ Add profile</Button>
+      </div>
+      <div className={s.tableWrap}>
+        <Table size="small" aria-label="Vector profiles">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Algorithm</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {profiles.map((p, i) => (
+              <TableRow key={i}>
+                <TableCell><Input size="small" value={p.name} aria-label={`profile-${i}-name`} onChange={(_, d) => patchProfile(i, { name: d.value })} className={s.fdInput} /></TableCell>
+                <TableCell>
+                  <Dropdown size="small" value={p.algorithm} selectedOptions={p.algorithm ? [p.algorithm] : []} placeholder="select algorithm" aria-label={`profile-${i}-algo`}
+                    onOptionSelect={(_, d) => patchProfile(i, { algorithm: d.optionValue || '' })}>
+                    {algoNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                  </Dropdown>
+                </TableCell>
+                <TableCell><Button size="small" appearance="subtle" onClick={() => removeProfile(i)} aria-label={`profile-${i}-delete`}>Delete</Button></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save vector config'}</Button>
+        {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
+      </div>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
+/**
+ * Indexer schedule panel — inline editor for one indexer's recurrence
+ * (interval + startTime) and disabled flag. Preset dropdown + custom interval
+ * input with validation; Save POSTs { action:'setSchedule' } to the indexers
+ * route, which PUTs /indexers/{name} preserving every other property.
+ */
+function IndexerSchedulePanel({
+  route, indexer, initialInterval, initialStartTime, initialDisabled, onSaved,
+}: {
+  route: string; indexer: string;
+  initialInterval?: string; initialStartTime?: string; initialDisabled?: boolean;
+  onSaved: () => void;
+}) {
+  const s = useStyles();
+  const presetMatch = SCHEDULE_PRESETS.find((p) => p.interval && p.interval === (initialInterval || '').toUpperCase());
+  const [preset, setPreset] = useState<string>(initialInterval ? (presetMatch ? presetMatch.label : 'Custom') : '');
+  const [interval, setInterval] = useState(initialInterval || '');
+  const [startTime, setStartTime] = useState(initialStartTime || '');
+  const [disabled, setDisabled] = useState(!!initialDisabled);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  const isCustom = preset === 'Custom';
+  const effectiveInterval = isCustom ? interval : (SCHEDULE_PRESETS.find((p) => p.label === preset)?.interval || '');
+
+  const save = async (remove: boolean) => {
+    setSaving(true); setMsg(null);
+    let schedule: { interval: string; startTime?: string } | null = null;
+    if (!remove) {
+      const err = validateScheduleInterval(effectiveInterval);
+      if (err) { setMsg({ intent: 'error', text: err }); setSaving(false); return; }
+      schedule = { interval: effectiveInterval.toUpperCase(), ...(startTime ? { startTime } : {}) };
+    }
+    const j = await postJson(route, { action: 'setSchedule', indexer, schedule, disabled });
+    setSaving(false);
+    if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Save failed' });
+    else { setMsg({ intent: 'success', text: remove ? 'Schedule removed.' : 'Schedule saved (PUT /indexers).' }); onSaved(); }
+  };
+
+  return (
+    <div className={s.card} style={{ marginTop: 8 }}>
+      <Subtitle2 style={{ fontSize: 13 }}>Schedule — {indexer}</Subtitle2>
+      <div className={s.optGrid}>
+        <span>Recurrence</span>
+        <Dropdown size="small" value={preset || '(no schedule)'} selectedOptions={preset ? [preset] : []} placeholder="(no schedule)" aria-label={`schedule-${indexer}-preset`}
+          onOptionSelect={(_, d) => {
+            const label = d.optionValue || '';
+            setPreset(label);
+            const p = SCHEDULE_PRESETS.find((x) => x.label === label);
+            if (p && p.interval) setInterval(p.interval);
+          }}>
+          {SCHEDULE_PRESETS.map((p) => (<Option key={p.label} value={p.label}>{p.label}</Option>))}
+        </Dropdown>
+        {isCustom && (
+          <>
+            <span>Custom interval (ISO-8601)</span>
+            <Input size="small" value={interval} aria-label={`schedule-${indexer}-interval`} placeholder="PT2H · PT30M · P1D"
+              onChange={(_, d) => setInterval(d.value)} />
+          </>
+        )}
+        <span>Start time (UTC, optional)</span>
+        <Input size="small" value={startTime} aria-label={`schedule-${indexer}-start`} placeholder="2026-01-01T00:00:00Z"
+          onChange={(_, d) => setStartTime(d.value)} />
+        <span>Paused</span>
+        <Checkbox checked={disabled} aria-label={`schedule-${indexer}-disabled`} label="Disable this indexer (no runs)"
+          onChange={(_, d) => setDisabled(!!d.checked)} />
+      </div>
+      <Caption1>
+        Min 5 minutes (PT5M), max 24 hours (P1D). On a schedule the indexer runs automatically; pausing keeps the
+        definition but stops runs. Saved via PUT /indexers/{indexer}.
+      </Caption1>
+      <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <Button size="small" appearance="primary" disabled={saving} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save schedule'}</Button>
+        <Button size="small" disabled={saving} onClick={() => save(true)}>Remove schedule</Button>
+      </div>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
 export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
@@ -964,6 +1331,8 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   // Indexers state.
   const [indexerData, setIndexerData] = useState<any>(null);
   const [indexersLoading, setIndexersLoading] = useState(false);
+  // Which indexer's schedule panel is expanded (by name).
+  const [scheduleEditFor, setScheduleEditFor] = useState<string | null>(null);
 
   const idx = detail.data?.index;
   const fields: any[] = idx?.fields || [];
@@ -1145,9 +1514,11 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   // reload indexers whenever the tab is active and the active index changes
   useEffect(() => { if (tab === 'indexers' && idx) loadIndexers(); }, [tab, idx, loadIndexers]);
 
+  // The route that owns indexer lifecycle + schedule actions for the active index.
+  const indexersRoute = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
+
   const indexerAction = async (action: 'run' | 'reset', indexer: string) => {
-    const url = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
-    await postJson(url, { action, indexer });
+    await postJson(indexersRoute, { action, indexer });
     loadIndexers();
   };
 
@@ -1343,12 +1714,6 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     </TableBody>
                   </Table>
                 </div>
-                {idx.vectorSearch && (
-                  <Caption1>Vector search · profiles: {vectorProfiles.join(', ') || '—'} · algorithms: {(idx.vectorSearch?.algorithms || []).map((a: any) => `${a.name}(${a.kind})`).join(', ') || '—'}</Caption1>
-                )}
-                {idx.semantic && (
-                  <Caption1>Semantic configurations: {semanticConfigs.join(', ') || '—'}</Caption1>
-                )}
                 <div className={s.toolbar} style={{ marginTop: 8 }}>
                   <Button appearance="primary" disabled={savingFields || !fieldsDirty} onClick={saveFields}>{savingFields ? 'Saving…' : 'Save fields'}</Button>
                   <Button disabled={!fieldsDirty} onClick={() => { setFieldRows((idx.fields || []).map(apiFieldToRow)); setFieldsDirty(false); setFieldsMsg(null); }}>Revert</Button>
@@ -1356,6 +1721,23 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                 </div>
                 {fieldsMsg && <MessageBar intent={fieldsMsg.intent}><MessageBarBody>{fieldsMsg.text}</MessageBarBody></MessageBar>}
               </div>
+
+              {/* Vector search designer — visual builder for index.vectorSearch
+                  (algorithms + profiles). Gated on the index having a vector field. */}
+              {indexHasVectorField(idx) ? (
+                <VectorSearchDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+              ) : (
+                <div className={s.card}>
+                  <Subtitle2>Vector search</Subtitle2>
+                  <MessageBar intent="info"><MessageBarBody>
+                    Add a vector field (<code>Collection(Edm.Single)</code> with dimensions) in the Fields designer to author
+                    vector algorithms and profiles here.
+                  </MessageBarBody></MessageBar>
+                </div>
+              )}
+
+              {/* Semantic configuration designer — visual builder for index.semantic.configurations[]. */}
+              <SemanticConfigDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
 
               {/* Advanced fallback: full definition JSON (vectorSearch / semantic /
                   scoringProfiles / analyzers authored here, round-trips with the grid). */}
@@ -1628,7 +2010,8 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                       <Table size="small">
                         <TableHeader><TableRow>
                           <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Target index</TableHeaderCell>
-                          <TableHeaderCell>Data source</TableHeaderCell><TableHeaderCell>Skillset</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+                          <TableHeaderCell>Data source</TableHeaderCell><TableHeaderCell>Skillset</TableHeaderCell>
+                          <TableHeaderCell>Schedule</TableHeaderCell><TableHeaderCell></TableHeaderCell>
                         </TableRow></TableHeader>
                         <TableBody>
                           {(indexerData.indexers || []).map((ix: any) => (
@@ -1637,9 +2020,17 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                               <TableCell className={s.cell}>{ix.targetIndexName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.dataSourceName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.skillsetName || '—'}</TableCell>
+                              <TableCell className={s.cell}>
+                                {ix.disabled ? <Badge color="warning">Paused</Badge>
+                                  : ix.schedule?.interval ? <Badge color="success">{describeScheduleInterval(ix.schedule.interval)}</Badge>
+                                  : <Caption1>On demand</Caption1>}
+                              </TableCell>
                               <TableCell>
                                 <Button size="small" onClick={() => indexerAction('run', ix.name)}>Run</Button>{' '}
-                                <Button size="small" onClick={() => indexerAction('reset', ix.name)}>Reset</Button>
+                                <Button size="small" onClick={() => indexerAction('reset', ix.name)}>Reset</Button>{' '}
+                                <Button size="small" appearance="primary" onClick={() => setScheduleEditFor((cur) => (cur === ix.name ? null : ix.name))}>
+                                  {scheduleEditFor === ix.name ? 'Close' : 'Schedule'}
+                                </Button>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -1647,6 +2038,20 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                       </Table>
                     </div>
                   )}
+                  {scheduleEditFor && (() => {
+                    const ix = (indexerData.indexers || []).find((x: any) => x.name === scheduleEditFor);
+                    if (!ix) return null;
+                    return (
+                      <IndexerSchedulePanel
+                        route={indexersRoute}
+                        indexer={ix.name}
+                        initialInterval={ix.schedule?.interval}
+                        initialStartTime={ix.schedule?.startTime}
+                        initialDisabled={ix.disabled}
+                        onSaved={() => { setScheduleEditFor(null); loadIndexers(); }}
+                      />
+                    );
+                  })()}
                   <Subtitle2 style={{ marginTop: 12 }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
                   {(indexerData.dataSources || []).length === 0 ? <Caption1>No data sources.</Caption1> : (
                     <Caption1>{(indexerData.dataSources || []).map((d: any) => `${d.name}${d.type ? ` (${d.type})` : ''}`).join(' · ')}</Caption1>
