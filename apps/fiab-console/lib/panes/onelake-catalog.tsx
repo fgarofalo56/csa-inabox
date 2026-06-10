@@ -26,6 +26,7 @@ import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Text, Badge, Button, Dropdown, Option,
   Tab, TabList, Spinner, Tree, TreeItem, TreeItemLayout,
+  TagGroup, Tag,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -53,7 +54,7 @@ interface CatalogItem {
   domainId?: string;
   isDiscoverable?: boolean;
 }
-interface WorkspaceNode { id: string; name: string; domain?: string; }
+interface WorkspaceNode { id: string; name: string; domain?: string; owner?: string; }
 interface DomainOption { id: string; name: string; }
 interface SearchGate { missingEnvVar: string; bicepModule: string; followUp?: string; }
 interface PurviewGate { missingEnvVar: string; bicepModule: string; followUp?: string; }
@@ -360,6 +361,7 @@ export function OneLakeCatalogPane() {
                       <TreeItemLayout
                         iconBefore={<Database20Regular style={{ color: w.id === selectedWs ? ACCENT.blue : tokens.colorNeutralForeground3 }} />}
                         className={w.id === selectedWs ? s.treeItemSelected : undefined}
+                        aside={w.owner ? <Caption1 className={s.muted} title={`Owner: ${w.owner}`}>{w.owner}</Caption1> : undefined}
                       >
                         {w.name}
                       </TreeItemLayout>
@@ -417,13 +419,21 @@ export function OneLakeCatalogPane() {
               </Toolbar>
 
               {selectedWs && (
-                <Badge
-                  appearance="tint" color="brand"
-                  style={{ marginBottom: tokens.spacingVerticalM, cursor: 'pointer' }}
-                  onClick={() => setSelectedWs(null)}
+                <TagGroup
+                  onDismiss={() => setSelectedWs(null)}
+                  aria-label="Active workspace filter"
+                  style={{ marginBottom: tokens.spacingVerticalM }}
                 >
-                  Workspace: {selectedWsName} ✕
-                </Badge>
+                  <Tag
+                    value={selectedWs}
+                    appearance="brand"
+                    dismissible
+                    dismissIcon={{ 'aria-label': `Clear workspace filter ${selectedWsName ?? ''}`.trim() }}
+                    icon={<Database20Regular />}
+                  >
+                    Workspace: {selectedWsName ?? selectedWs}
+                  </Tag>
+                </TagGroup>
               )}
 
               {view === 'list' ? (
