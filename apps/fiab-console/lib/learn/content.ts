@@ -262,7 +262,7 @@ const REGISTRY: Record<string, LearnEntry> = {
   },
   'copy-job': {
     title: 'Copy job',
-    summary: 'Simple data movement: source → sink, no transformations. Optimized for bulk loads with built-in retry + fault tolerance.',
+    summary: 'Guided source → sink data movement. Full, incremental (watermark column), or native CDC (SQL change tracking) copy modes — the delta modes track a cursor in an Azure SQL control table. Built on real ADF pipelines; no Fabric required.',
     docsUrl: 'https://learn.microsoft.com/fabric/data-factory/what-is-copy-job',
   },
   'spark-job-definition': {

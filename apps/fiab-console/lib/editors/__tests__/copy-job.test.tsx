@@ -74,3 +74,54 @@ describe('CopyJobEditor', () => {
     });
   });
 });
+
+describe('CopyJobEditor — native CDC (change tracking) mode', () => {
+  beforeEach(() => {
+    installFetchMock({
+      '/api/adf/linked-services': () => ({
+        ok: true,
+        linkedServices: [
+          { name: 'AzureSql_src', properties: { type: 'AzureSqlDatabase' } },
+          { name: 'AzureSql_sink', properties: { type: 'AzureSqlDatabase' } },
+        ],
+      }),
+      '/api/items/copy-job/cj-ct/runs': () => ({ ok: true, runs: [] }),
+      '/api/items/copy-job/cj-ct/watermark': () => ({
+        ok: true, configured: true,
+        watermark: { source: 'orders', table_name: 'dbo.orders', last_value: '42', updated_utc: '2026-01-01T00:05:00Z' },
+      }),
+      '/api/items/copy-job/cj-ct': () => ({
+        ok: true,
+        item: {
+          id: 'cj-ct',
+          workspaceId: 'ws-1',
+          displayName: 'cdc-fixture',
+          state: {
+            source: { linkedService: 'AzureSql_src', type: 'AzureSqlSource', sourceTable: 'dbo.orders' },
+            sink: { linkedService: 'AzureSql_sink', type: 'AzureSqlSink', table: 'bronze.orders' },
+            mode: 'ChangeTracking',
+            writeMode: 'Append',
+            keyColumns: 'id',
+            sourceName: 'orders',
+            mappings: [],
+          },
+        },
+      }),
+    });
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('renders the CDC mode badge, key columns, and the change-tracking cursor', async () => {
+    render(<CopyJobEditor item={makeItem('copy-job', 'Copy Job')} id="cj-ct" />);
+    // Mode badge labels native CDC, and the primary key column is shown.
+    await waitFor(() => {
+      expect(screen.getByText('Native CDC (change tracking)')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Primary key column(s)')).toBeInTheDocument();
+    // The cursor panel renders the persisted SYS_CHANGE_VERSION (last value 42).
+    await waitFor(() => {
+      expect(screen.getByText('Change-tracking cursor')).toBeInTheDocument();
+    });
+    expect(screen.getByText('42')).toBeInTheDocument();
+  });
+});

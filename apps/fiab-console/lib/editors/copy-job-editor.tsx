@@ -137,6 +137,7 @@ function specFromState(state?: Record<string, any>): Partial<CopyJobSpec> {
     writeMode: s.writeMode || 'Append',
     watermarkCol: s.watermarkCol,
     sourceName: s.sourceName,
+    keyColumns: s.keyColumns,
     mergeKeys: s.mergeKeys,
     mappings: Array.isArray(s.mappings) ? s.mappings : [],
   };
@@ -161,6 +162,9 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const persisted = useMemo(() => specFromState(cosmosItem?.state), [cosmosItem]);
   const configured = !!persisted.source?.linkedService && !!persisted.sink?.linkedService && !!persisted.sink?.table;
   const isIncremental = persisted.mode === 'Incremental';
+  const isChangeTracking = persisted.mode === 'ChangeTracking';
+  // Both delta modes persist a cursor in dbo.copy_watermark control table.
+  const tracksWatermark = isIncremental || isChangeTracking;
 
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
@@ -229,7 +233,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create copy job"
-        intro="A Copy job moves data source → destination with a guided wizard. It supports full and incremental copy; incremental copy tracks a watermark in an Azure SQL control table so each run moves only changed rows. Create it, then click Configure wizard." />
+        intro="A Copy job moves data source → destination with a guided wizard. It supports full copy, incremental copy (watermark column), and native CDC (SQL change tracking) for SQL sources — both delta modes track a cursor in an Azure SQL control table so each run moves only changed rows. Create it, then click Configure wizard." />
     );
   }
 
@@ -287,9 +291,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                       <Caption1 className={styles.label}>Destination</Caption1>
                       <Body1 className={styles.mono}>{persisted.sink?.linkedService} · {persisted.sink?.type} · {persisted.sink?.table}</Body1>
                       <Caption1 className={styles.label}>Copy mode</Caption1>
-                      <Body1><Badge appearance="tint" color={isIncremental ? 'brand' : 'informative'}>{persisted.mode}</Badge></Body1>
+                      <Body1><Badge appearance="tint" color={tracksWatermark ? 'brand' : 'informative'}>{isChangeTracking ? 'Native CDC (change tracking)' : persisted.mode}</Badge></Body1>
                       {isIncremental && <><Caption1 className={styles.label}>Watermark column</Caption1><Body1 className={styles.mono}>{persisted.watermarkCol || '—'}</Body1></>}
-                      {isIncremental && <><Caption1 className={styles.label}>Control-table key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
+                      {isChangeTracking && <><Caption1 className={styles.label}>Primary key column(s)</Caption1><Body1 className={styles.mono}>{persisted.keyColumns || '—'}</Body1></>}
+                      {tracksWatermark && <><Caption1 className={styles.label}>Control-table key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
                       <Caption1 className={styles.label}>Update method</Caption1>
                       <Body1>{persisted.writeMode}{persisted.writeMode === 'Merge' && persisted.mergeKeys ? ` (keys: ${persisted.mergeKeys})` : ''}</Body1>
                       <Caption1 className={styles.label}>Column mappings</Caption1>
@@ -300,30 +305,40 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                   )}
                 </div>
 
-                {isIncremental && (
+                {tracksWatermark && (
                   <div className={styles.card}>
-                    <Subtitle2>Watermark</Subtitle2>
+                    <Subtitle2>{isChangeTracking ? 'Change-tracking cursor' : 'Watermark'}</Subtitle2>
+                    {isChangeTracking && (
+                      <Caption1 className={styles.label}>
+                        Native CDC reads the delta with <code>CHANGETABLE(CHANGES …)</code>. The source database
+                        and table must have change tracking enabled (<code>ALTER DATABASE … SET CHANGE_TRACKING = ON</code>,{' '}
+                        <code>ALTER TABLE … ENABLE CHANGE_TRACKING</code>). The last <code>SYS_CHANGE_VERSION</code> is
+                        persisted below.
+                      </Caption1>
+                    )}
                     {wmConfigured === false && (
                       <MessageBar intent="warning">
                         <MessageBarBody>
                           <MessageBarTitle>Control table not configured</MessageBarTitle>
-                          Incremental copy persists its watermark in <code>dbo.copy_watermark</code> in Azure SQL.
+                          {isChangeTracking ? 'Native CDC' : 'Incremental copy'} persists its cursor in <code>dbo.copy_watermark</code> in Azure SQL.
                           Set <code>{wmMissing || 'LOOM_COPYJOB_CONTROL_SQL_SERVER'}</code> on the console app and deploy{' '}
                           <code>{wmModule || 'platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep'}</code> to create the
-                          table and stored procedure. Full copy works without this; incremental runs will fail until it is set.
+                          table and stored procedure. Full copy works without this; {isChangeTracking ? 'CDC' : 'incremental'} runs will fail until it is set.
                         </MessageBarBody>
                       </MessageBar>
                     )}
                     {wmConfigured && !watermark && (
                       <Caption1 className={styles.label}>
-                        No watermark recorded yet — the first incremental run full-loads the source and writes the initial high-water mark.
+                        {isChangeTracking
+                          ? 'No change version recorded yet — the first run copies all currently-changed rows and writes the initial SYS_CHANGE_VERSION.'
+                          : 'No watermark recorded yet — the first incremental run full-loads the source and writes the initial high-water mark.'}
                       </Caption1>
                     )}
                     {wmConfigured && watermark && (
                       <div className={styles.specGrid}>
                         <Caption1 className={styles.label}>Source key</Caption1><Body1 className={styles.mono}>{watermark.source}</Body1>
                         <Caption1 className={styles.label}>Table</Caption1><Body1 className={styles.mono}>{watermark.table_name}</Body1>
-                        <Caption1 className={styles.label}>Last value</Caption1><Body1 className={styles.mono}>{watermark.last_value ?? '—'}</Body1>
+                        <Caption1 className={styles.label}>{isChangeTracking ? 'Last change version' : 'Last value'}</Caption1><Body1 className={styles.mono}>{watermark.last_value ?? '—'}</Body1>
                         <Caption1 className={styles.label}>Updated</Caption1><Body1>{fmtTs(watermark.updated_utc)}</Body1>
                       </div>
                     )}

@@ -5,20 +5,27 @@
  * pipeline and triggers a run. No Microsoft Fabric dependency
  * (no-fabric-dependency.md) — the backend is ADF + Azure SQL.
  *
- *   Full mode        → one Copy activity (source dataset → sink dataset).
- *   Incremental mode → the canonical 4-activity incremental-copy pattern:
+ *   Full mode          → one Copy activity (source dataset → sink dataset).
+ *   Incremental mode   → the canonical 4-activity incremental-copy pattern:
  *       LookupOldWatermark (Script, reads dbo.copy_watermark)
  *         → LookupNewWatermark (Script, MAX(<col>) on the source)
  *           → IncrementalCopyActivity (Copy, WHERE <col> > old AND <= new)
  *             → UpdateWatermark (StoredProcedure, dbo.usp_write_watermark)
+ *   ChangeTracking mode → native SQL change-tracking (CDC); SQL sources only:
+ *       LookupOldWatermark (Script, last SYS_CHANGE_VERSION from dbo.copy_watermark)
+ *         → LookupNewWatermark (Script, CHANGE_TRACKING_CURRENT_VERSION())
+ *           → IncrementalCopyActivity (Copy, CHANGETABLE(CHANGES …) joined on PK)
+ *             → UpdateWatermark (StoredProcedure, dbo.usp_write_watermark)
  *
- * The watermark lives in dbo.copy_watermark in Azure SQL — deployed by
+ * The cursor (watermark value or SYS_CHANGE_VERSION) lives in dbo.copy_watermark
+ * in Azure SQL — deployed by
  * platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and addressed via
  * LOOM_COPYJOB_CONTROL_SQL_SERVER / LOOM_COPYJOB_CONTROL_SQL_DB. When the
- * control server env is unset, Full mode still runs; Incremental mode returns a
+ * control server env is unset, Full mode still runs; the delta modes return a
  * precise 503 naming the missing env var + bicep module (no-vaporware.md).
  *
- * Grounded in learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal.
+ * Grounded in learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal
+ * and …/tutorial-incremental-copy-change-tracking-feature-portal.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -47,10 +54,12 @@ interface SideSpec {
 interface CopySpec {
   source: SideSpec;
   sink: SideSpec;
-  mode?: 'Full' | 'Incremental';
+  mode?: 'Full' | 'Incremental' | 'ChangeTracking';
   writeMode?: 'Append' | 'Overwrite' | 'Merge';
   watermarkCol?: string;
   sourceName?: string;
+  /** ChangeTracking only — comma-separated PK columns for the CHANGETABLE join. */
+  keyColumns?: string;
   mergeKeys?: string;
   mappings?: Array<{ source: string; sink: string }>;
 }
@@ -268,6 +277,96 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
   };
 }
 
+/**
+ * Native CDC (SQL change-tracking) pipeline. Mirrors the canonical ADF tutorial
+ * (learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-change-tracking-feature-portal):
+ *
+ *   LookupOldWatermark   (Script, dbo.copy_watermark → last SYS_CHANGE_VERSION)
+ *     → LookupNewWatermark (Script, CHANGE_TRACKING_CURRENT_VERSION() on source)
+ *       → IncrementalCopyActivity (Copy; CHANGETABLE(CHANGES …) joined to source on PK)
+ *         → UpdateWatermark (StoredProcedure, persists the new change version)
+ *
+ * Unlike Incremental mode this needs no watermark column — the database tracks
+ * the delta. It requires native change tracking enabled on the source DB+table.
+ * The source must be SQL-family (CHANGETABLE is a SQL Server / Azure SQL builtin).
+ */
+function changeTrackingPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: string): AdfPipeline {
+  const sourceTable = spec.source.sourceTable!;
+  const sourceName = spec.sourceName || sourceTable;
+  const keys = (spec.keyColumns || '').split(',').map((k) => k.trim()).filter(Boolean);
+  const tx = translator(spec.mappings);
+  const oldVer = "@{activity('LookupOldWatermark').output.resultSets[0].rows[0].last_value}";
+  const newVer = "@{activity('LookupNewWatermark').output.resultSets[0].rows[0].new_value}";
+  // Resolve changed rows back to the full source row by joining CHANGETABLE on PK.
+  // SYS_CHANGE_OPERATION <> 'D' drops deletes (no source row to copy). Append/
+  // Overwrite/Merge all copy the current state of inserted+updated rows.
+  const joinOn = keys.map((k) => `s.${k} = ct.${k}`).join(' AND ');
+  const changeQuery =
+    `SELECT s.* FROM ${sourceTable} AS s ` +
+    `RIGHT OUTER JOIN CHANGETABLE(CHANGES ${sourceTable}, ${oldVer}) AS ct ON ${joinOn} ` +
+    `WHERE ct.SYS_CHANGE_OPERATION <> 'D'`;
+  return {
+    name: `loom-copy-${itemId}`,
+    properties: {
+      description: `Loom copy-job ${itemId} (Native CDC · change tracking)`,
+      activities: [
+        {
+          name: 'LookupOldWatermark',
+          type: 'Script',
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{
+              type: 'Query',
+              text:
+                `SELECT ISNULL(last_value, '0') AS last_value ` +
+                `FROM dbo.copy_watermark WHERE source = '${sourceName}' AND table_name = '${sourceTable}'`,
+            }],
+          },
+        },
+        {
+          name: 'LookupNewWatermark',
+          type: 'Script',
+          linkedServiceName: { referenceName: spec.source.linkedService, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{ type: 'Query', text: 'SELECT CHANGE_TRACKING_CURRENT_VERSION() AS new_value' }],
+          },
+        },
+        {
+          name: 'IncrementalCopyActivity',
+          type: 'Copy',
+          dependsOn: [
+            { activity: 'LookupOldWatermark', dependencyConditions: ['Succeeded'] },
+            { activity: 'LookupNewWatermark', dependencyConditions: ['Succeeded'] },
+          ],
+          inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
+          outputs: [{ referenceName: snkDs, type: 'DatasetReference' }],
+          typeProperties: {
+            source: { type: spec.source.type, sqlReaderQuery: changeQuery },
+            sink: sinkProps(spec),
+            ...(tx ? { translator: tx } : {}),
+            enableStaging: false,
+          },
+        },
+        {
+          name: 'UpdateWatermark',
+          type: 'SqlServerStoredProcedure',
+          dependsOn: [{ activity: 'IncrementalCopyActivity', dependencyConditions: ['Succeeded'] }],
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            storedProcedureName: 'dbo.usp_write_watermark',
+            storedProcedureParameters: {
+              source: { value: sourceName, type: 'String' },
+              table_name: { value: sourceTable, type: 'String' },
+              last_value: { value: newVer, type: 'String' },
+            },
+          },
+        },
+      ],
+      annotations: ['loom', 'copy-job', itemId, 'change-tracking'],
+    },
+  };
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
@@ -287,7 +386,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!spec.sink.table) {
       return jerr('a destination table / path is required', 400);
     }
-    const mode = spec.mode === 'Incremental' ? 'Incremental' : 'Full';
+    const mode: 'Full' | 'Incremental' | 'ChangeTracking' =
+      spec.mode === 'Incremental' ? 'Incremental'
+        : spec.mode === 'ChangeTracking' ? 'ChangeTracking'
+          : 'Full';
+    const tracksWatermark = mode === 'Incremental' || mode === 'ChangeTracking';
 
     const controlServer = process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER;
     if (mode === 'Incremental') {
@@ -300,14 +403,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!isSqlSource(spec.source.type)) {
         return jerr('incremental copy requires a SQL-family source (the watermark is read with MAX(<column>) against the source table)', 400);
       }
-      if (!controlServer) {
-        return jerr(
-          'LOOM_COPYJOB_CONTROL_SQL_SERVER is not configured, so the watermark control table cannot be reached. ' +
-          'Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and set LOOM_COPYJOB_CONTROL_SQL_SERVER ' +
-          '(+ LOOM_COPYJOB_CONTROL_SQL_DB) on the console app. Full-mode copy works without this.',
-          503,
-        );
+    }
+    if (mode === 'ChangeTracking') {
+      if (!spec.source.sourceTable) {
+        return jerr('a source table is required for native CDC (change tracking)', 400);
       }
+      if (!isSqlSource(spec.source.type)) {
+        return jerr('native CDC requires a SQL-family source — CHANGETABLE is a SQL Server / Azure SQL builtin. Pick a SQL source type.', 400);
+      }
+      if (!(spec.keyColumns || '').trim()) {
+        return jerr('primary key column(s) are required for native CDC — CHANGETABLE(CHANGES …) returns only PKs and must join back to the source table on them', 400);
+      }
+    }
+    if (tracksWatermark && !controlServer) {
+      return jerr(
+        'LOOM_COPYJOB_CONTROL_SQL_SERVER is not configured, so the change-tracking control table cannot be reached. ' +
+        'Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and set LOOM_COPYJOB_CONTROL_SQL_SERVER ' +
+        '(+ LOOM_COPYJOB_CONTROL_SQL_DB) on the console app. Full-mode copy works without this.',
+        503,
+      );
     }
 
     // Datasets — real ADF child resources referenced by the Copy activity.
@@ -316,8 +430,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await upsertDataset(srcDs, buildDataset(srcDs, spec.source.type, spec.source.linkedService, spec.source.sourceTable));
     await upsertDataset(snkDs, buildDataset(snkDs, spec.sink.type, spec.sink.linkedService, spec.sink.table));
 
-    if (mode === 'Incremental') {
+    if (tracksWatermark) {
       // Make sure the watermark control table + stored procedure exist (real DDL).
+      // Both Incremental (watermark column) and ChangeTracking (SYS_CHANGE_VERSION)
+      // persist their delta cursor in the same dbo.copy_watermark control table.
       await ensureControlTable(controlServer!, process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control');
       // Control linked service → Azure SQL watermark DB via the factory's MI.
       const controlLs: AdfLinkedService = {
@@ -338,7 +454,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const pipelineName = `loom-copy-${id}`;
     const pipeline = mode === 'Incremental'
       ? incrementalPipeline(id, spec, srcDs, snkDs)
-      : fullPipeline(id, spec, srcDs, snkDs);
+      : mode === 'ChangeTracking'
+        ? changeTrackingPipeline(id, spec, srcDs, snkDs)
+        : fullPipeline(id, spec, srcDs, snkDs);
     await upsertPipeline(pipelineName, pipeline);
 
     const run = await runPipeline(pipelineName);
