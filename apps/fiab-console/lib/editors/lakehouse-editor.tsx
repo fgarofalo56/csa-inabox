@@ -49,6 +49,7 @@ import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import { sparkConfigWarnings, cloudFabricNote } from './lakehouse-spark-conf';
 import { LoadToTableWizard } from './components/load-to-table-wizard';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
+import { LakehouseIcebergTab } from './components/lakehouse-iceberg-tab';
 import {
   SHORTCUT_SOURCE_CARDS, ShortcutSourceLogo, ExternalCredsForm, RemoteBrowseTree,
   type ExternalCredsState, type CredSourceType,
@@ -2493,12 +2494,16 @@ export function LakehouseEditor({ item, id }: Props) {
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
               <Tab value="shortcuts">Shortcuts</Tab>
+              <Tab value="iceberg">Iceberg</Tab>
               <Tab value="security">Security</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
             {tab === 'security' && (
               <OneLakeSecurityTab itemId={id} itemType="lakehouse" container={activeContainer || 'gold'} />
+            )}
+            {tab === 'iceberg' && (
+              <LakehouseIcebergTab container={activeContainer || 'gold'} />
             )}
             {tab === 'files' && (
               <>
