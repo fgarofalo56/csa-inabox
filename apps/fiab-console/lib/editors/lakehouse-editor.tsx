@@ -41,6 +41,7 @@ import {
   Wrench20Regular,
   History20Regular,
   CloudArrowUp20Regular,
+  Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
@@ -405,7 +406,16 @@ export function LakehouseEditor({ item, id }: Props) {
     deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
     schemasEnabled?: boolean;
     liquidClustering?: { tableName: string; columns: string[] };
+    icebergExpose?: { enabled: boolean; tableName: string; schemaName?: string };
     fabricToggles?: { vorder: boolean; autotune: boolean; nativeExecution: boolean };
+  }
+  interface IcebergEndpoint {
+    abfss: string;
+    httpsTablePath: string;
+    httpsMetadataFolder: string;
+    azureMetadataFolder: string;
+    format: 'iceberg-v2';
+    via: 'delta-uniform';
   }
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LakehouseSettings>({});
@@ -419,6 +429,16 @@ export function LakehouseEditor({ item, id }: Props) {
   const [lcSql, setLcSql] = useState<string | null>(null);
   const [lcGate, setLcGate] = useState<string | null>(null);
   const [lcError, setLcError] = useState<string | null>(null);
+  // Expose-as-Iceberg form state (Fabric OneLake "Iceberg V2 endpoint" parity →
+  // real Delta Lake UniForm ALTER TABLE on the Azure-native path).
+  const [icebergEnabled, setIcebergEnabled] = useState(false);
+  const [icebergTable, setIcebergTable] = useState('');
+  const [icebergSchema, setIcebergSchema] = useState('');     // when schemas enabled
+  const [icebergEndpoint, setIcebergEndpoint] = useState<IcebergEndpoint | null>(null);
+  const [icebergApplied, setIcebergApplied] = useState<boolean | null>(null);
+  const [icebergSql, setIcebergSql] = useState<string | null>(null);
+  const [icebergGate, setIcebergGate] = useState<string | null>(null);
+  const [icebergError, setIcebergError] = useState<string | null>(null);
   // Cloud boundary (commercial | gcc | gcch | il5) — drives honest per-cloud
   // disclosures for the Fabric-only acceleration gates.
   const [cloud, setCloud] = useState<'commercial' | 'gcc' | 'gcch' | 'il5'>('commercial');
@@ -1246,7 +1266,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setSettingsBusy(true); setSettingsError(null);
     try {
       const r = await fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings }>(r, 'Load settings');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings; icebergEndpoint?: IcebergEndpoint }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
       setSchemasEnabled(j.settings?.schemasEnabled ?? false);
@@ -1256,6 +1276,11 @@ export function LakehouseEditor({ item, id }: Props) {
       setLcTableName(j.settings?.liquidClustering?.tableName || '');
       setLcColumns((j.settings?.liquidClustering?.columns || []).join(', '));
       setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
+      setIcebergEnabled(j.settings?.icebergExpose?.enabled ?? false);
+      setIcebergTable(j.settings?.icebergExpose?.tableName || '');
+      setIcebergSchema(j.settings?.icebergExpose?.schemaName || '');
+      setIcebergEndpoint(j.icebergEndpoint || null);
+      setIcebergApplied(null); setIcebergSql(null); setIcebergGate(null); setIcebergError(null);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
@@ -1300,6 +1325,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
     setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
+    setIcebergApplied(null); setIcebergSql(null); setIcebergGate(null); setIcebergError(null);
     try {
       const sparkConfig: Record<string, string> = {};
       for (const line of settingsSparkConfText.split(/\r?\n/)) {
@@ -1310,6 +1336,14 @@ export function LakehouseEditor({ item, id }: Props) {
       const trimmedTable = lcTableName.trim();
       const liquidClustering = trimmedTable
         ? { tableName: trimmedTable, columns: lcColumns.split(',').map((c) => c.trim()).filter(Boolean) }
+        : undefined;
+      const icebergTbl = icebergTable.trim();
+      const icebergExpose = icebergTbl
+        ? {
+            enabled: icebergEnabled,
+            tableName: icebergTbl,
+            schemaName: schemasEnabled && icebergSchema.trim() ? icebergSchema.trim() : undefined,
+          }
         : undefined;
       const r = await fetch(`/api/lakehouse/settings`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1323,6 +1357,7 @@ export function LakehouseEditor({ item, id }: Props) {
           deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
           schemasEnabled: settings.schemasEnabled ?? false,
           liquidClustering,
+          icebergExpose,
           fabricToggles: settings.fabricToggles,
         }),
       });
@@ -1330,6 +1365,9 @@ export function LakehouseEditor({ item, id }: Props) {
         ok: boolean; error?: string; settings?: LakehouseSettings;
         clusteringApplied?: boolean; clusteringSql?: string;
         clusteringGate?: string; clusteringError?: string;
+        icebergApplied?: boolean; icebergSql?: string;
+        icebergGate?: string; icebergError?: string;
+        icebergEndpoint?: IcebergEndpoint;
       }>(r, 'Save settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || settings);
@@ -1338,13 +1376,18 @@ export function LakehouseEditor({ item, id }: Props) {
       setLcSql(j.clusteringSql || null);
       setLcGate(j.clusteringGate || null);
       setLcError(j.clusteringError || null);
+      setIcebergApplied(j.icebergApplied ?? null);
+      setIcebergSql(j.icebergSql || null);
+      setIcebergGate(j.icebergGate || null);
+      setIcebergError(j.icebergError || null);
+      if (j.icebergEndpoint) setIcebergEndpoint(j.icebergEndpoint);
       setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
-      // Keep the dialog open when clustering needs the user's attention (gate or
-      // error) so the MessageBar is visible; otherwise close as before.
-      if (!j.clusteringGate && !j.clusteringError) setSettingsOpen(false);
+      // Keep the dialog open when clustering / iceberg needs the user's
+      // attention (gate or error) so the MessageBar is visible; else close.
+      if (!j.clusteringGate && !j.clusteringError && !j.icebergGate && !j.icebergError) setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns]);
+  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns, icebergEnabled, icebergTable, icebergSchema, schemasEnabled]);
 
   // ---- reference lakehouses: load / mutate / browse / preview ---------
   const loadReferences = useCallback(async () => {
@@ -4373,6 +4416,124 @@ export function LakehouseEditor({ item, id }: Props) {
                         <MessageBarTitle>Clustering applied</MessageBarTitle>
                         ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
                         {lcSql ? <><br /><code style={{ fontSize: 11 }}>{lcSql}</code></> : null}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {/* ---- Expose as Iceberg (OneLake "Iceberg V2 endpoint" parity → Delta UniForm) ---- */}
+                  <Subtitle2 style={{ marginTop: 12 }}>
+                    Expose as Iceberg{' '}
+                    <Badge appearance="tint" color="brand" size="small">Iceberg V2</Badge>
+                  </Subtitle2>
+                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                    <MessageBarBody>
+                      Just like Fabric OneLake, your Delta table is read by Iceberg readers — there is no
+                      separate "Iceberg endpoint" to provision. On save, Loom enables{' '}
+                      <strong>Delta Lake UniForm</strong> with a real{' '}
+                      <code>ALTER TABLE … SET TBLPROPERTIES('delta.universalFormat.enabledFormats'='iceberg')</code>{' '}
+                      via a Databricks SQL Warehouse (Azure-native, no Fabric). Delta then generates Iceberg V2{' '}
+                      <code>metadata/*.metadata.json</code> alongside the Delta log, so Snowflake, Trino, Spark,
+                      and other Iceberg clients can read it at the ADLS path below. Requires{' '}
+                      <strong>LOOM_DATABRICKS_HOSTNAME</strong>.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Field
+                    label="Expose as Iceberg"
+                    hint="Generates Iceberg V2 metadata over the selected Delta table via UniForm. Turning this off unsets the UniForm format property."
+                  >
+                    <Switch
+                      checked={icebergEnabled}
+                      onChange={(_, d) => setIcebergEnabled(d.checked)}
+                      label={icebergEnabled ? 'Enabled' : 'Disabled'}
+                    />
+                  </Field>
+                  {schemasEnabled && (
+                    <Field label="Schema" hint="Schema-enabled lakehouse: the table lives under Tables/<schema>/. Defaults to dbo.">
+                      <Input
+                        value={icebergSchema}
+                        onChange={(_, d) => setIcebergSchema(d.value)}
+                        placeholder="dbo"
+                      />
+                    </Field>
+                  )}
+                  <Field label="Delta table to expose" hint="Delta table under /Tables/ in this container.">
+                    {(() => {
+                      const listing = activeContainer ? openPrefixes[cacheKey(activeContainer, 'Tables')] : undefined;
+                      const liveNames = Array.isArray(listing)
+                        ? listing.filter((e) => e.isDirectory).map((e) => leafName(e.name))
+                        : [];
+                      const bundleNames = bundleDeltaTables.map((t) => t.name);
+                      const allNames = Array.from(new Set([...liveNames, ...bundleNames])).sort();
+                      if (allNames.length > 0) {
+                        return (
+                          <Dropdown
+                            selectedOptions={icebergTable ? [icebergTable] : []}
+                            value={icebergTable}
+                            placeholder="Select a Delta table"
+                            onOptionSelect={(_, d) => setIcebergTable(d.optionValue || '')}
+                          >
+                            {allNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                          </Dropdown>
+                        );
+                      }
+                      return (
+                        <Input
+                          value={icebergTable}
+                          onChange={(_, d) => setIcebergTable(d.value)}
+                          placeholder="bronze_player_profile"
+                        />
+                      );
+                    })()}
+                  </Field>
+                  {icebergEndpoint && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                      <Caption1 style={{ fontWeight: 600 }}>Iceberg endpoint (metadata path readers point at)</Caption1>
+                      {([
+                        ['ADLS path (abfss)', icebergEndpoint.abfss],
+                        ['Iceberg catalog / metadata folder (HTTPS)', icebergEndpoint.httpsMetadataFolder],
+                        ['Snowflake EXTERNAL VOLUME base (azure://)', icebergEndpoint.azureMetadataFolder],
+                      ] as [string, string][]).map(([label, val]) => (
+                        <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <code style={{ fontSize: 11, wordBreak: 'break-all', flex: 1 }}>{val}</code>
+                            <Tooltip content={`Copy ${label}`} relationship="label">
+                              <Button
+                                size="small"
+                                appearance="subtle"
+                                icon={<Copy20Regular />}
+                                onClick={() => { try { void navigator.clipboard?.writeText(val); setActionStatus('Copied to clipboard'); } catch { /* clipboard unavailable */ } }}
+                              >
+                                Copy
+                              </Button>
+                            </Tooltip>
+                          </div>
+                        </div>
+                      ))}
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Format: Apache Iceberg V2 · via Delta Lake UniForm. Readers load the most recent{' '}
+                        <code>.metadata.json</code> in the metadata folder.
+                      </Caption1>
+                    </div>
+                  )}
+                  {icebergGate && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody><MessageBarTitle>Iceberg expose gate</MessageBarTitle>{icebergGate}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {icebergError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody><MessageBarTitle>UniForm ALTER TABLE failed</MessageBarTitle>{icebergError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {icebergApplied && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>
+                        <MessageBarTitle>Iceberg endpoint enabled</MessageBarTitle>
+                        UniForm is on. Delta generates Iceberg V2 metadata after the next write transaction
+                        (or immediately for existing data). If the table has deletion vectors, run{' '}
+                        <code>REORG TABLE … APPLY (UPGRADE UNIFORM(ICEBERG_COMPAT_VERSION=2))</code> in a notebook.
+                        {icebergSql ? <><br /><code style={{ fontSize: 11 }}>{icebergSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}
