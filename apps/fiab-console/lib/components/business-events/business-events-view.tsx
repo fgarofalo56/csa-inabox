@@ -27,7 +27,7 @@ import {
   Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Input, Textarea, Dropdown, Option, Checkbox, Caption1, Body1, Subtitle2,
-  Card, CardHeader, Switch, Divider, makeStyles, tokens, Tooltip,
+  Card, CardHeader, Switch, Divider, makeStyles, tokens, Tooltip, Link,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, Send20Regular, ArrowSync20Regular,
@@ -65,6 +65,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
+    transitionDuration: tokens.durationNormal, transitionProperty: 'box-shadow, border-color, transform',
+    ':hover': { boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1Hover },
   },
   statChip: {
     flexShrink: 0, width: '40px', height: '40px',
@@ -76,13 +78,20 @@ const useStyles = makeStyles({
   statLabel: { color: tokens.colorNeutralForeground3, fontSize: '12px' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap' },
   typeGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalM },
-  typeCard: { padding: tokens.spacingVerticalM },
+  typeCard: {
+    padding: tokens.spacingVerticalM,
+    transitionDuration: tokens.durationNormal, transitionProperty: 'box-shadow, border-color',
+    ':hover': { boxShadow: tokens.shadow8 },
+  },
+  typeBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   fieldRow: { display: 'grid', gridTemplateColumns: '1.4fr 1fr auto auto', gap: tokens.spacingHorizontalS, alignItems: 'end', marginBottom: tokens.spacingVerticalS },
   meter: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
-  meterCard: { minWidth: 200, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
-  mono: { fontFamily: 'monospace', fontSize: '12px' },
+  meterCard: { flex: '1 1 240px', minWidth: 240, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
+  meterList: { margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
   chips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
-  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 480 },
+  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 480, maxWidth: '100%' },
+  footnote: { display: 'block', marginTop: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
 });
 
 function sumMeter(series?: MeterSeries): number {
@@ -202,7 +211,7 @@ export function BusinessEventsView() {
                     </Tooltip>
                   }
                 />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div className={s.typeBody}>
                   <div className={s.chips}>
                     <Badge appearance="tint" color="brand">{t.category}</Badge>
                     {t.channels.map((c) => <Badge key={c} appearance="outline">{c === 'eventgrid' ? 'Event Grid' : 'Event Hubs'}</Badge>)}
@@ -239,7 +248,7 @@ export function BusinessEventsView() {
           <div className={s.meterCard}>
             <Subtitle2>Event Grid topics</Subtitle2>
             {egTopics.length === 0 ? <Caption1>No custom topics.</Caption1> : (
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              <ul className={s.meterList}>
                 {egTopics.map((t) => <li key={t.name}><span className={s.mono}>{t.name}</span> <Caption1>· {t.inputSchema || 'CloudEvents'}</Caption1></li>)}
               </ul>
             )}
@@ -253,7 +262,7 @@ export function BusinessEventsView() {
           <div className={s.meterCard}>
             <Subtitle2>Event Hubs{channels?.eventHub.namespace ? ` · ${channels.eventHub.namespace}` : ''}</Subtitle2>
             {ehHubs.length === 0 ? <Caption1>No event hubs.</Caption1> : (
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              <ul className={s.meterList}>
                 {ehHubs.map((h) => <li key={h.name}><span className={s.mono}>{h.name}</span> <Caption1>· {h.partitionCount ?? '—'}p · {h.messageRetentionInDays ?? '—'}d</Caption1></li>)}
               </ul>
             )}
@@ -264,9 +273,9 @@ export function BusinessEventsView() {
             )}
           </div>
         </div>
-        <Caption1 style={{ display: 'block', marginTop: 10 }}>
-          Published business events appear as subscribable sources in the <a href="/realtime-hub">Real-Time hub</a> and can drive
-          {' '}<a href="/activator">Activator</a> rules. Throughput above is read live from Azure Monitor.
+        <Caption1 className={s.footnote}>
+          Published business events appear as subscribable sources in the <Link href="/realtime-hub">Real-Time hub</Link> and can drive
+          {' '}<Link href="/activator">Activator</Link> rules. Throughput above is read live from Azure Monitor.
         </Caption1>
       </Section>
     </div>
@@ -362,7 +371,9 @@ function RegisterTypeDialog({
                     </Dropdown>
                   </Field>
                   <Checkbox checked={f.required} label="Req" onChange={(_, d) => setFields((p) => p.map((x, j) => j === i ? { ...x, required: !!d.checked } : x))} />
-                  <Button icon={<Delete20Regular />} appearance="subtle" size="small" onClick={() => setFields((p) => p.filter((_, j) => j !== i))} />
+                  <Tooltip content="Remove field" relationship="label">
+                    <Button icon={<Delete20Regular />} appearance="subtle" size="small" aria-label={`Remove field ${f.name || i + 1}`} onClick={() => setFields((p) => p.filter((_, j) => j !== i))} />
+                  </Tooltip>
                 </div>
               ))}
               <Button icon={<Add20Regular />} appearance="subtle" size="small" onClick={() => setFields((p) => [...p, { name: '', type: 'string', required: false }])}>Add field</Button>
