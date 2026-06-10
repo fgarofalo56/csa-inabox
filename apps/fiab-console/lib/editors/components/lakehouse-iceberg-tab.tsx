@@ -24,17 +24,17 @@
  * Every control calls the real BFF (/api/lakehouse/iceberg + /api/lakehouse/tables).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2, Switch, Checkbox, Field, Link,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, Save20Regular, Copy20Regular, CheckmarkCircle20Filled,
-  Clock20Regular, Layer20Regular, Open20Regular,
+  Clock20Regular, Layer20Regular, Open20Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -54,8 +54,22 @@ const useStyles = makeStyles({
     maxHeight: 220, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 4,
   },
-  pickRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  pickRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    padding: '2px 4px', borderRadius: 4,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  spacer: { flex: 1 },
+  redText: { color: tokens.colorPaletteRedForeground1 },
+  snippet: { whiteSpace: 'pre', flex: 1, margin: 0 },
+  snippetRow: { display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' },
+  sortHeader: {
+    cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4,
+  },
+  hint: { display: 'flex', alignItems: 'center', gap: 6, color: tokens.colorNeutralForeground3 },
 });
+
+type SortDir = 'asc' | 'desc';
 
 interface IcebergStatus {
   ok: boolean;
@@ -125,6 +139,8 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<'table' | 'converted'>('table');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   // Hydrate local form state from the server status once it loads.
   useEffect(() => {
@@ -177,10 +193,35 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
     }
   }, [container, enabled, selected, statusQ]);
 
+  const onSort = useCallback((col: 'table' | 'converted') => {
+    setSortCol((prevCol) => {
+      if (prevCol === col) {
+        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        return prevCol;
+      }
+      setSortDir('asc');
+      return col;
+    });
+  }, []);
+
   const st = statusQ.data;
   const tables = tablesQ.data?.tables || [];
   const tablesGate = tablesQ.data?.gate;
   const convertedMap = new Map((st?.tableStatus || []).map((t) => [t.table, t]));
+
+  const sortedStatus = useMemo(() => {
+    const rows = [...(st?.tableStatus || [])];
+    const dir = sortDir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      if (sortCol === 'converted') {
+        const av = a.converted ? 1 : 0;
+        const bv = b.converted ? 1 : 0;
+        if (av !== bv) return (av - bv) * dir;
+      }
+      return a.table.localeCompare(b.table) * dir;
+    });
+    return rows;
+  }, [st?.tableStatus, sortCol, sortDir]);
 
   const snowflakeSnippet =
     st?.adlsTablesRoot
@@ -194,14 +235,17 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
         <Subtitle2>Expose as Iceberg</Subtitle2>
         <Badge appearance="tint" color="brand">Iceberg {st?.icebergVersion?.toUpperCase() || 'V2'}</Badge>
         <Badge appearance="outline" color="informative">Preview</Badge>
-        <div style={{ flex: 1 }} />
-        <Button
-          icon={<ArrowSync20Regular />}
-          appearance="subtle"
-          onClick={() => { statusQ.refetch(); tablesQ.refetch(); }}
-        >
-          Refresh
-        </Button>
+        <div className={s.spacer} />
+        <Tooltip content="Re-scan Delta tables and refresh conversion status" relationship="label">
+          <Button
+            icon={<ArrowSync20Regular />}
+            appearance="subtle"
+            disabled={statusQ.isFetching || tablesQ.isFetching}
+            onClick={() => { statusQ.refetch(); tablesQ.refetch(); }}
+          >
+            {statusQ.isFetching || tablesQ.isFetching ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </Tooltip>
       </div>
 
       <Body1>
@@ -278,7 +322,7 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
             )}
           </div>
           {enabled && selected.size === 0 && (
-            <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>
+            <Caption1 className={s.redText}>
               Select at least one Delta table to expose.
             </Caption1>
           )}
@@ -412,17 +456,17 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
           )}
           {snowflakeSnippet && (
             <Field label="Snowflake external volume (read virtualized Iceberg)">
-              <div className={s.pathRow}>
-                <pre className={s.mono} style={{ whiteSpace: 'pre', flex: 1 }}>{snowflakeSnippet}</pre>
+              <div className={s.snippetRow}>
+                <pre className={`${s.mono} ${s.snippet}`}>{snowflakeSnippet}</pre>
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  icon={<Copy20Regular />}
+                  onClick={() => copy('snowflake', snowflakeSnippet)}
+                >
+                  {copied === 'snowflake' ? 'Copied' : 'Copy snippet'}
+                </Button>
               </div>
-              <Button
-                size="small"
-                appearance="subtle"
-                icon={<Copy20Regular />}
-                onClick={() => copy('snowflake', snowflakeSnippet)}
-              >
-                {copied === 'snowflake' ? 'Copied' : 'Copy snippet'}
-              </Button>
             </Field>
           )}
         </div>
@@ -435,13 +479,31 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
           <Table size="small">
             <TableHeader>
               <TableRow>
-                <TableHeaderCell>Table</TableHeaderCell>
-                <TableHeaderCell>Iceberg metadata</TableHeaderCell>
+                <TableHeaderCell
+                  className={s.sortHeader}
+                  tabIndex={0}
+                  aria-sort={sortCol === 'table' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  onClick={() => onSort('table')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort('table'); } }}
+                >
+                  Table
+                  {sortCol === 'table' && (sortDir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />)}
+                </TableHeaderCell>
+                <TableHeaderCell
+                  className={s.sortHeader}
+                  tabIndex={0}
+                  aria-sort={sortCol === 'converted' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  onClick={() => onSort('converted')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort('converted'); } }}
+                >
+                  Iceberg metadata
+                  {sortCol === 'converted' && (sortDir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />)}
+                </TableHeaderCell>
                 <TableHeaderCell>Latest metadata file</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {st.tableStatus!.map((t) => (
+              {sortedStatus.map((t) => (
                 <TableRow key={t.table}>
                   <TableCell>{t.table}</TableCell>
                   <TableCell>
@@ -466,10 +528,9 @@ export function LakehouseIcebergTab({ container }: { container: string }) {
               ))}
             </TableBody>
           </Table>
-          <Caption1>
-            <Open20Regular style={{ verticalAlign: 'middle' }} /> Iceberg metadata is written on the
-            next commit to each table after UniForm is enabled. Run an INSERT/MERGE/OPTIMIZE to
-            trigger the first conversion.
+          <Caption1 className={s.hint}>
+            <Open20Regular /> Iceberg metadata is written on the next commit to each table after
+            UniForm is enabled. Run an INSERT/MERGE/OPTIMIZE to trigger the first conversion.
           </Caption1>
         </div>
       )}
