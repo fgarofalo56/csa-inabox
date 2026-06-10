@@ -42,6 +42,8 @@ export {
   buildDeleteRelationshipTmsl,
   buildAlterTableHierarchyTmsl,
   buildModelBimTmsl,
+  buildRenameMeasureTmsl,
+  buildSetMeasureDescriptionTmsl,
 } from './aas-tmsl';
 export type {
   TmslCardinality, TmslCrossFilter, TmslRelationship,

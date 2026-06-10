@@ -11,7 +11,7 @@ vi.mock('../item-crud', () => ({ loadOwnedItem: vi.fn(), updateOwnedItem: vi.fn(
 
 import {
   normalizeRelationship, upsertRelationship, removeRelationship,
-  normalizeMeasure, upsertMeasure, tvfDdl,
+  normalizeMeasure, upsertMeasure, tvfDdl, renameMeasureInState,
   type LoomModelState,
 } from '../model-store';
 
@@ -91,5 +91,47 @@ describe('tvfDdl', () => {
     expect(ddl).toMatch(/RETURNS TABLE/);
     expect(ddl).toContain('SELECT SUM(Amount) AS T FROM dbo.Sales');
     expect(ddl.trimEnd().endsWith(');')).toBe(true);
+  });
+});
+
+describe('renameMeasureInState (model-structure Copilot)', () => {
+  const withMeasures = (): LoomModelState => ({
+    relationships: [],
+    measures: [
+      normalizeMeasure({ name: 'fn_Total', expression: 'SELECT 1' }, 'tvf'),
+      normalizeMeasure({ name: 'fn_Avg', expression: 'SELECT 2' }, 'tvf'),
+    ],
+  });
+
+  it('renames an existing measure and preserves its expression', () => {
+    const r = renameMeasureInState(withMeasures(), 'fn_Total', 'Total Sales');
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.from).toBe('fn_Total');
+    expect(r.to).toBe('Total Sales');
+    const renamed = r.model.measures.find((m) => m.name === 'Total Sales');
+    expect(renamed?.expression).toBe('SELECT 1');
+    // the other measure is untouched
+    expect(r.model.measures.find((m) => m.name === 'fn_Avg')).toBeTruthy();
+  });
+
+  it('errors when the source name is missing', () => {
+    const r = renameMeasureInState(withMeasures(), 'nope', 'X');
+    expect('error' in r && r.error).toMatch(/was not found/);
+  });
+
+  it('errors on a target collision', () => {
+    const r = renameMeasureInState(withMeasures(), 'fn_Total', 'fn_Avg');
+    expect('error' in r && r.error).toMatch(/already exists/);
+  });
+
+  it('rejects an invalid target name', () => {
+    const r = renameMeasureInState(withMeasures(), 'fn_Total', '1bad');
+    expect('error' in r && r.error).toMatch(/not a valid measure name/);
+  });
+
+  it('allows a no-op rename to the same name', () => {
+    const r = renameMeasureInState(withMeasures(), 'fn_Total', 'fn_Total');
+    expect('error' in r).toBe(false);
   });
 });

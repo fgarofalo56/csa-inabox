@@ -212,3 +212,50 @@ export function buildMeasureEvalQuery(tableName: string, measureName: string): s
   const meas = '[' + (measureName || '').replace(/]/g, '') + ']';
   return 'EVALUATE ROW("value", ' + tbl + meas + ')';
 }
+
+/**
+ * Build the TMSL `rename` command that renames a measure in-place on the model.
+ * The TMSL rename command preserves the object's body (expression, format,
+ * folder) and only changes the name — the engine rewrites references for you.
+ * https://learn.microsoft.com/analysis-services/tmsl/rename-command-tmsl
+ */
+export function buildRenameMeasureTmsl(opts: {
+  database: string;
+  tableName: string;
+  fromName: string;
+  toName: string;
+}): string {
+  return JSON.stringify(
+    {
+      rename: {
+        object: { database: opts.database, table: opts.tableName, measure: opts.fromName },
+        newName: opts.toName,
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Build the TMSL `alter` command that sets a measure's `description` (catalog
+ * metadata). Alter scopes the change to the measure object so its expression /
+ * format are untouched.
+ */
+export function buildSetMeasureDescriptionTmsl(opts: {
+  database: string;
+  tableName: string;
+  measureName: string;
+  description: string;
+}): string {
+  return JSON.stringify(
+    {
+      alter: {
+        object: { database: opts.database, table: opts.tableName, measure: opts.measureName },
+        measure: { name: opts.measureName, description: opts.description },
+      },
+    },
+    null,
+    2,
+  );
+}

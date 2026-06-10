@@ -29,6 +29,7 @@ import {
 import {
   SemanticModelHierarchyEditor, type ModelHierarchy,
 } from './semantic-model-hierarchy-editor';
+import { ModelStructureCopilot } from './model-structure-copilot';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 interface CanvasRelationship extends ModelRelationship { editable?: boolean }
@@ -259,6 +260,13 @@ export function PbiModelViewPanel({ workspaceId, datasetId }: PbiModelViewPanelP
         onCreateHierarchy={createHierarchy}
         onDeleteHierarchy={deleteHierarchy}
       />
+
+      {/* Model-structure Copilot — NL rename / describe / suggest-relationships
+          + checkpoint/restore. Works on the Loom-native model (no Power BI /
+          Fabric required); reloads the canvas after a structural write. */}
+      <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12 }}>
+        <ModelStructureCopilot datasetId={datasetId} onModelChanged={() => { void load(); }} />
+      </div>
 
       {/* Read-only TMSL (model.bim) preview — the receipt of what is written. */}
       <div>

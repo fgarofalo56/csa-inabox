@@ -52,6 +52,25 @@ export interface LoomModelState {
   measures: StoredMeasure[];
 }
 
+/**
+ * A point-in-time snapshot of the model structure (measures + relationships).
+ * Snapshots are stored Azure-native on `item.state.modelCheckpoints` so the
+ * model-structure Copilot can take a checkpoint before a bulk change and the
+ * operator can restore it — no Power BI / Fabric required.
+ */
+export interface ModelCheckpoint {
+  id: string;
+  label: string;
+  /** Who/what produced it — e.g. 'copilot:rename' or 'manual'. */
+  reason: string;
+  createdAt: string;
+  measureCount: number;
+  relationshipCount: number;
+  state: LoomModelState;
+}
+
+const MAX_CHECKPOINTS = 20;
+
 const CARDINALITIES: Cardinality[] = ['one-to-many', 'many-to-one', 'one-to-one', 'many-to-many'];
 const CROSS_FILTERS: CrossFilter[] = ['single', 'both'];
 
@@ -173,4 +192,128 @@ export function tvfDdl(measure: StoredMeasure): string {
   const name = measure.name.replace(/[[\]]/g, '');
   const body = measure.expression.trim().replace(/;+\s*$/, '');
   return `CREATE OR ALTER FUNCTION [${schema}].[${name}]()\nRETURNS TABLE\nAS RETURN (\n${body}\n);`;
+}
+
+/**
+ * Rename a measure by its current name (validated identifier). Returns the
+ * mutated model state plus the resolved old/new pair, or null when the source
+ * name is not found or the target collides with another measure. Renaming only
+ * changes the metadata name — the expression is preserved verbatim.
+ */
+export function renameMeasureInState(
+  model: LoomModelState,
+  fromName: string,
+  toName: string,
+): { model: LoomModelState; from: string; to: string } | { error: string } {
+  const from = String(fromName || '').trim();
+  const to = String(toName || '').trim();
+  if (!from || !to) return { error: 'both the current and new measure name are required' };
+  if (!/^[A-Za-z_][A-Za-z0-9_ ]*$/.test(to)) {
+    return { error: `"${to}" is not a valid measure name (letters, digits, spaces and underscores; must not start with a digit)` };
+  }
+  const target = model.measures.find((m) => m.name === from);
+  if (!target) return { error: `measure "${from}" was not found on this model` };
+  if (from !== to && model.measures.some((m) => m.name === to)) {
+    return { error: `a measure named "${to}" already exists` };
+  }
+  const now = new Date().toISOString();
+  const measures = model.measures.map((m) => (m.name === from ? { ...m, name: to, updatedAt: now } : m));
+  return { model: { ...model, measures }, from, to };
+}
+
+// ---------- model checkpoints (snapshot / restore) ----------
+
+/** Read the persisted checkpoints for an owned item (newest first). */
+export async function readModelCheckpoints(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+): Promise<{ checkpoints: ModelCheckpoint[]; itemFound: boolean }> {
+  const item = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!item) return { checkpoints: [], itemFound: false };
+  const raw = (item.state as Record<string, unknown> | undefined)?.modelCheckpoints;
+  const checkpoints = Array.isArray(raw) ? (raw as ModelCheckpoint[]) : [];
+  return { itemFound: true, checkpoints: [...checkpoints].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')) };
+}
+
+/**
+ * Capture a checkpoint of the CURRENT model state (measures + relationships).
+ * Trims the ring to MAX_CHECKPOINTS (drops the oldest). Returns the new
+ * checkpoint, or null when the item is not found / not owned.
+ */
+export async function captureModelCheckpoint(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+  meta: { label?: string; reason?: string },
+): Promise<ModelCheckpoint | null> {
+  const item = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!item) return null;
+  const existingState = (item.state as Record<string, unknown> | undefined)?.model as Partial<LoomModelState> | undefined;
+  const state: LoomModelState = {
+    relationships: Array.isArray(existingState?.relationships) ? (existingState!.relationships as StoredRelationship[]) : [],
+    measures: Array.isArray(existingState?.measures) ? (existingState!.measures as StoredMeasure[]) : [],
+  };
+  const now = new Date().toISOString();
+  const checkpoint: ModelCheckpoint = {
+    id: globalThis.crypto?.randomUUID?.() ?? `ckpt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: String(meta.label || `Checkpoint ${now}`).slice(0, 120),
+    reason: String(meta.reason || 'manual').slice(0, 60),
+    createdAt: now,
+    measureCount: state.measures.length,
+    relationshipCount: state.relationships.length,
+    state,
+  };
+  const prior = Array.isArray((item.state as Record<string, unknown> | undefined)?.modelCheckpoints)
+    ? ((item.state as Record<string, unknown>).modelCheckpoints as ModelCheckpoint[])
+    : [];
+  const next = [checkpoint, ...prior].slice(0, MAX_CHECKPOINTS);
+  const nextState = { ...(item.state || {}), modelCheckpoints: next };
+  const ok = await updateOwnedItem(itemId, itemType, tenantId, { state: nextState });
+  return ok ? checkpoint : null;
+}
+
+/**
+ * Restore a checkpoint by id: overwrite `item.state.model` with the snapshot
+ * (taking a fresh "pre-restore" checkpoint first so the restore is itself
+ * undoable). Returns the restored model state, or null when not found.
+ */
+export async function restoreModelCheckpoint(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+  checkpointId: string,
+): Promise<{ model: LoomModelState; checkpoint: ModelCheckpoint } | null | { error: string }> {
+  const item = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!item) return null;
+  const prior = Array.isArray((item.state as Record<string, unknown> | undefined)?.modelCheckpoints)
+    ? ((item.state as Record<string, unknown>).modelCheckpoints as ModelCheckpoint[])
+    : [];
+  const target = prior.find((c) => c.id === checkpointId);
+  if (!target) return { error: `checkpoint "${checkpointId}" was not found` };
+
+  // Snapshot the current state so restore is undoable, then trim the ring.
+  const currentState = (item.state as Record<string, unknown> | undefined)?.model as Partial<LoomModelState> | undefined;
+  const beforeState: LoomModelState = {
+    relationships: Array.isArray(currentState?.relationships) ? (currentState!.relationships as StoredRelationship[]) : [],
+    measures: Array.isArray(currentState?.measures) ? (currentState!.measures as StoredMeasure[]) : [],
+  };
+  const now = new Date().toISOString();
+  const beforeCheckpoint: ModelCheckpoint = {
+    id: globalThis.crypto?.randomUUID?.() ?? `ckpt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: `Before restore of "${target.label}"`,
+    reason: 'copilot:pre-restore',
+    createdAt: now,
+    measureCount: beforeState.measures.length,
+    relationshipCount: beforeState.relationships.length,
+    state: beforeState,
+  };
+  const nextCheckpoints = [beforeCheckpoint, ...prior].slice(0, MAX_CHECKPOINTS);
+  const nextState = {
+    ...(item.state || {}),
+    model: target.state,
+    modelCheckpoints: nextCheckpoints,
+  };
+  const ok = await updateOwnedItem(itemId, itemType, tenantId, { state: nextState });
+  return ok ? { model: target.state, checkpoint: target } : { error: 'failed to persist the restored model state' };
 }
