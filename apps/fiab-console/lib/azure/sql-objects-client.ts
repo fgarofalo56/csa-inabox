@@ -906,6 +906,391 @@ async function scriptTableCreate(server: string, database: string, objectId: num
   return ddl;
 }
 
+// ============================================================
+// Keys & constraints (sys.key_constraints / sys.foreign_keys /
+// sys.check_constraints) — list + ADD/DROP/toggle via ALTER TABLE.
+//
+// Every authored statement is built only from catalog-verified, bracket-quoted
+// identifiers: the table/referenced-table schema+name come from sys.objects by
+// integer object_id, and every key column comes from sys.columns by integer
+// column_id. The single free-text input — a CHECK constraint's boolean
+// expression — is the ONE arbitrary-T-SQL field the real SSMS/portal designers
+// also expose; it is placed only inside the `CHECK(…)` clause (never in an
+// identifier position), length-clamped, and parameterized-by-position is not
+// possible for DDL, so it is embedded verbatim exactly as SSMS does.
+//
+// Per the no-fabric-dependency rule, this is fully Azure-native: Azure SQL
+// Database and Fabric SQL database share the same TDS engine and enforce all
+// four constraint types identically. (Fabric Warehouse / Synapse dedicated
+// pools require NOT ENFORCED and are a different item type, not in scope.)
+// ============================================================
+
+export type SqlConstraintType = 'PK' | 'UQ' | 'FK' | 'CK';
+
+/** Referential action emitted into ON DELETE / ON UPDATE. */
+export type SqlReferentialAction = 'NO_ACTION' | 'CASCADE' | 'SET_NULL' | 'SET_DEFAULT';
+
+/** A unified constraint row across PK/UNIQUE/FK/CHECK catalog views. */
+export interface SqlConstraintRow {
+  /** sys object_id of the constraint itself (stable handle for drop/toggle). */
+  constraintId: number;
+  name: string;
+  constraintType: SqlConstraintType;
+  isSystemNamed: boolean;
+  isDisabled: boolean;
+  /** false when a FK/CHECK was added WITH NOCHECK (is_not_trusted = 1). */
+  isTrusted: boolean;
+  /** PK/UQ/FK: bracket-quoted, comma-separated key columns (with ASC/DESC for PK/UQ). */
+  columns: string;
+  /** PK/UQ: 'CLUSTERED' | 'NONCLUSTERED'. */
+  indexTypeDesc?: string;
+  /** FK: referenced table object_id. */
+  refTableId?: number;
+  /** FK: `[schema].[table]` of the referenced table. */
+  refTableName?: string;
+  /** FK: referenced column list (bracket-quoted). */
+  refColumns?: string;
+  /** FK: ON DELETE referential action. */
+  onDelete?: string;
+  /** FK: ON UPDATE referential action. */
+  onUpdate?: string;
+  /** CK: the boolean expression from sys.check_constraints.definition. */
+  checkDefinition?: string;
+}
+
+/** Discriminated spec passed to {@link addConstraint}. */
+export type ConstraintSpec =
+  | { type: 'PK'; name: string; columns: Array<{ columnId: number; descending: boolean }>; clustered: boolean }
+  | { type: 'UQ'; name: string; columns: Array<{ columnId: number; descending: boolean }>; clustered: boolean }
+  | { type: 'FK'; name: string; columns: number[]; refTableObjectId: number; refColumns: number[]; onDelete: SqlReferentialAction; onUpdate: SqlReferentialAction; noCheck: boolean }
+  | { type: 'CK'; name: string; expression: string; noCheck: boolean };
+
+/** Map an Azure SQL referential action enum → its T-SQL clause text. */
+const REF_ACTION_SQL: Record<SqlReferentialAction, string> = {
+  NO_ACTION: 'NO ACTION',
+  CASCADE: 'CASCADE',
+  SET_NULL: 'SET NULL',
+  SET_DEFAULT: 'SET DEFAULT',
+};
+
+/**
+ * Validate a constraint name: 1–128 chars, single-part (no `.`/`[`/`]`), no
+ * leading `#` (which would make it a temp-object name). Same rules SSMS allows
+ * for a user-named constraint.
+ */
+function validConstraintName(name: string): string | null {
+  const n = (name || '').trim();
+  if (!n || n.length > 128) return 'constraint name must be 1–128 characters';
+  if (/[.\[\]]/.test(n)) return 'constraint name cannot contain ".", "[" or "]"';
+  if (n.startsWith('#')) return 'constraint name cannot start with "#"';
+  return null;
+}
+
+/**
+ * List every PK / UNIQUE / FK / CHECK constraint on a table, resolved by
+ * object_id (bound `@p0`). One query unions the three catalog views; PK/UQ key
+ * columns come from `sys.index_columns`, FK columns from `sys.foreign_key_columns`,
+ * the CHECK expression verbatim from `sys.check_constraints.definition`. No user
+ * input is interpolated into the SQL text.
+ */
+export async function listConstraints(
+  server: string,
+  database: string,
+  objectId: number,
+): Promise<SqlConstraintRow[]> {
+  if (!Number.isInteger(objectId)) throw new AzureSqlError('objectId must be an integer', 400);
+  const rows = await executeParameterized<any>(
+    server,
+    database,
+    `-- PRIMARY KEY + UNIQUE (sys.key_constraints, columns via the backing index)
+     SELECT kc.type AS constraintType, kc.object_id AS constraintId, kc.name AS name,
+            kc.is_system_named AS isSystemNamed, CAST(0 AS bit) AS isDisabled,
+            CAST(1 AS bit) AS isTrusted,
+            ISNULL((
+              SELECT STRING_AGG('[' + REPLACE(c.name, ']', ']]') + '] '
+                     + CASE WHEN ic.is_descending_key = 1 THEN 'DESC' ELSE 'ASC' END, ', ')
+                     WITHIN GROUP (ORDER BY ic.key_ordinal)
+              FROM sys.index_columns ic
+              JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+              WHERE ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id AND ic.key_ordinal > 0
+            ), '') AS columns,
+            i.type_desc AS indexTypeDesc,
+            NULL AS refTableId, NULL AS refTableName, NULL AS refColumns,
+            NULL AS onDelete, NULL AS onUpdate, NULL AS checkDefinition
+     FROM sys.key_constraints kc
+     JOIN sys.indexes i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id
+     WHERE kc.parent_object_id = @p0 AND kc.type IN ('PK','UQ')
+     UNION ALL
+     -- FOREIGN KEY (sys.foreign_keys + sys.foreign_key_columns)
+     SELECT 'FK' AS constraintType, fk.object_id AS constraintId, fk.name AS name,
+            fk.is_system_named AS isSystemNamed, fk.is_disabled AS isDisabled,
+            CAST(CASE WHEN fk.is_not_trusted = 1 THEN 0 ELSE 1 END AS bit) AS isTrusted,
+            ISNULL((
+              SELECT STRING_AGG('[' + REPLACE(pc.name, ']', ']]') + ']', ', ')
+                     WITHIN GROUP (ORDER BY fkc.constraint_column_id)
+              FROM sys.foreign_key_columns fkc
+              JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+              WHERE fkc.constraint_object_id = fk.object_id
+            ), '') AS columns,
+            NULL AS indexTypeDesc,
+            fk.referenced_object_id AS refTableId,
+            '[' + REPLACE(rs.name, ']', ']]') + '].[' + REPLACE(rt.name, ']', ']]') + ']' AS refTableName,
+            ISNULL((
+              SELECT STRING_AGG('[' + REPLACE(rc.name, ']', ']]') + ']', ', ')
+                     WITHIN GROUP (ORDER BY fkc.constraint_column_id)
+              FROM sys.foreign_key_columns fkc
+              JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+              WHERE fkc.constraint_object_id = fk.object_id
+            ), '') AS refColumns,
+            fk.delete_referential_action_desc AS onDelete,
+            fk.update_referential_action_desc AS onUpdate,
+            NULL AS checkDefinition
+     FROM sys.foreign_keys fk
+     JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+     JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
+     WHERE fk.parent_object_id = @p0
+     UNION ALL
+     -- CHECK (sys.check_constraints)
+     SELECT 'CK' AS constraintType, cc.object_id AS constraintId, cc.name AS name,
+            cc.is_system_named AS isSystemNamed, cc.is_disabled AS isDisabled,
+            CAST(CASE WHEN cc.is_not_trusted = 1 THEN 0 ELSE 1 END AS bit) AS isTrusted,
+            '' AS columns, NULL AS indexTypeDesc,
+            NULL AS refTableId, NULL AS refTableName, NULL AS refColumns,
+            NULL AS onDelete, NULL AS onUpdate, cc.definition AS checkDefinition
+     FROM sys.check_constraints cc
+     WHERE cc.parent_object_id = @p0
+     ORDER BY constraintType, name;`,
+    [objectId],
+  );
+  return rows.map((r) => {
+    const t = String(r.constraintType || '').trim() as SqlConstraintType;
+    return {
+      constraintId: Number(r.constraintId),
+      name: String(r.name ?? ''),
+      constraintType: t,
+      isSystemNamed: !!r.isSystemNamed,
+      isDisabled: !!r.isDisabled,
+      isTrusted: !!r.isTrusted,
+      columns: String(r.columns ?? ''),
+      indexTypeDesc: r.indexTypeDesc ? String(r.indexTypeDesc) : undefined,
+      refTableId: r.refTableId == null ? undefined : Number(r.refTableId),
+      refTableName: r.refTableName ? String(r.refTableName) : undefined,
+      refColumns: r.refColumns ? String(r.refColumns) : undefined,
+      onDelete: r.onDelete ? String(r.onDelete) : undefined,
+      onUpdate: r.onUpdate ? String(r.onUpdate) : undefined,
+      checkDefinition: r.checkDefinition ? String(r.checkDefinition) : undefined,
+    };
+  });
+}
+
+/** Resolve a table's `{ schema, name }` by object_id (user tables only). */
+async function resolveTable(
+  server: string,
+  database: string,
+  tableObjectId: number,
+): Promise<{ schema: string; name: string } | null> {
+  const rows = await executeParameterized<any>(
+    server, database,
+    `SELECT s.name AS [schema], t.name AS name
+     FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
+     WHERE t.object_id = @p0 AND t.is_ms_shipped = 0;`,
+    [tableObjectId],
+  );
+  const hit = rows[0];
+  return hit ? { schema: String(hit.schema), name: String(hit.name) } : null;
+}
+
+/**
+ * Resolve a set of column ids → bracket-quoted names for a table, in the
+ * caller-given order. Every id is read back from `sys.columns` by integer
+ * `column_id`; an id that does not belong to the table yields `null` (rejected
+ * by the caller) so no name is ever taken from caller input.
+ */
+async function resolveColumns(
+  server: string,
+  database: string,
+  tableObjectId: number,
+  columnIds: number[],
+): Promise<string[] | null> {
+  if (columnIds.length === 0) return null;
+  if (!columnIds.every((c) => Number.isInteger(c))) return null;
+  const rows = await executeParameterized<any>(
+    server, database,
+    `SELECT c.column_id AS columnId, c.name AS name
+     FROM sys.columns c WHERE c.object_id = @p0;`,
+    [tableObjectId],
+  );
+  const byId = new Map<number, string>();
+  for (const r of rows) byId.set(Number(r.columnId), String(r.name));
+  const out: string[] = [];
+  for (const id of columnIds) {
+    const nm = byId.get(id);
+    if (!nm) return null; // unknown column for this table → reject
+    out.push(bracket(nm));
+  }
+  return out;
+}
+
+/**
+ * Build + execute an `ALTER TABLE … ADD CONSTRAINT …` for a PK/UQ/FK/CHECK.
+ * All identifiers are catalog-resolved + bracket-quoted; the constraint name is
+ * validated; the only verbatim free-text is a CHECK expression (placed only in
+ * the `CHECK(…)` clause). Returns the emitted DDL as a receipt on success.
+ */
+export async function addConstraint(
+  server: string,
+  database: string,
+  tableObjectId: number,
+  spec: ConstraintSpec,
+): Promise<{ ok: true; added: string; ddl: string } | { ok: false; error: string; status: number }> {
+  if (!Number.isInteger(tableObjectId)) return { ok: false, error: 'tableObjectId must be an integer', status: 400 };
+  const nameErr = validConstraintName(spec?.name);
+  if (nameErr) return { ok: false, error: nameErr, status: 400 };
+  try {
+    const tbl = await resolveTable(server, database, tableObjectId);
+    if (!tbl) return { ok: false, error: `table not found for object_id ${tableObjectId}`, status: 404 };
+    const fq = `${bracket(tbl.schema)}.${bracket(tbl.name)}`;
+    const cn = bracket(spec.name.trim());
+    let ddl: string;
+
+    if (spec.type === 'PK' || spec.type === 'UQ') {
+      if (!Array.isArray(spec.columns) || spec.columns.length === 0) {
+        return { ok: false, error: 'at least one key column is required', status: 400 };
+      }
+      const ids = spec.columns.map((c) => c.columnId);
+      const names = await resolveColumns(server, database, tableObjectId, ids);
+      if (!names) return { ok: false, error: 'one or more key columns do not belong to this table', status: 400 };
+      const cols = spec.columns.map((c, i) => `${names[i]} ${c.descending ? 'DESC' : 'ASC'}`).join(', ');
+      const clustered = spec.clustered ? 'CLUSTERED' : 'NONCLUSTERED';
+      const kw = spec.type === 'PK' ? 'PRIMARY KEY' : 'UNIQUE';
+      ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} ${clustered} (${cols});`;
+    } else if (spec.type === 'FK') {
+      if (!Array.isArray(spec.columns) || spec.columns.length === 0) {
+        return { ok: false, error: 'at least one foreign-key column is required', status: 400 };
+      }
+      if (!Number.isInteger(spec.refTableObjectId)) return { ok: false, error: 'refTableObjectId must be an integer', status: 400 };
+      if (!Array.isArray(spec.refColumns) || spec.refColumns.length !== spec.columns.length) {
+        return { ok: false, error: 'foreign-key and referenced column counts must match', status: 400 };
+      }
+      const refTbl = await resolveTable(server, database, spec.refTableObjectId);
+      if (!refTbl) return { ok: false, error: `referenced table not found for object_id ${spec.refTableObjectId}`, status: 404 };
+      const localNames = await resolveColumns(server, database, tableObjectId, spec.columns);
+      const refNames = await resolveColumns(server, database, spec.refTableObjectId, spec.refColumns);
+      if (!localNames) return { ok: false, error: 'one or more FK columns do not belong to this table', status: 400 };
+      if (!refNames) return { ok: false, error: 'one or more referenced columns do not belong to the referenced table', status: 400 };
+      const refFq = `${bracket(refTbl.schema)}.${bracket(refTbl.name)}`;
+      const onDelete = REF_ACTION_SQL[spec.onDelete] ?? 'NO ACTION';
+      const onUpdate = REF_ACTION_SQL[spec.onUpdate] ?? 'NO ACTION';
+      const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
+      ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} `
+        + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) `
+        + `ON DELETE ${onDelete} ON UPDATE ${onUpdate};`;
+    } else if (spec.type === 'CK') {
+      const expr = (spec.expression || '').trim();
+      if (!expr) return { ok: false, error: 'a CHECK expression is required', status: 400 };
+      if (expr.length > 4000) return { ok: false, error: 'CHECK expression must be ≤4000 characters', status: 400 };
+      const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
+      ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} CHECK (${expr});`;
+    } else {
+      return { ok: false, error: 'unsupported constraint type', status: 400 };
+    }
+
+    await executeParameterized(server, database, ddl);
+    return { ok: true, added: `${tbl.schema}.${tbl.name}.${spec.name.trim()}`, ddl };
+  } catch (e: any) {
+    const status = e instanceof AzureSqlError ? e.status : 502;
+    return { ok: false, error: e?.message || String(e), status };
+  }
+}
+
+/** Resolve a constraint's `{ schema, table, name, type }` by (table id, constraint id). */
+async function resolveConstraint(
+  server: string,
+  database: string,
+  tableObjectId: number,
+  constraintId: number,
+): Promise<{ schema: string; table: string; name: string; type: SqlConstraintType } | null> {
+  const rows = await executeParameterized<any>(
+    server, database,
+    `SELECT s.name AS [schema], t.name AS tname, o.name AS cname, o.type AS ctype
+     FROM sys.objects o
+     JOIN sys.tables t ON t.object_id = o.parent_object_id
+     JOIN sys.schemas s ON s.schema_id = t.schema_id
+     WHERE o.object_id = @p0 AND o.parent_object_id = @p1
+       AND o.type IN ('PK','UQ','F','C') AND t.is_ms_shipped = 0;`,
+    [constraintId, tableObjectId],
+  );
+  const hit = rows[0];
+  if (!hit) return null;
+  const raw = String(hit.ctype || '').trim();
+  const type: SqlConstraintType = raw === 'F' ? 'FK' : raw === 'C' ? 'CK' : (raw as SqlConstraintType);
+  return { schema: String(hit.schema), table: String(hit.tname), name: String(hit.cname), type };
+}
+
+/**
+ * DROP a constraint. Both ids are integers; schema/table/constraint names are
+ * read back from `sys.objects` and bracket-quoted, so no caller string is
+ * interpolated.
+ */
+export async function dropConstraint(
+  server: string,
+  database: string,
+  tableObjectId: number,
+  constraintId: number,
+): Promise<{ ok: true; dropped: string } | { ok: false; error: string; status: number }> {
+  if (!Number.isInteger(tableObjectId) || !Number.isInteger(constraintId)) {
+    return { ok: false, error: 'tableObjectId and constraintId must be integers', status: 400 };
+  }
+  try {
+    const hit = await resolveConstraint(server, database, tableObjectId, constraintId);
+    if (!hit) return { ok: false, error: `constraint not found for object_id ${constraintId} on table ${tableObjectId}`, status: 404 };
+    await executeParameterized(
+      server, database,
+      `ALTER TABLE ${bracket(hit.schema)}.${bracket(hit.table)} DROP CONSTRAINT ${bracket(hit.name)};`,
+    );
+    return { ok: true, dropped: `${hit.schema}.${hit.table}.${hit.name}` };
+  } catch (e: any) {
+    const status = e instanceof AzureSqlError ? e.status : 502;
+    return { ok: false, error: e?.message || String(e), status };
+  }
+}
+
+/**
+ * Enable / disable a FOREIGN KEY or CHECK constraint (no-op for PK/UNIQUE,
+ * which cannot be disabled). `enable=true` runs `WITH CHECK CHECK CONSTRAINT`
+ * (re-validates existing data + clears is_not_trusted); `enable=false` runs
+ * `NOCHECK CONSTRAINT`. All identifiers are catalog-resolved + bracket-quoted.
+ */
+export async function toggleConstraint(
+  server: string,
+  database: string,
+  tableObjectId: number,
+  constraintId: number,
+  enable: boolean,
+): Promise<{ ok: true; state: 'enabled' | 'disabled'; constraint: string } | { ok: false; error: string; status: number }> {
+  if (!Number.isInteger(tableObjectId) || !Number.isInteger(constraintId)) {
+    return { ok: false, error: 'tableObjectId and constraintId must be integers', status: 400 };
+  }
+  try {
+    const hit = await resolveConstraint(server, database, tableObjectId, constraintId);
+    if (!hit) return { ok: false, error: `constraint not found for object_id ${constraintId} on table ${tableObjectId}`, status: 404 };
+    if (hit.type === 'PK' || hit.type === 'UQ') {
+      return { ok: false, error: 'PRIMARY KEY / UNIQUE constraints cannot be disabled — drop and recreate to change them', status: 400 };
+    }
+    const fq = `${bracket(hit.schema)}.${bracket(hit.table)}`;
+    const cn = bracket(hit.name);
+    // WITH CHECK CHECK re-validates + trusts; NOCHECK disables enforcement.
+    const stmt = enable
+      ? `ALTER TABLE ${fq} WITH CHECK CHECK CONSTRAINT ${cn};`
+      : `ALTER TABLE ${fq} NOCHECK CONSTRAINT ${cn};`;
+    await executeParameterized(server, database, stmt);
+    return { ok: true, state: enable ? 'enabled' : 'disabled', constraint: `${hit.schema}.${hit.table}.${hit.name}` };
+  } catch (e: any) {
+    const status = e instanceof AzureSqlError ? e.status : 502;
+    return { ok: false, error: e?.message || String(e), status };
+  }
+}
+
 /** Build a runnable CREATE INDEX statement from a {@link SqlIndexRow}. */
 function scriptCreateIndex(ix: SqlIndexRow, schema: string, table: string): string {
   const clustered = ix.typeDesc.toUpperCase().includes('NONCLUSTERED') ? 'NONCLUSTERED'
