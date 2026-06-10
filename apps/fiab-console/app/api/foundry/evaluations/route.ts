@@ -19,6 +19,8 @@ import {
   listEvals,
   createEval,
   listEvalRuns,
+  getEval,
+  deleteEval,
   CsError,
   CsNotConfiguredError,
 } from '@/lib/azure/foundry-cs-client';
@@ -41,13 +43,31 @@ export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const evalId = req.nextUrl.searchParams.get('evalId')?.trim();
+  const detail = req.nextUrl.searchParams.get('detail');
   try {
+    if (evalId && detail) {
+      const { account, eval: ev } = await getEval(evalId, selectorFromQuery(req));
+      return NextResponse.json({ ok: true, account: { name: account.name, location: account.location }, eval: ev });
+    }
     if (evalId) {
       const { account, runs } = await listEvalRuns(evalId, selectorFromQuery(req));
       return NextResponse.json({ ok: true, account: { name: account.name, location: account.location }, evalId, runs });
     }
     const { account, evals } = await listEvals(selectorFromQuery(req));
     return NextResponse.json({ ok: true, account: { name: account.name, location: account.location }, evals });
+  } catch (e: any) {
+    return fail(e);
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const evalId = req.nextUrl.searchParams.get('evalId')?.trim();
+  if (!evalId) return NextResponse.json({ ok: false, error: 'evalId required' }, { status: 400 });
+  try {
+    await deleteEval(evalId, selectorFromQuery(req));
+    return NextResponse.json({ ok: true });
   } catch (e: any) {
     return fail(e);
   }

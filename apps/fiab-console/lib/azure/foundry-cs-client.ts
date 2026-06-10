@@ -24,7 +24,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, cogScope, isGovCloud } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const CS_API = '2024-10-01';
@@ -465,7 +465,22 @@ export interface ChatResult {
 }
 
 const AOAI_DATA_API = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-const COG_SCOPE = 'https://cognitiveservices.azure.com/.default';
+// Sovereign-cloud–aware Cognitive Services data-plane scope (Commercial vs Gov).
+const COG_SCOPE = cogScope();
+
+/**
+ * Sovereign-cloud availability guard for modalities Azure US Government does not
+ * host (DALL-E image generation, gpt-realtime). Returns a remediation message
+ * when the modality is unavailable in this cloud so routes can short-circuit
+ * BEFORE attempting an HTTP call that cannot succeed (no-vaporware).
+ */
+export function govModalityGate(modality: 'image' | 'realtime'): string | null {
+  if (!isGovCloud()) return null;
+  if (modality === 'image') {
+    return 'DALL-E / gpt-image image generation is not available in Azure US Government. Use Whisper (audio), TTS (speech), or GPT-4o chat/completions instead.';
+  }
+  return 'The gpt-realtime model is not available in Azure US Government. Use the Chat or Audio (Whisper/TTS) playgrounds instead.';
+}
 
 async function dataPlaneToken(): Promise<string> {
   const t = await credential.getToken(COG_SCOPE);
@@ -643,6 +658,452 @@ export async function listEvalRuns(evalId: string, selector?: AccountSelector): 
   const acct = await resolveAccount(false, selector);
   const j = await readEvalsJson<{ data?: any[] }>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs?order=desc&limit=50`));
   return { account: acct, runs: (j?.data || []).map(mapEvalRun) };
+}
+
+/** GET a single eval's full definition (data_source_config + testing_criteria). */
+export async function getEval(evalId: string, selector?: AccountSelector): Promise<{ account: CsAccount; eval: EvalSummary }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}`));
+  return { account: acct, eval: mapEval(j) };
+}
+
+/** DELETE an evaluation (and its runs). */
+export async function deleteEval(evalId: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
+  const res = await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) await readEvalsJson(res);
+}
+
+export interface CreateEvalRunInput {
+  /** Optional run name. */
+  name?: string;
+  /** Deployment / model name to evaluate (graded against the dataset rows). */
+  model: string;
+  /** Uploaded file id (purpose=evals JSONL) OR inline JSONL content. */
+  fileId?: string;
+  inlineContent?: { item: Record<string, unknown> }[];
+}
+
+/**
+ * Start a grading run for an eval. Builds the data_source the AOAI Evals API
+ * expects: a `completions` source either by uploaded file id or inline content,
+ * with an input template that runs the chosen model over each row.
+ * Ref: POST {endpoint}/openai/v1/evals/{eval-id}/runs
+ */
+export async function createEvalRun(evalId: string, input: CreateEvalRunInput, selector?: AccountSelector): Promise<{ account: CsAccount; run: EvalRunSummary }> {
+  const acct = await resolveAccount(false, selector);
+  const source = input.fileId
+    ? { type: 'file_id', id: input.fileId }
+    : { type: 'file_content', content: (input.inlineContent || []).map((r) => ({ item: r.item })) };
+  const body: any = {
+    ...(input.name ? { name: input.name } : {}),
+    data_source: {
+      type: 'completions',
+      model: input.model,
+      input_messages: {
+        type: 'template',
+        template: [
+          { role: 'developer', content: 'You are a helpful assistant.' },
+          { role: 'user', content: '{{ item.input }}' },
+        ],
+      },
+      source,
+    },
+  };
+  const j = await readEvalsJson<any>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs`, { method: 'POST', body: JSON.stringify(body) }));
+  return { account: acct, run: mapEvalRun(j) };
+}
+
+/** Cancel an in-progress eval run. */
+export async function cancelEvalRun(evalId: string, runId: string, selector?: AccountSelector): Promise<{ account: CsAccount; run: EvalRunSummary }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs/${encodeURIComponent(runId)}`, { method: 'POST', body: JSON.stringify({ status: 'canceled' }) }));
+  return { account: acct, run: mapEvalRun(j) };
+}
+
+/** Delete an eval run. */
+export async function deleteEvalRun(evalId: string, runId: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
+  const res = await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) await readEvalsJson(res);
+}
+
+export interface EvalOutputItem {
+  id?: string;
+  datasourceItemId?: number;
+  status?: string;
+  results?: { name?: string; passed?: boolean; score?: number }[];
+  sampleOutput?: string;
+  input?: Record<string, unknown>;
+}
+
+/** Per-row results of an eval run (each dataset row, grader scores, sample output). */
+export async function getEvalRunOutputItems(evalId: string, runId: string, selector?: AccountSelector): Promise<{ account: CsAccount; items: EvalOutputItem[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs/${encodeURIComponent(runId)}/output_items?order=asc&limit=100`));
+  const items: EvalOutputItem[] = (j?.data || []).map((it: any) => ({
+    id: it?.id,
+    datasourceItemId: it?.datasource_item_id,
+    status: it?.status,
+    results: Array.isArray(it?.results) ? it.results.map((r: any) => ({ name: r?.name, passed: r?.passed, score: r?.score })) : [],
+    sampleOutput: it?.sample?.output?.[0]?.content ?? it?.sample?.output_text,
+    input: it?.datasource_item,
+  }));
+  return { account: acct, items };
+}
+
+// ---------------- Files (shared: fine-tuning + eval datasets) ----------------
+//
+// AOAI files data-plane (v1):
+//   list   = GET    {endpoint}/openai/v1/files?purpose=...
+//   upload = POST   {endpoint}/openai/v1/files            (multipart/form-data)
+
+const AOAI_FT_API = process.env.LOOM_AOAI_FT_API_VERSION || '2024-10-21';
+
+export interface FileRow {
+  id: string;
+  filename?: string;
+  bytes?: number;
+  purpose?: string;
+  status?: string;
+  createdAt?: number;
+}
+
+function mapFile(f: any): FileRow {
+  return { id: f?.id, filename: f?.filename, bytes: f?.bytes, purpose: f?.purpose, status: f?.status, createdAt: f?.created_at };
+}
+
+/** Generic v1 data-plane fetch (no evals preview header) — files + fine-tuning. */
+async function v1Fetch(acct: CsAccount, path: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<Response> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_FT_API}`;
+  return fetch(url, {
+    ...init,
+    headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, ...headers },
+  });
+}
+
+async function readV1Json<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `AOAI call failed (${res.status})`);
+    throw new CsError(res.status, parsed, msg);
+  }
+  return parsed as T;
+}
+
+export async function listFiles(purpose?: string, selector?: AccountSelector): Promise<{ account: CsAccount; files: FileRow[] }> {
+  const acct = await resolveAccount(false, selector);
+  const q = purpose ? `/files?purpose=${encodeURIComponent(purpose)}` : '/files';
+  const j = await readV1Json<{ data?: any[] }>(await v1Fetch(acct, q));
+  return { account: acct, files: (j?.data || []).map(mapFile) };
+}
+
+export async function uploadFile(filename: string, content: Buffer, purpose: 'fine-tune' | 'evals', selector?: AccountSelector): Promise<{ account: CsAccount; file: FileRow }> {
+  const acct = await resolveAccount(false, selector);
+  const form = new FormData();
+  form.append('purpose', purpose);
+  const blob = new Blob([new Uint8Array(content)], { type: 'application/jsonl' });
+  form.append('file', blob, filename);
+  // FormData sets its own multipart content-type/boundary — do NOT override it.
+  const j = await readV1Json<any>(await v1Fetch(acct, '/files', { method: 'POST', body: form as any }));
+  return { account: acct, file: mapFile(j) };
+}
+
+// ---------------- Fine-tuning jobs ----------------
+//
+// AOAI fine-tuning data-plane (v1):
+//   list/create/get/cancel/events/checkpoints under {endpoint}/openai/v1/fine_tuning/jobs
+// Ref: https://learn.microsoft.com/azure/ai-foundry/openai/how-to/fine-tuning
+
+export interface FineTuningJob {
+  id: string;
+  model: string;
+  status?: string;
+  createdAt?: number;
+  finishedAt?: number;
+  trainedTokens?: number;
+  fineTunedModel?: string;
+  trainingFile?: string;
+  validationFile?: string;
+  hyperparameters?: { nEpochs?: number | string; batchSize?: number | string; learningRateMultiplier?: number | string };
+  resultFiles?: string[];
+  error?: { message?: string };
+}
+
+function mapFineTuneJob(j: any): FineTuningJob {
+  const h = j?.hyperparameters || {};
+  return {
+    id: j?.id,
+    model: j?.model,
+    status: j?.status,
+    createdAt: j?.created_at,
+    finishedAt: j?.finished_at,
+    trainedTokens: j?.trained_tokens,
+    fineTunedModel: j?.fine_tuned_model,
+    trainingFile: j?.training_file,
+    validationFile: j?.validation_file,
+    hyperparameters: { nEpochs: h.n_epochs, batchSize: h.batch_size, learningRateMultiplier: h.learning_rate_multiplier },
+    resultFiles: Array.isArray(j?.result_files) ? j.result_files : [],
+    error: j?.error?.message ? { message: j.error.message } : undefined,
+  };
+}
+
+export interface FineTuneEvent { id?: string; createdAt?: number; level?: string; message?: string }
+export interface FineTuneCheckpoint { id?: string; stepNumber?: number; fineTunedModelCheckpoint?: string; createdAt?: number; metrics?: Record<string, number> }
+
+export async function listFineTuningJobs(selector?: AccountSelector): Promise<{ account: CsAccount; jobs: FineTuningJob[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readV1Json<{ data?: any[] }>(await v1Fetch(acct, '/fine_tuning/jobs?limit=50'));
+  return { account: acct, jobs: (j?.data || []).map(mapFineTuneJob) };
+}
+
+export interface CreateFineTuneInput {
+  model: string;
+  trainingFile: string;
+  validationFile?: string;
+  suffix?: string;
+  seed?: number;
+  hyperparameters?: { nEpochs?: number | 'auto'; batchSize?: number | 'auto'; learningRateMultiplier?: number | 'auto' };
+}
+
+export async function createFineTuningJob(input: CreateFineTuneInput, selector?: AccountSelector): Promise<{ account: CsAccount; job: FineTuningJob }> {
+  const acct = await resolveAccount(false, selector);
+  const hp: any = {};
+  if (input.hyperparameters?.nEpochs !== undefined) hp.n_epochs = input.hyperparameters.nEpochs;
+  if (input.hyperparameters?.batchSize !== undefined) hp.batch_size = input.hyperparameters.batchSize;
+  if (input.hyperparameters?.learningRateMultiplier !== undefined) hp.learning_rate_multiplier = input.hyperparameters.learningRateMultiplier;
+  const body: any = {
+    model: input.model,
+    training_file: input.trainingFile,
+    ...(input.validationFile ? { validation_file: input.validationFile } : {}),
+    ...(input.suffix ? { suffix: input.suffix } : {}),
+    ...(input.seed !== undefined ? { seed: input.seed } : {}),
+    ...(Object.keys(hp).length ? { hyperparameters: hp } : {}),
+  };
+  const j = await readV1Json<any>(await v1Fetch(acct, '/fine_tuning/jobs', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }));
+  return { account: acct, job: mapFineTuneJob(j) };
+}
+
+export async function cancelFineTuningJob(jobId: string, selector?: AccountSelector): Promise<{ account: CsAccount; job: FineTuningJob }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readV1Json<any>(await v1Fetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }));
+  return { account: acct, job: mapFineTuneJob(j) };
+}
+
+export async function getFineTuningJobEvents(jobId: string, selector?: AccountSelector): Promise<{ account: CsAccount; events: FineTuneEvent[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readV1Json<{ data?: any[] }>(await v1Fetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/events?limit=100`));
+  const events: FineTuneEvent[] = (j?.data || []).map((e: any) => ({ id: e?.id, createdAt: e?.created_at, level: e?.level, message: e?.message }));
+  return { account: acct, events };
+}
+
+export async function listFineTuningCheckpoints(jobId: string, selector?: AccountSelector): Promise<{ account: CsAccount; checkpoints: FineTuneCheckpoint[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readV1Json<{ data?: any[] }>(await v1Fetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/checkpoints?limit=50`));
+  const checkpoints: FineTuneCheckpoint[] = (j?.data || []).map((c: any) => ({
+    id: c?.id,
+    stepNumber: c?.step_number,
+    fineTunedModelCheckpoint: c?.fine_tuned_model_checkpoint,
+    createdAt: c?.created_at,
+    metrics: c?.metrics,
+  }));
+  return { account: acct, checkpoints };
+}
+
+// ---------------- Playground data-plane: images / audio / speech / completions ----------------
+
+export interface GeneratedImage { url?: string; b64Json?: string; revisedPrompt?: string }
+export async function generateImage(
+  deploymentName: string,
+  prompt: string,
+  params: { n?: number; size?: string; quality?: string; style?: string } = {},
+  selector?: AccountSelector,
+): Promise<{ images: GeneratedImage[] }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/images/generations?api-version=${AOAI_DATA_API}`;
+  const body: any = { prompt };
+  if (params.n) body.n = params.n;
+  if (params.size) body.size = params.size;
+  if (params.quality) body.quality = params.quality;
+  if (params.style) body.style = params.style;
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const parsed = await readV1Json<any>(res);
+  const images: GeneratedImage[] = (parsed?.data || []).map((d: any) => ({ url: d?.url, b64Json: d?.b64_json, revisedPrompt: d?.revised_prompt }));
+  return { images };
+}
+
+export async function transcribeAudio(
+  deploymentName: string,
+  audio: Buffer,
+  filename: string,
+  params: { language?: string; responseFormat?: string; prompt?: string } = {},
+  selector?: AccountSelector,
+): Promise<{ text: string }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/audio/transcriptions?api-version=${AOAI_DATA_API}`;
+  const form = new FormData();
+  form.append('file', new Blob([new Uint8Array(audio)]), filename);
+  if (params.language) form.append('language', params.language);
+  if (params.responseFormat) form.append('response_format', params.responseFormat);
+  if (params.prompt) form.append('prompt', params.prompt);
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${tok}` }, body: form as any });
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed: any; try { parsed = JSON.parse(text); } catch { parsed = text; }
+    throw new CsError(res.status, parsed, parsed?.error?.message || `Transcription failed (${res.status})`);
+  }
+  let out = text;
+  try { const j = JSON.parse(text); if (j && typeof j.text === 'string') out = j.text; } catch { /* raw text format */ }
+  return { text: out };
+}
+
+export async function synthesizeSpeech(
+  deploymentName: string,
+  input: string,
+  params: { voice?: string; responseFormat?: string; speed?: number } = {},
+  selector?: AccountSelector,
+): Promise<{ audio: Buffer; contentType: string }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/audio/speech?api-version=${AOAI_DATA_API}`;
+  const body: any = { input, voice: params.voice || 'alloy', response_format: params.responseFormat || 'mp3' };
+  if (params.speed !== undefined) body.speed = params.speed;
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const t = await res.text();
+    let parsed: any; try { parsed = JSON.parse(t); } catch { parsed = t; }
+    throw new CsError(res.status, parsed, parsed?.error?.message || `Speech synthesis failed (${res.status})`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const fmt = params.responseFormat || 'mp3';
+  const ct = fmt === 'wav' ? 'audio/wav' : fmt === 'opus' ? 'audio/opus' : fmt === 'aac' ? 'audio/aac' : fmt === 'flac' ? 'audio/flac' : 'audio/mpeg';
+  return { audio: buf, contentType: ct };
+}
+
+export async function textCompletion(
+  deploymentName: string,
+  prompt: string,
+  params: { maxTokens?: number; temperature?: number; topP?: number; stop?: string[]; n?: number } = {},
+  selector?: AccountSelector,
+): Promise<{ text: string; finishReason?: string; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/completions?api-version=${AOAI_DATA_API}`;
+  const body: any = { prompt };
+  if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens;
+  if (params.temperature !== undefined) body.temperature = params.temperature;
+  if (params.topP !== undefined) body.top_p = params.topP;
+  if (params.stop && params.stop.length) body.stop = params.stop;
+  if (params.n !== undefined) body.n = params.n;
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const parsed = await readV1Json<any>(res);
+  const choice = parsed?.choices?.[0];
+  return {
+    text: choice?.text ?? '',
+    finishReason: choice?.finish_reason,
+    usage: parsed?.usage ? { promptTokens: parsed.usage.prompt_tokens, completionTokens: parsed.usage.completion_tokens, totalTokens: parsed.usage.total_tokens } : undefined,
+  };
+}
+
+// ---------------- Assistants API (threads + runs) ----------------
+//
+// AOAI Assistants data-plane (v1), header OpenAI-Beta: assistants=v2:
+//   create assistant/thread, add message, create+poll run, list messages.
+
+async function assistantsFetch(acct: CsAccount, path: string, init: RequestInit = {}): Promise<Response> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${endpoint}/openai${path}${sep}api-version=${AOAI_DATA_API}`;
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      authorization: `Bearer ${tok}`,
+      'content-type': 'application/json',
+      'OpenAI-Beta': 'assistants=v2',
+    },
+  });
+}
+
+export interface AssistantHandles { assistantId: string; threadId: string }
+
+export async function createAssistantAndThread(
+  input: { deployment: string; name?: string; instructions?: string; tools?: string[] },
+  selector?: AccountSelector,
+): Promise<{ account: CsAccount } & AssistantHandles> {
+  const acct = await resolveAccount(false, selector);
+  const tools = (input.tools || []).map((t) => ({ type: t }));
+  const aBody: any = { model: input.deployment, name: input.name || 'Assistant', instructions: input.instructions || 'You are a helpful assistant.', tools };
+  const a = await readV1Json<any>(await assistantsFetch(acct, '/assistants', { method: 'POST', body: JSON.stringify(aBody) }));
+  const t = await readV1Json<any>(await assistantsFetch(acct, '/threads', { method: 'POST', body: JSON.stringify({}) }));
+  return { account: acct, assistantId: a?.id, threadId: t?.id };
+}
+
+/** Add a user message, create a run, poll to terminal status, return the latest assistant reply. */
+export async function runAssistantTurn(
+  handles: AssistantHandles,
+  message: string,
+  selector?: AccountSelector,
+): Promise<{ account: CsAccount; reply: string; status: string }> {
+  const acct = await resolveAccount(false, selector);
+  await readV1Json(await assistantsFetch(acct, `/threads/${encodeURIComponent(handles.threadId)}/messages`, { method: 'POST', body: JSON.stringify({ role: 'user', content: message }) }));
+  const run = await readV1Json<any>(await assistantsFetch(acct, `/threads/${encodeURIComponent(handles.threadId)}/runs`, { method: 'POST', body: JSON.stringify({ assistant_id: handles.assistantId }) }));
+  let status = run?.status || 'queued';
+  const runId = run?.id;
+  const terminal = new Set(['completed', 'failed', 'cancelled', 'expired', 'requires_action']);
+  const deadline = Date.now() + 90_000;
+  while (!terminal.has(status) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const cur = await readV1Json<any>(await assistantsFetch(acct, `/threads/${encodeURIComponent(handles.threadId)}/runs/${encodeURIComponent(runId)}`));
+    status = cur?.status || status;
+  }
+  const msgs = await readV1Json<{ data?: any[] }>(await assistantsFetch(acct, `/threads/${encodeURIComponent(handles.threadId)}/messages?order=desc&limit=10`));
+  const firstAssistant = (msgs?.data || []).find((m: any) => m?.role === 'assistant');
+  const reply = (firstAssistant?.content || [])
+    .filter((c: any) => c?.type === 'text')
+    .map((c: any) => c?.text?.value || '')
+    .join('\n') || (status === 'completed' ? '(empty reply)' : `Run ${status}`);
+  return { account: acct, reply, status };
+}
+
+/**
+ * Reasoning (o-series) chat completion — uses `reasoning_effort` and
+ * `max_completion_tokens` (o-models reject temperature / max_tokens).
+ */
+export async function reasoningCompletion(
+  deploymentName: string,
+  messages: ChatMessage[],
+  params: { reasoningEffort?: 'low' | 'medium' | 'high'; maxCompletionTokens?: number } = {},
+  selector?: AccountSelector,
+): Promise<ChatResult> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=${AOAI_DATA_API}`;
+  const body: any = { messages };
+  if (params.reasoningEffort) body.reasoning_effort = params.reasoningEffort;
+  if (params.maxCompletionTokens !== undefined) body.max_completion_tokens = params.maxCompletionTokens;
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const parsed = await readV1Json<any>(res);
+  const choice = parsed?.choices?.[0];
+  return {
+    content: choice?.message?.content ?? '',
+    finishReason: choice?.finish_reason,
+    usage: parsed?.usage ? { promptTokens: parsed.usage.prompt_tokens, completionTokens: parsed.usage.completion_tokens, totalTokens: parsed.usage.total_tokens } : undefined,
+    model: parsed?.model,
+  };
 }
 
 // ---------------- Quota / usages (per region) ----------------
