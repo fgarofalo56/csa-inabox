@@ -12,7 +12,7 @@
 
 import {
   Button, Input, Dropdown, Option, Caption1, Field, Badge,
-  MessageBar, MessageBarBody,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add16Regular, Delete16Regular } from '@fluentui/react-icons';
@@ -327,7 +327,6 @@ export function ConflictResolutionPolicyEditor({
           hint="Path to a numeric property; the item with the highest value wins. Defaults to /_ts (the system timestamp)."
         >
           <Input
-            size="small"
             value={policy.conflictResolutionPath ?? ''}
             placeholder="/_ts"
             disabled={disabled}
@@ -341,7 +340,6 @@ export function ConflictResolutionPolicyEditor({
           hint="Resource id of the registered stored procedure that resolves conflicts (e.g. sprocs/myMergeProc)."
         >
           <Input
-            size="small"
             value={policy.conflictResolutionProcedure ?? ''}
             placeholder="sprocs/myMergeProc"
             disabled={disabled}
@@ -360,6 +358,7 @@ export function ConflictResolutionPolicyEditor({
 
       <MessageBar intent="info">
         <MessageBarBody>
+          <MessageBarTitle>When this applies</MessageBarTitle>
           Conflicts only occur when the account has multi-region writes enabled
           (<code>enableMultipleWriteLocations</code>). On a single-write account this policy is
           stored but never exercised — it takes effect automatically if the account is later
