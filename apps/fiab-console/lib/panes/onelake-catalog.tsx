@@ -26,6 +26,7 @@ import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Text, Badge, Button, Dropdown, Option,
   Tab, TabList, Spinner, Tree, TreeItem, TreeItemLayout,
+  TagGroup, Tag,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -418,13 +419,21 @@ export function OneLakeCatalogPane() {
               </Toolbar>
 
               {selectedWs && (
-                <Badge
-                  appearance="tint" color="brand"
-                  style={{ marginBottom: tokens.spacingVerticalM, cursor: 'pointer' }}
-                  onClick={() => setSelectedWs(null)}
+                <TagGroup
+                  onDismiss={() => setSelectedWs(null)}
+                  aria-label="Active workspace filter"
+                  style={{ marginBottom: tokens.spacingVerticalM }}
                 >
-                  Workspace: {selectedWsName} ✕
-                </Badge>
+                  <Tag
+                    value={selectedWs}
+                    appearance="brand"
+                    dismissible
+                    dismissIcon={{ 'aria-label': `Clear workspace filter ${selectedWsName ?? ''}`.trim() }}
+                    icon={<Database20Regular />}
+                  >
+                    Workspace: {selectedWsName ?? selectedWs}
+                  </Tag>
+                </TagGroup>
               )}
 
               {view === 'list' ? (
