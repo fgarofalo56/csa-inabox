@@ -771,6 +771,66 @@ export function pbiRestScope(): string {
 }
 
 /**
+ * AAD `.default` token scope for the **Power BI REST API** (the
+ * `api.powerbi.com` / `api.powerbigov.us` data plane used by GenerateToken,
+ * ExportTo, refresh, etc.). This is the `analysis.* powerbi/api` audience and
+ * splits four ways across the sovereign boundaries — the same split as
+ * `pbiRestScope()` (which the Direct-Lake-shim XMLA refresh uses). Grounded in
+ * Microsoft Learn (power-bi/developer/embedded/embed-sample-for-customers-national-clouds):
+ *   - Commercial : https://analysis.windows.net/powerbi/api/.default
+ *   - GCC        : https://analysis.usgovcloudapi.net/powerbi/api/.default
+ *   - GCC High   : https://high.analysis.usgovcloudapi.net/powerbi/api/.default
+ *   - DoD        : https://mil.analysis.usgovcloudapi.net/powerbi/api/.default
+ *
+ * powerbi-client.ts used to hard-code the Commercial scope, which silently
+ * fails GenerateToken against `api.powerbigov.us` in GCC-High / DoD. Callers
+ * resolve the scope through this helper. `LOOM_POWERBI_SCOPE` overrides outright
+ * for clouds we don't enumerate (e.g. China:
+ * `https://analysis.chinacloudapi.cn/powerbi/api/.default`).
+ */
+export function getPbiScope(): string {
+  const explicit = process.env.LOOM_POWERBI_SCOPE;
+  if (explicit) return explicit;
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC-High':
+      return 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default';
+    case 'GCC':
+      return 'https://analysis.usgovcloudapi.net/powerbi/api/.default';
+    default:
+      return 'https://analysis.windows.net/powerbi/api/.default';
+  }
+}
+
+/**
+ * Power BI **embed iframe** host (full URL with scheme, no trailing slash) —
+ * the browser-side `app.powerbi.com` family host the powerbi-client SDK loads
+ * the report iframe from. This is the `IPaginatedReportLoadConfiguration.hostname`
+ * value for sovereign-cloud awareness (the SDK ignores `hostname` when an
+ * `embedUrl` is supplied, but it lets the console badge the cloud and gate
+ * honestly before attempting the embed). Per Microsoft Learn national-cloud
+ * embed mapping:
+ *   - Commercial / GCC : https://app.powerbi.com
+ *   - GCC High / IL5   : https://app.powerbigov.us
+ *   - DoD              : https://app.mil.powerbigov.us
+ * `LOOM_POWERBI_EMBED_HOST` overrides outright for clouds we don't enumerate.
+ */
+export function getPbiEmbedHostname(): string {
+  const explicit = process.env.LOOM_POWERBI_EMBED_HOST;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  switch (detectLoomCloud()) {
+    case 'DoD':
+      return 'https://app.mil.powerbigov.us';
+    case 'GCC-High':
+      return 'https://app.powerbigov.us';
+    default:
+      // Commercial + GCC both use the worldwide Power BI app host.
+      return 'https://app.powerbi.com';
+  }
+}
+
+/**
  * Power BI XMLA endpoint connection URL for a workspace id —
  * `powerbi://{pbiHost}/v1.0/myorg/{workspaceId}`. This is the value persisted
  * as `SemanticModelConfig.XmlaEndpoint` and handed to the C# shim's

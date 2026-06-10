@@ -48,6 +48,7 @@ import {
   DataBarVertical20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
+  ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -12752,7 +12753,7 @@ function ReportLikeEditor({
   const [embedErr, setEmbedErr] = useState<string | null>(null);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | 'PNG' | null>(null);
+  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | 'PNG' | 'XLSX' | 'DOCX' | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
   // Report viewer state — pages, bookmarks, view/edit mode, live embed handle.
   const [pages, setPages] = useState<Array<{ name: string; displayName?: string }>>([]);
@@ -12853,13 +12854,16 @@ function ReportLikeEditor({
   // The BFF drives start->poll->download and streams the binary back, which
   // we save via an object URL. Paginated reports use a different export SDK,
   // so export is offered for standard PBI reports only.
-  const exportReport = useCallback(async (format: 'PDF' | 'PPTX' | 'PNG') => {
+  const exportReport = useCallback(async (format: 'PDF' | 'PPTX' | 'PNG' | 'XLSX' | 'DOCX') => {
     if (!workspaceId || !reportId) return;
+    // Paginated reports (RDL) render through the SSRS engine — the BFF must send
+    // `paginated:true` so Power BI attaches a paginatedReportConfiguration body.
+    const paginated = kind === 'paginated';
     setExportBusy(format); setExportErr(null);
     try {
       const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/export`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId, format }),
+        body: JSON.stringify({ workspaceId, format, paginated }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -12875,7 +12879,7 @@ function ReportLikeEditor({
       setTimeout(() => URL.revokeObjectURL(url), 4000);
     } catch (e: any) { setExportErr(e?.message || String(e)); }
     finally { setExportBusy(null); }
-  }, [workspaceId, reportId, report?.name]);
+  }, [workspaceId, reportId, report?.name, kind]);
 
   // Load the report's pages so the viewer can render a Pages list and the
   // embed can setPage(). Real REST: GET /reports/{id}/pages.
@@ -13040,6 +13044,13 @@ function ReportLikeEditor({
           pointCount: dataPoints.length,
         });
       });
+      // The `error` event fires for both standard and paginated reports (the
+      // latter does NOT emit `loaded`/`rendered`, so this is the only signal we
+      // get on a paginated render failure). Surface it in the viewer banner.
+      embed?.on?.('error', (ev: any) => {
+        const msg = ev?.detail?.message || ev?.detail?.detailedMessage;
+        if (msg) setViewerErr(String(msg));
+      });
     } catch { /* event wiring best-effort */ }
   }, [reloadBookmarks]);
 
@@ -13054,7 +13065,13 @@ function ReportLikeEditor({
         { label: refreshBusy ? 'Refreshing…' : 'Refresh data', onClick: hasReport && !refreshBusy ? refreshData : undefined, disabled: !hasReport || refreshBusy, title: !hasReport ? 'select a report first' : 'queue a refresh of the report’s underlying semantic model' },
         { label: 'Reload metadata', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : 'reload list + selected report metadata' },
       ]},
-      ...(kind === 'paginated' ? [] : [{ label: 'Export', actions: [
+      ...(kind === 'paginated' ? [{ label: 'Export', actions: [
+        // Paginated reports render through the SSRS engine — PDF / Excel / Word
+        // are the parity exports the Power BI service exposes for RDL.
+        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to PDF via Power BI REST (ExportTo + paginatedReportConfiguration)' },
+        { label: exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel', onClick: hasReport && !exportBusy ? () => exportReport('XLSX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to Excel (.xlsx) via Power BI REST' },
+        { label: exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word', onClick: hasReport && !exportBusy ? () => exportReport('DOCX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to Word (.docx) via Power BI REST' },
+      ]}] : [{ label: 'Export', actions: [
         { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PDF via Power BI REST' },
         { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PowerPoint via Power BI REST' },
         { label: exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG', onClick: hasReport && !exportBusy ? () => exportReport('PNG') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PNG via Power BI REST' },
@@ -13077,11 +13094,33 @@ function ReportLikeEditor({
   ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme, copilotOpen]);
 
   // Mint a per-report embed token whenever the selected report changes.
-  // Paginated reports use a different SDK (`pbi-paginated`) that we don't
-  // support yet, so skip token issuance for them.
+  //
+  // Paginated reports (RDL) use IPaginatedReportLoadConfiguration through the
+  // SAME powerbi-client SDK — there is no separate `pbi-paginated` package. They
+  // mint their token through the MULTI-RESOURCE GenerateToken (reports[] +
+  // referenced semantic-model datasets[]), so they hit a dedicated BFF route.
   useEffect(() => {
-    if (!workspaceId || !reportId || kind === 'paginated') { setEmbed(null); return; }
+    if (!workspaceId || !reportId) { setEmbed(null); return; }
     let cancelled = false;
+    if (kind === 'paginated') {
+      (async () => {
+        setEmbedErr(null);
+        try {
+          const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/paginated-embed-token`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceId, datasetIds: report?.datasetId ? [report.datasetId] : [] }),
+          });
+          const j = await r.json();
+          if (cancelled) return;
+          if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, reportId: j.reportId });
+          else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+        } catch (e: any) {
+          if (!cancelled) setEmbedErr(e?.message || String(e));
+        }
+      })();
+      return () => { cancelled = true; };
+    }
     (async () => {
       setEmbedErr(null);
       try {
@@ -13099,7 +13138,7 @@ function ReportLikeEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, [workspaceId, reportId, kind, editMode]);
+  }, [workspaceId, reportId, kind, editMode, report?.datasetId]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -13138,6 +13177,13 @@ function ReportLikeEditor({
                 <Switch label={editMode ? 'Edit mode' : 'View mode'} checked={editMode} onChange={toggleEditMode} disabled={!reportId} />
               </>
             )}
+            {kind === 'paginated' && powerBiConfigured && (
+              <>
+                <Button appearance="outline" icon={exportBusy === 'PDF' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy} title="export the paginated report to PDF via Power BI REST">{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
+                <Button appearance="outline" icon={exportBusy === 'XLSX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('XLSX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Excel (.xlsx) via Power BI REST">{exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel'}</Button>
+                <Button appearance="outline" icon={exportBusy === 'DOCX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('DOCX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Word (.docx) via Power BI REST">{exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word'}</Button>
+              </>
+            )}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
@@ -13171,12 +13217,11 @@ function ReportLikeEditor({
               </MessageBarBody>
             </MessageBar>
           )}
-          {powerBiConfigured && (kind === 'paginated' || reportView === 'view') && (
+          {powerBiConfigured && kind !== 'paginated' && reportView === 'view' && (
             <MessageBar intent="info">
               <MessageBarBody>
                 <MessageBarTitle>Live Power BI embed</MessageBarTitle>
-                This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
-                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+                This pane embeds the live report, triggers a dataset refresh, and exports to PDF/PPTX — all against the real
                 Power BI REST API. To build visuals inside Loom over the model, switch to the <strong>Visual designer</strong> tab.
               </MessageBarBody>
             </MessageBar>
@@ -13219,13 +13264,42 @@ function ReportLikeEditor({
                   </div>
                 </div>
               ) : kind === 'paginated' ? (
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    <MessageBarTitle>Paginated report embed not yet wired</MessageBarTitle>
-                    Power BI Paginated Reports use the <code>pbi-paginated</code> SDK which is separate from the
-                    standard powerbi-client. Use "Open in Power BI" above; an in-place embed lands in a follow-up PR.
-                  </MessageBarBody>
-                </MessageBar>
+                embed ? (
+                  <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Paginated report — in-place embed</MessageBarTitle>
+                        Rendered live via the Power BI paginated viewer (IPaginatedReportLoadConfiguration).
+                        Use the parameter bar to filter; drill-through links inside the report navigate in place.
+                        Use the <strong>Export</strong> ribbon (PDF / Excel / Word) for a downloadable copy.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <PowerBIEmbedFrame
+                      embedType="report"
+                      embedVariant="paginated"
+                      id={embed.reportId}
+                      embedUrl={embed.embedUrl}
+                      accessToken={embed.token}
+                      height={680}
+                      onEmbedded={onEmbedded}
+                    />
+                  </div>
+                ) : embedErr ? (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>Could not mint paginated embed token</MessageBarTitle>
+                      {embedErr}. The Console UAMI must be a workspace <strong>Member</strong> (not Contributor/Viewer)
+                      and the tenant setting <strong>"Service principals can use Fabric APIs"</strong> must be enabled
+                      with the UAMI's security group. In GCC-High / DoD set{' '}
+                      <code>LOOM_POWERBI_BASE=https://api.powerbigov.us/v1.0/myorg</code>.
+                    </MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+                    <Spinner size="medium" label="Loading paginated report embed…" labelPosition="below" />
+                  </div>
+                )
               ) : embedErr ? (
                 <MessageBar intent="error">
                   <MessageBarBody>

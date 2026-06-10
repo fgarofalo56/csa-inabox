@@ -34,7 +34,9 @@
  */
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
-import { getPbiGovHost } from './cloud-endpoints';
+import { getPbiGovHost, getPbiScope, getPbiEmbedHostname } from './cloud-endpoints';
+
+export { getPbiEmbedHostname } from './cloud-endpoints';
 
 // Power BI REST base. When LOOM_POWERBI_BASE is unset we resolve the
 // sovereign-cloud-aware host: Commercial / GCC → api.powerbi.com, GCC-High /
@@ -44,7 +46,12 @@ import { getPbiGovHost } from './cloud-endpoints';
 const POWERBI_BASE = process.env.LOOM_POWERBI_BASE || `${getPbiGovHost()}/v1.0/myorg`;
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 
-const POWERBI_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
+// Sovereign-cloud-aware Power BI REST scope. Commercial → the historical
+// `analysis.windows.net/powerbi/api/.default`; GCC-High / DoD use the Gov /
+// DoD analysis audiences. Hard-coding the Commercial scope silently 401s
+// against api.powerbigov.us in the Government clouds. `LOOM_POWERBI_SCOPE`
+// (honoured inside getPbiScope) overrides outright.
+const POWERBI_SCOPE = getPbiScope();
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -850,7 +857,7 @@ export async function addScorecardGoalValue(
 export async function getEmbedToken(
   workspaceId: string,
   body: {
-    datasets?: { id: string }[];
+    datasets?: { id: string; xmlaPermissions?: 'Off' | 'ReadOnly' }[];
     reports?: { id: string; allowEdit?: boolean }[];
     targetWorkspaces?: { id: string }[];
     accessLevel?: 'View' | 'Edit' | 'Create';
@@ -876,6 +883,35 @@ export async function generateReportEmbedToken(
     `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/GenerateToken`,
     { method: 'POST', body: { accessLevel } },
   );
+}
+
+/**
+ * Embed token for a **paginated report** (RDL). Unlike standard Power BI
+ * reports, paginated reports may reference one or more Power BI semantic
+ * models as data sources, so the embed token must be minted with the
+ * MULTI-RESOURCE `POST /v1.0/myorg/GenerateToken` (not the per-report
+ * `/reports/{id}/GenerateToken`). Per Microsoft Learn the request must:
+ *   - list the report under `reports[]` with `allowEdit: false`
+ *     (paginated reports cannot be edited via the embed SDK), and
+ *   - list every referenced Power BI semantic model under `datasets[]` with
+ *     `xmlaPermissions: 'ReadOnly'` so the token grants read access to the
+ *     bound model without write/XMLA rights.
+ *
+ * The Console UAMI must be a **Member or above** in the workspace for
+ * GenerateToken to succeed for paginated content.
+ *
+ * Docs:
+ *   https://learn.microsoft.com/power-bi/developer/embedded/embed-paginated-reports-customers
+ *   https://learn.microsoft.com/rest/api/power-bi/embed-token/generate-token
+ */
+export async function generatePaginatedReportEmbedToken(
+  reportId: string,
+  datasetIds: string[] = [],
+): Promise<{ token: string; tokenId: string; expiration: string }> {
+  return getEmbedToken('', {
+    reports: [{ id: reportId, allowEdit: false }],
+    datasets: datasetIds.filter(Boolean).map((id) => ({ id, xmlaPermissions: 'ReadOnly' })),
+  });
 }
 
 export async function generateDashboardEmbedToken(
@@ -952,7 +988,20 @@ export async function executeDatasetQueries(
 //
 // All three steps are groupId-scoped (per the PowerBIEntityNotFound fix).
 
+/**
+ * Standard Power BI report export formats (PowerBIReport ExportTo). Paginated
+ * reports support a wider set via `PaginatedExportFormat`.
+ */
 export type ExportFormat = 'PDF' | 'PPTX' | 'PNG';
+
+/**
+ * Paginated-report (RDL) export formats. The Power BI `ExportTo` REST renders
+ * paginated reports through the SSRS rendering extensions, which support PDF,
+ * Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, XML, MHTML and image
+ * formats. Verified against Microsoft Learn
+ * (power-bi/developer/embedded/export-paginated-report).
+ */
+export type PaginatedExportFormat = 'PDF' | 'DOCX' | 'XLSX' | 'PPTX' | 'CSV' | 'XML' | 'MHTML' | 'IMAGE';
 
 export interface ExportJob {
   id: string;
@@ -972,6 +1021,35 @@ export async function startReportExport(
   return call<ExportJob>(
     `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/ExportTo`,
     { method: 'POST', body: { format } },
+  );
+}
+
+/**
+ * Step 1 (paginated) — queue an export job for a **paginated report** (RDL).
+ * Same `ExportTo` endpoint as standard reports, but the request body must carry
+ * a `paginatedReportConfiguration` object (even if empty) so Power BI routes the
+ * job through the SSRS rendering engine. Optional report parameters are passed
+ * as `parameterValues` (the `rp:` parameter bar values). Verified against
+ * Microsoft Learn (power-bi/developer/embedded/export-paginated-report).
+ */
+export async function startPaginatedReportExport(
+  workspaceId: string,
+  reportId: string,
+  format: PaginatedExportFormat,
+  parameterValues: Array<{ name: string; value: string }> = [],
+): Promise<ExportJob> {
+  return call<ExportJob>(
+    `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/ExportTo`,
+    {
+      method: 'POST',
+      body: {
+        format,
+        paginatedReportConfiguration: {
+          formatSettings: {},
+          ...(parameterValues.length ? { parameterValues } : {}),
+        },
+      },
+    },
   );
 }
 

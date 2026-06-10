@@ -2087,6 +2087,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the report Visual Designer's executeQueries calls + measure
             // validation. GCC runs on the Commercial api.powerbi.com host.
             { name: 'LOOM_POWERBI_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.powerbigov.us/v1.0/myorg' : 'https://api.powerbi.com/v1.0/myorg' }
+            // Power BI REST AAD scope (GenerateToken / ExportTo / refresh). This
+            // is the analysis.* powerbi/api audience and splits 4 ways across the
+            // sovereign boundaries — hard-coding the Commercial scope silently
+            // 401s against api.powerbigov.us in Gov/DoD. getPbiScope() derives it
+            // from LOOM_CLOUD when this is unset; we pin it explicitly per
+            // boundary so the paginated-report embed token mints correctly.
+            { name: 'LOOM_POWERBI_SCOPE', value: boundary == 'IL5' ? 'https://mil.analysis.usgovcloudapi.net/powerbi/api/.default' : (boundary == 'GCC-High' ? 'https://high.analysis.usgovcloudapi.net/powerbi/api/.default' : (boundary == 'GCC' ? 'https://analysis.usgovcloudapi.net/powerbi/api/.default' : 'https://analysis.windows.net/powerbi/api/.default')) }
             // Semantic-model Model view — OPTIONAL Azure Analysis Services XMLA
             // write endpoint (azure-native, no Fabric). Empty by default: the
             // Loom-native Cosmos backend works without it. Set to the DLZ
