@@ -6038,11 +6038,14 @@ const TIME_ORDER: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-4h', 'last-24h'
 const TILE_VIZ_OPTIONS: TileViz[] = ['table', 'timechart', 'line', 'column', 'bar', 'pie', 'stat', 'map'];
 
 // Auto-refresh interval choices (Fabric "Manage > Auto refresh" exposes an
-// explicit minimum interval + default rate). Minimum is 30s — the ADX
-// /v1/rest/query round-trip is 2–10s, so a tighter cadence risks query
-// pile-up. Matches the Fabric provisioner's minInterval: '30s'.
+// explicit minimum interval + default rate). The ADX /v1/rest/query round-trip
+// is 2–10s, so the tightest live cadences (5s/30s) are paired with an in-flight
+// guard in the auto-refresh effect below: a tick is SKIPPED while the previous
+// runAll() is still resolving, so a slow cluster can never pile up overlapping
+// queries. Matches the Fabric Real-Time Dashboard continuous-refresh behavior.
 const REFRESH_INTERVALS: { ms: number; label: string }[] = [
   { ms: 0,         label: 'Off' },
+  { ms: 5_000,     label: '5 seconds' },
   { ms: 30_000,    label: '30 seconds' },
   { ms: 60_000,    label: '1 minute' },
   { ms: 300_000,   label: '5 minutes' },
@@ -6237,6 +6240,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  // True while a runAll() ADX requery is in flight. Read synchronously inside
+  // the auto-refresh interval so a tight cadence (5s/30s) skips a tick rather
+  // than stacking overlapping /run round-trips against a slow cluster.
+  const runInFlightRef = useRef(false);
+  // Wall-clock of the last successful auto/manual refresh — surfaced in the
+  // toolbar so the user can see the live cadence is actually firing.
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   // Index of the tile whose edit flyout (Dialog) is open, or null. Mirrors the
@@ -6306,6 +6316,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   // Run the CURRENT (possibly unsaved) builder model live via POST /run.
   const runAll = useCallback(async () => {
     if (tiles.length === 0) return;
+    runInFlightRef.current = true;
     setRunning(true); setSaveErr(null);
     try {
       const r = await fetch(`/api/items/kql-dashboard/${id}/run`, {
@@ -6322,9 +6333,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         result: j.tiles?.[i]?.result,
         error: j.tiles?.[i]?.error,
       })));
+      setLastRefreshedAt(Date.now());
     } catch (e: any) {
       setSaveErr(e?.message || String(e));
     } finally {
+      runInFlightRef.current = false;
       setRunning(false);
     }
   }, [id, tiles.length, buildModel]);
@@ -6447,10 +6460,16 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
-  // Auto-refresh — re-run the live model every N ms.
+  // Auto-refresh — re-run the live model (real ADX requery via /run) every N ms.
+  // A tick is SKIPPED when the previous requery is still resolving so a tight
+  // cadence (5s/30s) against a slow cluster can never pile up overlapping
+  // queries — the next tick simply picks up once the in-flight run completes.
   useEffect(() => {
     if (!autoRefreshMs || autoRefreshMs <= 0) return;
-    const t = setInterval(() => { runAll(); }, autoRefreshMs);
+    const t = setInterval(() => {
+      if (runInFlightRef.current) return;
+      runAll();
+    }, autoRefreshMs);
     return () => clearInterval(t);
   }, [autoRefreshMs, runAll]);
 
@@ -6590,6 +6609,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             </option>
           ))}
         </Select>
+        {autoRefreshMs > 0 && lastRefreshedAt && (
+          <Caption1 aria-live="polite">Last refreshed {new Date(lastRefreshedAt).toLocaleTimeString()}</Caption1>
+        )}
         <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
         </Button>

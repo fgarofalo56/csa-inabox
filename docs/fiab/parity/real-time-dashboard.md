@@ -63,7 +63,7 @@ global **time range**, with **auto-refresh** and **save**.
 | 8 Parameter — data source | ✅ built | filter-bar dropdown of dashboard sources |
 | 9 Parameter — time range (duration) | ✅ built | global Time control → `_startTime`/`_endTime`/`_loomTimeFrom` |
 | 10 Parameter filter bar | ✅ built | params render at top; onBlur/Apply re-runs all tiles live |
-| 11 Auto refresh | ✅ built | cycles off/15s/30s/60s/300s; re-runs the live model; persisted |
+| 11 Auto refresh | ✅ built | interval Select off/5s/30s/1m/5m/30m/1h; each tick re-queries ADX via `/run` (in-flight guard skips a tick while a requery is still resolving so a 5s cadence can't pile up); `autoRefreshMs` persisted in the model; "Last refreshed HH:MM:SS" shown live |
 | 11 Manual refresh | ✅ built | "Refresh all" + per-tile Run |
 | 12 Save (model → Cosmos) | ✅ built | `PUT /api/items/kql-dashboard/[id]` saves tiles+sources+params+timeRange |
 | 13 Edit JSON model | ✅ built | full `{ tiles, dataSources, parameters, timeRange }` (array root = tiles only) |

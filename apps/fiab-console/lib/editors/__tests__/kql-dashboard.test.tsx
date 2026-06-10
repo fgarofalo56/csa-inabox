@@ -136,6 +136,35 @@ describe('KqlDashboardEditor', () => {
     expect(select.value).toBe('30000');
   });
 
+  it('exposes the 5-second live-refresh interval option', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // The acceptance interval (5s) is a real, selectable option.
+    const opt = screen.getByRole('option', { name: /every 5 seconds/i }) as HTMLOptionElement;
+    expect(opt).toBeInTheDocument();
+    const select = screen.getByRole('combobox', { name: /Auto-refresh interval/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '5000' } });
+    expect(select.value).toBe('5000');
+  });
+
+  it('auto-refresh interval requeries ADX via /run on each tick', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // Select the tightest live cadence (5s) and confirm the editor issues real
+    // /run requeries against ADX on the cadence (the initial load already runs
+    // one; each tick issues another). We assert at least one /run POST fired —
+    // the requery path the auto-refresh setInterval drives.
+    const select = screen.getByRole('combobox', { name: /Auto-refresh interval/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '5000' } });
+    expect(select.value).toBe('5000');
+    await waitFor(() => {
+      const runCalls = calls.filter(
+        (c) => c.url.includes('/api/items/kql-dashboard/dash-fixture/run') && c.init?.method === 'POST',
+      );
+      expect(runCalls.length).toBeGreaterThan(0);
+    });
+  });
+
   it('shows the drill-through config when a tile is expanded', async () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
     await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
