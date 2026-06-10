@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Button, Dropdown, Option, Caption1, Text,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Input,
+  Input, Skeleton, SkeletonItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowClockwise20Regular, Search20Regular } from '@fluentui/react-icons';
@@ -69,6 +69,31 @@ const useStyles = makeStyles({
     flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM,
   },
   search: { flex: 1, minWidth: '220px' },
+  windowLabel: { color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  // KPI stat cards — same visual language as the other Monitor tabs.
+  stats: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL,
+  },
+  stat: {
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+  statLabel: {
+    fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600,
+    textTransform: 'uppercase', letterSpacing: '0.05em',
+  },
+  statValue: { fontSize: '26px', fontWeight: 700, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' },
+  statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
+  statAccentBrand: { color: tokens.colorBrandForeground1 },
+  statAccentDanger: { color: tokens.colorPaletteRedForeground1 },
+  skel: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL,
+  },
+  skelCard: { height: '84px', borderRadius: tokens.borderRadiusLarge },
 });
 
 const DAYS_OPTIONS: { value: string; label: string }[] = [
@@ -146,6 +171,22 @@ export function MonitorHubPane() {
     );
   }, [rows, q]);
 
+  // KPI roll-up of the run window (over the full result set, not the search
+  // filter) — same stat-card language as the other Monitor tabs.
+  const kpis = useMemo(() => {
+    const succeeded = rows.filter((r) => /succ/i.test(r.status ?? '')).length;
+    const failed = rows.filter((r) => /fail/i.test(r.status ?? '')).length;
+    const inProgress = rows.filter(
+      (r) => /inprogress|queued|inqueue|running/i.test(r.status ?? ''),
+    ).length;
+    return [
+      { label: 'Runs', value: rows.length, accent: undefined as string | undefined },
+      { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
+      { label: 'In progress', value: inProgress, accent: inProgress > 0 ? styles.statAccentBrand : undefined },
+      { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
+    ];
+  }, [rows, styles]);
+
   const columns: LoomColumn<ActivityRow & { __id: string }>[] = useMemo(() => [
     {
       key: 'name', label: 'Name', width: 280, filterable: true, filterType: 'text',
@@ -215,7 +256,7 @@ export function MonitorHubPane() {
           value={q}
           onChange={(_, d) => setQ(d.value)}
         />
-        <Caption1>Window:</Caption1>
+        <Caption1 className={styles.windowLabel}>Window:</Caption1>
         <Dropdown
           aria-label="Time window"
           value={DAYS_OPTIONS.find((d) => d.value === days)?.label || days}
@@ -239,7 +280,30 @@ export function MonitorHubPane() {
       )}
 
       {err && (
-        <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn&apos;t load activity history</MessageBarTitle>
+            {err}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* KPI roll-up — skeleton while loading, suppressed behind the honest gate. */}
+      {!gate && (
+        loading ? (
+          <Skeleton aria-label="Loading run summary" className={styles.skel}>
+            {[0, 1, 2, 3].map((i) => <SkeletonItem key={i} className={styles.skelCard} />)}
+          </Skeleton>
+        ) : (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        )
       )}
 
       <Section title="Activities">
