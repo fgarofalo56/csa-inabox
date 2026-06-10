@@ -86,28 +86,28 @@ export interface FabricItemType {
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Fabric Apps — Rayfin (Build 2026 preview)
   { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
-    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI.',
+    description: 'Code-first app backend (database, auth, Data APIs, storage) OR a data app bound to an existing semantic model — deployed to Fabric with the Rayfin SDK + CLI.',
     learnContent: {
-      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace as a Rayfin item — data lands in OneLake (no ETL) and inherits your tenant's Entra identity, security, and governance. In Loom you author the backend spec here and Loom generates the SDK model + the exact CLI commands to deploy; the Rayfin CLI runs on your dev machine.",
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). The editor builds two app shapes. APP BACKEND (the general case): define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators — `npx rayfin up` deploys it as a Rayfin item, data lands in OneLake, and it inherits your tenant's Entra identity + governance. DATA APP (the --template dataapp flow, \"Create an app connected to a semantic model\"): the app does NOT define its own schema — it BINDS to an existing semantic model and queries it with DAX through the Execute DAX Queries API. Loom lists the bindable models from a real backend (Azure-native default: Loom semantic models + Azure Analysis Services; opt-in: Power BI/Fabric datasets), runs a live DAX probe so you prove the binding before deploying, and emits the scaffold + a typed RayfinClient data-access client. The Rayfin CLI runs on your dev machine.",
       "steps": [
         {
-          "title": "Define entities + services",
-          "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
+          "title": "Pick the app shape",
+          "body": "App backend tab: define entities + services. Data app tab: bind to an existing semantic model and query it with DAX (no schema to define)."
         },
         {
-          "title": "Generate the model + commands",
-          "body": "Loom emits a model.ts using @microsoft/rayfin-core decorators (@entity/@text/@boolean/@date) and the exact CLI sequence — copy them into your project."
+          "title": "Bind + prove the model (data app)",
+          "body": "Select a semantic model (Loom-native, Azure Analysis Services, or a Power BI workspace dataset), then run a live EVALUATE query — the same Execute DAX Queries call the deployed app makes — to prove the binding works."
+        },
+        {
+          "title": "Generate the artifacts + commands",
+          "body": "Loom emits a model.ts (@entity/@text/@boolean/@date) for the backend shape, or the `--template dataapp` scaffold + a typed src/data/model.ts client for the data-app shape, plus the exact CLI sequence."
         },
         {
           "title": "Scaffold + deploy",
-          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, then `npx rayfin up` to deploy to Fabric."
-        },
-        {
-          "title": "It runs in your tenant",
-          "body": "The deployed Rayfin item runs on Fabric under your identity/network/governance; app data lands in OneLake so it's catalogable and governed alongside your other items."
+          "body": "Run the generated `npm create @microsoft/rayfin@latest …` command, then `npx rayfin up` to deploy to Fabric. The app runs under your tenant identity/network/governance."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/apps/overview"
+      "docsUrl": "https://learn.microsoft.com/fabric/apps/data-apps-template"
     } },
   // Data Engineering
   { slug: 'lakehouse', displayName: 'Lakehouse', restType: 'Lakehouse', category: 'Data Engineering',
