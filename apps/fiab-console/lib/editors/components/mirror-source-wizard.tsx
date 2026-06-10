@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, Divider, Checkbox, Switch,
-  Table, TableBody, TableRow, TableCell,
+  Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell,
   MessageBar, MessageBarBody, Badge,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
@@ -81,6 +81,23 @@ const useStyles = makeStyles({
   connRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   summary: { display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
   sumKey: { color: tokens.colorNeutralForeground3 },
+  sumVal: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  // Snowflake "Include Iceberg" callout — an accented info card, not a flat box.
+  icebergCard: {
+    marginTop: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  icebergHint: { color: tokens.colorNeutralForeground3, lineHeight: tokens.lineHeightBase200 },
+  hintRow: { display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 },
+  tableActions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  msgTop: { marginTop: tokens.spacingVerticalS },
 });
 
 function toB64(s: string): string {
@@ -343,19 +360,19 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
 
                 {/* Snowflake — "Include Iceberg tables" (Fabric parity). */}
                 {isSnowflake && (
-                  <div style={{ marginTop: 8, padding: 10, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 }}>
+                  <div className={s.icebergCard}>
                     <Switch
                       checked={includeIceberg}
                       onChange={(_, d) => { setIncludeIceberg(!!d.checked); if (!d.checked) setIcebergSel(new Set()); }}
                       label={<span><strong>Include Iceberg tables</strong> — read Snowflake Iceberg tables in place (no copy)</span>}
                     />
-                    <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                    <Caption1 className={s.icebergHint}>
                       Snowflake Iceberg tables live as Parquet in external storage. Loom exposes them via a Synapse
                       Serverless query over that storage — the Azure-native equivalent of Fabric&apos;s shortcut +
                       Iceberg→Delta virtualization. No Microsoft Fabric or OneLake required.
                     </Caption1>
                     {includeIceberg && (
-                      <Field label="Iceberg storage URL" required style={{ marginTop: 8 }}
+                      <Field label="Iceberg storage URL" required
                         hint="One storage connection for all selected Iceberg tables. Find it with SYSTEM$GET_ICEBERG_TABLE_INFORMATION in Snowflake.">
                         <Input value={icebergStorageUrl} onChange={(_, d) => setIcebergStorageUrl(d.value)}
                           placeholder="https://acct.dfs.core.windows.net/container/path  or  abfss://container@acct.dfs.core.windows.net/path" />
@@ -363,7 +380,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     )}
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                <div className={s.tableActions}>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
                     {tablesLoading ? 'Loading…' : 'Load tables'}
                   </Button>
@@ -375,15 +392,24 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </>
                   )}
                 </div>
-                {tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
+                {tablesMsg && <Caption1 className={s.hintRow}>{tablesMsg}</Caption1>}
                 {isSnowflake && includeIceberg && availTables && availTables.length > 0 && (
-                  <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.hintRow}>
                     Tick <strong>Mirror</strong> for managed tables (copied) and <strong>Iceberg</strong> for Iceberg tables (read in place). {icebergSel.size} Iceberg selected.
                   </Caption1>
                 )}
                 {availTables && availTables.length > 0 && (
                   <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: 8 }}>
                     <Table size="small" aria-label="Source tables">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell style={{ width: 36 }}>Mirror</TableHeaderCell>
+                          <TableHeaderCell>Schema.Table</TableHeaderCell>
+                          {isSnowflake && includeIceberg && (
+                            <TableHeaderCell style={{ width: 120 }}>Iceberg</TableHeaderCell>
+                          )}
+                        </TableRow>
+                      </TableHeader>
                       <TableBody>
                         {availTables.map((t) => {
                           const k = tkey(t);
@@ -395,7 +421,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                               <TableCell className={s.cell}>{t.schema}.{t.table}</TableCell>
                               {isSnowflake && includeIceberg && (
                                 <TableCell style={{ width: 120 }}>
-                                  <Checkbox aria-label={`Iceberg ${k}`} label="Iceberg" checked={icebergSel.has(k)}
+                                  <Checkbox aria-label={`Iceberg ${k}`} checked={icebergSel.has(k)}
                                     onChange={(_, d) => setIcebergSel((prev) => { const n = new Set(prev); if (d.checked) n.add(k); else n.delete(k); return n; })} />
                                 </TableCell>
                               )}
@@ -425,9 +451,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   {isSnowflake && (
                     <>
                       <span className={s.sumKey}>Iceberg</span>
-                      <span>
+                      <span className={s.sumVal}>
                         {includeIceberg
-                          ? <>Included · {icebergSel.size} table(s) · <Badge appearance="tint" color="brand" size="small">read in place</Badge></>
+                          ? <>Included · {icebergSel.size} table(s) <Badge appearance="tint" color="brand" size="small">read in place</Badge></>
                           : 'Managed tables only (Iceberg skipped)'}
                       </span>
                     </>
