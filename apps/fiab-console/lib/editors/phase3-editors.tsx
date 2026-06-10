@@ -77,6 +77,7 @@ import type {
   RdlField, RdlDataSourceType, RdlExportFormat,
 } from '@/lib/azure/paginated-report-client';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
+import { WarehouseAccelerationPanel } from './components/warehouse-acceleration';
 import { NewItemCreateGate } from './new-item-gate';
 import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
 import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
@@ -8749,7 +8750,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
   // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'settings'>('query');
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -9201,15 +9202,21 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'settings')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
+            <Tab value="settings" icon={<Flash20Regular />}>Acceleration</Tab>
           </TabList>
           {editorTab === 'monitoring' && (
             isNew
               ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
               : <WarehouseMonitoringTab itemId={id} engine="warehouse" />
+          )}
+          {editorTab === 'settings' && (
+            isNew
+              ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Query-acceleration settings activate once the warehouse item is saved.</MessageBarBody></MessageBar>
+              : <WarehouseAccelerationPanel id={id} ready={ready} />
           )}
           {editorTab === 'model' && (
             <ModelViewPanel
