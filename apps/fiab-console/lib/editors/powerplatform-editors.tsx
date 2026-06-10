@@ -29,6 +29,7 @@ import {
 import {
   Add20Regular, Edit20Regular, Delete20Regular, Copy20Regular,
   DatabaseArrowUp20Regular, ArrowReset20Regular, ArrowSync20Regular, History20Regular,
+  Open16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
@@ -767,16 +768,23 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
           {selectedTable && <Caption1>Table: <strong>{selectedTable}</strong></Caption1>}
           {selectedTable && env.selected && (
-            <a
-              href={`https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/entities/${encodeURIComponent(selectedTable)}`}
-              target="_blank" rel="noreferrer"
-            >Open in Maker</a>
+            <Button
+              appearance="transparent"
+              icon={<Open16Regular />}
+              onClick={() => window.open(
+                `https://make.powerapps.com/environments/${encodeURIComponent(env.selected!)}/entities/${encodeURIComponent(selectedTable)}`,
+                '_blank', 'noopener,noreferrer',
+              )}
+            >Open in Maker</Button>
           )}
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.selected && !env.loading && <EmptyText>Select an environment to list its Dataverse tables.</EmptyText>}
         {tablesState.loading && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
         {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} />}
+        {!selectedTable && !tablesState.loading && !tablesState.error && env.selected && tablesState.data && filtered.length === 0 && (
+          <EmptyText>No custom or key system tables in this environment.</EmptyText>
+        )}
         {!selectedTable && filtered.length > 0 && (
           <>
             <Caption1>{filtered.length} table(s) — custom + key system entities</Caption1>
@@ -1309,8 +1317,12 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadAll} disabled={listSt.loading}>Reload</Button>
-          {env.selected && (
-            <a href={makerHref} target="_blank" rel="noreferrer">Open Power Apps maker</a>
+          {env.selected && makerHref && (
+            <Button
+              appearance="transparent"
+              icon={<Open16Regular />}
+              onClick={() => window.open(makerHref, '_blank', 'noopener,noreferrer')}
+            >Open Power Apps maker</Button>
           )}
         </div>
         {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
