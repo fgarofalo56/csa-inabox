@@ -4423,7 +4423,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       Expose a Delta table as <strong>Apache Iceberg V2</strong> so Iceberg readers
                       (Snowflake, Trino, Spark, BigQuery) can read the same data — the Azure-native 1:1 of
                       OneLake's Delta→Iceberg virtualization. On save, Loom runs a real{' '}
-                      <code>ALTER TABLE delta.`abfss://…` SET TBLPROPERTIES (delta.universalFormat.enabledFormats=&apos;iceberg&apos;)</code>{' '}
+                      <code style={{ wordBreak: 'break-all' }}>ALTER TABLE delta.`abfss://…` SET TBLPROPERTIES (delta.universalFormat.enabledFormats=&apos;iceberg&apos;)</code>{' '}
                       (Delta UniForm) via a Databricks SQL Warehouse. Databricks then writes an Iceberg{' '}
                       <code>metadata/</code> folder beside the Delta log — no Fabric, no data copy. Requires{' '}
                       <strong>LOOM_DATABRICKS_HOSTNAME</strong> to be set.
@@ -4482,33 +4482,33 @@ export function LakehouseEditor({ item, id }: Props) {
                     })()}
                   </Field>
                   {iceGate && (
-                    <MessageBar intent="warning">
+                    <MessageBar intent="warning" style={{ marginTop: 4 }}>
                       <MessageBarBody><MessageBarTitle>Iceberg endpoint gate</MessageBarTitle>{iceGate}</MessageBarBody>
                     </MessageBar>
                   )}
                   {iceError && (
-                    <MessageBar intent="error">
+                    <MessageBar intent="error" style={{ marginTop: 4 }}>
                       <MessageBarBody><MessageBarTitle>ALTER TABLE failed</MessageBarTitle>{iceError}</MessageBarBody>
                     </MessageBar>
                   )}
                   {iceApplied && (
-                    <MessageBar intent="success">
+                    <MessageBar intent="success" style={{ marginTop: 4 }}>
                       <MessageBarBody>
                         <MessageBarTitle>{iceEnabled ? 'Iceberg endpoint enabled' : 'Iceberg endpoint disabled'}</MessageBarTitle>
                         {iceEnabled
                           ? 'Delta UniForm is on — the table now generates Iceberg V2 metadata and is readable by Iceberg readers.'
                           : 'Delta UniForm removed — Iceberg metadata generation stopped.'}
-                        {iceSql ? <><br /><code style={{ fontSize: 11 }}>{iceSql}</code></> : null}
+                        {iceSql ? <><br /><code style={{ fontSize: 11, wordBreak: 'break-all' }}>{iceSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}
                   {(iceAdlsPath || iceMetadataPath || iceCatalogUrl) && (
-                    <MessageBar intent="info">
+                    <MessageBar intent="info" style={{ marginTop: 4 }}>
                       <MessageBarBody>
                         <MessageBarTitle>Iceberg endpoint paths</MessageBarTitle>
-                        {iceAdlsPath && (<><strong>ADLS path:</strong> <code style={{ fontSize: 11 }}>{iceAdlsPath}</code><br /></>)}
-                        {iceMetadataPath && (<><strong>Iceberg metadata:</strong> <code style={{ fontSize: 11 }}>{iceMetadataPath}</code><br /></>)}
-                        {iceCatalogUrl && (<><strong>Iceberg REST catalog:</strong> <code style={{ fontSize: 11 }}>{iceCatalogUrl}</code></>)}
+                        {iceAdlsPath && (<><strong>ADLS path:</strong> <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{iceAdlsPath}</code><br /></>)}
+                        {iceMetadataPath && (<><strong>Iceberg metadata:</strong> <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{iceMetadataPath}</code><br /></>)}
+                        {iceCatalogUrl && (<><strong>Iceberg REST catalog:</strong> <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{iceCatalogUrl}</code></>)}
                       </MessageBarBody>
                     </MessageBar>
                   )}
