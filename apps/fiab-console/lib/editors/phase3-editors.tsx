@@ -7931,7 +7931,8 @@ function EventstreamSqlOperatorTab({
           title={!asaJobName.trim() ? 'Enter an ASA job name first' : 'Create/update one ASA output per named sink (real ARM PUT)'}>
           {applyBusy ? 'Applying…' : 'Apply sinks to ASA'}
         </Button>
-        {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+        {loading && <Spinner size="tiny" label="Loading saved operator…" labelPosition="after" />}
+        {dirty && !loading && <Badge appearance="outline" color="warning">Unsaved changes</Badge>}
       </div>
 
       {saveErr && (
@@ -7977,8 +7978,11 @@ function EventstreamSqlOperatorTab({
 
         {/* Named sinks manager */}
         <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Subtitle2>Named sinks</Subtitle2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <Subtitle2>Named sinks</Subtitle2>
+              {sinks.length > 0 && <Badge appearance="tint" color="informative">{sinks.length}</Badge>}
+            </div>
             <Button appearance="outline" size="small" icon={<Add20Regular />} onClick={() => addSink()}>Add sink</Button>
           </div>
           {applyErr && (
@@ -8095,20 +8099,27 @@ function EventstreamSqlOperatorTab({
               <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{testResult.errors.join('; ')}</MessageBarBody></MessageBar>
             )}
             {testResult.rows.length > 0 ? (
-              <div className={s.tableWrap} style={{ marginTop: 8 }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
-                  <thead>
-                    <tr>{testColumns.map((c) => <th key={c} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground2 }}>{c}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {testResult.rows.slice(0, 100).map((row, ri) => (
-                      <tr key={ri}>
-                        {testColumns.map((c) => <td key={c} style={{ padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>{typeof row?.[c] === 'object' ? JSON.stringify(row[c]) : String(row?.[c] ?? '')}</td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                    <thead>
+                      <tr>{testColumns.map((c) => <th key={c} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground2, fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {testResult.rows.slice(0, 100).map((row, ri) => (
+                        <tr key={ri} style={{ background: ri % 2 ? tokens.colorNeutralBackground1 : tokens.colorNeutralBackground2 }}>
+                          {testColumns.map((c) => <td key={c} className={s.cell} style={{ padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>{typeof row?.[c] === 'object' ? JSON.stringify(row[c]) : String(row?.[c] ?? '')}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {testResult.rows.length > 100 && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
+                    Showing first 100 of {testResult.rows.length} rows.
+                  </Caption1>
+                )}
+              </>
             ) : (
               <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>
                 No rows produced{testResult.outputUri ? ' (output written to the test storage location).' : '.'}
