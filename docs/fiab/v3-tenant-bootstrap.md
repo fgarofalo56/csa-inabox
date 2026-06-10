@@ -477,6 +477,49 @@ az role assignment create --assignee-object-id <console-uami-oid> \
 ```
 (Granted live on kv-loom-… 2026-06-06.)
 
+## Eventstream MQTT/Kafka mTLS certificates (Key Vault) {#eventstream-mtls-certs}
+
+The Real-Time Hub **Connect source → MQTT** dialog (and the Kafka secure-
+connection panels) can authenticate to a broker with mutual TLS using
+certificates stored as **Key Vault certificate objects** (PEM, content type
+`application/x-pem-file`). The dialog's **TLS/mTLS settings** section offers a
+**Trust CA certificate** picker and a **Client certificate and key** picker;
+both list real certificates from the eventstream cert vault and the connector
+persists only a `{certVaultUri, certName}` reference — never the key material.
+
+Wiring (auto on deploy):
+- `LOOM_EVENTSTREAM_CERT_VAULT` → console env (`admin-plane/main.bicep`,
+  defaults to the admin-plane vault output; set
+  `loomEventstreamCertKeyVaultUri` to isolate streaming certs in a separate
+  vault).
+- The Console UAMI is granted **Key Vault Certificate User** on the vault
+  (`keyvault.bicep`, role `db79e9a7-68ee-4b58-9aeb-b90e7c24fcba`).
+
+Import the CA + client certs as PEM bundles (cert + private key concatenated,
+LF line endings, `issuerParameters.name: "Unknown"` for externally signed):
+```bash
+az keyvault certificate import \
+  --vault-name <vault> --name mqtt-ca     --file ca.pem     --policy @pem-policy.json
+az keyvault certificate import \
+  --vault-name <vault> --name mqtt-client --file client.pem --policy @pem-policy.json
+```
+
+For an existing deployment, set the env + grant once:
+```bash
+az containerapp update --name <loom-console> -g <loom-admin-rg> \
+  --set-env-vars "LOOM_EVENTSTREAM_CERT_VAULT=https://<vault>.vault.azure.net/"
+az role assignment create --assignee-object-id <console-uami-oid> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Certificate User" \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>
+```
+
+Until configured, the mTLS cert pickers honest-gate with a Fluent MessageBar
+naming `LOOM_EVENTSTREAM_CERT_VAULT` + the role to grant — the rest of the MQTT
+dialog (broker URL, topic, version, username/password) stays fully functional.
+Broker passwords entered in the dialog are written to `LOOM_KEY_VAULT_URI`
+(Secrets Officer, above) as a `*SecretRef`, never stored in the item state.
+
 ## Delta Sharing shortcuts (cross-tenant) {#delta-sharing-shortcuts}
 
 A **Delta Sharing** lakehouse shortcut (Lakehouse editor → Shortcuts → New

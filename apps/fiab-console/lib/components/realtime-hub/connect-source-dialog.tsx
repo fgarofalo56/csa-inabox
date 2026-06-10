@@ -18,11 +18,16 @@ import Link from 'next/link';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Subtitle2, Body1, Caption1, Spinner, Dropdown, Option, makeStyles, tokens,
+  Subtitle2, Body1, Caption1, Spinner, Dropdown, Option, Switch, Divider, Link as FluentLink,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowLeft20Regular, Open20Regular, PlugConnected20Regular, Search20Regular } from '@fluentui/react-icons';
 import {
-  SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual, type SourceConnector, type SourceCategory,
+  ArrowLeft20Regular, Open20Regular, PlugConnected20Regular, Search20Regular,
+  ArrowClockwise16Regular, Certificate20Regular,
+} from '@fluentui/react-icons';
+import {
+  SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual,
+  type SourceConnector, type SourceCategory, type SourceField,
 } from './source-catalog';
 
 const useStyles = makeStyles({
@@ -67,6 +72,13 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   form: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  sectionHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
+  },
+  sectionTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
+  certRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS },
+  certGrow: { flex: 1, minWidth: 0 },
 });
 
 interface Props {
@@ -130,6 +142,39 @@ export function ConnectSourceDialog({
   const [success, setSuccess] = useState<string | null>(null);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
 
+  // ---- Key Vault certificate picker state (mTLS sources, e.g. MQTT) --------
+  interface KvCert { name: string; id: string; enabled: boolean; expires?: string }
+  const [certs, setCerts] = useState<KvCert[]>([]);
+  const [certVaultUri, setCertVaultUri] = useState<string | null>(null);
+  const [certGate, setCertGate] = useState<{ missing: string; detail: string } | null>(null);
+  const [certsLoading, setCertsLoading] = useState(false);
+  const [certError, setCertError] = useState<string | null>(null);
+
+  /** Does this connector expose any KV-cert pickers? (drives the lazy fetch). */
+  const hasCertFields = !!picked?.fields.some((f) => f.kind === 'cert');
+
+  async function loadCerts() {
+    setCertsLoading(true); setCertError(null);
+    try {
+      const res = await fetch('/api/realtime-hub/keyvault-certificates', { cache: 'no-store' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) { setCertError(j.error || `Could not list certificates (HTTP ${res.status}).`); return; }
+      setCerts(Array.isArray(j.certificates) ? j.certificates : []);
+      setCertVaultUri(typeof j.vaultUri === 'string' ? j.vaultUri : null);
+      setCertGate(j.configured === false && j.gate ? j.gate : null);
+    } catch (e: any) {
+      setCertError(e?.message || String(e));
+    } finally {
+      setCertsLoading(false);
+    }
+  }
+
+  // Fetch the KV cert list once the user opens a connector that needs it.
+  useEffect(() => {
+    if (open && hasCertFields && certs.length === 0 && !certsLoading && !certGate && !certError) loadCerts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasCertFields]);
+
   const connectors = useMemo(() => {
     const q = query.trim().toLowerCase();
     return SOURCE_CONNECTORS.filter((c) =>
@@ -140,6 +185,7 @@ export function ConnectSourceDialog({
     setPicked(null); setDisplayName(''); setProps({});
     setError(null); setErrorHint(null); setSuccess(null); setBusy(false);
     setCreatedLink(null);
+    setCerts([]); setCertVaultUri(null); setCertGate(null); setCertError(null); setCertsLoading(false);
   }
 
   function pick(c: SourceConnector, preProps?: Record<string, string>, preName?: string) {
@@ -157,8 +203,10 @@ export function ConnectSourceDialog({
     setError(null); setErrorHint(null); setSuccess(null); setCreatedLink(null);
   }
 
+  /** A field is visible unless it's gated by a toggle (`showWhen`) that's off. */
+  const isFieldVisible = (f: SourceField) => !f.showWhen || (props[f.showWhen] || '') === 'true';
   const missingRequired = picked
-    ? picked.fields.some((f) => f.required && !(props[f.key] || '').trim())
+    ? picked.fields.some((f) => f.required && isFieldVisible(f) && !(props[f.key] || '').trim())
     : false;
   const canConnect = !!picked && !!displayName.trim() && !!workspaceId && !missingRequired && !busy;
 
@@ -168,8 +216,14 @@ export function ConnectSourceDialog({
     try {
       const properties: Record<string, string> = {};
       for (const f of picked.fields) {
+        if (!isFieldVisible(f)) continue;            // skip fields hidden by an off toggle
         const v = (props[f.key] || '').trim();
         if (v) properties[f.key] = v;
+      }
+      // Tell the backend which Key Vault the chosen mTLS certs live in so it can
+      // persist a resolvable {vaultUri, certName} reference (never the material).
+      if (hasCertFields && (props.useMtls === 'true') && certVaultUri) {
+        properties.certVaultUri = certVaultUri;
       }
       const res = await fetch('/api/realtime-hub/connect-source', {
         method: 'POST',
@@ -244,15 +298,113 @@ export function ConnectSourceDialog({
                     {workspaces.map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
                   </Dropdown>
                 </Field>
-                {picked.fields.map((f) => (
-                  <Field key={f.key} label={f.label} required={f.required} hint={f.help}>
-                    <Input
-                      placeholder={f.placeholder}
-                      value={props[f.key] || ''}
-                      onChange={(_, d) => setProps((p) => ({ ...p, [f.key]: d.value }))}
-                    />
-                  </Field>
-                ))}
+                {(() => {
+                  let lastSection: string | undefined;
+                  return picked.fields.map((f) => {
+                    if (!isFieldVisible(f)) return null;
+                    const setVal = (v: string) => setProps((p) => ({ ...p, [f.key]: v }));
+                    const nodes: React.ReactNode[] = [];
+                    // Emit a section divider+header the first time a new section appears.
+                    if (f.section && f.section !== lastSection) {
+                      lastSection = f.section;
+                      nodes.push(
+                        <div key={`sec-${f.section}`}>
+                          <Divider />
+                          <div className={styles.sectionHead}>
+                            <Certificate20Regular />
+                            <span className={styles.sectionTitle}>{f.section}</span>
+                            <Badge appearance="outline" color="warning" size="small">Preview</Badge>
+                          </div>
+                        </div>,
+                      );
+                    }
+
+                    if (f.kind === 'toggle') {
+                      nodes.push(
+                        <Field key={f.key} hint={f.help}>
+                          <Switch
+                            label={f.label}
+                            checked={(props[f.key] || '') === 'true'}
+                            onChange={(_, d) => setVal(d.checked ? 'true' : '')}
+                          />
+                        </Field>,
+                      );
+                    } else if (f.kind === 'select') {
+                      const cur = props[f.key] || '';
+                      const curLabel = f.options?.find((o) => o.value === cur)?.label || '';
+                      nodes.push(
+                        <Field key={f.key} label={f.label} required={f.required} hint={f.help}>
+                          <Dropdown
+                            aria-label={f.label}
+                            placeholder={f.placeholder || 'Select…'}
+                            selectedOptions={cur ? [cur] : []}
+                            value={curLabel}
+                            onOptionSelect={(_, d) => setVal(d.optionValue || '')}
+                          >
+                            {(f.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                          </Dropdown>
+                        </Field>,
+                      );
+                    } else if (f.kind === 'cert') {
+                      nodes.push(
+                        <Field key={f.key} label={f.label} required={f.required} hint={f.help}
+                          validationState={certError ? 'error' : undefined}
+                          validationMessage={certError || undefined}>
+                          <div className={styles.certRow}>
+                            <div className={styles.certGrow}>
+                              <Dropdown
+                                aria-label={f.label}
+                                disabled={!!certGate || certsLoading || certs.length === 0}
+                                placeholder={
+                                  certGate ? 'No cert vault configured'
+                                    : certsLoading ? 'Loading certificates…'
+                                    : certs.length === 0 ? 'No certificates in vault'
+                                    : 'Select a certificate…'
+                                }
+                                selectedOptions={props[f.key] ? [props[f.key]] : []}
+                                value={props[f.key] || ''}
+                                onOptionSelect={(_, d) => setVal(d.optionValue || '')}
+                              >
+                                {certs.filter((c) => c.enabled).map((c) => (
+                                  <Option key={c.id} value={c.name} text={c.name}>
+                                    {c.name}{c.expires ? ` (exp ${c.expires.slice(0, 10)})` : ''}
+                                  </Option>
+                                ))}
+                              </Dropdown>
+                            </div>
+                            <Button appearance="subtle" icon={<ArrowClockwise16Regular />}
+                              aria-label="Refresh certificates" onClick={loadCerts}
+                              disabled={certsLoading || !!certGate} />
+                          </div>
+                        </Field>,
+                      );
+                    } else {
+                      nodes.push(
+                        <Field key={f.key} label={f.label} required={f.required} hint={f.help}>
+                          <Input
+                            type={f.kind === 'password' ? 'password' : 'text'}
+                            placeholder={f.placeholder}
+                            value={props[f.key] || ''}
+                            onChange={(_, d) => setVal(d.value)}
+                          />
+                        </Field>,
+                      );
+                    }
+                    return <div key={`wrap-${f.key}`}>{nodes}</div>;
+                  });
+                })()}
+                {hasCertFields && (props.useMtls === 'true') && certGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Key Vault not configured for mTLS certificates</MessageBarTitle>
+                      Set <code>{certGate.missing}</code> (or <code>LOOM_KEY_VAULT_URI</code>) and grant the Console
+                      identity the <strong>Key Vault Certificate User</strong> role. {certGate.detail}{' '}
+                      <FluentLink href="https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-mqtt" target="_blank">
+                        MQTT mTLS certificate requirements
+                      </FluentLink>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 {picked.fields.length === 0 && (
                   <MessageBar intent="info">
                     <MessageBarBody>This source needs no extra connection settings — Connect creates the eventstream and subscribes immediately.</MessageBarBody>

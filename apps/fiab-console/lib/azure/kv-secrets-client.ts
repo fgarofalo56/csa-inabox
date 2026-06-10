@@ -146,6 +146,91 @@ export async function getKeyVaultSecretValue(name: string): Promise<string> {
   return j?.value || '';
 }
 
+// ---------------------------------------------------------------------------
+// Key Vault CERTIFICATES — used by the eventstream MQTT/Kafka mTLS pickers.
+// The CA / client certificate objects (PEM, contentType application/x-pem-file)
+// live as KV certificate objects; the connector references them by
+// {vaultUri, certName} so the secret material never touches Cosmos or the UI.
+// The Console UAMI needs the "Key Vault Certificate User" (read) role on the
+// vault; a 403 surfaces verbatim so the UI names the exact role to grant.
+// ---------------------------------------------------------------------------
+
+export interface KeyVaultCertificateRef {
+  /** Bare certificate name (the value referenced by the connector). */
+  name: string;
+  /** Full https://{vault}.vault.azure.net/certificates/{name} identifier. */
+  id: string;
+  /** Whether the cert object is enabled. */
+  enabled: boolean;
+  /** ISO expiry (`exp`) if present, for the picker to flag expiring certs. */
+  expires?: string;
+}
+
+/**
+ * Resolve the vault base URL for eventstream mTLS certificates. Operators may
+ * isolate streaming certs to a dedicated vault via `LOOM_EVENTSTREAM_CERT_VAULT`
+ * (a full https URI or a bare vault name); when unset it falls back to the
+ * general Loom vault. The sovereign suffix is preserved (full URI passed
+ * through verbatim) so this works in Gov/secret clouds.
+ */
+export function certVaultUrl(): string | null {
+  const ov = (process.env.LOOM_EVENTSTREAM_CERT_VAULT || '').trim();
+  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : `https://${ov}.vault.azure.net`;
+  return vaultUrl();
+}
+
+/** Honest-gate for the eventstream cert vault. Names LOOM_EVENTSTREAM_CERT_VAULT. */
+export function certVaultConfigGate(): { missing: string; detail: string } | null {
+  if (!certVaultUrl()) {
+    return {
+      missing: 'LOOM_EVENTSTREAM_CERT_VAULT',
+      detail:
+        'No Key Vault configured for eventstream mTLS certificates. Set LOOM_EVENTSTREAM_CERT_VAULT ' +
+        '(or LOOM_KEY_VAULT_URI) and grant the Console identity the "Key Vault Certificate User" role on that vault.',
+    };
+  }
+  return null;
+}
+
+/**
+ * List certificate objects in the eventstream cert vault. Returns name + full
+ * identifier + enabled/expiry so the mTLS cert picker can render real choices.
+ * Throws KeyVaultError with the verbatim KV status (e.g. 403 Forbidden) so the
+ * UI shows the exact role to grant — no mocks, no empty placeholder list.
+ */
+export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef[]> {
+  const base = certVaultUrl();
+  if (!base) throw new KeyVaultError('Eventstream cert Key Vault not configured (LOOM_EVENTSTREAM_CERT_VAULT)', 503);
+  const out: KeyVaultCertificateRef[] = [];
+  let next: string | null = `${base}/certificates?api-version=${KV_API}`;
+  // Follow KV paging (`nextLink`) so vaults with many certs return all of them.
+  let guard = 0;
+  while (next && guard++ < 50) {
+    const res: Response = await fetch(next, {
+      headers: { authorization: `Bearer ${await token()}` },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new KeyVaultError(`Key Vault list-certificates failed (${res.status}): ${body.slice(0, 300)}`, res.status);
+    }
+    const j: any = await res.json().catch(() => ({}));
+    for (const c of (j?.value || [])) {
+      const id: string = String(c?.id || '');
+      const name = id.split('/').filter(Boolean).pop() || '';
+      if (!name) continue;
+      out.push({
+        name,
+        id,
+        enabled: c?.attributes?.enabled !== false,
+        expires: c?.attributes?.exp ? new Date(c.attributes.exp * 1000).toISOString() : undefined,
+      });
+    }
+    next = typeof j?.nextLink === 'string' ? j.nextLink : null;
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Soft-delete a secret (best-effort). */
 export async function deleteKeyVaultSecret(name: string): Promise<void> {
   const base = vaultUrl();

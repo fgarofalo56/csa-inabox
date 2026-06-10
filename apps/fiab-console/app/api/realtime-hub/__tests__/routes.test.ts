@@ -32,6 +32,18 @@ vi.mock('@/lib/azure/kusto-client', async () => {
   return { ...actual, executeQuery: vi.fn(), defaultDatabase: vi.fn(() => 'loomdb-default') };
 });
 
+// NOTE: no importActual here — kv-secrets-client transitively imports
+// @azure/identity, which isn't resolvable in the isolated worktree node_modules.
+// The route only uses these named exports, so a flat factory is sufficient.
+vi.mock('@/lib/azure/kv-secrets-client', () => ({
+  KeyVaultError: class KeyVaultError extends Error { status: number; constructor(m: string, s: number) { super(m); this.status = s; } },
+  putKeyVaultSecret: vi.fn(),
+  vaultUrl: vi.fn(),
+  listKeyVaultCertificates: vi.fn(),
+  certVaultConfigGate: vi.fn(),
+  certVaultUrl: vi.fn(),
+}));
+
 // Azure-native default path uses item-crud (Cosmos) — mock at the boundary.
 vi.mock('@/app/api/items/_lib/item-crud', () => ({
   createOwnedItem: vi.fn(),
@@ -47,11 +59,15 @@ import {
   connectEventstreamSource, getEventstreamDefinition, FabricError, buildEventstreamDefinition,
 } from '@/lib/azure/fabric-client';
 import { executeQuery } from '@/lib/azure/kusto-client';
+import {
+  putKeyVaultSecret, vaultUrl, listKeyVaultCertificates, certVaultConfigGate, certVaultUrl,
+} from '@/lib/azure/kv-secrets-client';
 
 import { GET as STREAMS } from '../streams/route';
 import { POST as CONNECT } from '../connect-source/route';
 import { POST as PREVIEW } from '../preview/route';
 import { GET as ENDPOINTS } from '../endpoints/route';
+import { GET as CERTS } from '../keyvault-certificates/route';
 
 const AUTH = { claims: { oid: 'tenant-1', upn: 'u@x' } };
 
@@ -146,6 +162,96 @@ describe('POST /api/realtime-hub/connect-source', () => {
     expect(res.status).toBe(404);
     const j = await res.json();
     expect(j.error).toContain('workspace not found');
+  });
+});
+
+// ---------------- connect-source: MQTT mTLS (Key Vault certs) ----------------
+describe('POST /api/realtime-hub/connect-source — MQTT mTLS', () => {
+  it('accepts the Mqtt source type and persists CA/client cert refs in the topology', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (vaultUrl as any).mockReturnValue(null); // no password supplied → KV not required
+    (createOwnedItem as any).mockResolvedValue({ ok: true, item: { id: 'es-mqtt', displayName: 'Telemetry MQTT' } });
+    const res = await CONNECT(jsonReq({
+      workspaceId: 'ws-1', displayName: 'Telemetry MQTT', sourceType: 'Mqtt',
+      properties: {
+        brokerUrl: 'ssl://broker:8883', topic: 'devices/+/telemetry', protocolVersion: 'V5',
+        useMtls: 'true', caCertName: 'mqtt-ca', clientCertName: 'mqtt-client',
+        certVaultUri: 'https://kv.vault.azure.net',
+      },
+    }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(true);
+    expect(j.sourceType).toBe('Mqtt');
+    const [, , body] = (createOwnedItem as any).mock.calls[0];
+    expect(body.state.source.type).toBe('Mqtt');
+    expect(body.state.source.properties.caCertName).toBe('mqtt-ca');
+    expect(body.state.source.properties.clientCertName).toBe('mqtt-client');
+    expect(body.state.source.properties.certVaultUri).toBe('https://kv.vault.azure.net');
+  });
+
+  it('writes a supplied broker password to Key Vault and keeps only a secretRef', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (vaultUrl as any).mockReturnValue('https://kv.vault.azure.net');
+    (putKeyVaultSecret as any).mockResolvedValue({ name: 'es-source-1-password-123' });
+    (createOwnedItem as any).mockResolvedValue({ ok: true, item: { id: 'es-mqtt2' } });
+    const res = await CONNECT(jsonReq({
+      workspaceId: 'ws-1', displayName: 'Secured MQTT', sourceType: 'Mqtt',
+      properties: { brokerUrl: 'ssl://broker:8883', topic: 't', username: 'u', password: 's3cret' },
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(putKeyVaultSecret).toHaveBeenCalled();
+    const [, , body] = (createOwnedItem as any).mock.calls[0];
+    expect(body.state.source.properties.password).toBeUndefined();
+    expect(body.state.source.properties.passwordSecretRef).toBe('es-source-1-password-123');
+  });
+
+  it('503 when a password is supplied but no Key Vault is configured', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (vaultUrl as any).mockReturnValue(null);
+    const res = await CONNECT(jsonReq({
+      workspaceId: 'ws-1', displayName: 'x', sourceType: 'Mqtt',
+      properties: { brokerUrl: 'ssl://b', topic: 't', password: 'p' },
+    }));
+    expect(res.status).toBe(503);
+    expect(createOwnedItem).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------- keyvault-certificates (mTLS cert picker source) ----------------
+describe('GET /api/realtime-hub/keyvault-certificates', () => {
+  it('401 when unauthenticated', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await CERTS();
+    expect(res.status).toBe(401);
+  });
+
+  it('returns an honest gate (200) when no cert vault is configured', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (certVaultConfigGate as any).mockReturnValue({ missing: 'LOOM_EVENTSTREAM_CERT_VAULT', detail: 'set it' });
+    const res = await CERTS();
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(true);
+    expect(j.configured).toBe(false);
+    expect(j.gate.missing).toBe('LOOM_EVENTSTREAM_CERT_VAULT');
+    expect(j.certificates).toEqual([]);
+  });
+
+  it('lists real Key Vault certificates when the vault is configured', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (certVaultConfigGate as any).mockReturnValue(null);
+    (certVaultUrl as any).mockReturnValue('https://kv.vault.azure.net');
+    (listKeyVaultCertificates as any).mockResolvedValue([
+      { name: 'mqtt-ca', id: 'https://kv.vault.azure.net/certificates/mqtt-ca', enabled: true },
+    ]);
+    const res = await CERTS();
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.configured).toBe(true);
+    expect(j.vaultUri).toBe('https://kv.vault.azure.net');
+    expect(j.certificates[0].name).toBe('mqtt-ca');
   });
 });
 

@@ -23,6 +23,7 @@ import {
   RTH_SOURCE_TYPES,
   FabricError,
 } from '@/lib/azure/fabric-client';
+import { putKeyVaultSecret, vaultUrl, KeyVaultError } from '@/lib/azure/kv-secrets-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,6 +79,35 @@ export async function POST(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ ok: false, error: 'workspaceId is required.', hint: 'Pick the Loom workspace to create the eventstream in.' }, { status: 400 });
   }
+  // Secret hardening: never persist a broker password (or any *password* prop)
+  // in the item state / Cosmos. Write it to Key Vault and keep only a secretRef
+  // (per no-vaporware.md secret handling + the mTLS connection contract).
+  const safeProps: Record<string, unknown> = { ...properties };
+  try {
+    for (const key of Object.keys(safeProps)) {
+      if (/password|secret|key$/i.test(key) && typeof safeProps[key] === 'string' && (safeProps[key] as string).trim()) {
+        if (!vaultUrl()) {
+          return NextResponse.json({
+            ok: false,
+            error: 'A secret was supplied but no Key Vault is configured to store it.',
+            hint: 'Set LOOM_KEY_VAULT_URI (or LOOM_KEY_VAULT_NAME) and grant the Console identity "Key Vault Secrets Officer".',
+          }, { status: 503 });
+        }
+        const { name } = await putKeyVaultSecret(`es-${sourceName}-${key}-${Date.now()}`, String(safeProps[key]));
+        delete safeProps[key];
+        safeProps[`${key}SecretRef`] = name;
+      }
+    }
+  } catch (e: any) {
+    if (e instanceof KeyVaultError) {
+      const hint = e.status === 403
+        ? 'Grant the Console identity the "Key Vault Secrets Officer" role on the configured vault.'
+        : undefined;
+      return NextResponse.json({ ok: false, error: e.message, hint }, { status: e.status });
+    }
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+  }
+
   const res = await createOwnedItem(session, 'eventstream', {
     workspaceId,
     displayName,
@@ -87,11 +117,11 @@ export async function POST(req: NextRequest) {
       // The eventstream editor reads this topology: one source node, no
       // destinations yet (the user wires processing/destinations in the canvas).
       definition: {
-        sources: [{ name: sourceName, type: sourceType, properties }],
+        sources: [{ name: sourceName, type: sourceType, properties: safeProps }],
         operators: [],
         destinations: [],
       },
-      source: { name: sourceName, type: sourceType, properties },
+      source: { name: sourceName, type: sourceType, properties: safeProps },
     },
   });
   if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
