@@ -41,10 +41,18 @@ import { useCallback, useEffect, useState } from 'react';
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: 12, height: '100%', overflow: 'hidden' },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tabBody: { display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, paddingTop: 8 },
+  tabBody: { display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
   row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
   field: { flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 4 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13 },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px' },
+  // Constrain the (long) Spark application id so it never blows out the runs grid.
+  appIdCell: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
+    maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  hint: { color: tokens.colorNeutralForeground3 },
+  // Sticky header keeps the runs columns visible while scrolling history.
+  runsHeader: { position: 'sticky', top: 0, zIndex: 1, backgroundColor: tokens.colorNeutralBackground1 },
 });
 
 type SparkLanguage = 'PySpark' | 'Spark' | 'SparkR';
@@ -294,7 +302,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                     <Input value={driverMemory} onChange={(_, d) => { setDriverMemory(d.value); markDirty(); }} placeholder="4g" />
                   </Field>
                   <Field label="Driver cores" className={s.field}>
-                    <Input type="number" value={driverCores} onChange={(_, d) => { setDriverCores(d.value); markDirty(); }} />
+                    <Input type="number" min={1} value={driverCores} onChange={(_, d) => { setDriverCores(d.value); markDirty(); }} />
                   </Field>
                 </div>
                 <div className={s.row}>
@@ -302,13 +310,13 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                     <Input value={executorMemory} onChange={(_, d) => { setExecutorMemory(d.value); markDirty(); }} placeholder="4g" />
                   </Field>
                   <Field label="Executor cores" className={s.field}>
-                    <Input type="number" value={executorCores} onChange={(_, d) => { setExecutorCores(d.value); markDirty(); }} />
+                    <Input type="number" min={1} value={executorCores} onChange={(_, d) => { setExecutorCores(d.value); markDirty(); }} />
                   </Field>
                   <Field label="Executors" className={s.field}>
-                    <Input type="number" value={numExecutors} onChange={(_, d) => { setNumExecutors(d.value); markDirty(); }} />
+                    <Input type="number" min={1} value={numExecutors} onChange={(_, d) => { setNumExecutors(d.value); markDirty(); }} />
                   </Field>
                 </div>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={s.hint}>
                   These map 1:1 onto the Livy batch sizing the Submit button sends to the target Spark pool.
                 </Caption1>
               </div>
@@ -324,7 +332,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                   <Caption1>No batch runs yet. Submit the definition to start one.</Caption1>
                 ) : (
                   <Table size="small" aria-label="Spark batch runs">
-                    <TableHeader>
+                    <TableHeader className={s.runsHeader}>
                       <TableRow>
                         <TableHeaderCell>Batch ID</TableHeaderCell>
                         <TableHeaderCell>State</TableHeaderCell>
@@ -341,7 +349,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                             <Badge size="small" appearance="tint" color={r.state === 'success' ? 'success' : r.state === 'error' || r.state === 'dead' || r.state === 'killed' ? 'danger' : 'informative'}>{r.state || '—'}</Badge>
                           </TableCell>
                           <TableCell>{r.result || '—'}</TableCell>
-                          <TableCell className={s.mono}>{r.appId || '—'}</TableCell>
+                          <TableCell className={s.appIdCell} title={r.appId || undefined}>{r.appId || '—'}</TableCell>
                           <TableCell>{r.submittedAt || '—'}</TableCell>
                         </TableRow>
                       ))}

@@ -41,10 +41,27 @@ const useStyles = makeStyles({
   connField: { minWidth: 220 },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
   },
-  resultWrap: { flex: 1, overflow: 'auto', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8 },
-  meta: { display: 'flex', gap: 8, alignItems: 'center', color: tokens.colorNeutralForeground3 },
+  resultWrap: {
+    flex: 1, minHeight: 0, overflow: 'auto',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS,
+  },
+  meta: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalXS,
+  },
+  // Sticky header so column names stay visible while scrolling a tall result set.
+  resultHeader: {
+    position: 'sticky', top: 0, zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  // Truncate long cell values with an ellipsis; the full value lives in the title.
+  cell: {
+    maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  emptyNote: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 },
 });
 
 interface KqlScriptProps { content?: { query?: string; currentConnection?: { poolName?: string; databaseName?: string; type?: string } } }
@@ -237,10 +254,10 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
                   {result.truncated && <Badge appearance="tint" color="warning">Truncated to first 5000</Badge>}
                 </div>
                 {result.columns.length === 0 ? (
-                  <Caption1 style={{ display: 'block', marginTop: 8 }}>Query returned no columns.</Caption1>
+                  <Caption1 className={s.emptyNote}>Query returned no columns.</Caption1>
                 ) : (
                   <Table size="small" aria-label="Query results">
-                    <TableHeader>
+                    <TableHeader className={s.resultHeader}>
                       <TableRow>
                         {result.columns.map((c, i) => (
                           <TableHeaderCell key={i}>{c}{result.columnTypes[i] ? ` (${result.columnTypes[i]})` : ''}</TableHeaderCell>
@@ -250,9 +267,10 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
                     <TableBody>
                       {result.rows.map((row, ri) => (
                         <TableRow key={ri}>
-                          {row.map((cell, ci) => (
-                            <TableCell key={ci}>{cell == null ? '' : typeof cell === 'object' ? JSON.stringify(cell) : String(cell)}</TableCell>
-                          ))}
+                          {row.map((cell, ci) => {
+                            const text = cell == null ? '' : typeof cell === 'object' ? JSON.stringify(cell) : String(cell);
+                            return <TableCell key={ci} className={s.cell} title={text}>{text}</TableCell>;
+                          })}
                         </TableRow>
                       ))}
                     </TableBody>

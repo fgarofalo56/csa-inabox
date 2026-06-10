@@ -486,7 +486,7 @@ export function SynapseWorkspaceTree({
                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenKqlScript) { e.preventDefault(); onOpenKqlScript(k.name); } }}
                       >{k.name}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {k.pool && <Caption1>{k.pool}</Caption1>}
+                        {k.pool && <Badge size="small" appearance="outline">{k.pool}</Badge>}
                         {onOpenKqlScript && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenKqlScript(k.name)} aria-label={`Open ${k.name}`} /></Tooltip>}
                         <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(KQL_ROUTE, k.name)} aria-label={`Delete ${k.name}`} /></Tooltip>
                       </span>
