@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, Divider, Checkbox,
-  Table, TableBody, TableRow, TableCell,
+  Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell, Spinner,
   MessageBar, MessageBarBody,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
@@ -61,18 +61,23 @@ const GATEWAY_SOURCES = new Set(['Oracle']);
 
 const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: 8 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalS },
   card: {
+    position: 'relative',
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
     backgroundColor: tokens.colorNeutralBackground1,
     transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
   cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: '#fff' },
+  cardLabel: { minWidth: 0, overflow: 'hidden', '& > *': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+  cardCheck: { marginLeft: 'auto', flexShrink: 0, color: tokens.colorBrandForeground1 },
   wizard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '560px', maxWidth: '640px' },
   stepHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   stepNum: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold },
@@ -159,6 +164,15 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || MIRROR_SOURCES[0], [createSrc]);
   const isBigQuery = BIGQUERY_SOURCES.has(createSrc);
   const isOracle = GATEWAY_SOURCES.has(createSrc);
+
+  // Selecting a source resets its connection + source-specific fields so the
+  // next step starts clean. Shared by click and keyboard (Enter/Space).
+  const pickSource = useCallback((srcId: string) => {
+    setCreateSrc(srcId); setConnId(''); setAvailTables(null); setSelTables(new Set());
+    setTablesMsg(null); setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
+    setVerify({ status: 'idle' });
+    if (srcId !== 'Snowflake') setIncludeIceberg(false);
+  }, []);
 
   const loadConnections = useCallback(async () => {
     try {
@@ -322,14 +336,20 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
                 <div className={s.grid} style={{ marginTop: 8 }}>
-                  {MIRROR_SOURCES.map((src) => (
-                    <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
-                      style={{ borderLeftColor: src.accent }}
-                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); setProjectId(''); setServiceName(''); setGateway(''); setSyncUser(''); setVerify({ status: 'idle' }); if (src.id !== 'Snowflake') setIncludeIceberg(false); }} role="button" tabIndex={0}>
-                      <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
-                      <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
-                    </div>
-                  ))}
+                  {MIRROR_SOURCES.map((src) => {
+                    const active = createSrc === src.id;
+                    return (
+                      <div key={src.id} className={`${s.card} ${active ? s.cardActive : ''}`}
+                        style={{ borderLeftColor: src.accent }}
+                        onClick={() => pickSource(src.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickSource(src.id); } }}
+                        role="button" tabIndex={0} aria-pressed={active} aria-label={`Mirror from ${src.name}`}>
+                        <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
+                        <span className={s.cardLabel}><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
+                        {active && <CheckmarkCircle16Filled className={s.cardCheck} />}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -449,17 +469,30 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </>
                   )}
                 </div>
-                {tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
-                {availTables && availTables.length > 0 && (
+                {tablesLoading && (
+                  <div className={s.tableLoading}><Spinner size="tiny" label="Discovering tables…" labelPosition="after" /></div>
+                )}
+                {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
+                {!tablesLoading && availTables && availTables.length > 0 && (
                   <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: 8 }}>
                     <Table size="small" aria-label="Source tables">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell style={{ width: 36 }}>
+                            <Checkbox aria-label="Select all tables"
+                              checked={selTables.size === availTables.length ? true : selTables.size === 0 ? false : 'mixed'}
+                              onChange={(_, d) => setSelTables(d.checked ? new Set(availTables.map(tkey)) : new Set())} />
+                          </TableHeaderCell>
+                          <TableHeaderCell>Schema.table</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
                       <TableBody>
                         {availTables.map((t) => {
                           const k = tkey(t);
                           return (
-                            <TableRow key={k}>
+                            <TableRow key={k} appearance={selTables.has(k) ? 'brand' : 'none'}>
                               <TableCell style={{ width: 36 }}>
-                                <Checkbox checked={selTables.has(k)} onChange={(_, d) => setSelTables((prev) => { const n = new Set(prev); if (d.checked) n.add(k); else n.delete(k); return n; })} />
+                                <Checkbox checked={selTables.has(k)} aria-label={`Mirror ${k}`} onChange={(_, d) => setSelTables((prev) => { const n = new Set(prev); if (d.checked) n.add(k); else n.delete(k); return n; })} />
                               </TableCell>
                               <TableCell className={s.cell}>{t.schema}.{t.table}</TableCell>
                             </TableRow>
