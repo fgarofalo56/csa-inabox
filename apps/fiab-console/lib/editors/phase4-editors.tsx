@@ -2354,6 +2354,75 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     finally { setPublishing(false); }
   }, [id, save, reload, dirty, lastSaveError, state.description, state.alias]);
 
+  // ---- publish to Microsoft 365 Copilot (Azure-native: Bot Service + MsTeams channel) ----
+  const [m365Scope, setM365Scope] = useState<'organization' | 'individual'>('organization');
+  const [m365Display, setM365Display] = useState('');
+  const [m365ShortDesc, setM365ShortDesc] = useState('');
+  const [m365Developer, setM365Developer] = useState('CSA Loom');
+  const [m365Busy, setM365Busy] = useState(false);
+  const [m365Result, setM365Result] = useState<any>(null);
+  const [m365Status, setM365Status] = useState<any>(null);
+
+  const loadM365Status = useCallback(async () => {
+    if (id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish-m365`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        setM365Status(j);
+        if (j.scope) setM365Scope(j.scope);
+      }
+    } catch { /* non-fatal */ }
+  }, [id]);
+
+  const m365Metadata = useCallback(() => ({
+    displayName: m365Display.trim() || undefined,
+    shortDescription: m365ShortDesc.trim() || undefined,
+    developerName: m365Developer.trim() || undefined,
+  }), [m365Display, m365ShortDesc, m365Developer]);
+
+  const publishM365 = useCallback(async () => {
+    setM365Busy(true); setM365Result(null);
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish-m365`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'publish', scope: m365Scope, metadata: m365Metadata() }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (!r.ok && j && j.ok === undefined) j.ok = false;
+      setM365Result(j);
+      if (j.ok) await loadM365Status();
+    } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
+    finally { setM365Busy(false); }
+  }, [id, m365Scope, m365Metadata, loadM365Status]);
+
+  const downloadM365Package = useCallback(async () => {
+    setM365Busy(true);
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish-m365`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'package', metadata: m365Metadata() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+        setM365Result({ ok: false, deferred: r.status === 501, error: j?.error, hint: j?.hint });
+        return;
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get('content-disposition') || '';
+      const m = /filename="?([^"]+)"?/.exec(cd);
+      const fileName = m?.[1] || 'loom-data-agent-m365.zip';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+      setM365Result({ ok: true, downloaded: fileName });
+    } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
+    finally { setM365Busy(false); }
+  }, [id, m365Metadata]);
+
+  useEffect(() => { if (tab === 'publish') void loadM365Status(); }, [tab, loadM365Status]);
+
   // ---- delete this agent (owner-scoped via the item DELETE route) ----
   const [deleting, setDeleting] = useState(false);
   const deleteAgent = useCallback(async () => {
@@ -2731,6 +2800,107 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   </MessageBarBody>
                 </MessageBar>
               )}
+
+              {/* ── Publish to Microsoft 365 Copilot (Azure-native) ── */}
+              <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: 20, paddingTop: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Subtitle2>Publish to Microsoft 365 Copilot</Subtitle2>
+                  <Badge appearance="tint" color="brand" size="small">Preview</Badge>
+                </div>
+                <Caption1 style={{ display: 'block', marginTop: 2 }}>
+                  Fronts the published Foundry agent with an Azure Bot Service registration and enables the
+                  Teams &amp; Microsoft 365 Copilot channel, then produces the app package an admin submits
+                  to the Microsoft 365 admin center. Azure-native — no Microsoft Fabric or Power BI required.
+                </Caption1>
+
+                {!state.foundryAgentId && (
+                  <MessageBar intent="info" style={{ marginTop: 8 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Publish to Foundry first</MessageBarTitle>
+                      Publish this agent to the Foundry Agent Service above — that creates the stable
+                      endpoint the Microsoft 365 bot forwards conversations to.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {m365Status && m365Status.configured === false && (
+                  <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Microsoft 365 publish not configured</MessageBarTitle>
+                      <div>{m365Status.gate}</div>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+                  <Field label="Agent display name (M365 store)">
+                    <Input value={m365Display} onChange={(_, d) => setM365Display(d.value)} placeholder={state.alias || item.displayName || 'Loom data agent'} style={{ minWidth: 240 }} />
+                  </Field>
+                  <Field label="Developer / publisher">
+                    <Input value={m365Developer} onChange={(_, d) => setM365Developer(d.value)} placeholder="CSA Loom" style={{ minWidth: 180 }} />
+                  </Field>
+                  <Field label="Availability scope">
+                    <Dropdown
+                      value={m365Scope === 'organization' ? 'People in your organization' : 'Just me'}
+                      selectedOptions={[m365Scope]}
+                      onOptionSelect={(_, d) => setM365Scope((d.optionValue as 'organization' | 'individual') || 'organization')}
+                      style={{ minWidth: 220 }}
+                    >
+                      <Option value="organization">People in your organization</Option>
+                      <Option value="individual">Just me</Option>
+                    </Dropdown>
+                  </Field>
+                </div>
+                <Field label="Short description (≤ 80 chars)" style={{ marginTop: 8 }}>
+                  <Input value={m365ShortDesc} onChange={(_, d) => setM365ShortDesc(d.value)} placeholder={state.description || 'Answers grounded questions over governed data.'} />
+                </Field>
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                  <Button appearance="primary" onClick={publishM365} disabled={m365Busy || !state.foundryAgentId}>
+                    {m365Busy ? 'Publishing…' : 'Publish to Microsoft 365 Copilot'}
+                  </Button>
+                  <Button onClick={downloadM365Package} disabled={m365Busy || !state.foundryAgentId}>
+                    Download app package (.zip)
+                  </Button>
+                </div>
+
+                {m365Status?.bot && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    <Badge appearance="filled" color={m365Status.bot.provisioningState === 'Succeeded' ? 'success' : 'informative'}>
+                      bot {m365Status.bot.provisioningState || 'registered'}
+                    </Badge>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'monospace', fontSize: 12 }}>
+                      {m365Status.bot.name}
+                    </Caption1>
+                    {m365Status.publishedAt && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        published {new Date(m365Status.publishedAt).toLocaleString()}
+                      </Caption1>
+                    )}
+                  </div>
+                )}
+
+                {m365Result && (
+                  <MessageBar intent={m365Result.ok ? 'success' : m365Result.deferred ? 'warning' : 'error'} style={{ marginTop: 8 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {m365Result.ok
+                          ? (m365Result.downloaded ? 'App package downloaded' : 'Published to Microsoft 365 Copilot')
+                          : m365Result.deferred ? 'Microsoft 365 publish not configured' : 'Microsoft 365 publish failed'}
+                      </MessageBarTitle>
+                      {m365Result.ok && m365Result.downloaded && <div>Saved <strong>{m365Result.downloaded}</strong>. Submit it to the Microsoft 365 admin center (Agents → Requests) for org approval, or sideload it in Teams.</div>}
+                      {m365Result.ok && m365Result.nextStep && <div style={{ marginTop: 4 }}>{m365Result.nextStep}</div>}
+                      {m365Result.ok && m365Result.botAppId && (
+                        <Caption1 style={{ display: 'block', marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}>
+                          bot app id: <strong>{m365Result.botAppId}</strong>{m365Result.manifestId ? <> · manifest id: <strong>{m365Result.manifestId}</strong></> : null}
+                        </Caption1>
+                      )}
+                      {m365Result.error && <div>{m365Result.error}</div>}
+                      {m365Result.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {m365Result.hint}</div>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
             </>
           )}
 

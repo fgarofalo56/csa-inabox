@@ -156,6 +156,13 @@ param aiFoundryEnabled bool = false
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
+@description('Microsoft Entra application (client) id for the data-agent Microsoft 365 Copilot bot (LOOM_M365_BOT_APP_ID). When set, the data-agent "Publish to Microsoft 365 Copilot" surface creates an Azure Bot Service registration fronting the published Foundry agent and enables the Teams/M365 channel. Empty = the surface renders an honest infra-gate. Create the Entra app once per tenant (docs/fiab/v3-tenant-bootstrap.md).')
+param m365BotAppId string = ''
+
+@description('Microsoft App type for the data-agent M365 bot (LOOM_M365_BOT_APP_TYPE): MultiTenant | SingleTenant | UserAssignedMSI. Default SingleTenant.')
+@allowed([ 'MultiTenant', 'SingleTenant', 'UserAssignedMSI' ])
+param m365BotAppType string = 'SingleTenant'
+
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable.')
 param loomAoaiCompletionDeployment string = ''
 
@@ -411,6 +418,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiFoundryEnabled: aiFoundryEnabled
     contentSafetyEnabled: contentSafetyEnabled
     agentFoundryEnabled: agentFoundryEnabled
+    m365BotAppId: m365BotAppId
+    m365BotAppType: m365BotAppType
     loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
     apimEnabled: apimEnabled

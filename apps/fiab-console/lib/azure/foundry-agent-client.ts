@@ -186,6 +186,26 @@ export function getProjectId(override?: FoundryAgentConfigOverride): string {
 }
 
 /**
+ * Returns the resolved Foundry project endpoint (throws
+ * FoundryAgentNotConfiguredError when unset) — used by the M365 Copilot publish
+ * flow to derive the Bot Service messaging endpoint for a published agent.
+ */
+export function getProjectEndpoint(override?: FoundryAgentConfigOverride): string {
+  return requireConfig(override).endpoint;
+}
+
+/**
+ * Derive the Bot Service messaging endpoint for a published Foundry agent. The
+ * Foundry Agent Service exposes a per-agent Bot Framework channel endpoint
+ * shaped `{projectEndpoint}/agents/{name}/messages`. This is the URL the Azure
+ * Bot Service registration forwards Teams / M365 Copilot activities to.
+ */
+export function agentMessagingEndpoint(name: string, override?: FoundryAgentConfigOverride): string {
+  const { endpoint, apiVersion } = requireConfig(override);
+  return `${endpoint}/agents/${encodeURIComponent(name)}/messages?api-version=${apiVersion}`;
+}
+
+/**
  * Create-or-update an agent in the Foundry project. The Agent Service does
  * not currently expose a single upsert verb, so we GET first and switch
  * between POST (create) and PATCH (update by name).

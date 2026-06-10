@@ -119,6 +119,13 @@ param contentSafetyEnabled bool = false
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
+@description('Microsoft Entra application (client) id for the data-agent Microsoft 365 Copilot bot (LOOM_M365_BOT_APP_ID). An Azure Bot Service registration cannot exist without a Microsoft App Id, so when this is empty the data-agent "Publish to Microsoft 365 Copilot" surface renders an honest infra-gate. Create the Entra app once per tenant (see docs/fiab/v3-tenant-bootstrap.md), then pass its client id here.')
+param m365BotAppId string = ''
+
+@description('Microsoft App type for the data-agent M365 bot (LOOM_M365_BOT_APP_TYPE): MultiTenant | SingleTenant | UserAssignedMSI. Default SingleTenant for a tenant-scoped bot.')
+@allowed([ 'MultiTenant', 'SingleTenant', 'UserAssignedMSI' ])
+param m365BotAppType string = 'SingleTenant'
+
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
 
@@ -852,6 +859,19 @@ module network 'network.bicep' = {
     // F15 — grant the Console UAMI Network Contributor on this RG so the
     // Advanced-networking pane can write NSG rules + create private endpoints.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// data-agent → Microsoft 365 Copilot publish (Build 2026 #4). Grants the Console
+// UAMI Contributor on THIS RG (only when an M365 bot Entra app id is supplied)
+// so it can PUT the Azure Bot Service registration + MsTeams channel that fronts
+// a published Foundry data agent. Azure-native — no Fabric / Power BI.
+module m365CopilotBot 'm365-copilot-bot.bicep' = {
+  name: 'm365CopilotBot'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    m365BotAppId: m365BotAppId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -2255,6 +2275,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
             { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
             { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
+            // Microsoft 365 Copilot publish (data-agent → M365/Teams). The
+            // Console creates an Azure Bot Service registration fronting the
+            // published Foundry agent and enables the Teams/M365 channel. The bot
+            // requires a Microsoft Entra app (client) id — created once by a
+            // tenant admin and supplied via the m365BotAppId param (empty = the
+            // publish surface renders an honest infra-gate). LOOM_M365_BOT_RG
+            // defaults to the admin RG; the Console UAMI needs "Azure Bot Service
+            // Contributor" on that RG (granted in m365-copilot-bot.bicep).
+            { name: 'LOOM_M365_BOT_APP_ID',          value: m365BotAppId }
+            { name: 'LOOM_M365_BOT_APP_TYPE',        value: m365BotAppType }
+            { name: 'LOOM_M365_BOT_RG',              value: resourceGroup().name }
+            { name: 'LOOM_M365_BOT_LOCATION',        value: 'global' }
             // AOAI inference endpoint + model deployment names for the Agent
             // Service account. Consumed by the AOAI clients (chat + embeddings).
             // AOAI inference endpoint + model deployment names. Sourced from the
