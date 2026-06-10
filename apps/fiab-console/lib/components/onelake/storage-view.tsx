@@ -164,8 +164,20 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusXLarge,
     boxShadow: tokens.shadow2,
     padding: tokens.spacingVerticalL,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1 },
   },
   cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground2 },
+  cardIcon: {
+    width: '32px',
+    height: '32px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   cardValue: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' },
   cardSub: { color: tokens.colorNeutralForeground3 },
   nameCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
@@ -179,12 +191,25 @@ const useStyles = makeStyles({
 });
 
 function StatCard({
-  icon, label, value, sub,
-}: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
+  icon, label, value, sub, accent,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  sub?: string;
+  /** CSS color for the icon chip — gives the four cards distinct semantic hues. */
+  accent?: string;
+}) {
   const styles = useStyles();
+  const chipStyle = accent
+    ? { backgroundColor: `${accent}1f`, color: accent }
+    : { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground2 };
   return (
     <div className={styles.card}>
-      <span className={styles.cardHead}>{icon}<Caption1>{label}</Caption1></span>
+      <span className={styles.cardHead}>
+        <span className={styles.cardIcon} style={chipStyle} aria-hidden>{icon}</span>
+        <Caption1>{label}</Caption1>
+      </span>
       <span className={styles.cardValue}>{value}</span>
       {sub && <Caption1 className={styles.cardSub}>{sub}</Caption1>}
     </div>
@@ -373,8 +398,8 @@ export function StorageView({ workspaces }: { workspaces: Workspace[] }) {
           </Tooltip>
         )}
         <Button
-          appearance="primary"
-          icon={<ArrowClockwise20Regular />}
+          appearance="secondary"
+          icon={loading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />}
           onClick={() => void load()}
           disabled={loading}
         >
@@ -399,24 +424,28 @@ export function StorageView({ workspaces }: { workspaces: Workspace[] }) {
               label="Total OneLake storage"
               value={fmtBytes(grandTotal)}
               sub={`${fmtNum(totals.liveFiles)} live file(s)`}
+              accent={tokens.colorBrandForeground1}
             />
             <StatCard
               icon={<DocumentSettings20Regular />}
               label="System files (Delta log, …)"
               value={fmtBytes(totals.systemBytes)}
               sub="Included in the total — Fabric bills these too"
+              accent={tokens.colorPaletteBlueForeground2}
             />
             <StatCard
               icon={<BinRecycle20Regular />}
               label="Soft-deleted (retained)"
               value={fmtBytes(totals.deletedBytes)}
               sub={`${fmtNum(totals.deletedFiles)} file(s) recoverable until purge`}
+              accent={tokens.colorPaletteDarkOrangeForeground1}
             />
             <StatCard
               icon={<Database20Regular />}
               label="Items reported"
               value={fmtNum(totals.items)}
               sub={`${fmtNum(totals.adlsItems)} ADLS-backed (OneLake)`}
+              accent={tokens.colorPaletteGreenForeground1}
             />
           </div>
 
