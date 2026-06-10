@@ -35,6 +35,8 @@ import {
   getDatasetDatasources,
   discoverGateways,
   bindToGateway,
+  generatePaginatedReportEmbedToken,
+  startPaginatedReportExport,
   PowerBiError,
 } from '../powerbi-client';
 
@@ -171,5 +173,61 @@ describe('gateway + datasources', () => {
     expect(body.gatewayObjectId).toBe('gw-1');
     expect(body.datasourceObjectIds).toEqual(['src-1']);
     expect(out).toEqual({ ok: true });
+  });
+});
+
+describe('paginated report embed + export', () => {
+  it('mints a paginated embed token via the MULTI-RESOURCE GenerateToken', async () => {
+    let url = ''; let method = ''; let body: any;
+    mockFetch((u, init) => {
+      url = u; method = (init?.method as string) || 'GET';
+      body = JSON.parse((init?.body as string) || '{}');
+      return { token: 'EMBED', tokenId: 'tid', expiration: '2030-01-01' };
+    });
+    const out = await generatePaginatedReportEmbedToken('rdl-1', ['ds-a', 'ds-b']);
+    // Multi-resource endpoint (workspace-less /GenerateToken), NOT the per-report one.
+    expect(url).toMatch(/\/GenerateToken$/);
+    expect(url).not.toContain('/reports/rdl-1/GenerateToken');
+    expect(method).toBe('POST');
+    // reports[] carries the report with allowEdit:false (paginated cannot edit).
+    expect(body.reports).toEqual([{ id: 'rdl-1', allowEdit: false }]);
+    // datasets[] carries every bound model with xmlaPermissions ReadOnly.
+    expect(body.datasets).toEqual([
+      { id: 'ds-a', xmlaPermissions: 'ReadOnly' },
+      { id: 'ds-b', xmlaPermissions: 'ReadOnly' },
+    ]);
+    expect(out.token).toBe('EMBED');
+  });
+
+  it('omits datasets[] when the paginated report binds no semantic model', async () => {
+    let body: any;
+    mockFetch((_, init) => { body = JSON.parse((init?.body as string) || '{}'); return { token: 'T', tokenId: 'i', expiration: 'e' }; });
+    await generatePaginatedReportEmbedToken('rdl-1');
+    expect(body.reports).toEqual([{ id: 'rdl-1', allowEdit: false }]);
+    expect(body.datasets).toEqual([]);
+  });
+
+  it('queues a paginated export with a paginatedReportConfiguration body', async () => {
+    let url = ''; let method = ''; let body: any;
+    mockFetch((u, init) => {
+      url = u; method = (init?.method as string) || 'GET';
+      body = JSON.parse((init?.body as string) || '{}');
+      return { id: 'exp-1', status: 'Running' };
+    });
+    const job = await startPaginatedReportExport('ws-1', 'rdl-1', 'XLSX');
+    expect(url).toContain('/groups/ws-1/reports/rdl-1/ExportTo');
+    expect(method).toBe('POST');
+    expect(body.format).toBe('XLSX');
+    // The paginatedReportConfiguration object is REQUIRED for RDL exports.
+    expect(body.paginatedReportConfiguration).toBeDefined();
+    expect(body.paginatedReportConfiguration.formatSettings).toEqual({});
+    expect(job.id).toBe('exp-1');
+  });
+
+  it('passes report parameterValues into the paginated export body when provided', async () => {
+    let body: any;
+    mockFetch((_, init) => { body = JSON.parse((init?.body as string) || '{}'); return { id: 'e', status: 'Running' }; });
+    await startPaginatedReportExport('ws-1', 'rdl-1', 'PDF', [{ name: 'Year', value: '2026' }]);
+    expect(body.paginatedReportConfiguration.parameterValues).toEqual([{ name: 'Year', value: '2026' }]);
   });
 });

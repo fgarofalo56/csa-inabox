@@ -42,6 +42,22 @@ export interface PowerBIEmbedFrameProps {
   /** Show "Edit" toolbar (reports only — requires edit-tier embed token). */
   edit?: boolean;
   /**
+   * Which embed shape to render. `'standard'` (default) uses
+   * IEmbedConfiguration with panes / view mode / page navigation. `'paginated'`
+   * uses IPaginatedReportLoadConfiguration — the same powerbi-client SDK but a
+   * different config object: no panes, no page navigation, no view mode (these
+   * are not supported for paginated reports), plus the parameter-panel command.
+   * The `loaded`/`rendered` events are intentionally NOT wired for paginated
+   * reports because Microsoft documents they do not fire.
+   */
+  embedVariant?: 'standard' | 'paginated';
+  /**
+   * Paginated-report parameter values (`rp:` parameters) seeded into the embed
+   * via IPaginatedReportLoadConfiguration.parameterValues. Structured —
+   * NOT a raw JSON blob — per the no-freeform-config rule.
+   */
+  parameterValues?: Array<{ name: string; value: string }>;
+  /**
    * Receives the live powerbi-client embed instance once the visual is loaded.
    * The caller uses it to drive the report JS API for parity with the Power BI
    * service viewer toolbar: `report.bookmarksManager`, `report.setPage(name)`,
@@ -68,7 +84,7 @@ export interface PowerBIEmbedFrameProps {
   };
 }
 
-export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit, onEmbedded, theme, paneOverrides }: PowerBIEmbedFrameProps) {
+export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit, embedVariant = 'standard', parameterValues, onEmbedded, theme, paneOverrides }: PowerBIEmbedFrameProps) {
   const [models, setModels] = useState<any>(null);
   // Load `models` lazily client-side so we can map permissions/tokenType enums.
   useEffect(() => {
@@ -90,29 +106,53 @@ export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height
     return <Spinner size="small" label="Loading Power BI SDK…" labelPosition="after" />;
   }
 
-  const config: any = {
-    type: embedType,
-    id,
-    embedUrl,
-    accessToken,
-    tokenType: models.TokenType.Embed,
-    permissions: edit ? models.Permissions.All : models.Permissions.Read,
-    viewMode: edit && embedType === 'report' ? models.ViewMode.Edit : models.ViewMode.View,
-    pageName,
-    ...(theme ? { theme: { themeJson: theme } } : {}),
-    settings: {
-      panes: {
-        filters: { expanded: false, visible: true },
-        pageNavigation: { visible: embedType === 'report' },
-        ...(paneOverrides?.bookmarks ? { bookmarks: paneOverrides.bookmarks } : {}),
-        ...(paneOverrides?.selection ? { selection: paneOverrides.selection } : {}),
-        ...(paneOverrides?.visualizations ? { visualizations: paneOverrides.visualizations } : {}),
-        ...(paneOverrides?.fields ? { fields: paneOverrides.fields } : {}),
-      },
-      bars: { statusBar: { visible: true } },
-      background: models.BackgroundType.Transparent,
-    },
-  };
+  // Paginated reports (RDL) load through IPaginatedReportLoadConfiguration.
+  // It is a DISTINCT config shape from the standard report IEmbedConfiguration:
+  //   - type is still 'report' but there is NO viewMode / permissions / panes /
+  //     pageName (page navigation, view-mode toggle, filter pane are not
+  //     applicable to paginated reports).
+  //   - the parameter bar is controlled via settings.commands.parameterPanel.
+  //   - report parameter values seed via config.parameterValues.
+  // The `loaded`/`rendered` events are intentionally not wired (Microsoft
+  // documents they do not fire for paginated reports). The `error` event still
+  // fires and is surfaced through the embed handle by the caller.
+  const config: any = embedVariant === 'paginated'
+    ? {
+        type: 'report',
+        id,
+        embedUrl,
+        accessToken,
+        tokenType: models.TokenType.Embed,
+        settings: {
+          commands: {
+            parameterPanel: { enabled: true, expanded: false },
+          },
+        },
+        ...(parameterValues && parameterValues.length ? { parameterValues } : {}),
+      }
+    : {
+        type: embedType,
+        id,
+        embedUrl,
+        accessToken,
+        tokenType: models.TokenType.Embed,
+        permissions: edit ? models.Permissions.All : models.Permissions.Read,
+        viewMode: edit && embedType === 'report' ? models.ViewMode.Edit : models.ViewMode.View,
+        pageName,
+        ...(theme ? { theme: { themeJson: theme } } : {}),
+        settings: {
+          panes: {
+            filters: { expanded: false, visible: true },
+            pageNavigation: { visible: embedType === 'report' },
+            ...(paneOverrides?.bookmarks ? { bookmarks: paneOverrides.bookmarks } : {}),
+            ...(paneOverrides?.selection ? { selection: paneOverrides.selection } : {}),
+            ...(paneOverrides?.visualizations ? { visualizations: paneOverrides.visualizations } : {}),
+            ...(paneOverrides?.fields ? { fields: paneOverrides.fields } : {}),
+          },
+          bars: { statusBar: { visible: true } },
+          background: models.BackgroundType.Transparent,
+        },
+      };
 
   return (
     <div

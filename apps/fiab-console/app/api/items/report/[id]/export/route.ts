@@ -1,7 +1,8 @@
 /**
  * POST /api/items/report/[id]/export
  *
- * Body: { workspaceId: string, format?: 'PDF' | 'PPTX' | 'PNG' }
+ * Body: { workspaceId: string, format?: string, paginated?: boolean,
+ *         parameterValues?: { name, value }[] }
  * Returns: the exported file as a binary download (Content-Disposition: attachment),
  *          OR { ok: false, error } JSON on failure.
  *
@@ -11,6 +12,11 @@
  *   2. poll GET /groups/{ws}/reports/{id}/exports/{exportId} until Succeeded
  *   3. GET  /groups/{ws}/reports/{id}/exports/{exportId}/file (binary)
  *
+ * Standard Power BI reports support PDF / PPTX / PNG. Paginated reports (RDL)
+ * render through the SSRS rendering engine and support a wider set (PDF / Word /
+ * Excel / PowerPoint / CSV / XML / MHTML / image) — the request body must then
+ * carry a `paginatedReportConfiguration` object (set via `paginated: true`).
+ *
  * No mocks. Power BI errors (job Failed, 401/403, capacity required) surface
  * verbatim so the editor can show them in a MessageBar.
  */
@@ -18,10 +24,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   startReportExport,
+  startPaginatedReportExport,
   getReportExportStatus,
   getReportExportFile,
   PowerBiError,
   type ExportFormat,
+  type PaginatedExportFormat,
 } from '@/lib/azure/powerbi-client';
 
 export const runtime = 'nodejs';
@@ -34,6 +42,24 @@ const MIME: Record<ExportFormat, string> = {
   PNG: 'image/png',
 };
 
+// Paginated reports (RDL) render through the SSRS rendering extensions and
+// support a wider format set than standard Power BI reports.
+const PAGINATED_MIME: Record<PaginatedExportFormat, string> = {
+  PDF: 'application/pdf',
+  DOCX: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  XLSX: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  PPTX: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  CSV: 'text/csv',
+  XML: 'application/xml',
+  MHTML: 'multipart/related',
+  IMAGE: 'image/tiff',
+};
+
+const PAGINATED_EXT: Record<PaginatedExportFormat, string> = {
+  PDF: 'pdf', DOCX: 'docx', XLSX: 'xlsx', PPTX: 'pptx',
+  CSV: 'csv', XML: 'xml', MHTML: 'mhtml', IMAGE: 'tiff',
+};
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -44,10 +70,34 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const workspaceId = (body?.workspaceId || '').toString().trim();
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  const format: ExportFormat = (['PDF', 'PPTX', 'PNG'].includes(body?.format) ? body.format : 'PDF') as ExportFormat;
+
+  const paginated = body?.paginated === true;
+  const parameterValues = Array.isArray(body?.parameterValues)
+    ? body.parameterValues
+        .filter((p: any) => p && typeof p.name === 'string')
+        .map((p: any) => ({ name: String(p.name), value: String(p.value ?? '') }))
+    : [];
+
+  // Resolve the requested format against the per-kind allow-list + MIME map.
+  const requested = String(body?.format || 'PDF').toUpperCase();
+  const mime = paginated
+    ? PAGINATED_MIME[requested as PaginatedExportFormat]
+    : MIME[requested as ExportFormat];
+  if (!mime) {
+    const allowed = paginated ? Object.keys(PAGINATED_MIME) : Object.keys(MIME);
+    return NextResponse.json(
+      { ok: false, error: `unsupported export format "${requested}" — allowed: ${allowed.join(', ')}` },
+      { status: 400 },
+    );
+  }
+  const ext = paginated
+    ? PAGINATED_EXT[requested as PaginatedExportFormat]
+    : requested.toLowerCase();
 
   try {
-    const job = await startReportExport(workspaceId, reportId, format);
+    const job = paginated
+      ? await startPaginatedReportExport(workspaceId, reportId, requested as PaginatedExportFormat, parameterValues)
+      : await startReportExport(workspaceId, reportId, requested as ExportFormat);
     let status = job.status;
     let exportId = job.id;
 
@@ -75,11 +125,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const { bytes } = await getReportExportFile(workspaceId, reportId, exportId);
-    const ext = format.toLowerCase();
     return new NextResponse(bytes, {
       status: 200,
       headers: {
-        'content-type': MIME[format],
+        'content-type': mime,
         'content-disposition': `attachment; filename="report-${reportId}.${ext}"`,
         'cache-control': 'no-store',
       },
