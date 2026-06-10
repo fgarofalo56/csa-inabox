@@ -31,7 +31,9 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  DatabaseStack20Regular, CloudDatabase20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import { MIRROR_SOURCES, CREDENTIALED_SOURCES, SOURCE_FIELD_HINTS } from './mirror-source-catalog';
 
@@ -81,6 +83,18 @@ export interface MirrorSourceWizardProps {
 }
 
 const tkey = (t: MirrorTableSpec) => `${t.schema}.${t.table}`;
+
+// A per-source glyph so the Step 1 card grid is scannable at a glance (mirrors
+// how Fabric's source picker shows a distinct icon per source) — cross-cloud and
+// open-mirroring sources read differently from the Azure SQL family.
+const SOURCE_ICON: Record<string, FluentIcon> = {
+  GoogleBigQuery: CloudDatabase20Regular,
+  Oracle: CloudDatabase20Regular,
+  Snowflake: CloudDatabase20Regular,
+  CosmosDb: DatabaseStack20Regular,
+  GenericMirror: BranchFork20Regular,
+};
+const sourceIcon = (id: string): FluentIcon => SOURCE_ICON[id] || Database20Regular;
 
 export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const { open, editing, workspaceId, mirrorId, initialSrc, onClose, onCreated, onUpdated } = props;
@@ -231,14 +245,20 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
                 <div className={s.grid} style={{ marginTop: 8 }}>
-                  {MIRROR_SOURCES.map((src) => (
-                    <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
-                      style={{ borderLeftColor: src.accent }}
-                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); }} role="button" tabIndex={0}>
-                      <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
-                      <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
-                    </div>
-                  ))}
+                  {MIRROR_SOURCES.map((src) => {
+                    const Icon = sourceIcon(src.id);
+                    const pick = () => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); };
+                    return (
+                      <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
+                        style={{ borderLeftColor: src.accent }}
+                        onClick={pick}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}
+                        role="button" tabIndex={0} aria-pressed={createSrc === src.id} aria-label={src.name}>
+                        <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Icon /></span>
+                        <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

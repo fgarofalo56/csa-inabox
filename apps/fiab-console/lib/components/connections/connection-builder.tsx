@@ -128,6 +128,14 @@ export function ConnectionBuilder({
   const availMethods = methodsFor(type);
   const methodObj = availMethods.find((m) => m.value === authMethod) || availMethods[0];
 
+  // Per-source required fields so the primary button only enables when the source
+  // can actually be created (a failed POST is a worse experience than a disabled button).
+  const missingRequired =
+    isBigQuery ? (!projectId.trim() || !serviceAccountEmail.trim())
+    : isOracle ? (!host.trim() || !username.trim())
+    : false;
+  const canSubmit = !!name.trim() && !missingRequired && !(needsSecret && !secret.trim());
+
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
@@ -232,7 +240,7 @@ export function ConnectionBuilder({
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" icon={<Key20Regular />} disabled={busy || !name.trim() || (needsSecret && !secret)} onClick={submit}>
+            <Button appearance="primary" icon={<Key20Regular />} disabled={busy || !canSubmit} onClick={submit}>
               {busy ? 'Saving…' : 'Create connection'}
             </Button>
           </DialogActions>
