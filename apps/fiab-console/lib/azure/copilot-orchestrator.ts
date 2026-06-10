@@ -1288,6 +1288,94 @@ export async function emitCopilotUsage(
   }
 }
 
+/**
+ * MAF tier client — proxies orchestration to the `loom-copilot-maf` Container
+ * App and re-yields its `OrchestratorStep` SSE stream verbatim, persisting each
+ * step into the SAME shared Cosmos `copilot-sessions` container the Foundry tier
+ * uses. Auto-engaged from {@link orchestrate} when `isGovCloud()` and
+ * `LOOM_MAF_ENDPOINT` is set.
+ *
+ * The MAF app is VNet-internal (Container Apps internal ingress). The Console
+ * passes the signed-in user's `oid` as the trusted `x-user-oid` header — the MAF
+ * app uses that to call the Console's token-gated internal tool endpoints
+ * (`/api/internal/copilot/tools/*`), so tool dispatch + OBO + per-user ownership
+ * remain in the Console. The MAF app authenticates that callback with the shared
+ * `LOOM_INTERNAL_TOKEN`; the AOAI completion itself is done by the MAF app's UAMI
+ * against Gov AOAI (`*.openai.azure.us`).
+ */
+async function* orchestrateViaMaf(
+  opts: OrchestrateOptions,
+  mafEndpoint: string,
+): AsyncIterable<OrchestratorStep> {
+  const { prompt, sessionId, userOid } = opts;
+  const url = `${mafEndpoint.replace(/\/$/, '')}/orchestrate`;
+
+  // Mirror the Foundry tier's opening thought + prompt persistence so the stored
+  // transcript shape is identical regardless of which tier served the turn.
+  await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-user-oid': userOid },
+      body: JSON.stringify({ prompt, sessionId, maxIterations: opts.maxIterations }),
+    });
+  } catch (e: any) {
+    const step: OrchestratorStep = {
+      kind: 'error',
+      error: `MAF orchestration tier unreachable at ${mafEndpoint}: ${e?.message || e}`,
+    };
+    await persistStep(sessionId, userOid, step);
+    yield step;
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    const body = await res.text().catch(() => '');
+    const step: OrchestratorStep = {
+      kind: 'error',
+      error: `MAF orchestration tier returned ${res.status}: ${body.slice(0, 300)}`,
+    };
+    await persistStep(sessionId, userOid, step);
+    yield step;
+    return;
+  }
+
+  // Parse the SSE stream from the MAF app and re-yield each OrchestratorStep.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let currentEvent = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        currentEvent = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        const raw = line.slice(5).trimStart();
+        if (currentEvent === 'step') {
+          let step: OrchestratorStep | null = null;
+          try { step = JSON.parse(raw) as OrchestratorStep; } catch { step = null; }
+          if (step) {
+            await persistStep(sessionId, userOid, step);
+            yield step;
+            if (step.kind === 'final' || step.kind === 'error') return;
+          }
+        }
+        currentEvent = '';
+      } else if (line.trim() === '') {
+        currentEvent = '';
+      }
+    }
+  }
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   // Copilot surface tag for per-persona usage metering (string, defaults to
@@ -1297,6 +1385,28 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // Identity passed to every tool handler so build-assist tools create/configure
   // items OWNED by this user (not the broken tenantId:'default' shells).
   const toolCtx: ToolContext = { userOid, session: { claims: { oid: userOid, upn: userOid } } };
+
+  // ── MAF orchestration tier (GCC-High / IL5) ────────────────────────────────
+  // When the active cloud is an Azure Government boundary (isGovCloud()) AND
+  // LOOM_MAF_ENDPOINT is wired (the loom-copilot-maf Container App is deployed),
+  // proxy the whole orchestration to that app. The MAF tier calls Gov AOAI
+  // (cognitiveservices.azure.us) DIRECTLY — bypassing the two Gov-broken Foundry
+  // paths this function would otherwise use: the Foundry hub listConnections()
+  // discovery (unreliable on a kind=Default workspace) and the
+  // services.ai.azure.com Agent Service endpoint (no confirmed Gov host).
+  //
+  // Tool DISPATCH + OBO stay HERE: the MAF app calls back into the Console's
+  // token-gated internal tool endpoints, so the exact same handlers, the exact
+  // same Cosmos containers, and the exact same per-user ownership apply. Step
+  // PERSISTENCE is also done on this side (persistStep → shared copilot-sessions
+  // container) as each proxied step is re-yielded, so a MAF-tier transcript is
+  // byte-identical in shape + storage to a Foundry-tier transcript.
+  const mafEndpoint = process.env.LOOM_MAF_ENDPOINT;
+  if (isGovCloud() && mafEndpoint) {
+    yield* orchestrateViaMaf(opts, mafEndpoint);
+    return;
+  }
+  // ── End MAF tier ────────────────────────────────────────────────────────────
 
   let target: AoaiTarget;
   try {

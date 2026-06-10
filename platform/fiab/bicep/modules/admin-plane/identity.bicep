@@ -56,6 +56,15 @@ resource uamiDirectLake 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
   tags: complianceTags
 }
 
+// MAF orchestration tier (GCC-High / IL5). Calls Gov AOAI direct; needs
+// Cognitive Services OpenAI User on the AOAI account (granted in main.bicep)
+// + ACR pull. Distinct identity so the AOAI grant is scoped to the MAF tier.
+resource uamiMaf 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: 'uami-loom-maf-${location}'
+  location: location
+  tags: complianceTags
+}
+
 // =====================================================================
 // Outputs
 // =====================================================================
@@ -88,3 +97,7 @@ output uamiMirroringPrincipalId string = uamiMirroring.properties.principalId
 output uamiDirectLakeId string = uamiDirectLake.id
 output uamiDirectLakeClientId string = uamiDirectLake.properties.clientId
 output uamiDirectLakePrincipalId string = uamiDirectLake.properties.principalId
+
+output uamiMafId string = uamiMaf.id
+output uamiMafClientId string = uamiMaf.properties.clientId
+output uamiMafPrincipalId string = uamiMaf.properties.principalId

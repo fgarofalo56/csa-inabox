@@ -200,7 +200,7 @@ param frontDoorEnabled bool = false
 
 // ---------- Container image tags + Loom Console env-var wiring ----------
 
-@description('Container image tag per app (loom-console, loom-mcp, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim). Default v0.1; override per release.')
+@description('Container image tag per app (loom-console, loom-mcp, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf). Default v0.1; override per release.')
 param appImageTags object = {
   console: 'v0.1'
   mcp: 'v0.1'
@@ -208,7 +208,19 @@ param appImageTags object = {
   activator: 'v0.1'
   mirroring: 'v0.1'
   directLake: 'v0.1'
+  maf: 'v0.1'
 }
+
+@description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
+param copilotMafEnabled bool = false
+
+// Shared internal trust token for the MAF → Console tool-dispatch callback.
+// Deterministic on the admin RG so the value injected into BOTH the Console and
+// the MAF app matches without a round-trip. Internal-network use only.
+var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
+
+// MAF tier deploys only in Gov boundaries with Container Apps + app deploy on.
+var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5') && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Loom version label shown in the UI (matches console image tag by convention).')
 param loomVersion string = 'v0.1'
@@ -221,6 +233,8 @@ param loomSynapseDedicatedPool string = 'loompool'
 
 @description('Direct Lake warm-cache TTL in seconds. Semantic-model "Direct Lake query" requests within this window are served from the Power BI in-memory VertiPaq cache; older queries fall back transparently to Synapse Serverless OPENROWSET over the Gold Delta files. 0 = always Serverless. Default 3600 (1 hour).')
 param loomDlCacheTtlSeconds int = 3600
+@description('Entra group object ID whose members may run the Ops Admin Copilot ARM/config actions (scale capacity, toggle the Synapse outbound-access policy, create workspaces). Empty = any signed-in admin (matches the rest of the admin pane). Recommended: a dedicated "Loom Ops Admins" group. Membership is checked via Microsoft Graph transitiveMembers using the Console UAMI Group.Read.All AppRole (already granted by identity-graph-rbac).')
+param loomOpsAdminEntraGroup string = ''
 
 @description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
 param loomOnelakeSecurityEnabled bool = false
@@ -1006,6 +1020,10 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     // Sovereign / private-only boundaries keep the account off the public net.
     publicNetworkAccess: boundary == 'Commercial'
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // MAF tier (GCC-High / IL5) UAMI gets Cognitive Services OpenAI User here so
+    // the loom-copilot-maf Container App can call Gov AOAI direct. Empty in
+    // non-Gov boundaries → grant skipped.
+    mafPrincipalId: (copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) ? identity.outputs.uamiMafPrincipalId : ''
     skipRoleGrants: skipRoleGrants
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
@@ -1322,6 +1340,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // older queries fall back transparently to Synapse Serverless
             // OPENROWSET over the Gold Delta files. 0 = always Serverless.
             { name: 'LOOM_DL_CACHE_TTL_SECONDS', value: string(loomDlCacheTtlSeconds) }
+            // Ops Admin Copilot RBAC gate (Admin → Capacity & compute → Ops Copilot).
+            // Members of this Entra group may execute NL-driven scale / OAP-toggle /
+            // workspace-create actions. Empty = any signed-in admin.
+            { name: 'LOOM_OPS_ADMIN_ENTRA_GROUP', value: loomOpsAdminEntraGroup }
             // Lakehouse schemas (F9) — Spark pool for CREATE/ALTER/DROP SCHEMA
             // DDL via Livy, and the sovereign-cloud dev-endpoint DNS suffix.
             { name: 'LOOM_DEFAULT_SPARK_POOL', value: loomDefaultSparkPool }
@@ -2114,7 +2136,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
             { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
-          ]
+          ],
+          // MAF orchestration tier (GCC-High / IL5). When the loom-copilot-maf
+          // Container App deploys, set LOOM_MAF_ENDPOINT so copilot-orchestrator
+          // auto-routes Gov turns to it, plus the shared internal token used to
+          // authenticate the MAF → Console tool-dispatch callback.
+          copilotMafActive ? [
+            { name: 'LOOM_MAF_ENDPOINT', value: copilotMaf!.outputs.mafInternalEndpoint }
+            { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
+          ] : []
         )
         secrets: concat(
           !empty(loomMsalClientId) ? [
@@ -2137,6 +2167,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // azure-functions/paginated-report-renderer/DEPLOYMENT.md).
           !empty(loomPaginatedRenderUrl) ? [
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // Shared internal trust token for the MAF → Console tool-dispatch
+          // callback (GCC-High / IL5). Same deterministic value the MAF app gets.
+          copilotMafActive ? [
+            { name: 'loom-internal-token', value: loomInternalToken }
           ] : []
         )
       }
@@ -2234,6 +2269,37 @@ module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerAp
     uamiClientId: identity.outputs.uamiCopilotClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     boundary: boundary
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// MAF orchestration tier (GCC-High / IL5 only).
+// Gov AOAI-direct copilot orchestration with NO AI Foundry Hub dependency.
+// Auto-selected by copilot-orchestrator.ts when LOOM_MAF_ENDPOINT is set
+// (only when this module deploys) + isGovCloud(). Tool dispatch + OBO are
+// delegated back to the Console's token-gated internal endpoints.
+// =====================================================================
+module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
+  name: 'copilot-maf'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    acrLoginServer: registry.outputs.acrLoginServer
+    imageTag: appImageTags.maf
+    uamiId: identity.outputs.uamiMafId
+    uamiClientId: identity.outputs.uamiMafClientId
+    // Gov AOAI endpoint — prefer the dedicated Agent Service account, then the
+    // shared hub. Empty → the MAF app shows an honest runtime gate.
+    aoaiEndpoint: agentFoundryEnabled
+      ? agentFoundry!.outputs.aoaiEndpoint
+      : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')
+    aoaiDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : ''
+    aoaiApiVersion: '2024-10-21'
+    consoleInternalEndpoint: 'http://loom-console'
+    internalToken: loomInternalToken
+    boundary: boundary == 'IL5' ? 'IL5' : 'GCC-High'
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
 }
@@ -2586,3 +2652,7 @@ output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropa
 output reportSubscriptionsFunctionName string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : ''
 output reportSubscriptionsPrincipalId string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.principalId : ''
 output reportSubscriptionLogicAppName string = reportSubscriptionsEnabled ? reportSubscriptionLogicApp.outputs.workflowName : ''
+// MAF orchestration tier (GCC-High / IL5). Internal endpoint the Console reads
+// as LOOM_MAF_ENDPOINT; empty when the tier isn't active.
+output copilotMafEndpoint string = copilotMafActive ? copilotMaf!.outputs.mafInternalEndpoint : ''
+output copilotMafPrincipalId string = (copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) ? identity.outputs.uamiMafPrincipalId : ''

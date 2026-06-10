@@ -1,0 +1,20 @@
+{
+  "name": "loom-copilot-maf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom — Microsoft Agent Framework (MAF) orchestration tier for GCC-High / IL5. Runs the Copilot agent loop against Gov AOAI direct, with tool dispatch delegated back to the Console's internal endpoints.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --import tsx --watch src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -101,6 +101,9 @@ param completionModelCapacity int = 10
 @description('Console UAMI principal (object) id — granted Azure AI Developer + Cognitive Services User + Cognitive Services OpenAI User on this account. Empty skips the grants.')
 param consolePrincipalId string = ''
 
+@description('MAF orchestration-tier UAMI principal (object) id — granted Cognitive Services OpenAI User on this account so the MAF Container App can call Gov AOAI direct. Empty skips the grant (Gov-only tier).')
+param mafPrincipalId string = ''
+
 @description('principalType for the role assignments. ServicePrincipal for a UAMI.')
 @allowed(['ServicePrincipal', 'User', 'Group'])
 param principalType string = 'ServicePrincipal'
@@ -257,6 +260,20 @@ resource raCognitiveServicesOpenAIUser 'Microsoft.Authorization/roleAssignments@
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleCognitiveServicesOpenAIUser)
     principalId: consolePrincipalId
+    principalType: principalType
+  }
+}
+
+// MAF orchestration tier — same Cognitive Services OpenAI User grant so the
+// loom-copilot-maf Container App can call this account's AOAI deployments
+// directly (Gov AOAI, *.openai.azure.us). Account-scope, in-module, so the
+// principalId is start-time-known (no BCP177 across modules).
+resource raMafOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(mafPrincipalId) && !skipRoleGrants) {
+  scope: account
+  name: guid(account.id, mafPrincipalId, roleCognitiveServicesOpenAIUser)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleCognitiveServicesOpenAIUser)
+    principalId: mafPrincipalId
     principalType: principalType
   }
 }
