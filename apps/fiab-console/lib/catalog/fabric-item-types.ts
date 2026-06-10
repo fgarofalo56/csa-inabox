@@ -763,6 +763,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-mlflow"
     } },
+  { slug: 'automl', displayName: 'AutoML job', restType: 'AutoMLJob', category: 'Data Science',
+    description: 'Low-code automated ML — pick a task, dataset, and compute, and AutoML trains and tunes the best model.',
+    learnContent: {
+      "overview": "An AutoML job runs Azure Machine Learning's automated ML on a dataset — it trains and tunes many models and algorithms and surfaces the best one for your primary metric. In Loom it is fully Azure-native (Microsoft.MachineLearningServices, no Fabric dependency): a low-code wizard picks the task (classification, regression, or time-series forecasting), the training MLTable + target column, an AmlCompute cluster, and the limit/metric settings, then submits a real AutoML job you monitor live.",
+      "steps": [
+        {
+          "title": "Pick a task type",
+          "body": "Classification (binary or multi-class), regression, or time-series forecasting — AutoML uses this to choose which algorithms to try."
+        },
+        {
+          "title": "Choose data + target",
+          "body": "Select a registered MLTable data asset (or paste an MLTable URI) and the target column to predict. Forecasting also takes a time column and horizon."
+        },
+        {
+          "title": "Pick compute + settings",
+          "body": "Choose an AmlCompute cluster, the primary metric, trial/concurrency caps, and timeouts; optionally enable explainability and early termination."
+        },
+        {
+          "title": "Run and monitor",
+          "body": "Submit the AutoML job and watch its status update live in the Monitor tab; cancel an in-flight run anytime. The best model can be registered for deployment."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-automated-ml"
+    } },
 
   // Fabric IQ (preview)
   { slug: 'ontology', displayName: 'Ontology', restType: 'Ontology', category: 'Fabric IQ', preview: true,

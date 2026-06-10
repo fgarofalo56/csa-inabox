@@ -512,6 +512,218 @@ export async function listModels(): Promise<AmlModel[]> {
 }
 
 // ============================================================
+// 4b. Data assets (registered MLTable / uri_file / uri_folder)
+// ============================================================
+
+export interface AmlDataAsset {
+  id?: string;
+  name: string;
+  latestVersion?: string;
+  description?: string;
+  /** Asset kind from the latest version: mltable | uri_folder | uri_file. */
+  dataType?: string;
+  /** Data URI of the latest version (azureml:// or abfss:// …). */
+  uri?: string;
+}
+
+function shapeDataAsset(raw: any): AmlDataAsset {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    latestVersion: p.latestVersion,
+    description: p.description,
+  };
+}
+
+function shapeDataVersion(raw: any): AmlDataAsset {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    latestVersion: raw?.name, // for a version resource, `name` is the version number
+    description: p.description,
+    dataType: p.dataType,
+    uri: p.dataUri,
+  };
+}
+
+/**
+ * List registered Data assets (data containers). AutoML needs an MLTable
+ * training input, so the wizard's dataset dropdown is populated from here.
+ *   GET <ws>/data
+ * https://learn.microsoft.com/rest/api/azureml/data-containers/list
+ */
+export async function listDataAssets(): Promise<AmlDataAsset[]> {
+  const rows = await pagedList('/data', 'listDataAssets');
+  return rows.map(shapeDataAsset);
+}
+
+/**
+ * Resolve the latest version of one data asset to its data URI + type, so the
+ * wizard can submit `azureml:<name>:<version>` or the raw dataUri as the
+ * AutoML MLTable training input.
+ *   GET <ws>/data/{name}/versions/{version}
+ * https://learn.microsoft.com/rest/api/azureml/data-versions/get
+ */
+export async function getDataAssetVersion(name: string, version: string): Promise<AmlDataAsset | null> {
+  const res = await amlFetch(
+    `/data/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`,
+  );
+  const j = await readAmlJson<any>(res, 'getDataAssetVersion');
+  return j ? shapeDataVersion(j) : null;
+}
+
+// ============================================================
+// 4c. AutoML jobs (low-code automated ML)
+// ============================================================
+
+/** AutoML tabular task verticals supported by the wizard. */
+export type AutoMLTaskType = 'Classification' | 'Regression' | 'Forecasting';
+
+/** Primary metric per task (must match AML's enum for the chosen vertical). */
+export const AUTOML_METRICS: Record<AutoMLTaskType, string[]> = {
+  // https://learn.microsoft.com/azure/machine-learning/how-to-configure-auto-train#primary-metric
+  Classification: [
+    'AUCWeighted', 'Accuracy', 'NormMacroRecall',
+    'AveragePrecisionScoreWeighted', 'PrecisionScoreWeighted',
+  ],
+  Regression: ['NormalizedRootMeanSquaredError', 'R2Score', 'SpearmanCorrelation', 'NormalizedMeanAbsoluteError'],
+  Forecasting: ['NormalizedRootMeanSquaredError', 'R2Score', 'SpearmanCorrelation', 'NormalizedMeanAbsoluteError'],
+};
+
+export interface AutoMLSubmitInput {
+  /** Display name shown in Studio / the runs table. */
+  displayName?: string;
+  /** Experiment name to group the run under. */
+  experimentName?: string;
+  description?: string;
+  task: AutoMLTaskType;
+  /** MLTable training data URI (azureml:<name>:<ver> | azureml:// | abfss:// …). */
+  trainingDataUri: string;
+  /** Optional separate MLTable validation data URI. */
+  validationDataUri?: string;
+  /** Label / target column to predict. */
+  targetColumnName: string;
+  /** Compute cluster name (AmlCompute) the trials run on. */
+  computeName: string;
+  primaryMetric?: string;
+  /** Execution limits. */
+  maxTrials?: number;
+  maxConcurrentTrials?: number;
+  /** ISO-8601 duration, e.g. "PT1H" (1 hour) for the whole experiment. */
+  timeout?: string;
+  /** ISO-8601 duration cap per individual trial, e.g. "PT20M". */
+  trialTimeout?: string;
+  /** Whether to enable model explainability (default true). */
+  enableModelExplainability?: boolean;
+  /** Forecasting-only: the time/datetime column. */
+  timeColumnName?: string;
+  /** Forecasting-only: how many periods ahead to forecast. */
+  forecastHorizon?: number;
+  /** Whether to enable early termination (default true). */
+  enableEarlyTermination?: boolean;
+}
+
+/** Build the MLTableJobInput for an AutoML training/validation input. */
+function mlTableInput(uri: string): Record<string, unknown> {
+  return { jobInputType: 'mltable', uri };
+}
+
+/**
+ * Submit an AutoML job. Real ARM PUT of an AutoML-typed job.
+ *   PUT {base}/jobs/{name}?api-version=2024-10-01
+ * The polymorphic `taskDetails.taskType` selects the vertical; tabular tasks
+ * (Classification / Regression / Forecasting) all take an MLTable training
+ * input + target column + limit/training settings.
+ * https://learn.microsoft.com/rest/api/azureml/jobs/create-or-update
+ */
+export async function submitAutoMLJob(input: AutoMLSubmitInput): Promise<AmlJob> {
+  const t = resolveAmlTarget();
+  const name = `loom-automl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const computeId =
+    `/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}` +
+    `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}/computes/${input.computeName}`;
+
+  const allowedMetrics = AUTOML_METRICS[input.task];
+  const primaryMetric =
+    input.primaryMetric && allowedMetrics.includes(input.primaryMetric)
+      ? input.primaryMetric
+      : allowedMetrics[0];
+
+  const limitSettings: Record<string, unknown> = {
+    maxTrials: input.maxTrials ?? 20,
+    maxConcurrentTrials: input.maxConcurrentTrials ?? 4,
+    timeout: input.timeout || 'PT1H',
+    enableEarlyTermination: input.enableEarlyTermination ?? true,
+  };
+  if (input.trialTimeout) limitSettings.trialTimeout = input.trialTimeout;
+
+  const taskDetails: Record<string, unknown> = {
+    taskType: input.task,
+    trainingData: mlTableInput(input.trainingDataUri),
+    targetColumnName: input.targetColumnName,
+    primaryMetric,
+    limitSettings,
+    trainingSettings: {
+      enableModelExplainability: input.enableModelExplainability ?? true,
+    },
+  };
+  if (input.validationDataUri) {
+    taskDetails.validationData = mlTableInput(input.validationDataUri);
+  }
+  if (input.task === 'Forecasting') {
+    taskDetails.forecastingSettings = {
+      ...(input.timeColumnName ? { timeColumn: input.timeColumnName } : {}),
+      ...(input.forecastHorizon ? { forecastHorizon: { mode: 'Custom', value: input.forecastHorizon } } : {}),
+    };
+  }
+
+  const armBody = {
+    properties: {
+      jobType: 'AutoML',
+      displayName: input.displayName || `AutoML ${input.task}`,
+      experimentName: input.experimentName || 'loom-automl',
+      description: input.description,
+      computeId,
+      taskDetails,
+    },
+  };
+
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+  });
+  const j = await readAmlJson<any>(res, 'submitAutoMLJob');
+  return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'AutoML', displayName: armBody.properties.displayName };
+}
+
+/** List AutoML jobs (jobs filtered to jobType == AutoML) for the monitor table. */
+export async function listAutoMLJobs(opts: { maxResults?: number } = {}): Promise<AmlJob[]> {
+  const jobs = await listJobs({ maxResults: opts.maxResults ?? 200 });
+  return jobs.filter((j) => (j.jobType || '') === 'AutoML');
+}
+
+/** Read a single AutoML job's status (poll). Null on 404. Reuses getCiJob. */
+export async function getAutoMLJob(name: string): Promise<AmlJob | null> {
+  return getCiJob(name);
+}
+
+/**
+ * Cancel a running AutoML job.
+ *   POST {base}/jobs/{name}/cancel?api-version=2024-10-01  → 202 Accepted
+ * https://learn.microsoft.com/rest/api/azureml/jobs/cancel
+ */
+export async function cancelAmlJob(name: string): Promise<void> {
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}/cancel`, { method: 'POST' });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const txt = await res.text().catch(() => '');
+  // Cancelling an already-terminal job is a no-op for the caller.
+  if (res.status === 409 || /completed|failed|canceled|terminal/i.test(txt)) return;
+  throw new AmlError(res.status, txt, `AutoML job cancel failed: ${txt.slice(0, 240)}`);
+}
+
+// ============================================================
 // 5. Schedules
 // ============================================================
 

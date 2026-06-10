@@ -316,4 +316,92 @@ describe('AML control-plane', () => {
       expect(rows[0]).toMatchObject({ name: 'sklearn-env', latestVersion: '3' });
     });
   });
+
+  describe('AutoML jobs', () => {
+    it('submitAutoMLJob PUTs an AutoML Classification job with MLTable + limits', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({ name: 'loom-automl-x', properties: { jobType: 'AutoML', status: 'NotStarted', displayName: 'fraud' } }), calls);
+      const mod = await import('../aml-client');
+      const job = await mod.submitAutoMLJob({
+        task: 'Classification',
+        trainingDataUri: 'azureml:bank:1',
+        targetColumnName: 'y',
+        computeName: 'cpu-cluster',
+        displayName: 'fraud',
+        primaryMetric: 'Accuracy',
+        maxTrials: 30,
+        maxConcurrentTrials: 5,
+        timeout: 'PT2H',
+      });
+      expect(job.name).toBe('loom-automl-x');
+      const call = calls[0];
+      expect(call.init.method).toBe('PUT');
+      expect(call.url).toContain('/workspaces/ws-test/jobs/');
+      expect(call.url).toContain('api-version=2024-10-01');
+      const body = JSON.parse(String(call.init.body));
+      expect(body.properties.jobType).toBe('AutoML');
+      expect(body.properties.computeId).toContain('/workspaces/ws-test/computes/cpu-cluster');
+      expect(body.properties.taskDetails.taskType).toBe('Classification');
+      expect(body.properties.taskDetails.trainingData).toEqual({ jobInputType: 'mltable', uri: 'azureml:bank:1' });
+      expect(body.properties.taskDetails.targetColumnName).toBe('y');
+      expect(body.properties.taskDetails.primaryMetric).toBe('Accuracy');
+      expect(body.properties.taskDetails.limitSettings).toMatchObject({ maxTrials: 30, maxConcurrentTrials: 5, timeout: 'PT2H' });
+    });
+
+    it('submitAutoMLJob adds forecastingSettings for Forecasting and rejects a wrong-vertical metric', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({ name: 'loom-automl-f', properties: { jobType: 'AutoML', status: 'NotStarted' } }), calls);
+      const mod = await import('../aml-client');
+      await mod.submitAutoMLJob({
+        task: 'Forecasting',
+        trainingDataUri: 'azureml:energy:2',
+        targetColumnName: 'demand',
+        computeName: 'cpu-cluster',
+        timeColumnName: 'ts',
+        forecastHorizon: 24,
+        primaryMetric: 'Accuracy', // not valid for Forecasting → falls back to the first allowed metric
+      });
+      const body = JSON.parse(String(calls[0].init.body));
+      expect(body.properties.taskDetails.taskType).toBe('Forecasting');
+      expect(body.properties.taskDetails.forecastingSettings).toMatchObject({
+        timeColumn: 'ts',
+        forecastHorizon: { mode: 'Custom', value: 24 },
+      });
+      // 'Accuracy' is invalid for Forecasting → coerced to the first Regression-family metric.
+      expect(body.properties.taskDetails.primaryMetric).toBe('NormalizedRootMeanSquaredError');
+    });
+
+    it('listAutoMLJobs filters the jobs list to jobType == AutoML', async () => {
+      mockFetch(() => ({ value: [
+        { name: 'a', properties: { jobType: 'AutoML', status: 'Completed' } },
+        { name: 'c', properties: { jobType: 'Command', status: 'Completed' } },
+        { name: 'b', properties: { jobType: 'AutoML', status: 'Running' } },
+      ] }));
+      const mod = await import('../aml-client');
+      const rows = await mod.listAutoMLJobs();
+      expect(rows.map((r) => r.name).sort()).toEqual(['a', 'b']);
+      expect(rows.every((r) => r.jobType === 'AutoML')).toBe(true);
+    });
+
+    it('cancelAmlJob POSTs jobs/{name}/cancel and tolerates a 409 terminal job', async () => {
+      const calls: Call[] = [];
+      mockFetch((url) => url.includes('/cancel') ? new Response(null, { status: 202 }) : ({}), calls);
+      const mod = await import('../aml-client');
+      await mod.cancelAmlJob('loom-automl-x');
+      expect(calls[0].init.method).toBe('POST');
+      expect(calls[0].url).toContain('/jobs/loom-automl-x/cancel');
+
+      mockFetch(() => new Response(JSON.stringify({ error: { message: 'job is in a terminal state' } }), { status: 409 }));
+      await expect(mod.cancelAmlJob('done-job')).resolves.toBeUndefined();
+    });
+
+    it('listDataAssets GETs the data child resource', async () => {
+      const calls: Call[] = [];
+      mockFetch(() => ({ value: [{ id: 'd1', name: 'bank', properties: { latestVersion: '3' } }] }), calls);
+      const mod = await import('../aml-client');
+      const rows = await mod.listDataAssets();
+      expect(calls[0].url).toContain('/workspaces/ws-test/data?api-version=2024-10-01');
+      expect(rows[0]).toMatchObject({ name: 'bank', latestVersion: '3' });
+    });
+  });
 });
