@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
+import { AdfCdcEditor } from '@/lib/adf/adf-cdc-editor';
 import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PipelineCopilotPane } from './pipeline-editor';
@@ -125,6 +126,7 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
+  const [openCdc, setOpenCdc] = useState<string | null>(null);
   // Bump to force the navigator (ADF Factory Resources / Synapse Workspace
   // Resources) to re-list after a bind/create/manage action mutates the backend.
   const [factoryRefreshKey, setFactoryRefreshKey] = useState(0);
@@ -484,6 +486,7 @@ export function PipelineEditorCore({
             boundPipeline={bound}
             onOpenPipeline={(name) => bindTo(name, false)}
             onOpenManage={() => setManageOpen(true)}
+            onOpenCdc={(name) => setOpenCdc(name)}
             refreshKey={factoryRefreshKey}
           />
         ) : (
@@ -712,6 +715,17 @@ export function PipelineEditorCore({
                 if (isAdf) setFactoryRefreshKey((k) => k + 1);
                 else setWorkspaceRefreshKey((k) => k + 1);
               }
+            }}
+          />
+
+          {/* Change Data Capture (preview) detail panel — opened from the
+              Factory Resources navigator. Inspect status + source→target
+              mapping and Start/Stop/Delete (real ADF adfcdcs ARM REST). */}
+          <AdfCdcEditor
+            name={openCdc}
+            onClose={(changed) => {
+              setOpenCdc(null);
+              if (changed) setFactoryRefreshKey((k) => k + 1);
             }}
           />
 

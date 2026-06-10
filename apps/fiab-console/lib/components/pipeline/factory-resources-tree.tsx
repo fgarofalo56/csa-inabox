@@ -39,7 +39,7 @@ import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, MoreHorizontal20Regular,
   Flow20Regular, DocumentTable20Regular, DataUsage20Regular, Clock20Regular,
   Link20Regular, Server20Regular, Play16Regular, Stop16Regular, Open16Regular,
-  Search20Regular, Warning20Regular,
+  Search20Regular, Warning20Regular, ArrowRepeatAll20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -59,6 +59,7 @@ const DF_ROUTE = '/api/adf/dataflows';
 const TRG_ROUTE = '/api/adf/triggers';
 const LS_ROUTE = '/api/adf/linked-services';
 const IR_ROUTE = '/api/adf/integration-runtimes';
+const CDC_ROUTE = '/api/adf/cdc';
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -76,6 +77,8 @@ export interface FactoryResourcesTreeProps {
   onOpenPipeline: (name: string) => void;
   /** Open the Manage hub (linked services / datasets / integration runtimes). */
   onOpenManage: () => void;
+  /** Open the Change Data Capture (preview) detail panel for a CDC resource. */
+  onOpenCdc?: (name: string) => void;
   /** Increment to force a refresh from the parent (e.g. after a bind/create). */
   refreshKey?: number;
 }
@@ -84,7 +87,7 @@ export interface FactoryResourcesTreeProps {
  * A typed, ADF-Studio-faithful Factory Resources navigator.
  */
 export function FactoryResourcesTree({
-  boundPipeline, onOpenPipeline, onOpenManage, refreshKey = 0,
+  boundPipeline, onOpenPipeline, onOpenManage, onOpenCdc, refreshKey = 0,
 }: FactoryResourcesTreeProps) {
   const s = useStyles();
 
@@ -99,6 +102,7 @@ export function FactoryResourcesTree({
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
   const [linkedServices, setLinkedServices] = useState<NamedRow[]>([]);
   const [runtimes, setRuntimes] = useState<NamedRow[]>([]);
+  const [cdcs, setCdcs] = useState<Array<{ name: string; status?: string; mode?: string; sourceCount?: number; targetCount?: number }>>([]);
 
   const [busy, setBusy] = useState(false);
 
@@ -117,16 +121,17 @@ export function FactoryResourcesTree({
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [pr, dr, fr, tr, lr, ir] = await Promise.all([
+      const [pr, dr, fr, tr, lr, ir, cr] = await Promise.all([
         fetch(PIPE_ROUTE).then(readJson),
         fetch(DS_ROUTE).then(readJson),
         fetch(DF_ROUTE).then(readJson),
         fetch(TRG_ROUTE).then(readJson),
         fetch(LS_ROUTE).then(readJson),
         fetch(IR_ROUTE).then(readJson),
+        fetch(CDC_ROUTE).then(readJson),
       ]);
       // Any route reporting not_configured gates the whole tree (same factory).
-      for (const b of [pr, dr, fr, tr, lr, ir]) { if (applyGate(b)) { setLoading(false); return; } }
+      for (const b of [pr, dr, fr, tr, lr, ir, cr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (pr.ok) setPipelines(pr.pipelines || []); else setError(pr.error || 'failed to list pipelines');
       if (dr.ok) setDatasets(dr.datasets || []);
@@ -134,6 +139,7 @@ export function FactoryResourcesTree({
       if (tr.ok) setTriggers(tr.triggers || []);
       if (lr.ok) setLinkedServices(lr.linkedServices || []);
       if (ir.ok) setRuntimes(ir.runtimes || []);
+      if (cr.ok) setCdcs(cr.cdcs || []);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -216,6 +222,22 @@ export function FactoryResourcesTree({
     finally { setBusy(false); }
   }, [loadAll]);
 
+  // Start / Stop a Change Data Capture (preview) resource (real ARM REST via
+  // POST /api/adf/cdc { name, action }). Delete uses the generic `del` helper.
+  const cdcLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(CDC_ROUTE, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok) { setError(body.error || `${action} failed`); setBusy(false); return; }
+      await loadAll();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [loadAll]);
+
   // ---------------------------------------------------------------
   // Filtering
   // ---------------------------------------------------------------
@@ -227,6 +249,7 @@ export function FactoryResourcesTree({
   const fTriggers = useMemo(() => triggers.filter((t) => match(t.name)), [triggers, f]);
   const fLinked = useMemo(() => linkedServices.filter((l) => match(l.name)), [linkedServices, f]);
   const fRuntimes = useMemo(() => runtimes.filter((r) => match(r.name)), [runtimes, f]);
+  const fCdcs = useMemo(() => cdcs.filter((c) => match(c.name)), [cdcs, f]);
 
   // ---------------------------------------------------------------
   // Render helpers
@@ -442,6 +465,45 @@ export function FactoryResourcesTree({
             </Tree>
           </TreeItem>
 
+          {/* Change Data Capture (preview) — real ADF adfcdcs resources.
+              The "(preview)" suffix matches ADF Studio's own label (the CDC
+              feature is still tagged preview in the portal). Start/Stop hit
+              real ARM REST; Open inspects the source→target mapping + live
+              status before executing (the "preview CDC output" workflow). */}
+          <TreeItem itemType="branch" value="g-cdc">
+            {groupHeader('Change Data Capture (preview)', <ArrowRepeatAll20Regular />, cdcs.length)}
+            <Tree>
+              {fCdcs.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No CDC resources'}</Caption1></TreeItemLayout></TreeItem>}
+              {fCdcs.map((c) => {
+                const running = (c.status || '').toLowerCase() === 'running';
+                const transitioning = ['starting', 'stopping'].includes((c.status || '').toLowerCase());
+                const color = running ? 'success' : (c.status || '').toLowerCase() === 'stopped' ? 'informative' : transitioning ? 'warning' : 'danger';
+                return (
+                  <TreeItem key={c.name} itemType="leaf" value={`c-${c.name}`}>
+                    <TreeItemLayout iconBefore={<ArrowRepeatAll20Regular />}>
+                      <span className={s.leafRow}>
+                        <span
+                          role="button" tabIndex={0} style={{ cursor: onOpenCdc ? 'pointer' : undefined }}
+                          onClick={() => onOpenCdc?.(c.name)}
+                          onKeyDown={(e) => { if (onOpenCdc && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenCdc(c.name); } }}
+                        >{c.name}</span>
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          {typeof c.targetCount === 'number' && <Caption1>{(c.sourceCount ?? 0)}→{c.targetCount} tbl</Caption1>}
+                          <Badge size="small" appearance="filled" color={color}>{c.status || '—'}</Badge>
+                          {running
+                            ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'stop')} aria-label={`Stop ${c.name}`} /></Tooltip>
+                            : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'start')} aria-label={`Start ${c.name}`} /></Tooltip>}
+                          {onOpenCdc && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenCdc(c.name)} aria-label={`Open ${c.name}`} /></Tooltip>}
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(CDC_ROUTE, c.name)} aria-label={`Delete ${c.name}`} /></Tooltip>
+                        </span>
+                      </span>
+                    </TreeItemLayout>
+                  </TreeItem>
+                );
+              })}
+            </Tree>
+          </TreeItem>
+
           {/* Honest gate rows — Azure exposes these groups; we don't wire them yet. */}
           <TreeItem itemType="branch" value="g-not-wired">
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
@@ -449,7 +511,6 @@ export function FactoryResourcesTree({
               {[
                 ['Managed private endpoints', 'Microsoft.DataFactory/factories/managedVirtualNetworks/managedPrivateEndpoints — needs a Managed VNet on the factory.'],
                 ['Power Query', 'WranglingDataFlow authoring (mashup editor) — Power Query online surface not embedded yet.'],
-                ['Change data capture', 'Top-level CDC resource (adfcdc) — preview REST not wired.'],
                 ['Global parameters', 'Factory-level globalParameters — editor not wired; edit via the factory ARM resource for now.'],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
