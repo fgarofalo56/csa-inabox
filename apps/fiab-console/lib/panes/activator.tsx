@@ -123,6 +123,9 @@ const useStyles = makeStyles({
     alignItems: 'center',
     padding: '32px',
   },
+  historyHint: {
+    color: tokens.colorNeutralForeground3,
+  },
   footer: {
     color: tokens.colorNeutralForeground3,
     paddingTop: '4px',
@@ -130,6 +133,11 @@ const useStyles = makeStyles({
     marginTop: '4px',
   },
 });
+
+/** Severity badge color — critical/error are loud, warning amber, info/verbose subtle. */
+const SEV_COLOR: Record<number, 'danger' | 'warning' | 'informative' | 'subtle'> = {
+  0: 'danger', 1: 'danger', 2: 'warning', 3: 'informative', 4: 'subtle',
+};
 
 /** Extract the leading KQL table name from a rule's query — that is the
  *  Activator "object class" the rule watches. Falls back to '(unknown)'. */
@@ -317,9 +325,13 @@ export function ActivatorPane() {
     { key: 'query', label: 'KQL', filterType: 'text', width: 240, render: (r) => <code className={styles.mono} title={r.query}>{r.query}</code> },
     { key: 'evaluationFrequency', label: 'Frequency', filterType: 'select', width: 110 },
     {
-      key: 'severity', label: 'Severity', filterType: 'select', width: 150,
+      key: 'severity', label: 'Severity', filterType: 'select', width: 160,
       getValue: (r) => `Sev${r.severity}`,
-      render: (r) => SEV_LABEL[r.severity] ?? `Sev${r.severity}`,
+      render: (r) => (
+        <Badge appearance="tint" color={SEV_COLOR[r.severity] ?? 'subtle'}>
+          {SEV_LABEL[r.severity] ?? `Sev${r.severity}`}
+        </Badge>
+      ),
     },
     {
       key: 'state', label: 'State', filterType: 'select', width: 110,
@@ -392,6 +404,9 @@ export function ActivatorPane() {
         {ruleRows.length > 0 && (
           <Badge appearance="tint" color="success">{activeRules} active / {ruleRows.length} rules</Badge>
         )}
+        {objectRows.length > 0 && (
+          <Badge appearance="tint" color="informative">{objectRows.length} {objectRows.length === 1 ? 'object' : 'objects'} watched</Badge>
+        )}
         <div className={styles.spacer} />
         <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={() => loadAll(workspaceId)} disabled={!workspaceId || loading}>
           Refresh
@@ -403,8 +418,9 @@ export function ActivatorPane() {
 
       <div className={styles.bar}>
         <div className={styles.picker}>
-          <Caption1>Workspace</Caption1>
+          <Caption1 id="activator-ws-label">Workspace</Caption1>
           <Select
+            aria-labelledby="activator-ws-label"
             value={workspaceId}
             onChange={(_, d) => setWorkspaceId(d.value)}
             disabled={workspaces.length === 0}
@@ -469,7 +485,7 @@ export function ActivatorPane() {
       {activeTab === 'history' && (
         <>
           <div className={styles.bar}>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={styles.historyHint}>
               Fired and resolved Azure Monitor alert instances across this workspace&apos;s activators.
             </Caption1>
             <div className={styles.spacer} />
