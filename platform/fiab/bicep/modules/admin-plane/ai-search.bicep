@@ -56,6 +56,12 @@ param scriptIdentityId string = ''
 @description('Console UAMI client id — used by the script to request a search-scoped MSI token.')
 param scriptIdentityClientId string = ''
 
+@description('''Console UAMI principal (object) ID. Granted Search Index Data
+Contributor on this service so the Loom BFF can run the data-plane index +
+document + vector-search operations (PUT /indexes, POST /docs/index, POST
+/docs/search) on behalf of the vector-store editor. Leave empty to skip.''')
+param consolePrincipalId string = ''
+
 @description('Location of the deployment script (kept distinct so the script can run in a region with ACI quota).')
 param scriptLocation string = location
 
@@ -95,6 +101,24 @@ resource roleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!
       '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
     principalId: adminEntraGroupId
     principalType: 'Group'
+  }
+}
+
+// Search Index Data Contributor → Console UAMI.
+// Data-plane role required for the Loom BFF (foundry-client.ts searchToken path)
+// to PUT /indexes, POST /docs/index, and POST /docs/search — the operations
+// behind the vector-store editor's create-index / add-documents / vector-search
+// tabs. Without this grant every data-plane call returns 403 even though the
+// service is reachable. Role id 8ebe5a00-799e-43f5-93ac-243d3dce84a7.
+resource consoleIndexDataRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(consolePrincipalId)) {
+  scope: search
+  name: guid(search.id, consolePrincipalId, '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 
