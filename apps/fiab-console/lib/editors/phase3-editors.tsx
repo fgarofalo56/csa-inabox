@@ -7156,7 +7156,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'designer' | 'json'>('designer');
+  const [activeTab, setActiveTab] = useState<'designer' | 'sql' | 'json'>('designer');
   // Publish-to-Fabric dialog state. Publishing creates/updates a REAL
   // Fabric Eventstream item via the definition REST API.
   const [publishOpen, setPublishOpen] = useState(false);
@@ -7652,13 +7652,18 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
 
-        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'json') || 'designer')}>
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'sql' | 'json') || 'designer')}>
           <Tab value="designer">Visual designer</Tab>
+          <Tab value="sql">SQL operator</Tab>
           <Tab value="json">JSON</Tab>
         </TabList>
 
         {activeTab === 'designer' && (
           <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} itemId={id} />
+        )}
+
+        {activeTab === 'sql' && (
+          <EventstreamSqlOperatorTab id={id} asaJobName={asaJobName} onAsaJobName={setAsaJobName} />
         )}
 
         {activeTab === 'json' && (
@@ -7676,6 +7681,443 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         )}
       </div>
     } />
+  );
+}
+
+// ============================================================
+// Eventstream — code-first T-SQL (Stream Analytics SAQL) operator tab.
+//
+// Parity with Fabric Eventstream's "Edit code" / Stream Analytics query
+// surface, Azure-native by default (real ASA job, no Fabric required):
+//   • Monaco SQL editor for a multi-INTO SAQL query.
+//   • Named sinks manager — one row per `INTO [alias]`, each mapped to a
+//     real ASA output (ADX / ADLS Gen2 / Event Hub).
+//   • Compile  → real ASA compileQuery (whole query) — always available.
+//   • Per-output Test → scopes the query to one sink alias + runs ASA
+//     testQuery over sample events, returning that sink's produced rows.
+//   • Save → persists to Cosmos + pushes the transformation to the ASA job.
+//   • Apply sinks → creates/updates the ASA outputs for every named sink.
+//
+// All actions hit /api/items/eventstream/[id]/sql-operator (real ARM). When
+// ASA isn't provisioned the route returns an honest 501 naming the bicep
+// module + env vars; the UI surfaces it in a warning MessageBar.
+// ============================================================
+interface SqlSinkRow {
+  alias: string;
+  kind: 'kusto' | 'lakehouse' | 'eventhub' | 'reflex';
+  // kusto
+  kustoClusterUrl?: string;
+  database?: string;
+  table?: string;
+  // lakehouse
+  storageAccount?: string;
+  container?: string;
+  pathPattern?: string;
+  // eventhub / reflex
+  namespace?: string;
+  eventHubName?: string;
+}
+
+const DEFAULT_SQL_QUERY = `-- Code-first T-SQL (Stream Analytics SAQL) operator.
+-- Write one SELECT ... INTO [<sink alias>] per named destination.
+-- Each [alias] must match a sink in the "Named sinks" list on the right.
+
+SELECT *
+INTO [hot-path]
+FROM [eventstream-input]
+WHERE [eventType] = 'order';
+
+SELECT
+  System.Timestamp() AS windowEnd,
+  COUNT(*)           AS orders
+INTO [aggregates]
+FROM [eventstream-input]
+GROUP BY TumblingWindow(minute, 5);`;
+
+function aliasesFromQuery(query: string): string[] {
+  const out = new Set<string>();
+  const re = /\binto\s+\[?([A-Za-z0-9_-]+)\]?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(query)) !== null) out.add(m[1].trim());
+  return [...out];
+}
+
+function EventstreamSqlOperatorTab({
+  id, asaJobName, onAsaJobName,
+}: {
+  id: string;
+  asaJobName: string;
+  onAsaJobName: (v: string) => void;
+}) {
+  const s = useStyles();
+  const [query, setQuery] = useState(DEFAULT_SQL_QUERY);
+  const [sinks, setSinks] = useState<SqlSinkRow[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saveHint, setSaveHint] = useState<string | null>(null);
+
+  const [compiling, setCompiling] = useState(false);
+  const [compileResult, setCompileResult] = useState<{ valid: boolean; errors: Array<{ message: string; startLine?: number }>; warnings: string[]; outputs: string[] } | null>(null);
+  const [compileErr, setCompileErr] = useState<string | null>(null);
+  const [compileHint, setCompileHint] = useState<string | null>(null);
+
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const [applyHint, setApplyHint] = useState<string | null>(null);
+
+  // Per-output test state.
+  const [testAlias, setTestAlias] = useState('');
+  const [sampleText, setSampleText] = useState('[\n  { "eventType": "order", "amount": 42 },\n  { "eventType": "view", "amount": 0 }\n]');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<{ outputAlias: string; status: string; rows: any[]; outputUri?: string; errors?: string[] } | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+  const [testHint, setTestHint] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!id || id === 'new') { setLoading(false); return; }
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`);
+      const j = await r.json();
+      if (j.ok && j.sqlOperator) {
+        setQuery(j.sqlOperator.query || DEFAULT_SQL_QUERY);
+        setSinks(Array.isArray(j.sqlOperator.sinks) ? j.sqlOperator.sinks.map((x: any) => ({
+          alias: x.alias || '',
+          kind: (x.kind as SqlSinkRow['kind']) || 'kusto',
+          kustoClusterUrl: x.kustoClusterUrl, database: x.database, table: x.table,
+          storageAccount: x.storageAccount, container: x.container, pathPattern: x.pathPattern,
+          namespace: x.namespace, eventHubName: x.eventHubName,
+        })) : []);
+        if (j.sqlOperator.asaJobName && !asaJobName) onAsaJobName(j.sqlOperator.asaJobName);
+      }
+      setDirty(false);
+    } catch {
+      /* keep defaults; save still works once a record exists */
+    } finally {
+      setLoading(false);
+    }
+  }, [id, asaJobName, onAsaJobName]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const referencedAliases = useMemo(() => aliasesFromQuery(query), [query]);
+  const declaredAliases = useMemo(() => new Set(sinks.map((x) => x.alias.trim()).filter(Boolean)), [sinks]);
+  // Aliases referenced by INTO but with no matching sink row — surfaced so the
+  // user knows which sinks still need declaring.
+  const missingSinks = referencedAliases.filter((a) => !declaredAliases.has(a));
+
+  const updateSink = useCallback((idx: number, patch: Partial<SqlSinkRow>) => {
+    setSinks((prev) => prev.map((x, i) => (i === idx ? { ...x, ...patch } : x)));
+    setDirty(true);
+  }, []);
+  const addSink = useCallback((alias?: string) => {
+    setSinks((prev) => [...prev, { alias: alias || `sink-${prev.length + 1}`, kind: 'kusto', database: 'loomdb-default', table: '' }]);
+    setDirty(true);
+  }, []);
+  const removeSink = useCallback((idx: number) => {
+    setSinks((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  }, []);
+
+  const doSave = useCallback(async () => {
+    setSaving(true); setSaveMsg(null); setSaveErr(null); setSaveHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'save', query, sinks, asaJobName: asaJobName.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSaveErr(j.error || `HTTP ${r.status}`); setSaveHint(j.hint || null); return; }
+      setDirty(false);
+      setSaveMsg(j.asaPushed
+        ? `Saved and pushed the transformation to ASA job "${asaJobName.trim()}".`
+        : (j.hint || `Saved at ${new Date().toLocaleTimeString()}.`));
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+    } finally { setSaving(false); }
+  }, [id, query, sinks, asaJobName]);
+
+  const doCompile = useCallback(async () => {
+    setCompiling(true); setCompileResult(null); setCompileErr(null); setCompileHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'compile', query }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCompileErr(j.error || `HTTP ${r.status}`); setCompileHint(j.hint || null); return; }
+      setCompileResult({ valid: !!j.valid, errors: j.errors || [], warnings: j.warnings || [], outputs: j.outputs || [] });
+    } catch (e: any) {
+      setCompileErr(e?.message || String(e));
+    } finally { setCompiling(false); }
+  }, [id, query]);
+
+  const doApplySinks = useCallback(async () => {
+    if (!asaJobName.trim()) { setApplyErr('Enter an ASA job name first.'); return; }
+    if (!sinks.length) { setApplyErr('Add at least one named sink.'); return; }
+    setApplyBusy(true); setApplyMsg(null); setApplyErr(null); setApplyHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'apply-sinks', asaJobName: asaJobName.trim(), sinks }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setApplyErr(j.error || `HTTP ${r.status}`); setApplyHint(j.hint || null); return; }
+      const n = (j.outputs || []).length;
+      setApplyMsg(`Created/updated ${n} ASA output${n === 1 ? '' : 's'} on job "${j.asaJobName}". Start the job in the Stream Analytics editor to land events.`);
+    } catch (e: any) {
+      setApplyErr(e?.message || String(e));
+    } finally { setApplyBusy(false); }
+  }, [id, asaJobName, sinks]);
+
+  const doTest = useCallback(async () => {
+    if (!testAlias.trim()) { setTestErr('Choose a sink (INTO alias) to test.'); return; }
+    let sampleInput: Array<{ inputAlias: string; events: any[] }>;
+    try {
+      const events = JSON.parse(sampleText);
+      if (!Array.isArray(events)) throw new Error('sample data must be a JSON array of events');
+      sampleInput = [{ inputAlias: 'eventstream-input', events }];
+    } catch (e: any) {
+      setTestErr(`Sample data: ${e?.message || 'invalid JSON'}`); return;
+    }
+    setTestBusy(true); setTestResult(null); setTestErr(null); setTestHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'test', query, outputAlias: testAlias.trim(), asaJobName: asaJobName.trim() || undefined, sampleInput }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestErr(j.error || `HTTP ${r.status}`); setTestHint(j.hint || null); return; }
+      setTestResult({ outputAlias: j.outputAlias, status: j.status, rows: j.rows || [], outputUri: j.outputUri, errors: j.errors });
+    } catch (e: any) {
+      setTestErr(e?.message || String(e));
+    } finally { setTestBusy(false); }
+  }, [id, query, testAlias, asaJobName, sampleText]);
+
+  const testColumns = useMemo(() => {
+    const cols = new Set<string>();
+    (testResult?.rows || []).slice(0, 50).forEach((row) => { if (row && typeof row === 'object') Object.keys(row).forEach((k) => cols.add(k)); });
+    return [...cols];
+  }, [testResult]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Code-first T-SQL operator</MessageBarTitle>
+          Write a multi-output Stream Analytics query. Each <code>SELECT … INTO [alias]</code> targets a
+          named sink (ADX / ADLS Gen2 / Event Hub). <strong>Compile</strong> validates the whole query,
+          <strong> Test output</strong> runs one sink over sample events, and <strong>Apply sinks</strong>
+          {' '}creates the real ASA outputs. Azure-native — no Fabric workspace required.
+        </MessageBarBody>
+      </MessageBar>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="ASA job" style={{ minWidth: 240 }}>
+          <Input value={asaJobName} onChange={(_: unknown, d: any) => onAsaJobName(d.value)} placeholder="asa-loom-default-eastus2" />
+        </Field>
+        <Button appearance="primary" icon={<Save20Regular />} onClick={doSave} disabled={saving || loading}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+        <Button appearance="outline" icon={<Play20Regular />} onClick={doCompile} disabled={compiling || loading}>
+          {compiling ? 'Compiling…' : 'Compile'}
+        </Button>
+        <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={doApplySinks} disabled={applyBusy || loading || !asaJobName.trim() || !sinks.length}
+          title={!asaJobName.trim() ? 'Enter an ASA job name first' : 'Create/update one ASA output per named sink (real ARM PUT)'}>
+          {applyBusy ? 'Applying…' : 'Apply sinks to ASA'}
+        </Button>
+        {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+      </div>
+
+      {saveErr && (
+        <MessageBar intent={saveHint ? 'warning' : 'error'}>
+          <MessageBarBody><MessageBarTitle>{saveHint ? 'Stream Analytics not configured' : 'Save failed'}</MessageBarTitle>{saveErr}{saveHint ? <><br /><Caption1>{saveHint}</Caption1></> : null}</MessageBarBody>
+        </MessageBar>
+      )}
+      {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
+        {/* T-SQL editor */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Caption1>Stream Analytics query (T-SQL / SAQL). Input alias: <code>[eventstream-input]</code>.</Caption1>
+          <MonacoTextarea
+            value={query}
+            onChange={(v) => { setQuery(v); setDirty(true); }}
+            language="sql"
+            height={380}
+            minHeight={300}
+            ariaLabel="Eventstream T-SQL operator query"
+          />
+          {compileErr && (
+            <MessageBar intent={compileHint ? 'warning' : 'error'}>
+              <MessageBarBody><MessageBarTitle>{compileHint ? 'Compile unavailable' : 'Compile failed'}</MessageBarTitle>{compileErr}{compileHint ? <><br /><Caption1>{compileHint}</Caption1></> : null}</MessageBarBody>
+            </MessageBar>
+          )}
+          {compileResult && (
+            <MessageBar intent={compileResult.valid && compileResult.errors.length === 0 ? 'success' : 'error'}>
+              <MessageBarBody>
+                <MessageBarTitle>{compileResult.valid && compileResult.errors.length === 0 ? 'Query compiled' : 'Compile errors'}</MessageBarTitle>
+                {compileResult.errors.length === 0
+                  ? <>Outputs: {compileResult.outputs.length ? compileResult.outputs.map((o) => <code key={o} style={{ marginRight: 6 }}>{o}</code>) : '(none)'}</>
+                  : <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{compileResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
+                {compileResult.warnings.length > 0 && (
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
+                    {compileResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                )}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+        </div>
+
+        {/* Named sinks manager */}
+        <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Subtitle2>Named sinks</Subtitle2>
+            <Button appearance="outline" size="small" icon={<Add20Regular />} onClick={() => addSink()}>Add sink</Button>
+          </div>
+          {applyErr && (
+            <MessageBar intent={applyHint ? 'warning' : 'error'}>
+              <MessageBarBody><MessageBarTitle>{applyHint ? 'Stream Analytics not configured' : 'Apply failed'}</MessageBarTitle>{applyErr}{applyHint ? <><br /><Caption1>{applyHint}</Caption1></> : null}</MessageBarBody>
+            </MessageBar>
+          )}
+          {applyMsg && !applyErr && <MessageBar intent="success"><MessageBarBody>{applyMsg}</MessageBarBody></MessageBar>}
+          {missingSinks.length > 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Undeclared sinks</MessageBarTitle>
+                These <code>INTO</code> targets have no sink row yet:{' '}
+                {missingSinks.map((a) => (
+                  <Button key={a} appearance="transparent" size="small" onClick={() => addSink(a)}>＋ {a}</Button>
+                ))}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {sinks.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sinks yet. Add one per <code>INTO [alias]</code> in your query.</Caption1>}
+          {sinks.map((sink, idx) => (
+            <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <Field label="INTO alias" style={{ flex: 1 }}>
+                  <Input value={sink.alias} onChange={(_: unknown, d: any) => updateSink(idx, { alias: d.value })} placeholder="hot-path" />
+                </Field>
+                <Field label="Kind" style={{ minWidth: 150 }}>
+                  <Select value={sink.kind} onChange={(_: unknown, d: any) => updateSink(idx, { kind: d.value as SqlSinkRow['kind'] })}>
+                    <option value="kusto">KQL Database (ADX)</option>
+                    <option value="lakehouse">Lakehouse (ADLS Gen2)</option>
+                    <option value="eventhub">Event Hub</option>
+                    <option value="reflex">Activator</option>
+                  </Select>
+                </Field>
+                <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeSink(idx)} aria-label={`Remove sink ${sink.alias}`} />
+              </div>
+              {sink.kind === 'kusto' && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Field label="Database" style={{ flex: 1 }}>
+                    <Input value={sink.database || ''} onChange={(_: unknown, d: any) => updateSink(idx, { database: d.value })} placeholder="loomdb-default" />
+                  </Field>
+                  <Field label="Table" style={{ flex: 1 }}>
+                    <Input value={sink.table || ''} onChange={(_: unknown, d: any) => updateSink(idx, { table: d.value })} placeholder="Orders" />
+                  </Field>
+                </div>
+              )}
+              {sink.kind === 'lakehouse' && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Field label="Storage account" style={{ flex: 1, minWidth: 120 }}>
+                    <Input value={sink.storageAccount || ''} onChange={(_: unknown, d: any) => updateSink(idx, { storageAccount: d.value })} placeholder="(or LOOM_ADLS_ACCOUNT)" />
+                  </Field>
+                  <Field label="Container" style={{ flex: 1, minWidth: 120 }}>
+                    <Input value={sink.container || ''} onChange={(_: unknown, d: any) => updateSink(idx, { container: d.value })} placeholder="bronze" />
+                  </Field>
+                  <Field label="Path pattern" style={{ flex: 1, minWidth: 120 }}>
+                    <Input value={sink.pathPattern || ''} onChange={(_: unknown, d: any) => updateSink(idx, { pathPattern: d.value })} placeholder="events/{date}/{time}" />
+                  </Field>
+                </div>
+              )}
+              {(sink.kind === 'eventhub' || sink.kind === 'reflex') && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Field label="Namespace" style={{ flex: 1 }}>
+                    <Input value={sink.namespace || ''} onChange={(_: unknown, d: any) => updateSink(idx, { namespace: d.value })} placeholder="(or LOOM_EVENTHUBS_NAMESPACE)" />
+                  </Field>
+                  <Field label="Event hub" style={{ flex: 1 }}>
+                    <Input value={sink.eventHubName || ''} onChange={(_: unknown, d: any) => updateSink(idx, { eventHubName: d.value })} placeholder="processed-events" />
+                  </Field>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-output test */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Subtitle2>Test a single output</Subtitle2>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Runs only the statements writing to the selected <code>INTO</code> alias against the sample events and returns that sink&apos;s rows (real ASA Test Query).
+        </Caption1>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <Field label="Output (INTO alias)" style={{ minWidth: 220 }}>
+            <Select value={testAlias} onChange={(_: unknown, d: any) => setTestAlias(d.value)}>
+              <option value="">Select an output…</option>
+              {referencedAliases.map((a) => <option key={a} value={a}>{a}</option>)}
+            </Select>
+          </Field>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={doTest} disabled={testBusy || !testAlias.trim()}>
+            {testBusy ? 'Testing…' : 'Test output'}
+          </Button>
+        </div>
+        <Field label="Sample input events (JSON array)">
+          <MonacoTextarea
+            value={sampleText}
+            onChange={(v) => setSampleText(v)}
+            language="json"
+            height={140}
+            minHeight={120}
+            ariaLabel="Sample input events"
+          />
+        </Field>
+        {testErr && (
+          <MessageBar intent={testHint ? 'warning' : 'error'}>
+            <MessageBarBody><MessageBarTitle>{testHint ? 'Test Query not available' : 'Test failed'}</MessageBarTitle>{testErr}{testHint ? <><br /><Caption1>{testHint}</Caption1></> : null}</MessageBarBody>
+          </MessageBar>
+        )}
+        {testResult && (
+          <div className={s.resultBox}>
+            <Caption1>
+              Output <code>{testResult.outputAlias}</code> — status <Badge appearance="outline">{testResult.status}</Badge>
+              {' '}· {testResult.rows.length} row{testResult.rows.length === 1 ? '' : 's'}
+            </Caption1>
+            {testResult.errors && testResult.errors.length > 0 && (
+              <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{testResult.errors.join('; ')}</MessageBarBody></MessageBar>
+            )}
+            {testResult.rows.length > 0 ? (
+              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                  <thead>
+                    <tr>{testColumns.map((c) => <th key={c} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground2 }}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {testResult.rows.slice(0, 100).map((row, ri) => (
+                      <tr key={ri}>
+                        {testColumns.map((c) => <td key={c} style={{ padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>{typeof row?.[c] === 'object' ? JSON.stringify(row[c]) : String(row?.[c] ?? '')}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>
+                No rows produced{testResult.outputUri ? ' (output written to the test storage location).' : '.'}
+              </Caption1>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
