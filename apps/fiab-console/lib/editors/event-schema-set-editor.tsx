@@ -56,6 +56,10 @@ interface SchemaSet {
   compatibility?: 'BACKWARD' | 'FORWARD' | 'FULL' | 'NONE';
   format?: 'AVRO' | 'JSON' | 'PROTOBUF';
   externalRegistry?: { endpoint?: string; type?: string } | null;
+  /** Which backend enforces compatibility: EH Schema Registry vs in-process. */
+  compatBackend?: 'eventhubs-sr' | 'cosmos-inprocess';
+  /** The Event Hubs Schema Registry schema group, when server-side enforcement is wired. */
+  eventHubsSchemaGroup?: string | null;
 }
 
 const SAMPLE_AVRO = `{
@@ -158,7 +162,17 @@ export function EventSchemaSetEditor({ item, id }: Props) {
         body: JSON.stringify({ subject: regSubject.trim(), schema: regSchema, format: active?.format || 'AVRO' }),
       });
       const j = await r.json();
-      if (!j.ok) { setRegErr(j.error || 'register failed'); return; }
+      if (!j.ok) {
+        // 409 = the new schema violates the set's compatibility policy. The
+        // server message already names the policy + the specific breaking
+        // changes; prefix it so the cause is unmistakable in the dialog.
+        if (r.status === 409) {
+          setRegErr(`Incompatible schema — registration blocked. ${j.error || ''}`.trim());
+        } else {
+          setRegErr(j.error || 'register failed');
+        }
+        return;
+      }
       setActionMsg(`Registered ${regSubject} v${j.version}`);
       setRegOpen(false); setRegSubject('');
       await loadDetail(workspaceId, setId);
@@ -374,12 +388,30 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                   <Option value="FULL">FULL</Option>
                   <Option value="NONE">NONE (no check)</Option>
                 </Dropdown>
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    <MessageBarTitle>Server-side compatibility check not yet wired</MessageBarTitle>
-                    Loom persists the policy but does not yet block incompatible registrations. A follow-up wires the call to Confluent Schema Registry / Apicurio / Event Hubs Schema Registry. See <a href="/docs/fiab/event-schema-registry.md">docs/fiab/event-schema-registry.md</a> for the bootstrap procedure when you're ready to attach a real registry.
-                  </MessageBarBody>
-                </MessageBar>
+                {active.compatBackend === 'eventhubs-sr' ? (
+                  <MessageBar intent="success">
+                    <MessageBarBody>
+                      <MessageBarTitle>Enforced server-side by Azure Event Hubs Schema Registry</MessageBarTitle>
+                      New versions are registered into the Event Hubs schema group
+                      {' '}<code>{active.eventHubsSchemaGroup || 'loom-schemas'}</code>, which enforces this
+                      compatibility policy at registration time and rejects breaking changes (HTTP 400) before
+                      they are persisted. Avro evolution is checked by the service; JSON Schema and Protobuf
+                      use NONE per Event Hubs Schema Registry behavior. See <a href="/docs/fiab/event-schema-registry.md">docs/fiab/event-schema-registry.md</a>.
+                    </MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Enforced in-process against the Avro structural rules</MessageBarTitle>
+                      When you register a new version, Loom checks it against the subject's latest version under
+                      this policy and rejects breaking changes (HTTP 409) before persisting — no external
+                      registry required. Avro is structurally checked (added/removed fields, defaults, type
+                      promotion); JSON Schema and Protobuf use NONE, matching Event Hubs Schema Registry. To
+                      delegate enforcement to a real Azure Event Hubs Schema Registry instead, set
+                      {' '}<code>LOOM_EH_SCHEMA_GROUP</code>. See <a href="/docs/fiab/event-schema-registry.md">docs/fiab/event-schema-registry.md</a>.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </>
             )}
 

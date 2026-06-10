@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { schemaRegistryConfigGate } from '@/lib/azure/eventhubs-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'event-schema-set') return err('event schema set not found', 404);
     const state = (resource.state || {}) as Record<string, unknown>;
+    // Whether server-side compatibility is enforced by the Azure Event Hubs
+    // Schema Registry data plane (opt-in via LOOM_EH_SCHEMA_GROUP). When unset,
+    // the in-process Avro validator enforces compatibility (the default).
+    const srWired = schemaRegistryConfigGate() === null;
     return NextResponse.json({
       ok: true,
       schemaSet: {
@@ -34,6 +39,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         compatibility: state.compatibility || 'BACKWARD',
         format: state.format || 'AVRO',
         externalRegistry: state.externalRegistry || null,
+        compatBackend: srWired ? 'eventhubs-sr' : 'cosmos-inprocess',
+        eventHubsSchemaGroup: srWired ? (process.env.LOOM_EH_SCHEMA_GROUP || null) : null,
       },
     });
   } catch (e: any) {
