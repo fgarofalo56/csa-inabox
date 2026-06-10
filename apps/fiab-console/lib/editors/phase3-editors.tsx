@@ -8687,6 +8687,27 @@ interface WHSchemaResp {
   error?: string;
 }
 
+/**
+ * Shape returned by GET /api/items/warehouse/[id]/acceleration. `gpuAvailable`
+ * is ALWAYS false — neither warehouse backend offers GPU acceleration.
+ */
+interface WHAccelInfo {
+  ok: boolean;
+  backend?: 'synapse-dedicated' | 'fabric-warehouse' | 'unknown';
+  accelerationModel?: 'dwu-sku' | 'serverless-autoscale' | 'unknown';
+  gpuAvailable?: boolean;
+  accelerationEnabled?: boolean;
+  userToggleable?: boolean;
+  sku?: string;
+  state?: string;
+  pool?: string | null;
+  fabricWorkspaceBound?: boolean;
+  probeError?: string;
+  summary?: string;
+  scaleHint?: string;
+  error?: string;
+}
+
 const SAMPLE_SQL = `-- Fabric Warehouse (Loom-Gov: backed by Synapse Dedicated SQL pool)\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`;
 
 function formatCell(v: unknown): string {
@@ -8863,6 +8884,22 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
   const [secOpen, setSecOpen] = useState(false);
 
+  // Query acceleration — HONEST disclosure. There is NO GPU acceleration on
+  // either warehouse backend (both are CPU columnar batch-mode engines). The
+  // toggle reflects the REAL active backend's acceleration model, surfaced by
+  // GET /api/items/warehouse/<id>/acceleration (reads the live Synapse DWU SKU
+  // via ARM on the default path). No fake acceleration switch — see the dialog.
+  const [accelOpen, setAccelOpen] = useState(false);
+  const accelQ = useQuery<WHAccelInfo>({
+    queryKey: ['warehouse-acceleration', id],
+    queryFn: async () => {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/acceleration`);
+      return (await r.json()) as WHAccelInfo;
+    },
+    enabled: !isNew && accelOpen,
+    staleTime: 30_000,
+  });
+
   // Statistics manager (CREATE / UPDATE / DROP STATISTICS) for a selected table.
   const [statsOpen, setStatsOpen] = useState(false);
   const [statsTarget, setStatsTarget] = useState<{ schema: string; table: string } | null>(null);
@@ -9008,6 +9045,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // Column-level GRANT, Row-Level Security and Dynamic Data Masking over
         // the backing Synapse Dedicated SQL pool (Azure-native — no Fabric).
         { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
+      ]},
+      { label: 'Performance', actions: [
+        // Query acceleration — HONEST disclosure of the active backend's
+        // acceleration model. There is NO GPU on either backend; the dialog
+        // explains the real scaling lever (DWU SKU on Synapse / serverless
+        // auto-scale on the opt-in Fabric backend) — no fake acceleration.
+        { label: 'Query acceleration', onClick: () => setAccelOpen(true), title: 'How this warehouse accelerates queries (DWU SKU / serverless) — no GPU on either backend' },
       ]},
     ]},
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize]);
@@ -9386,6 +9430,118 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setSecOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/*
+           * Query acceleration — HONEST disclosure dialog. The toggle reflects
+           * the REAL active backend's acceleration model (read live via ARM on
+           * the default Synapse path). There is NO GPU on either backend; the
+           * toggle is informational (userToggleable === false) and the dialog
+           * states the real scaling lever. No fake acceleration switch.
+           */}
+          <Dialog open={accelOpen} onOpenChange={(_, d) => setAccelOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '620px', width: '92vw' }}>
+              <DialogBody>
+                <DialogTitle>Query acceleration</DialogTitle>
+                <DialogContent>
+                  {isNew ? (
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Save the warehouse first</MessageBarTitle>
+                        Acceleration details load once the warehouse item is saved and bound to its compute.
+                      </MessageBarBody>
+                    </MessageBar>
+                  ) : accelQ.isLoading ? (
+                    <Spinner size="small" label="Reading backend acceleration capability…" labelPosition="after" />
+                  ) : !accelQ.data?.ok ? (
+                    <MessageBar intent="error">
+                      <MessageBarBody>
+                        <MessageBarTitle>Could not read acceleration capability</MessageBarTitle>
+                        {accelQ.data?.error || accelQ.error?.message || 'Unknown error'}
+                      </MessageBarBody>
+                    </MessageBar>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Badge appearance="outline">
+                          Backend: {accelQ.data.backend === 'fabric-warehouse'
+                            ? 'Fabric Warehouse (opt-in)'
+                            : accelQ.data.backend === 'synapse-dedicated'
+                              ? 'Synapse Dedicated SQL pool (Azure-native)'
+                              : 'unknown'}
+                        </Badge>
+                        {accelQ.data.sku && accelQ.data.sku !== 'unknown' && (
+                          <Badge appearance="outline">SKU: {accelQ.data.sku}</Badge>
+                        )}
+                        {accelQ.data.state && (
+                          <Badge appearance="filled" color={accelQ.data.state === 'Online' ? 'success' : 'warning'}>
+                            {accelQ.data.state}
+                          </Badge>
+                        )}
+                        {/* GPU is NEVER available — state it plainly, no fakery. */}
+                        <Badge appearance="tint" color="informative">GPU acceleration: not available</Badge>
+                      </div>
+
+                      {/*
+                       * The toggle. It mirrors the backend's real acceleration
+                       * state and is DISABLED — there is no per-query on/off
+                       * switch on either backend, and we never present a fake
+                       * GPU-on control. The honest scaling action follows.
+                       */}
+                      <Switch
+                        checked={!!accelQ.data.accelerationEnabled}
+                        disabled={!accelQ.data.userToggleable}
+                        label={
+                          accelQ.data.accelerationModel === 'serverless-autoscale'
+                            ? 'Serverless auto-scale acceleration (managed by Fabric — always on)'
+                            : accelQ.data.accelerationModel === 'dwu-sku'
+                              ? `DWU-based acceleration (governed by the pool SKU${accelQ.data.sku && accelQ.data.sku !== 'unknown' ? ` · ${accelQ.data.sku}` : ''})`
+                              : 'Acceleration (backend unknown)'
+                        }
+                      />
+
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>No GPU-accelerated warehouse</MessageBarTitle>
+                          {accelQ.data.summary}
+                        </MessageBarBody>
+                      </MessageBar>
+
+                      {accelQ.data.scaleHint && (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>How to accelerate queries</MessageBarTitle>
+                            {accelQ.data.scaleHint}
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+
+                      {accelQ.data.probeError && (
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>Live SKU not readable</MessageBarTitle>
+                            Could not read the Dedicated SQL pool SKU via ARM ({accelQ.data.probeError}). Grant the Console
+                            managed identity Reader on the Synapse workspace to show the live DWU.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  {accelQ.data?.accelerationModel === 'dwu-sku' && (
+                    <Button
+                      appearance="primary"
+                      onClick={() => window.open('/admin/scaling', '_blank')}
+                      title="Scale the Dedicated SQL pool DWU SKU (a real ARM resize)"
+                    >
+                      Scale compute
+                    </Button>
+                  )}
+                  <Button appearance="secondary" onClick={() => setAccelOpen(false)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
