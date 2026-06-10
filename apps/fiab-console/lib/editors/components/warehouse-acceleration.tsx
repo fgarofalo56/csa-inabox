@@ -35,6 +35,17 @@ import { Flash20Regular, ArrowSync20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 
 const useStyles = makeStyles({
+  pad: {
+    padding: tokens.spacingVerticalM,
+  },
+  gpuBar: {
+    marginBottom: tokens.spacingVerticalL,
+  },
+  titleRow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalSNudge,
+  },
   row: {
     display: 'flex',
     alignItems: 'center',
@@ -44,11 +55,23 @@ const useStyles = makeStyles({
   controlBlock: {
     display: 'flex',
     flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  controlCard: {
+    display: 'flex',
+    flexDirection: 'column',
     gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
   hint: {
     color: tokens.colorNeutralForeground3,
     maxWidth: '720px',
+  },
+  notice: {
+    marginTop: tokens.spacingVerticalM,
   },
 });
 
@@ -142,14 +165,14 @@ export function WarehouseAccelerationPanel({ id, ready }: { id: string; ready: b
   );
 
   return (
-    <div style={{ padding: tokens.spacingVerticalM }}>
+    <div className={s.pad}>
       {/*
         HONEST GATE — the GPU question. A relational SQL warehouse (Synapse
         Dedicated SQL pool default, or the opt-in Fabric Warehouse backend) has
         no GPU acceleration. State that plainly and point to the real
         acceleration paths instead of shipping a dead "GPU" switch.
       */}
-      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
+      <MessageBar intent="info" className={s.gpuBar}>
         <MessageBarBody>
           <MessageBarTitle>About GPU-accelerated querying</MessageBarTitle>
           The Azure-native default backend for this warehouse is the{' '}
@@ -169,7 +192,7 @@ export function WarehouseAccelerationPanel({ id, ready }: { id: string; ready: b
       </MessageBar>
 
       <Section
-        title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Flash20Regular /> Query acceleration</span>}
+        title={<span className={s.titleRow}><Flash20Regular /> Query acceleration</span>}
         actions={
           <Button
             appearance="subtle"
@@ -193,40 +216,42 @@ export function WarehouseAccelerationPanel({ id, ready }: { id: string; ready: b
 
         {ready && (
           <div className={s.controlBlock}>
-            <div className={s.row}>
-              {loading ? (
-                <Spinner size="tiny" labelPosition="after" label="Reading acceleration state…" />
-              ) : (
-                <Switch
-                  checked={enabled === true}
-                  disabled={saving || enabled === null}
-                  onChange={(_, d) => void toggle(d.checked)}
-                  label={
-                    saving
-                      ? 'Applying…'
-                      : `Result-set caching (database-level query acceleration)${enabled == null ? '' : enabled ? ' — ON' : ' — OFF'}`
-                  }
-                />
-              )}
-              {dbName && <Badge appearance="outline">{dbName}</Badge>}
-              {enabled === true && <Badge appearance="filled" color="success">Accelerated</Badge>}
+            <div className={s.controlCard}>
+              <div className={s.row}>
+                {loading ? (
+                  <Spinner size="tiny" labelPosition="after" label="Reading acceleration state…" />
+                ) : (
+                  <Switch
+                    checked={enabled === true}
+                    disabled={saving || enabled === null}
+                    onChange={(_, d) => void toggle(d.checked)}
+                    label={
+                      saving
+                        ? 'Applying…'
+                        : `Result-set caching (database-level query acceleration)${enabled == null ? '' : enabled ? ' — ON' : ' — OFF'}`
+                    }
+                  />
+                )}
+                {dbName && <Badge appearance="outline">{dbName}</Badge>}
+                {enabled === true && <Badge appearance="filled" color="success">Accelerated</Badge>}
+              </div>
+              <Caption1 className={s.hint}>
+                When ON, the dedicated pool caches each query&apos;s result set in the user database
+                (up to 1 TB, evicted after 48 h idle or on data change) and serves repeated
+                identical queries directly from cache — bypassing concurrency slots. This runs a
+                real <code>ALTER DATABASE … SET RESULT_SET_CACHING</code> against the live pool.
+              </Caption1>
             </div>
-            <Caption1 className={s.hint}>
-              When ON, the dedicated pool caches each query's result set in the user database
-              (up to 1 TB, evicted after 48 h idle or on data change) and serves repeated
-              identical queries directly from cache — bypassing concurrency slots. This runs a
-              real <code>ALTER DATABASE … SET RESULT_SET_CACHING</code> against the live pool.
-            </Caption1>
           </div>
         )}
 
         {error && (
-          <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
+          <MessageBar intent="error" className={s.notice}>
             <MessageBarBody><MessageBarTitle>Acceleration change failed</MessageBarTitle>{error}</MessageBarBody>
           </MessageBar>
         )}
         {notice && !error && (
-          <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM }}>
+          <MessageBar intent="success" className={s.notice}>
             <MessageBarBody><Body1>{notice}</Body1></MessageBarBody>
           </MessageBar>
         )}
