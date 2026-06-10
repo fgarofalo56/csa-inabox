@@ -23,7 +23,7 @@ Backend service: **Azure Resource Graph** (`POST …/providers/Microsoft.Resourc
 | Cross-**subscription** browse | ✅ built — `LOOM_SUBSCRIPTION_ID` + `LOOM_EXTRA_SUBSCRIPTIONS`, paged via `$skipToken` | Resource Graph KQL `where type in~ (eventhub/namespaces, devices/iothubs, kusto/clusters)` |
 | Event Hub **entity** granularity (per event hub, not just namespace) | ✅ built — the env-pinned Loom namespace expands into one row per event hub | `listEventHubs()` (real EH ARM `…/eventhubs`) |
 | Columns: Name, Type, Source, Resource group, Location | ✅ built — sortable / filterable / resizable `LoomDataTable` | same route payload |
-| Row action: **Subscribe** (connect source → create eventstream) | ✅ built — opens the ConnectSourceDialog **pre-filled** with the row's source type + properties (e.g. `eventHubName`, `consumerGroupName`) | `POST /api/realtime-hub/connect-source` → `createOwnedItem('eventstream', …)` (real Cosmos item, EH-backed) |
+| Row action: **Subscribe** (connect source → create eventstream) | ✅ built — opens the ConnectSourceDialog **pre-filled** with the row's source type + properties (e.g. `eventHubName`, `consumerGroupName`); on success surfaces an **"Open eventstream editor"** button (dialog) + toast deep-link to the new item | `POST /api/realtime-hub/connect-source` → `createOwnedItem('eventstream', …)` (real Cosmos item, EH-backed); receipt `link:/items/eventstream/{id}` |
 | Row action: **Create activator** (Reflex on a stream) | ✅ built — creates an `activator` Loom item carrying the stream `source` ref | `POST /api/items/activator` (Azure-native: Cosmos item + Azure Monitor rules) |
 | Row action: **Open item** (Loom items) | ✅ built — deep-links to the live editor | `/items/{type}/{id}` |
 | **Azure events** tab (Blob Storage events / Event Grid) | ✅ built — Blob Storage Events connector → pre-filled `AzureBlobStorageEvents` eventstream | connect-source route |
@@ -42,7 +42,8 @@ Backend service: **Azure Resource Graph** (`POST …/providers/Microsoft.Resourc
 ## Backend per control
 
 - `GET /api/rti-hub` — `getSession` (401) → `rtiSubscriptionScope()` (503 honest-gate when empty) → `Promise`-merge `listAllOwnedItems` + `listStreamingResourcesViaGraph` + env-pinned `listEventHubs` expansion → tabs `{ dataStreams, azureEvents, fabricEvents }`; each row carries `subscribePreFill {sourceType, sourceName, properties}`.
-- **Subscribe** → existing `POST /api/realtime-hub/connect-source` with the pre-fill body → real Loom eventstream item (receipt: `{ ok, eventstreamId, link }`).
+- `GET /api/real-time-hub/sources` — stable hyphenated **alias** that re-exports the same handler as `GET /api/rti-hub` (identical payload, no divergent logic).
+- **Subscribe** → existing `POST /api/realtime-hub/connect-source` with the pre-fill body → real Loom eventstream item (receipt: `{ ok, eventstreamId, link }`); the dialog and the parent toast both deep-link to `link` ("Open eventstream editor").
 - **Create activator** → `POST /api/items/activator?workspaceId=…` with `source` ref → real Cosmos activator item.
 
 ## Per-cloud
@@ -58,6 +59,7 @@ Backend service: **Azure Resource Graph** (`POST …/providers/Microsoft.Resourc
 
 ## Verification
 
-- Backend contract tests: `app/api/rti-hub/__tests__/route.test.ts` (8) — 401, 503 honest-gate, dataStreams (graph EH namespace + Loom eventstream), azureEvents static connector, Fabric opt-in gate, EH-entity `AzureEventHub` pre-fill, IoT-Hub `AzureIoTHub` pre-fill, Resource-Graph-failure → `warnings[]` + 200. All passing.
+- Backend contract tests: `app/api/rti-hub/__tests__/route.test.ts` (8) — 401, 503 honest-gate, dataStreams (graph EH namespace + Loom eventstream), azureEvents static connector, Fabric opt-in gate, EH-entity `AzureEventHub` pre-fill, IoT-Hub `AzureIoTHub` pre-fill, Resource-Graph-failure → `warnings[]` + 200. Plus `app/api/real-time-hub/sources/__tests__/route.test.ts` (3) — pins the alias to the same handler + 401 + Azure-native data-streams contract. All 11 passing.
+- The legacy static `lib/panes/real-time-hub.tsx` (hard-coded `SOURCES` array of dead cards, orphaned/unimported) is removed; the pane now re-exports the live `RtiHubView`.
 - `tsc --noEmit` clean across the project (0 errors).
 - Live browser probe + minted-session E2E: not available in this worktree (no provisioned subscription Reader / UAMI). Per `no-vaporware.md` the honest 503 infra-gate renders when discovery is unconfigured.
