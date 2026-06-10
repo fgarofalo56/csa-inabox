@@ -40,6 +40,16 @@ resource adxDb 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
   }
 }
 
+// NOTE: Runtime database role grants (the Loom console RBAC panel →
+// /api/adx/roles → `.add` / `.drop database <db> <role> ('<fqn>')`) are
+// data-plane Kusto control commands, NOT ARM resources, so they do not need a
+// Bicep resource here. The two principalAssignments below are the only STATIC,
+// ARM-plane grants: the admin Entra group (Database Admin, so the console UAMI
+// inheriting AllDatabasesAdmin can run the runtime `.add/.drop` commands) and
+// the optional Activator app (Viewer). Per-table row-level-security
+// (`.alter table … policy row_level_security`) and external tables
+// (`.create-or-alter external table … kind=delta|storage`) are likewise
+// data-plane commands authored at runtime, not ARM resources.
 resource adxDbAdmin 'Microsoft.Kusto/clusters/databases/principalAssignments@2024-04-13' = {
   parent: adxDb
   name: 'admins-group'

@@ -1140,6 +1140,212 @@ export async function dropIngestionMapping(
   return executeMgmtCommand(db, `.drop ${scope} ingestion ${k} mapping "${name}"`);
 }
 
+// ============================================================
+// Database security roles (RBAC principal management) + row-level
+// security + Azure-storage external tables — the ADX web UI "Security"
+// pane and the External-tables schema-tree group, wired to real Kusto
+// control commands. Grounded in Microsoft Learn:
+//   .show database <db> principals / .add|.drop database <db> <role> ('fqn')
+//     https://learn.microsoft.com/kusto/management/manage-database-security-roles
+//   .alter table <T> policy row_level_security enable|disable "<query>"
+//     https://learn.microsoft.com/kusto/management/alter-table-row-level-security-policy-command
+//   .create-or-alter external table … kind=storage
+//     https://learn.microsoft.com/kusto/management/external-tables-azure-storage
+// All target the stand-alone ADX cluster — no Fabric / OneLake dependency.
+// ============================================================
+
+/** A database principal + role pair from `.show database <db> principals`. */
+export interface KustoDatabasePrincipal {
+  /** admins | users | viewers | unrestrictedviewers | ingestors | monitors (parsed from the "Database <db> <Role>" Role column). */
+  role: string;
+  /** The raw Role column text (e.g. "Database Samples Admin"). */
+  roleLabel: string;
+  /** Microsoft Entra user | Microsoft Entra group | Microsoft Entra app. */
+  principalType: string;
+  principalDisplayName: string;
+  principalObjectId: string;
+  /** aaduser=… / aadgroup=… / aadapp=… — empty for cross-tenant principals. */
+  principalFQN: string;
+  notes?: string;
+}
+
+export type KustoDatabaseRole =
+  | 'admins' | 'users' | 'viewers' | 'unrestrictedviewers' | 'ingestors' | 'monitors';
+
+export const KUSTO_DATABASE_ROLES: KustoDatabaseRole[] = [
+  'admins', 'users', 'viewers', 'unrestrictedviewers', 'ingestors', 'monitors',
+];
+
+const ROLE_LABEL_RE = /\b(admin|user|viewer|unrestrictedviewer|ingestor|monitor)s?\b/i;
+
+/** Map the human "Database <db> Admin" label to the canonical role token. */
+function parseRoleToken(roleLabel: string): string {
+  const m = ROLE_LABEL_RE.exec(roleLabel || '');
+  if (!m) return (roleLabel || '').trim();
+  const base = m[1].toLowerCase();
+  return base.endsWith('s') ? base : `${base}s`;
+}
+
+/**
+ * `.show database ["<db>"] principals` — every principal + role pair on the
+ * database. Requires Database Admin. Returns [] when the caller can read the
+ * command but no explicit principals are set (inherited cluster admins aside).
+ */
+export async function listDatabasePrincipals(db: string): Promise<KustoDatabasePrincipal[]> {
+  const r = await executeMgmtCommand(db, `.show database ${qName(db)} principals`);
+  const idx = (c: string) => r.columns.indexOf(c);
+  const roleIdx = idx('Role');
+  const typeIdx = idx('PrincipalType');
+  const nameIdx = idx('PrincipalDisplayName');
+  const oidIdx = idx('PrincipalObjectId');
+  const fqnIdx = idx('PrincipalFQN');
+  const notesIdx = idx('Notes');
+  return r.rows.map((row) => {
+    const roleLabel = roleIdx >= 0 ? String(row[roleIdx] ?? '') : '';
+    return {
+      role: parseRoleToken(roleLabel),
+      roleLabel,
+      principalType: typeIdx >= 0 ? String(row[typeIdx] ?? '') : '',
+      principalDisplayName: nameIdx >= 0 ? String(row[nameIdx] ?? '') : '',
+      principalObjectId: oidIdx >= 0 ? String(row[oidIdx] ?? '') : '',
+      principalFQN: fqnIdx >= 0 ? String(row[fqnIdx] ?? '') : '',
+      notes: notesIdx >= 0 ? (row[notesIdx] as string) || undefined : undefined,
+    };
+  });
+}
+
+function assertDbRole(role: string): asserts role is KustoDatabaseRole {
+  if (!KUSTO_DATABASE_ROLES.includes(role as KustoDatabaseRole)) {
+    throw new KustoError(`unsupported database role "${role}" — use one of ${KUSTO_DATABASE_ROLES.join(', ')}`, 400);
+  }
+}
+
+const PRINCIPAL_FQN_RE = /^(aaduser|aadgroup|aadapp)=.+/i;
+
+function assertPrincipalFqn(fqn: string): void {
+  if (!PRINCIPAL_FQN_RE.test(fqn.trim())) {
+    throw new KustoError('principalFQN must start with aaduser= / aadgroup= / aadapp=', 400);
+  }
+}
+
+/**
+ * `.add database ["<db>"] <role> ('<principalFQN>') '<description>'`.
+ * Requires Database Admin. Returns the updated principal list as the receipt
+ * (no `skip-results`).
+ */
+export async function addDatabasePrincipal(
+  db: string, role: KustoDatabaseRole, principalFQN: string, description?: string,
+): Promise<KustoQueryResult> {
+  assertDbRole(role);
+  const fqn = principalFQN.trim();
+  assertPrincipalFqn(fqn);
+  const esc = fqn.replace(/'/g, "\\'");
+  const desc = (description || 'Granted via CSA Loom').replace(/'/g, "\\'");
+  return executeMgmtCommand(db, `.add database ${qName(db)} ${role} ('${esc}') '${desc}'`);
+}
+
+/** `.drop database ["<db>"] <role> ('<principalFQN>')`. Requires Database Admin. */
+export async function dropDatabasePrincipal(
+  db: string, role: KustoDatabaseRole, principalFQN: string,
+): Promise<KustoQueryResult> {
+  assertDbRole(role);
+  const fqn = principalFQN.trim();
+  assertPrincipalFqn(fqn);
+  const esc = fqn.replace(/'/g, "\\'");
+  return executeMgmtCommand(db, `.drop database ${qName(db)} ${role} ('${esc}')`);
+}
+
+/**
+ * `.show table ["<T>"] policy row_level_security` — the applied RLS policy.
+ * The Policy column is a JSON string `{"IsEnabled":true,"Query":"…"}`.
+ * Returns null when no policy is set on the table. Requires Database Admin.
+ */
+export async function showTableRlsPolicy(
+  db: string, table: string,
+): Promise<{ enabled: boolean; query: string; raw: string } | null> {
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} policy row_level_security`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const raw = String(r.rows[0][polIdx >= 0 ? polIdx : r.columns.length - 1] ?? '');
+  if (!raw || raw === 'null') return null;
+  let enabled = false; let query = '';
+  try {
+    const o = JSON.parse(raw);
+    enabled = Boolean(o?.IsEnabled);
+    query = String(o?.Query ?? '');
+  } catch { /* keep defaults; expose raw */ }
+  return { enabled, query, raw };
+}
+
+/**
+ * `.alter table ["<T>"] policy row_level_security enable|disable "<query>"`.
+ * `query` is the KQL predicate expression that re-shapes rows for the calling
+ * principal (e.g. `T | where SalesPersonAccount == current_principal()`).
+ * Requires Table Admin (Database Admin subsumes it). Returns the applied
+ * policy command result as the receipt.
+ */
+export async function setTableRlsPolicy(
+  db: string, table: string, enabled: boolean, query: string,
+): Promise<KustoQueryResult> {
+  const q = (query || '').trim();
+  if (enabled && !q) {
+    throw new KustoError('setTableRlsPolicy: a KQL predicate query is required when enabling RLS', 400);
+  }
+  // The query is a double-quoted string literal in the command; escape `"`.
+  const literal = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const verb = enabled ? 'enable' : 'disable';
+  return executeMgmtCommand(
+    db,
+    `.alter table ${qName(table)} policy row_level_security ${verb} "${literal}"`,
+  );
+}
+
+/**
+ * `.create-or-alter external table <N> (<schema>) kind=storage
+ *    dataformat=<fmt> (h@'<connStr>') [with (folder=…, docstring=…)]`.
+ *
+ * `connectionString` is the storage URI + auth value that goes inside `h@'…'`
+ * (e.g. `https://acct.blob.core.windows.net/container;managed_identity=system`
+ * or an ADLS abfss path). Requires Database User to create; the cluster MI
+ * needs Storage Blob Data Reader on the account. Grounded in Microsoft Learn —
+ * "Create and alter Azure Storage external tables".
+ */
+export async function createExternalStorageTable(
+  db: string,
+  name: string,
+  schema: string,
+  dataFormat: string,
+  connectionString: string,
+  opts?: { folder?: string; docString?: string },
+): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('createExternalStorageTable: name is required', 400);
+  const cols = schema.trim();
+  if (!cols) throw new KustoError('createExternalStorageTable: schema is required (e.g. "ts:datetime, v:long")', 400);
+  const fmt = dataFormat.trim().toLowerCase();
+  if (!/^(csv|tsv|json|multijson|parquet|avro|orc|psv|scsv|sohsv|txt|raw|w3clogfile)$/.test(fmt)) {
+    throw new KustoError(`createExternalStorageTable: unsupported dataformat "${dataFormat}"`, 400);
+  }
+  const conn = connectionString.trim();
+  if (!conn) throw new KustoError('createExternalStorageTable: connectionString is required', 400);
+  const escConn = conn.replace(/'/g, "\\'");
+  const withParts: string[] = [];
+  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
+  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
+  const command =
+    `.create-or-alter external table ${qName(name)} (${cols})\n` +
+    `kind=storage\n` +
+    `dataformat=${fmt}\n` +
+    `(\n  h@'${escConn}'\n)${withClause}`;
+  return executeMgmtCommand(db, command);
+}
+
+/** `.drop external table N ifexists`. Requires Table Admin. */
+export async function dropExternalTable(db: string, name: string): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('dropExternalTable: name is required', 400);
+  return executeMgmtCommand(db, `.drop external table ${qName(name)} ifexists`);
+}
+
 /**
  * Inline ingest of small (<= a few hundred rows) ad-hoc data.
  * `rows` is a 2-D array of cell values; rendered as CSV after the `<|`

@@ -66,6 +66,7 @@ For the ADX web UI / Fabric KQL database schema tree, each object type exposes a
 | 8 | **Retention / caching policies** | per-table & per-db hot-cache + soft-delete (`.alter … policy retention/caching`) |
 | 9 | **Row-level security** | per-table RLS predicate (`.alter table T policy row_level_security`) |
 | 10 | **External tables** | Blob/ADLS/SQL external tables (`.create external table`) — continuous-export targets |
+| 11 | **Security — database roles** | RBAC principals per role (`.show/.add/.drop database <db> <role> ('fqn')`): admins, users, viewers, unrestrictedviewers, ingestors, monitors |
 | — | Top toolbar | **New** menu, **Filter objects by name** |
 
 ## Loom coverage
@@ -97,8 +98,9 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Database policies** — list (read-only) | ✅ | **Now built (PR #536).** A **Policies group** lists db-level retention/caching/sharding/mergepolicy/streamingingestion via `GET /api/adx/policies` → `showDatabasePolicies()` → real `.show database <db> policy <kind>` (`kusto-client.ts:342`, tree `:423-440`); raw policy JSON in a tooltip |
 | **Update policies** | ⚠️ | honest "coming" row — `.alter table T policy update`; the KQL database **ribbon** (New → Update policy) already authors these via the query route, not the navigator yet |
 | **Retention / caching policies** (authoring) | ⚠️ | db-level retention/caching are now **read** in the Policies group above (✅, real `.show database … policy`); per-table & inline-`.alter` **authoring** remains an honest "coming" row — `.alter table T policy retention` / `.alter database policy caching` (the latter authored today from the Eventhouse "Data policies" dialog) |
-| **Row-level security** | ⚠️ | honest "coming" row — `.alter table T policy row_level_security` |
-| **External tables** | ⚠️ | honest "coming" row — `.create external table` (continuous-export targets) |
+| **Database role assignment (RBAC)** — list / add / drop principals | ✅ | **Built (audit-T20).** A **Security → Database roles** sub-group lists principals via `GET /api/adx/roles` → `.show database ["db"] principals`; an **Add principal** dialog (role dropdown, principal type User/Group/App, UPN/object-id/app-id + optional tenant + description) posts `POST /api/adx/roles {action:'add'}` → `.add database ["db"] <role> ('aaduser=…')`; per-row Remove → `{action:'drop'}` → `.drop database …`. Six roles: admins, users, viewers, unrestrictedviewers, ingestors, monitors. Database Admin required. |
+| **Row-level security** — per-table policy show + alter | ✅ | **Built (audit-T20).** A **Security → Row-level security** sub-group lists tables; each opens an `RlsPolicyDialog` that pre-loads via `GET /api/adx/rls?table=T` → `.show table ["T"] policy row_level_security`, with an enable/disable Switch + KQL predicate `Textarea`, saving via `POST /api/adx/rls` → `.alter table ["T"] policy row_level_security enable\|disable "query"`. Table/Database Admin required; success receipt shown. |
+| **External tables** — list + create (Delta + Storage) + drop | ✅ | **Built (audit-T20).** An **External tables** group lists via `GET /api/adx/external-tables` → `.show external tables` (type badge, open `external_table("N")`, drop). A **New external table** wizard creates **Delta** (abfss URI, schema auto-inferred) or **Azure Storage** (column grid + data-format dropdown + `h@'…'` connection string) via `POST /api/adx/external-tables` → `.create-or-alter external table … kind=delta\|storage`; drop → `DELETE … → .drop external table N ifexists`. SQL external tables remain ⚠️ (need a secrets surface). |
 | Honest infra-gate when cluster unconfigured | ✅ | routes 503 `not_configured` → whole navigator shows one `MessageBar` naming `LOOM_KUSTO_CLUSTER_URI` + the Database Admin / AllDatabasesAdmin role |
 
 Zero ❌. Every un-built ADX/Fabric capability is an honest ⚠️ "coming" row whose
@@ -127,6 +129,15 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
 | Mapping create | `POST /api/adx/ingestion-mappings` | `createIngestionMapping` | `.create-or-alter table ["T"] ingestion <kind> mapping "N" 'json'` |
 | Mapping drop | `DELETE /api/adx/ingestion-mappings` | `dropIngestionMapping` | `.drop <table\|database> … ingestion <kind> mapping "N"` |
 | Schema + continuous-exports (read-only) | `GET /api/adx/overview` | `getDatabaseSchemaJson` / `listContinuousExports` | `.show database ["db"] schema as json` / `.show continuous-exports` |
+| Database principals list | `GET /api/adx/roles` | `listDatabasePrincipals` | `.show database ["db"] principals` |
+| Database principal grant | `POST /api/adx/roles {action:'add'}` | `addDatabasePrincipal` | `.add database ["db"] <role> ('<fqn>') '<desc>'` |
+| Database principal revoke | `POST /api/adx/roles {action:'drop'}` | `dropDatabasePrincipal` | `.drop database ["db"] <role> ('<fqn>')` |
+| RLS policy show | `GET /api/adx/rls?table=T` | `showTableRlsPolicy` | `.show table ["T"] policy row_level_security` |
+| RLS policy alter | `POST /api/adx/rls` | `setTableRlsPolicy` | `.alter table ["T"] policy row_level_security enable\|disable "query"` |
+| External tables list | `GET /api/adx/external-tables` | `listExternalTables` | `.show external tables` |
+| External table create (Delta) | `POST /api/adx/external-tables {kind:'delta'}` | `createOrAlterExternalTableDelta` | `.create-or-alter external table ["N"] kind=delta (h@'abfss…;impersonate')` |
+| External table create (Storage) | `POST /api/adx/external-tables {kind:'storage'}` | `createExternalStorageTable` | `.create-or-alter external table ["N"] (schema) kind=storage dataformat=<fmt> (h@'conn')` |
+| External table drop | `DELETE /api/adx/external-tables` | `dropExternalTable` | `.drop external table ["N"] ifexists` |
 
 ## Deferred (explicit follow-ups, not half-built)
 
@@ -137,8 +148,10 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
   same query route.
 - **Retention / caching policies** — `.alter table T policy retention` /
   `.alter database policy caching`; db-level details surfaced read-only today.
-- **Row-level security** — `.alter table T policy row_level_security`.
-- **External tables** — `.create external table` (Blob/ADLS/SQL).
+- **SQL external tables** — `.create external table … kind=sql`; needs a
+  `SqlConnectionString` with embedded credentials / managed identity, which Loom
+  has no secrets surface for yet. Delta + Azure-Storage external tables ARE
+  built (audit-T20).
 - **Mapping editor (visual column builder)** — today the create dialog takes the
   mapping definition as a validated JSON array (`[{ column, datatype?,
   Properties }]`), which is exactly the value `.create-or-alter … mapping`
@@ -167,3 +180,20 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
   command; the honest infra-gate renders when `LOOM_KUSTO_CLUSTER_URI` is unset.
 - Live `pnpm uat` side-by-side against the ADX web UI / Fabric Eventhouse:
   pending (no minted session in this worktree).
+- **audit-T20** added Security (RBAC + RLS) + External tables (Delta + Storage):
+  `kusto-security.test.ts` (11 cases) GREEN; `/api/adx/roles`, `/api/adx/rls`,
+  `/api/adx/external-tables` register; tsc on touched files clean (px-noise only).
+
+## Per-cloud matrix (audit-T20 additions)
+
+| Concern | Commercial | GCC | GCC-High / IL5 | DoD (IL6) |
+|---------|-----------|-----|----------------|-----------|
+| Kusto data-plane host | `<c>.<r>.kusto.windows.net` | same | `<c>.<r>.kusto.usgovcloudapi.net` | `<c>.<r>.kusto.usgovcloudapi.net` |
+| `.show/.add/.drop database … principals`, `.alter table … policy row_level_security`, `.create-or-alter external table` | ✅ | ✅ | ✅ | ✅ |
+| Principal FQN format (`aaduser=UPN`, `aadgroup=OID;tenant`, `aadapp=clientId;tenant`) | identical across all clouds — cloud-agnostic at the Kusto layer | | | |
+| External-table storage auth (`managed_identity=system`) | cluster MI needs Storage Blob Data Reader on the ADLS/Blob account | same | same | same |
+| Fabric dependency | **none** — ADX-native only; no OneLake / `api.fabric.microsoft.com` on any path | N/A | no Fabric in GCC-High (per `no-fabric-dependency.md`) | N/A |
+
+No cloud-conditional code is needed: the existing `kustoClusterUri()` /
+`kustoSuffix()` helpers in `cloud-endpoints.ts` already pick the right host
+suffix; the new control commands are byte-identical across sovereign clouds.

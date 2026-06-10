@@ -21,11 +21,17 @@
  *   - Database schema     → /api/adx/overview             (.show database schema as json — read-only)
  *   - Continuous export   → /api/adx/overview             (.show continuous-exports — read-only)
  *   - Database policies   → /api/adx/policies             (.show database <db> policy <kind> — read-only)
+ *   - Database roles      → /api/adx/roles                (.show/.add/.drop database <db> <role> ('fqn'))
+ *   - Row-level security  → /api/adx/rls                  (.show/.alter table T policy row_level_security)
+ *   - External tables     → /api/adx/external-tables      (.show/.create-or-alter/.drop external table — Delta + Storage)
  *
- * Capabilities the ADX/Fabric UI exposes that we don't yet *author* (update
- * policies, retention/caching policies, row-level security, external tables,
- * continuous-export authoring) render as honest ⚠️ "coming" rows naming the
- * control command + role required — never a fake list. No mocks.
+ * The Security group (database roles + per-table RLS) mirrors the ADX web UI
+ * "Security" pane; the External tables group mirrors the ADX schema-tree group.
+ *
+ * Capabilities the ADX/Fabric UI exposes that we don't yet *author* (retention/
+ * caching policy authoring, SQL external tables, continuous-export authoring)
+ * render as honest ⚠️ "coming" rows naming the control command + role required
+ * — never a fake list. No mocks.
  *
  * The database is resolved per kql-database item; when the cluster env var
  * (LOOM_KUSTO_CLUSTER_URI) is unset the routes 503 and the whole tree shows a
@@ -47,6 +53,7 @@ import {
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
   DataHistogram16Regular, Code16Regular, ChartMultiple16Regular,
+  People20Regular, Person16Regular, ShieldLock16Regular, CloudLink20Regular,
 } from '@fluentui/react-icons';
 import { IngestionMappingWizardDialog } from './ingestion-mapping-wizard';
 import {
@@ -74,6 +81,11 @@ interface MvRow { name: string; sourceTable?: string }
 interface MapRow { name: string; kind: string; table?: string; mapping?: string }
 interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string }
 interface PolicyRow { kind: string; policy?: unknown; raw?: string }
+interface PrincipalRow { role: string; roleLabel?: string; principalType: string; principalDisplayName: string; principalObjectId?: string; principalFQN: string; notes?: string }
+interface ExtTableRow { name: string; tableType?: string; folder?: string }
+
+const DATABASE_ROLES = ['admins', 'users', 'viewers', 'unrestrictedviewers', 'ingestors', 'monitors'] as const;
+const EXT_DATA_FORMATS = ['csv', 'tsv', 'json', 'multijson', 'parquet', 'avro', 'orc', 'psv'] as const;
 
 // Functions are authored through the structured stored-function editor
 // (onEditFunction) and ingestion mappings through their own wizard, so the
@@ -161,6 +173,9 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const MAPPINGS = `/api/adx/ingestion-mappings?${idq}`;
   const OVERVIEW = `/api/adx/overview?${idq}`;
   const POLICIES = `/api/adx/policies?${idq}`;
+  const ROLES = `/api/adx/roles?${idq}`;
+  const RLS = `/api/adx/rls?${idq}`;
+  const EXT = `/api/adx/external-tables?${idq}`;
 
   const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
@@ -175,6 +190,37 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const [mappings, setMappings] = useState<MapRow[]>([]);
   const [exports, setExports] = useState<ExportRow[]>([]);
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
+  const [principals, setPrincipals] = useState<PrincipalRow[]>([]);
+  const [extTables, setExtTables] = useState<ExtTableRow[]>([]);
+
+  // ---- RBAC: add-principal dialog ----
+  const [addPrincipalOpen, setAddPrincipalOpen] = useState(false);
+  const [pRole, setPRole] = useState<typeof DATABASE_ROLES[number]>('viewers');
+  const [pType, setPType] = useState<'aaduser' | 'aadgroup' | 'aadapp'>('aaduser');
+  const [pIdentity, setPIdentity] = useState('');     // UPN / object id / app id
+  const [pTenant, setPTenant] = useState('');         // optional tenant for group/app
+  const [pDesc, setPDesc] = useState('');
+  const [pError, setPError] = useState<string | null>(null);
+
+  // ---- RLS dialog (table-scoped, loaded on demand) ----
+  const [rlsTable, setRlsTable] = useState<string | null>(null);
+  const [rlsEnabled, setRlsEnabled] = useState(false);
+  const [rlsQuery, setRlsQuery] = useState('');
+  const [rlsLoading, setRlsLoading] = useState(false);
+  const [rlsError, setRlsError] = useState<string | null>(null);
+  const [rlsReceipt, setRlsReceipt] = useState<string | null>(null);
+
+  // ---- External-table wizard dialog ----
+  const [extOpen, setExtOpen] = useState(false);
+  const [extKind, setExtKind] = useState<'delta' | 'storage'>('delta');
+  const [extName, setExtName] = useState('');
+  const [extAbfss, setExtAbfss] = useState('');
+  const [extSchema, setExtSchema] = useState('ts:datetime, tenant:string, value:long');
+  const [extFormat, setExtFormat] = useState<typeof EXT_DATA_FORMATS[number]>('parquet');
+  const [extConn, setExtConn] = useState('');
+  const [extFolder, setExtFolder] = useState('');
+  const [extDoc, setExtDoc] = useState('');
+  const [extError, setExtError] = useState<string | null>(null);
 
   // ---- create dialog ----
   const [createGroup, setCreateGroup] = useState<CreatableGroup | null>(null);
@@ -199,15 +245,17 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [tr, fr, mr, ir, or, pr] = await Promise.all([
+      const [tr, fr, mr, ir, or, pr, rr, er] = await Promise.all([
         fetch(TABLES).then(readJson),
         fetch(FUNCTIONS).then(readJson),
         fetch(MVIEWS).then(readJson),
         fetch(MAPPINGS).then(readJson),
         fetch(OVERVIEW).then(readJson),
         fetch(POLICIES).then(readJson),
+        fetch(ROLES).then(readJson),
+        fetch(EXT).then(readJson),
       ]);
-      for (const b of [tr, fr, mr, ir, or, pr]) { if (applyGate(b)) { setLoading(false); return; } }
+      for (const b of [tr, fr, mr, ir, or, pr, rr, er]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (tr.ok) { setTables(tr.tables || []); setDatabase(tr.database || ''); }
       else setError(tr.error || 'failed to list tables');
@@ -216,12 +264,16 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
       if (ir.ok) setMappings(ir.mappings || []);
       if (or.ok) setExports(or.continuousExports || []);
       if (pr.ok) setPolicies(pr.policies || []);
+      // RBAC + external tables are best-effort (need Database Admin); a 502/403
+      // here must not blank the whole tree — the rest still renders.
+      if (rr.ok) setPrincipals(rr.principals || []); else setPrincipals([]);
+      if (er.ok) setExtTables(er.externalTables || []); else setExtTables([]);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
       setLoading(false);
     }
-  }, [TABLES, FUNCTIONS, MVIEWS, MAPPINGS, OVERVIEW, POLICIES]);
+  }, [TABLES, FUNCTIONS, MVIEWS, MAPPINGS, OVERVIEW, POLICIES, ROLES, EXT]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -271,6 +323,142 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   }, [loadAll]);
 
   // ---------------------------------------------------------------
+  // RBAC principal add / drop (real .add/.drop database <role> ('fqn'))
+  // ---------------------------------------------------------------
+  /** Build the Kusto principal FQN from the dialog inputs. */
+  const buildPrincipalFqn = useCallback((): string => {
+    const id = pIdentity.trim();
+    const tenant = pTenant.trim();
+    if (!id) return '';
+    if (pType === 'aaduser') {
+      // A UPN already identifies the user; an object id needs ;tenant.
+      return id.includes('@') ? `aaduser=${id}` : (tenant ? `aaduser=${id};${tenant}` : `aaduser=${id}`);
+    }
+    // group / app: object/app id, with tenant when provided
+    return tenant ? `${pType}=${id};${tenant}` : `${pType}=${id}`;
+  }, [pType, pIdentity, pTenant]);
+
+  const submitAddPrincipal = useCallback(async () => {
+    const fqn = buildPrincipalFqn();
+    if (!fqn) { setPError('Enter the principal UPN / object id / app id.'); return; }
+    setBusy(true); setPError(null);
+    try {
+      const res = await fetch(ROLES, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'add', role: pRole, principalFQN: fqn, description: pDesc.trim() || undefined }),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok) { setPError(body.error || 'grant failed'); setBusy(false); return; }
+      setPrincipals(body.principals || []);
+      setAddPrincipalOpen(false);
+      setPIdentity(''); setPTenant(''); setPDesc('');
+    } catch (e: any) {
+      setPError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [ROLES, pRole, pDesc, buildPrincipalFqn]);
+
+  const dropPrincipal = useCallback(async (role: string, principalFQN: string) => {
+    if (!principalFQN) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(ROLES, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'drop', role, principalFQN }),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok) { setError(body.error || 'revoke failed'); setBusy(false); return; }
+      setPrincipals(body.principals || []);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [ROLES]);
+
+  // ---------------------------------------------------------------
+  // Row-level security (real .show / .alter table policy row_level_security)
+  // ---------------------------------------------------------------
+  const openRls = useCallback(async (table: string) => {
+    setRlsTable(table); setRlsError(null); setRlsReceipt(null);
+    setRlsEnabled(false); setRlsQuery(''); setRlsLoading(true);
+    try {
+      const res = await fetch(`${RLS}&table=${encodeURIComponent(table)}`);
+      const body = await readJson(res);
+      if (applyGate(body)) { setRlsTable(null); return; }
+      if (body.ok && body.policy) {
+        setRlsEnabled(Boolean(body.policy.enabled));
+        setRlsQuery(String(body.policy.query || ''));
+      } else if (!body.ok) {
+        setRlsError(body.error || 'failed to read RLS policy');
+      }
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setRlsLoading(false);
+    }
+  }, [RLS]);
+
+  const saveRls = useCallback(async () => {
+    if (!rlsTable) return;
+    setBusy(true); setRlsError(null); setRlsReceipt(null);
+    try {
+      const res = await fetch(RLS, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ table: rlsTable, enabled: rlsEnabled, query: rlsQuery }),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok) { setRlsError(body.error || 'failed to apply RLS policy'); setBusy(false); return; }
+      setRlsReceipt(`.show table ["${rlsTable}"] policy row_level_security → ${rlsEnabled ? 'enabled' : 'disabled'}`);
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [RLS, rlsTable, rlsEnabled, rlsQuery]);
+
+  // ---------------------------------------------------------------
+  // External tables (real .create-or-alter / .drop external table)
+  // ---------------------------------------------------------------
+  const openExtWizard = useCallback(() => {
+    setExtOpen(true); setExtError(null); setExtKind('delta');
+    setExtName(''); setExtAbfss(''); setExtConn('');
+    setExtSchema('ts:datetime, tenant:string, value:long'); setExtFormat('parquet');
+    setExtFolder(''); setExtDoc('');
+  }, []);
+
+  const submitExt = useCallback(async () => {
+    if (!extName.trim()) { setExtError('Name is required.'); return; }
+    setBusy(true); setExtError(null);
+    try {
+      const payload: any = {
+        name: extName.trim(), kind: extKind,
+        folder: extFolder.trim() || undefined, docString: extDoc.trim() || undefined,
+      };
+      if (extKind === 'delta') {
+        payload.abfssUri = extAbfss.trim();
+      } else {
+        payload.schema = extSchema.trim();
+        payload.dataFormat = extFormat;
+        payload.connectionString = extConn.trim();
+      }
+      const res = await fetch(EXT, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok) { setExtError(body.error || 'create failed'); setBusy(false); return; }
+      setExtOpen(false);
+      await loadAll();
+    } catch (e: any) {
+      setExtError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [EXT, extName, extKind, extAbfss, extSchema, extFormat, extConn, extFolder, extDoc, loadAll]);
+
+  // ---------------------------------------------------------------
   // Filtering
   // ---------------------------------------------------------------
   const f = filter.trim().toLowerCase();
@@ -281,6 +469,8 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const fMaps = useMemo(() => mappings.filter((x) => match(x.name)), [mappings, f]);
   const fExports = useMemo(() => exports.filter((x) => match(x.name)), [exports, f]);
   const fPolicies = useMemo(() => policies.filter((x) => match(x.kind)), [policies, f]);
+  const fPrincipals = useMemo(() => principals.filter((x) => match(x.principalDisplayName) || match(x.principalFQN) || match(x.role)), [principals, f]);
+  const fExtTables = useMemo(() => extTables.filter((x) => match(x.name)), [extTables, f]);
 
   const openQuery = (kql: string) => onOpenQuery?.(kql);
 
@@ -553,14 +743,110 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             </Tree>
           </TreeItem>
 
+          {/* Security — database roles (RBAC) + row-level security.
+              Mirrors the ADX web UI "Security" pane (Manage → Security). */}
+          <TreeItem itemType="branch" value="g-security">
+            <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>Security</TreeItemLayout>
+            <Tree>
+              {/* Database roles (RBAC principals) */}
+              <TreeItem itemType="branch" value="g-db-roles">
+                {groupHeader('Database roles', <People20Regular />, principals.length, () => { setAddPrincipalOpen(true); setPError(null); }, 'Add principal')}
+                <Tree>
+                  {fPrincipals.length === 0 && (
+                    <TreeItem itemType="leaf" value="role-empty">
+                      <Tooltip content="Principals + roles come from .show database <db> principals. Add a grant with .add database <db> <role> ('aaduser=…'). Requires Database Admin; cluster-inherited AllDatabasesAdmin principals aren't listed here." relationship="description">
+                        <TreeItemLayout iconBefore={<People20Regular />}>
+                          <Caption1>{f ? 'No matches' : 'No explicit principals (Database Admin required to list/grant)'}</Caption1>
+                        </TreeItemLayout>
+                      </Tooltip>
+                    </TreeItem>
+                  )}
+                  {fPrincipals.map((p, i) => (
+                    <TreeItem key={`${p.role}-${p.principalFQN || p.principalObjectId || i}`} itemType="leaf" value={`role-${p.role}-${i}`}>
+                      <TreeItemLayout iconBefore={<Person16Regular />}>
+                        <span className={s.leafRow}>
+                          <span title={p.principalFQN}>{p.principalDisplayName || p.principalFQN || '(unknown)'}</span>
+                          <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                            <Badge size="small" appearance="tint" color="brand">{p.role}</Badge>
+                            {p.principalType && <Caption1>{p.principalType.replace(/^Microsoft Entra /, '')}</Caption1>}
+                            <Tooltip content={p.principalFQN ? 'Remove (.drop database principal)' : 'Cross-tenant principal — no FQN to remove from this UI'} relationship="label">
+                              <Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy || !p.principalFQN} onClick={() => dropPrincipal(p.role, p.principalFQN)} aria-label={`Remove ${p.principalDisplayName || p.principalFQN}`} />
+                            </Tooltip>
+                          </span>
+                        </span>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
+
+              {/* Row-level security — per table */}
+              <TreeItem itemType="branch" value="g-rls">
+                {groupHeader('Row-level security', <ShieldLock16Regular />, tables.length, undefined)}
+                <Tree>
+                  {fTables.length === 0 && (
+                    <TreeItem itemType="leaf" value="rls-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No tables to secure'}</Caption1></TreeItemLayout></TreeItem>
+                  )}
+                  {fTables.map((t) => (
+                    <TreeItem key={`rls-${t.name}`} itemType="leaf" value={`rls-${t.name}`}>
+                      <TreeItemLayout iconBefore={<ShieldLock16Regular />}>
+                        <span className={s.leafRow}>
+                          <span>{t.name}</span>
+                          <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                            <Tooltip content="Edit row-level security policy (.alter table T policy row_level_security)" relationship="label">
+                              <Button size="small" appearance="subtle" icon={<ShieldLock16Regular />} disabled={busy} onClick={() => openRls(t.name)} aria-label={`Edit RLS for ${t.name}`} />
+                            </Tooltip>
+                          </span>
+                        </span>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
+            </Tree>
+          </TreeItem>
+
+          {/* External tables — list + create (Delta + Storage) + drop.
+              Mirrors the ADX "External tables" schema-tree group. */}
+          <TreeItem itemType="branch" value="g-ext-tables">
+            {groupHeader('External tables', <CloudLink20Regular />, extTables.length, openExtWizard, 'New external table')}
+            <Tree>
+              {fExtTables.length === 0 && (
+                <TreeItem itemType="leaf" value="ext-empty">
+                  <Tooltip content="External tables come from .show external tables. Create a Delta (kind=delta) or Azure-Storage (kind=storage) external table; the cluster MI needs Storage Blob Data Reader on the account. SQL external tables need a secrets surface and are listed as coming below. Requires Database Admin to list." relationship="description">
+                    <TreeItemLayout iconBefore={<CloudLink20Regular />}>
+                      <Caption1>{f ? 'No matches' : 'No external tables (Database Admin required to list)'}</Caption1>
+                    </TreeItemLayout>
+                  </Tooltip>
+                </TreeItem>
+              )}
+              {fExtTables.map((x) => (
+                <TreeItem key={`ext-${x.name}`} itemType="leaf" value={`ext-${x.name}`}>
+                  <TreeItemLayout iconBefore={<CloudLink20Regular />}>
+                    <span className={s.leafRow}>
+                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                        onClick={() => openQuery(`external_table("${x.name}")\n| take 100`)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`external_table("${x.name}")\n| take 100`); } }}
+                      >{x.name}</span>
+                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                        {x.tableType && <Badge size="small" appearance="outline">{x.tableType}</Badge>}
+                        <Tooltip content="Explore (external_table)" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => openQuery(`external_table("${x.name}")\n| take 100`)} aria-label={`Explore ${x.name}`} /></Tooltip>
+                        <Tooltip content="Drop external table (.drop external table N ifexists)" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(EXT, `name=${encodeURIComponent(x.name)}`)} aria-label={`Drop ${x.name}`} /></Tooltip>
+                      </span>
+                    </span>
+                  </TreeItemLayout>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
           {/* Honest gate rows — ADX/Fabric exposes these; we don't author them yet. */}
           <TreeItem itemType="branch" value="g-not-wired">
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
                 ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
-                ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
-                ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
+                ['SQL external tables', '.create external table … kind=sql — needs a SqlConnectionString with embedded credentials/MI. Loom has no secrets surface for it yet; Delta + Azure-Storage external tables ARE wired in the External tables group above.'],
                 ['Continuous-export authoring', '.create-or-alter continuous-export over an external table; needs an external table + Database Admin. Listed read-only above.'],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
@@ -670,6 +956,173 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>
               <Button appearance="primary" onClick={submitCreate} disabled={busy || !cName.trim()}>{busy ? 'Creating…' : 'Create'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Add database principal (RBAC) dialog */}
+      <Dialog open={addPrincipalOpen} onOpenChange={(_, d) => { if (!d.open) setAddPrincipalOpen(false); }}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Add database principal (.add database {database || '<db>'} &lt;role&gt;)</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Field label="Role" required>
+                  <Dropdown value={pRole} selectedOptions={[pRole]} onOptionSelect={(_, d) => setPRole((d.optionValue as typeof DATABASE_ROLES[number]) || 'viewers')}>
+                    {DATABASE_ROLES.map((r) => <Option key={r} value={r} text={r}>{r}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Principal type" required>
+                  <Dropdown
+                    value={pType === 'aaduser' ? 'User' : pType === 'aadgroup' ? 'Group' : 'Application'}
+                    selectedOptions={[pType]}
+                    onOptionSelect={(_, d) => setPType((d.optionValue as 'aaduser' | 'aadgroup' | 'aadapp') || 'aaduser')}
+                  >
+                    <Option value="aaduser" text="User">User</Option>
+                    <Option value="aadgroup" text="Group">Group</Option>
+                    <Option value="aadapp" text="Application">Application</Option>
+                  </Dropdown>
+                </Field>
+                <Field label={pType === 'aaduser' ? 'User UPN or object id' : pType === 'aadgroup' ? 'Group object id' : 'Application (client) id'} required>
+                  <Input
+                    value={pIdentity}
+                    onChange={(_, d) => setPIdentity(d.value)}
+                    placeholder={pType === 'aaduser' ? 'user@contoso.com' : '00000000-0000-0000-0000-000000000000'}
+                  />
+                </Field>
+                <Field label="Tenant id (required for groups/apps and object-id users)" hint="Omit only when granting a user by UPN.">
+                  <Input value={pTenant} onChange={(_, d) => setPTenant(d.value)} placeholder="contoso.onmicrosoft.com or tenant GUID" />
+                </Field>
+                <Field label="Description (Notes column)">
+                  <Input value={pDesc} onChange={(_, d) => setPDesc(d.value)} placeholder="Granted via CSA Loom" />
+                </Field>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Will run <code>.add database {database || '<db>'} {pRole} ('{buildPrincipalFqn() || `${pType}=…`}')</code> — requires Database Admin.
+                </Caption1>
+                {pError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Grant failed</MessageBarTitle>{pError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAddPrincipalOpen(false)} disabled={busy}>Cancel</Button>
+              <Button appearance="primary" onClick={submitAddPrincipal} disabled={busy || !pIdentity.trim()}>{busy ? 'Granting…' : 'Add principal'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Row-level security policy dialog */}
+      <Dialog open={rlsTable !== null} onOpenChange={(_, d) => { if (!d.open) setRlsTable(null); }}>
+        <DialogSurface style={{ maxWidth: 620 }}>
+          <DialogBody>
+            <DialogTitle>Row-level security · {rlsTable}</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {rlsLoading && <Spinner size="tiny" label="Loading current policy…" />}
+                <Field label="Enforcement">
+                  <Switch
+                    label={rlsEnabled ? 'Enabled — the predicate below filters every query' : 'Disabled — table returns all rows'}
+                    checked={rlsEnabled}
+                    onChange={(_, d) => setRlsEnabled(!!d.checked)}
+                    disabled={rlsLoading}
+                  />
+                </Field>
+                <Field
+                  label="RLS predicate (KQL)"
+                  required={rlsEnabled}
+                  hint="A KQL query that re-shapes the table for the calling principal. Use current_principal() / current_principal_details() to scope rows."
+                >
+                  <Textarea
+                    value={rlsQuery}
+                    onChange={(_, d) => setRlsQuery(d.value)}
+                    rows={6}
+                    disabled={rlsLoading || !rlsEnabled}
+                    style={{ fontFamily: 'Consolas, monospace' }}
+                    placeholder={`${rlsTable} | where Owner == current_principal()`}
+                  />
+                </Field>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Applies <code>.alter table ["{rlsTable}"] policy row_level_security {rlsEnabled ? 'enable' : 'disable'} "&lt;query&gt;"</code> — requires Table/Database Admin.
+                </Caption1>
+                {rlsReceipt && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Policy applied</MessageBarTitle>{rlsReceipt}</MessageBarBody></MessageBar>}
+                {rlsError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RLS error</MessageBarTitle>{rlsError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setRlsTable(null)} disabled={busy}>Close</Button>
+              <Button appearance="primary" onClick={saveRls} disabled={busy || rlsLoading || (rlsEnabled && !rlsQuery.trim())}>{busy ? 'Applying…' : 'Apply policy'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* External-table wizard dialog */}
+      <Dialog open={extOpen} onOpenChange={(_, d) => { if (!d.open) setExtOpen(false); }}>
+        <DialogSurface style={{ maxWidth: 620 }}>
+          <DialogBody>
+            <DialogTitle>New external table (.create-or-alter external table)</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Field label="Name" required>
+                  <Input value={extName} onChange={(_, d) => setExtName(d.value)} placeholder="orders_archive" />
+                </Field>
+                <Field label="Kind" required>
+                  <Dropdown
+                    value={extKind === 'delta' ? 'Delta (ADLS Delta Lake)' : 'Azure Storage (Blob/ADLS)'}
+                    selectedOptions={[extKind]}
+                    onOptionSelect={(_, d) => setExtKind((d.optionValue as 'delta' | 'storage') || 'delta')}
+                  >
+                    <Option value="delta" text="Delta (ADLS Delta Lake)">Delta (ADLS Delta Lake)</Option>
+                    <Option value="storage" text="Azure Storage (Blob/ADLS)">Azure Storage (Blob/ADLS)</Option>
+                  </Dropdown>
+                </Field>
+
+                {extKind === 'delta' && (
+                  <Field label="Delta table root (abfss:// URI)" required hint="Schema is auto-inferred from the delta log. Storage auth uses the cluster system-assigned MI (impersonation).">
+                    <Input value={extAbfss} onChange={(_, d) => setExtAbfss(d.value)} placeholder="abfss://bronze@acct.dfs.core.windows.net/orders" />
+                  </Field>
+                )}
+
+                {extKind === 'storage' && (
+                  <>
+                    <Field label="Columns" required>
+                      <ColumnGridDesigner
+                        columns={parseKustoSchema(extSchema)}
+                        onChange={(cols) => setExtSchema(toKustoSchema(cols))}
+                        disabled={busy}
+                      />
+                    </Field>
+                    <Field label="Data format" required>
+                      <Dropdown value={extFormat} selectedOptions={[extFormat]} onOptionSelect={(_, d) => setExtFormat((d.optionValue as typeof EXT_DATA_FORMATS[number]) || 'parquet')}>
+                        {EXT_DATA_FORMATS.map((fmt) => <Option key={fmt} value={fmt} text={fmt.toUpperCase()}>{fmt.toUpperCase()}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field
+                      label="Storage connection string (h@'…')"
+                      required
+                      hint="Storage URI + auth, e.g. https://acct.blob.core.windows.net/container;managed_identity=system. See learn.microsoft.com/kusto/api/connection-strings/storage-connection-strings"
+                    >
+                      <Input value={extConn} onChange={(_, d) => setExtConn(d.value)} placeholder="https://acct.blob.core.windows.net/container;managed_identity=system" />
+                    </Field>
+                  </>
+                )}
+
+                <Field label="Folder (optional)">
+                  <Input value={extFolder} onChange={(_, d) => setExtFolder(d.value)} placeholder="Archive" />
+                </Field>
+                <Field label="Doc string (optional)">
+                  <Input value={extDoc} onChange={(_, d) => setExtDoc(d.value)} placeholder="Cold orders mirrored to ADLS" />
+                </Field>
+
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  SQL external tables (kind=sql) require an embedded credential and aren't supported here yet — see the &quot;Not yet wired&quot; group.
+                </Caption1>
+                {extError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{extError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setExtOpen(false)} disabled={busy}>Cancel</Button>
+              <Button appearance="primary" onClick={submitExt} disabled={busy || !extName.trim() || (extKind === 'delta' ? !extAbfss.trim() : !extConn.trim())}>{busy ? 'Creating…' : 'Create external table'}</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
