@@ -42,18 +42,54 @@ type TriggerOperation = 'All' | 'Create' | 'Delete' | 'Replace' | 'Update';
 type ScriptKind = 'storedProcedure' | 'trigger' | 'udf';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', minHeight: '0' },
-  toolbar: { display: 'flex', alignItems: 'flex-end', gap: '8px', flexWrap: 'wrap' },
-  spacer: { flex: '1' },
-  editorWrap: { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column', gap: '6px' },
-  muted: { color: tokens.colorNeutralForeground3 },
-  resultPre: {
-    margin: '0', padding: '8px', maxHeight: '220px', overflow: 'auto',
-    backgroundColor: tokens.colorNeutralBackground3,
-    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
-    borderRadius: '4px', whiteSpace: 'pre', color: tokens.colorNeutralForeground1,
+  root: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalM, height: '100%', minHeight: '0',
   },
-  execRow: { display: 'flex', alignItems: 'flex-end', gap: '8px', flexWrap: 'wrap' },
+  toolbar: {
+    display: 'flex', alignItems: 'flex-end',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+  },
+  spacer: { flex: '1' },
+  idField: { minWidth: '220px' },
+  triggerField: { minWidth: '130px' },
+  opField: { minWidth: '150px' },
+  pkField: { minWidth: '200px' },
+  paramsField: { flex: '1', minWidth: '240px' },
+  editorWrap: {
+    flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  muted: { color: tokens.colorNeutralForeground3 },
+  loadingWrap: {
+    flex: '1', minHeight: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  execBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  execHeader: {
+    display: 'flex', alignItems: 'center',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+  },
+  resultPanel: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    padding: tokens.spacingVerticalS,
+  },
+  resultPre: {
+    margin: '0', padding: tokens.spacingVerticalSNudge, maxHeight: '220px', overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground3,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+    borderRadius: tokens.borderRadiusSmall, whiteSpace: 'pre',
+    color: tokens.colorNeutralForeground1,
+  },
+  execRow: {
+    display: 'flex', alignItems: 'flex-end',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+  },
 });
 
 const SPROC_TEMPLATE =
@@ -289,7 +325,7 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
       )}
 
       <div className={s.toolbar}>
-        <Field label={`${noun.charAt(0).toUpperCase()}${noun.slice(1)} id`} required style={{ minWidth: 220 }}>
+        <Field label={`${noun.charAt(0).toUpperCase()}${noun.slice(1)} id`} required className={s.idField}>
           <Input
             value={id}
             onChange={(_, d) => setId(d.value)}
@@ -300,7 +336,7 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
 
         {kind === 'trigger' && (
           <>
-            <Field label="Trigger type" style={{ minWidth: 130 }}>
+            <Field label="Trigger type" className={s.triggerField}>
               <Dropdown
                 value={triggerType}
                 selectedOptions={[triggerType]}
@@ -311,7 +347,7 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
                 <Option value="Post" text="Post">Post</Option>
               </Dropdown>
             </Field>
-            <Field label="Operation" style={{ minWidth: 150 }}>
+            <Field label="Operation" className={s.opField}>
               <Dropdown
                 value={triggerOperation}
                 selectedOptions={[triggerOperation]}
@@ -365,7 +401,9 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
           <code>{db}/{container}</code>. {loading ? 'Loading…' : null}
         </Caption1>
         {loading ? (
-          <Spinner size="tiny" label={`Loading ${noun}…`} />
+          <div className={s.loadingWrap}>
+            <Spinner size="small" label={`Loading ${noun}…`} />
+          </div>
         ) : (
           <MonacoTextarea
             value={bodyText}
@@ -378,7 +416,7 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
       </div>
 
       {kind === 'storedProcedure' && (
-        <>
+        <div className={s.execBlock}>
           <Divider />
           <Caption1 className={s.muted}>
             Execute — runs the saved stored procedure against one partition. The partition key is
@@ -386,27 +424,33 @@ export function CosmosScriptEditor({ kind: action, db, container, scriptName, pa
             <code>{partitionKey || '/id'}</code>). Params are passed positionally to the function.
           </Caption1>
           <div className={s.execRow}>
-            <Field label="Partition key value" style={{ minWidth: 200 }}>
-              <Input value={execPk} onChange={(_, d) => setExecPk(d.value)} placeholder="e.g. tenant-123" />
+            <Field label="Partition key value" className={s.pkField}>
+              <Input value={execPk} onChange={(_, d) => setExecPk(d.value)} placeholder="e.g. tenant-123" disabled={executing} />
             </Field>
-            <Field label="Params (JSON array)" style={{ flex: 1, minWidth: 240 }}>
-              <Input value={execParams} onChange={(_, d) => setExecParams(d.value)} placeholder='["arg1", 42]' />
+            <Field label="Params (JSON array)" className={s.paramsField}>
+              <Input value={execParams} onChange={(_, d) => setExecParams(d.value)} placeholder='["arg1", 42]' disabled={executing} />
             </Field>
           </div>
+          {executing && (
+            <Spinner size="tiny" label="Executing stored procedure…" labelPosition="after" />
+          )}
           {execError && (
             <MessageBar intent="error">
               <MessageBarBody><MessageBarTitle>Execute failed</MessageBarTitle>{execError}</MessageBarBody>
             </MessageBar>
           )}
           {execResult && (
-            <div>
-              <Badge size="small" appearance="tint" color="informative">
-                {execResult.requestCharge.toFixed(2)} RU
-              </Badge>
+            <div className={s.resultPanel}>
+              <div className={s.execHeader}>
+                <Caption1 className={s.muted}>Result</Caption1>
+                <Badge size="small" appearance="tint" color="informative">
+                  {execResult.requestCharge.toFixed(2)} RU
+                </Badge>
+              </div>
               <pre className={s.resultPre}>{JSON.stringify(execResult.result, null, 2)}</pre>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
