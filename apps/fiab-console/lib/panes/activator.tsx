@@ -117,6 +117,18 @@ const useStyles = makeStyles({
     display: 'block',
   },
   picker: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '260px' },
+  loadingWrap: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: '32px',
+  },
+  footer: {
+    color: tokens.colorNeutralForeground3,
+    paddingTop: '4px',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    marginTop: '4px',
+  },
 });
 
 /** Extract the leading KQL table name from a rule's query — that is the
@@ -456,6 +468,21 @@ export function ActivatorPane() {
 
       {activeTab === 'history' && (
         <>
+          <div className={styles.bar}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Fired and resolved Azure Monitor alert instances across this workspace&apos;s activators.
+            </Caption1>
+            <div className={styles.spacer} />
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ArrowClockwise24Regular />}
+              onClick={() => loadHistory(workspaceId, activators)}
+              disabled={!workspaceId || historyLoading}
+            >
+              Refresh history
+            </Button>
+          </div>
           {historyError && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -465,7 +492,7 @@ export function ActivatorPane() {
             </MessageBar>
           )}
           {historyLoading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}>
+            <div className={styles.loadingWrap}>
               <Spinner size="medium" label="Loading alert history…" />
             </div>
           ) : (
@@ -480,7 +507,7 @@ export function ActivatorPane() {
         </>
       )}
 
-      <Body1 as="p" style={{ color: tokens.colorNeutralForeground3 }}>
+      <Body1 as="p" className={styles.footer}>
         Rules persist as Azure Monitor scheduled-query alert rules — enable/disable and delete here round-trip to ARM. Use{' '}
         <Button appearance="transparent" size="small" icon={<Open16Regular />} iconPosition="after" onClick={openEditor}>
           the Activator editor
