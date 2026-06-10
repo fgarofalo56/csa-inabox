@@ -150,6 +150,20 @@ export async function getPipeline(name: string): Promise<AdfPipeline> {
   return jsonOrThrow<AdfPipeline>(r, `getPipeline(${name})`);
 }
 
+/**
+ * Fetch only the `properties.parameters` block of a pipeline. Used by the
+ * geo-pipeline run route to validate which declared parameters a target ADF
+ * pipeline exposes before firing createRun — so the run route passes only the
+ * parameters the pipeline contract declares (ADF ignores unknown params, but
+ * this gives an honest used/skipped receipt). Real ARM REST via getPipeline().
+ */
+export async function getPipelineParameters(
+  name: string,
+): Promise<Record<string, { type: string; defaultValue?: unknown }>> {
+  const pipeline = await getPipeline(name);
+  return pipeline.properties?.parameters ?? {};
+}
+
 export async function upsertPipeline(name: string, spec: AdfPipeline): Promise<AdfPipeline> {
   const body = { name: spec.name || name, properties: spec.properties || { activities: [] } };
   const r = await call(`${base()}/pipelines/${encodeURIComponent(name)}?api-version=${API}`, {

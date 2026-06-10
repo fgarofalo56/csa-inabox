@@ -44,6 +44,9 @@ param storageAccountId string = ''
 @description('DLZ ADLS Gen2 storage account NAME (same RG). Alternative to storageAccountId — also grants the ADF system-assigned MI Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
 param adlsAccountName string = ''
 
+@description('Deploy the "loom-geo-enrich" starter pipeline with enrichH3 (Bool), reverseGeocode (Bool), and bufferMeters (Int) parameters pre-declared. The GeoPipeline editor posts these flags to createRun as ADF pipeline parameters. When false, the editor still works but the target pipeline must declare those parameter names itself. Default true.')
+param deployGeoEnrichPipeline bool = true
+
 // Unify both inputs: prefer the explicit account name, else derive it from the
 // resource ID. A single grant covers MSI-auth copy pipelines AND Dataflow Gen2
 // sinks (same role, same principal, same account) — avoids a duplicate
@@ -85,6 +88,35 @@ resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
 //   For on-demand HDInsight clusters, also grant the Console UAMI the
 //   "HDInsight Cluster Operator" role on the cluster resource.
 // ---------------------------------------------------------------------
+
+// =====================================================================
+// Geo-enrichment starter pipeline (loom-geo-enrich)
+//
+// Backs the GeoPipeline editor: the editor posts enrichH3 / reverseGeocode /
+// bufferMeters as ADF pipeline PARAMETERS at trigger time (real createRun).
+// This declares those parameter names so the editor's flags map 1:1. The
+// activities array is an empty shell — operators build the enrichment graph in
+// ADF Studio / the Loom pipeline editor (Copy + Dataflow/Function activities
+// that read @pipeline().parameters.enrichH3 etc.). No Fabric dependency: this
+// is a plain ADF pipeline resource. Opt-out with deployGeoEnrichPipeline=false.
+// =====================================================================
+
+resource geoEnrichPipeline 'Microsoft.DataFactory/factories/pipelines@2018-06-01' = if (deployGeoEnrichPipeline) {
+  parent: adf
+  name: 'loom-geo-enrich'
+  properties: {
+    description: 'Geo-enrichment pipeline driven by the Loom GeoPipeline editor flags. Parameters: enrichH3 (Bool), reverseGeocode (Bool), bufferMeters (Int).'
+    annotations: [ 'loom', 'geo' ]
+    parameters: {
+      enrichH3:       { type: 'Bool',   defaultValue: true }
+      reverseGeocode: { type: 'Bool',   defaultValue: false }
+      bufferMeters:   { type: 'Int',    defaultValue: 0 }
+      inputPath:      { type: 'String', defaultValue: '' }
+      outputPath:     { type: 'String', defaultValue: '' }
+    }
+    activities: []
+  }
+}
 
 // =====================================================================
 // Private endpoint
