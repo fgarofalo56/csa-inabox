@@ -1,99 +1,266 @@
 'use client';
 
 /**
- * MonitorHubPane — Activities table with filters, status badges,
- * and per-item-type icons. Mirrors the Fabric Monitor hub described
- * in inventory §2.3.
+ * MonitorHubPane — the Fabric Monitor-hub "Activities" feed, Azure-native.
+ *
+ * Parity target: Fabric Monitor hub → Activities list (one row per pipeline /
+ * job / refresh run, with status, start, duration, submitter, and per-column
+ * sort + filter).
+ *
+ * Source: GET /api/monitor/activities — REAL Log Analytics run history
+ * (ADFPipelineRun + optionally SynapseIntegrationPipelineRuns via isfuzzy
+ * union). No sample/mock data anywhere in this component.
+ *
+ * Honest gate: when Log Analytics isn't configured the route returns a `gate`
+ * and this pane renders a Fluent MessageBar naming LOOM_LOG_ANALYTICS_WORKSPACE_ID
+ * — the filter bar + table chrome still render so the surface is never empty.
+ *
+ * The Fabric "Schedule failures" tab is intentionally NOT reproduced here: it
+ * surfaces Power BI / Fabric scheduled-refresh failure notifications, a
+ * Fabric-family feature with no Azure-native analog. The Azure-native
+ * equivalent (scheduled pipeline-failure alerts) lives on the Alerts tab via
+ * Azure Monitor scheduled-query rules. No dead tab is shipped.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option,
-  Tab, TabList,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Badge, Button, Dropdown, Option, Caption1, Text,
+  MessageBar, MessageBarBody, MessageBarTitle,
+  Input,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search20Regular, ArrowClockwise20Regular } from '@fluentui/react-icons';
+import { ArrowClockwise20Regular, Search20Regular } from '@fluentui/react-icons';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 
-const ROWS = [
-  { name: 'nightly-orders-pipeline', type: 'Pipeline',    status: 'Succeeded', started: '2026-05-24 02:00', duration: '14m 22s', submitter: 'system' },
-  { name: 'ChurnModel.train',        type: 'Notebook',    status: 'Succeeded', started: '2026-05-24 01:30', duration: '38m 11s', submitter: 'carl@contoso' },
-  { name: 'mirror-azuresql',         type: 'Mirrored DB', status: 'Running',   started: '2026-05-24 09:12', duration: '—',       submitter: 'alice@contoso' },
-  { name: 'fin-warehouse refresh',   type: 'Warehouse',   status: 'Failed',    started: '2026-05-24 08:55', duration: '02m 04s', submitter: 'bob@contoso' },
-  { name: 'orders→silver',           type: 'Dataflow Gen2', status: 'Succeeded', started: '2026-05-24 08:00', duration: '06m 47s', submitter: 'alice@contoso' },
-  { name: 'eventstream-billing',     type: 'Eventstream', status: 'Running',   started: '2026-05-22 14:30', duration: 'streaming', submitter: 'eve@contoso' },
-];
-const STATUSES = ['(All)', 'Succeeded', 'Running', 'Failed', 'Queued', 'Canceled'];
-const TYPES = ['(All)', 'Pipeline', 'Notebook', 'Dataflow Gen2', 'Mirrored DB', 'Warehouse', 'Eventstream', 'ML experiment'];
+interface ActivityRow {
+  timeGenerated: string;
+  name: string;
+  runId?: string;
+  itemType: string;
+  status?: string;
+  start?: string;
+  end?: string;
+  durationMs?: number;
+  submitter?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  source: 'adf' | 'synapse' | 'arm';
+}
+
+interface Gate { missing: string[]; message: string }
+
+interface ApiResponse {
+  ok: boolean;
+  gate?: Gate;
+  error?: string;
+  days?: number;
+  synapseIncluded?: boolean;
+  total?: number;
+  rows?: ActivityRow[];
+}
 
 const useStyles = makeStyles({
-  bar: { display: 'flex', gap: '12px', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' },
-  rowHover: { ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' } },
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM, display: 'block' },
+  caption: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS, display: 'block' },
+  filters: {
+    display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center',
+    flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM,
+  },
+  search: { flex: 1, minWidth: '220px' },
 });
 
+const DAYS_OPTIONS: { value: string; label: string }[] = [
+  { value: '1', label: 'Last 24 hours' },
+  { value: '7', label: 'Last 7 days' },
+  { value: '14', label: 'Last 14 days' },
+  { value: '30', label: 'Last 30 days' },
+];
+
+function statusBadge(status?: string) {
+  const s = (status || '').toLowerCase();
+  if (s === 'succeeded' || s === 'success') return <Badge appearance="filled" color="success">{status}</Badge>;
+  if (s === 'failed' || s === 'failure') return <Badge appearance="filled" color="danger">{status}</Badge>;
+  if (s === 'inprogress' || s === 'queued' || s === 'inqueue' || s === 'running') return <Badge appearance="filled" color="brand">{status}</Badge>;
+  if (s === 'cancelled' || s === 'canceled') return <Badge appearance="outline" color="subtle">{status}</Badge>;
+  return status ? <Badge appearance="outline" color="informative">{status}</Badge> : <Text size={200}>—</Text>;
+}
+
+function fmtDuration(ms?: number): string {
+  if (!ms || ms <= 0) return '—';
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function fmtTime(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export function MonitorHubPane() {
-  const s = useStyles();
-  const [tab, setTab] = useState('activities');
-  const [status, setStatus] = useState('(All)');
-  const [type, setType] = useState('(All)');
+  const styles = useStyles();
+  const [data, setData] = useState<ApiResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [unauth, setUnauth] = useState(false);
+  const [days, setDays] = useState('30');
   const [q, setQ] = useState('');
-  const filtered = ROWS.filter((r) =>
-    (status === '(All)' || r.status === status) &&
-    (type === '(All)' || r.type === type) &&
-    (!q || r.name.toLowerCase().includes(q.toLowerCase()))
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setErr(null);
+    const params = new URLSearchParams({ days });
+    fetch(`/api/monitor/activities?${params.toString()}`)
+      .then(async (r) => {
+        if (!alive) return;
+        if (r.status === 401 || r.status === 403) { setUnauth(true); setData({ ok: false }); return; }
+        const j: ApiResponse = await r.json();
+        if (!j.ok && !j.gate) setErr(j.error || 'Failed to load activities');
+        setData(j);
+      })
+      .catch((e) => { if (alive) { setErr(String(e)); setData({ ok: false }); } });
+    return () => { alive = false; };
+  }, [days, tick]);
+
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+
+  // Client-side free-text search across Name + Submitter (the Fabric search box).
+  const searched = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(
+      (r) => r.name.toLowerCase().includes(needle)
+        || (r.submitter || '').toLowerCase().includes(needle),
+    );
+  }, [rows, q]);
+
+  const columns: LoomColumn<ActivityRow & { __id: string }>[] = useMemo(() => [
+    {
+      key: 'name', label: 'Name', width: 280, filterable: true, filterType: 'text',
+      getValue: (r) => r.name,
+      render: (r) => (
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <Text weight="semibold" truncate wrap={false}>{r.name}</Text>
+          {r.errorMessage && (
+            <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }} truncate wrap={false}>
+              {r.errorCode ? `${r.errorCode}: ` : ''}{r.errorMessage}
+            </Caption1>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'itemType', label: 'Item type', width: 160, filterable: true, filterType: 'select',
+      getValue: (r) => r.itemType,
+      render: (r) => <Text size={200}>{r.itemType}</Text>,
+    },
+    {
+      key: 'status', label: 'Status', width: 130, filterable: true, filterType: 'select',
+      getValue: (r) => r.status || '',
+      render: (r) => <span title={r.errorMessage || undefined}>{statusBadge(r.status)}</span>,
+    },
+    {
+      key: 'start', label: 'Started', width: 180, filterType: 'date',
+      getValue: (r) => (r.start ? new Date(r.start).getTime() : 0),
+      render: (r) => <Text size={200}>{fmtTime(r.start)}</Text>,
+    },
+    {
+      key: 'durationMs', label: 'Duration', width: 120, filterable: false,
+      getValue: (r) => r.durationMs ?? 0,
+      render: (r) => <Text size={200}>{fmtDuration(r.durationMs)}</Text>,
+    },
+    {
+      key: 'submitter', label: 'Submitter', width: 200, filterable: true, filterType: 'text',
+      getValue: (r) => r.submitter || '',
+      render: (r) => <Text size={200}>{r.submitter || '—'}</Text>,
+    },
+  ], []);
+
+  const tableRows = useMemo(
+    () => searched.map((r, i) => ({ ...r, __id: `${r.source}:${r.runId ?? r.name}:${i}` })),
+    [searched],
   );
+
+  const gate = data?.gate ?? null;
+  const loading = data === null;
+
   return (
     <div>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-        <Tab value="activities">Activities</Tab>
-        <Tab value="schedule">Schedule failures (preview)</Tab>
-      </TabList>
-      <div style={{ marginTop: 12 }}>
-        {tab === 'activities' && (<>
-          <div className={s.bar}>
-            <Input contentBefore={<Search20Regular />} placeholder="Search activities" value={q} onChange={(_, d) => setQ(d.value)} style={{ flex: 1, minWidth: 200 }} />
-            <Caption1>Status:</Caption1>
-            <Dropdown value={status} selectedOptions={[status]} onOptionSelect={(_, d) => setStatus(d.optionValue ?? status)}>
-              {STATUSES.map((x) => <Option key={x} value={x}>{x}</Option>)}
-            </Dropdown>
-            <Caption1>Item type:</Caption1>
-            <Dropdown value={type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue ?? type)}>
-              {TYPES.map((x) => <Option key={x} value={x}>{x}</Option>)}
-            </Dropdown>
-            <Button appearance="subtle" icon={<ArrowClockwise20Regular />}>Refresh</Button>
-            <Button appearance="subtle">Export CSV</Button>
-          </div>
-          <Table aria-label="Activities">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Item type</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Started</TableHeaderCell>
-                <TableHeaderCell>Duration</TableHeaderCell><TableHeaderCell>Submitter</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((r) => (
-                <TableRow key={r.name} className={s.rowHover}>
-                  <TableCell>{r.name}</TableCell>
-                  <TableCell>{r.type}</TableCell>
-                  <TableCell>
-                    <Badge appearance="filled" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : r.status === 'Running' ? 'brand' : 'subtle'}>
-                      {r.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{r.started}</TableCell>
-                  <TableCell>{r.duration}</TableCell>
-                  <TableCell>{r.submitter}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>{filtered.length} of {ROWS.length} activities · last 30 days</Caption1>
-        </>)}
-        {tab === 'schedule' && (
-          <Body1>Schedule failure notifications for scheduled items will appear here. Configure per-item recipients from the item&apos;s Settings.</Body1>
-        )}
+      {unauth && <SignInRequired subject="activity history" />}
+
+      <Caption1 className={styles.intro}>
+        Every pipeline and job run across the platform — name, status, start time, duration, and who
+        submitted it. Run history reads live from Log Analytics (Azure Data Factory pipeline runs,
+        and Synapse pipeline runs where deployed). Click a column to sort; use the per-column filters
+        for status, item type, and date range.
+      </Caption1>
+
+      <div className={styles.filters}>
+        <Input
+          className={styles.search}
+          contentBefore={<Search20Regular />}
+          placeholder="Search by name or submitter"
+          value={q}
+          onChange={(_, d) => setQ(d.value)}
+        />
+        <Caption1>Window:</Caption1>
+        <Dropdown
+          aria-label="Time window"
+          value={DAYS_OPTIONS.find((d) => d.value === days)?.label || days}
+          selectedOptions={[days]}
+          onOptionSelect={(_, d) => d.optionValue && setDays(d.optionValue)}
+        >
+          {DAYS_OPTIONS.map((d) => <Option key={d.value} value={d.value}>{d.label}</Option>)}
+        </Dropdown>
+        <Button appearance="primary" icon={<ArrowClockwise20Regular />} onClick={refresh}>Refresh</Button>
       </div>
+
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Activity feed unavailable — Log Analytics not configured</MessageBarTitle>
+            {gate.message} Missing: <strong>{gate.missing.join(', ')}</strong>. Set it on the Console
+            container app (admin-plane bicep <code>apps[]</code> env list); the Monitoring Reader and
+            Log Analytics Reader grants are already in place.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {err && (
+        <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>
+      )}
+
+      <Section title="Activities">
+        <LoomDataTable
+          columns={columns}
+          rows={tableRows}
+          getRowId={(r) => r.__id}
+          loading={loading}
+          empty={gate
+            ? 'Configure Log Analytics to read pipeline and job run history.'
+            : 'No pipeline or job runs in this window.'}
+          ariaLabel="Activity feed"
+        />
+        {!loading && !gate && (
+          <Caption1 className={styles.caption}>
+            {tableRows.length} of {rows.length} run{rows.length === 1 ? '' : 's'} · run history from
+            Log Analytics{data?.synapseIncluded ? ' (ADF + Synapse)' : ' (ADF)'} · last{' '}
+            {days === '1' ? '24 hours' : `${days} days`}
+          </Caption1>
+        )}
+      </Section>
     </div>
   );
 }

@@ -147,6 +147,82 @@ describe('GET /api/monitor/activity', () => {
   });
 });
 
+describe('GET /api/monitor/activities', () => {
+  function laBody() {
+    return {
+      tables: [{
+        columns: [
+          { name: 'TimeGenerated' }, { name: 'Name' }, { name: 'RunId' },
+          { name: 'ItemType' }, { name: 'Status' }, { name: 'Start' },
+          { name: 'End' }, { name: 'Submitter' }, { name: 'ErrorCode' },
+          { name: 'ErrorMessage' },
+        ],
+        rows: [[
+          '2026-06-09T02:00:00Z', 'nightly-orders-pipeline', 'run-1', 'Pipeline',
+          'Succeeded', '2026-06-09T02:00:00Z', '2026-06-09T02:14:22Z',
+          'ScheduleTrigger', '', '',
+        ]],
+      }],
+    };
+  }
+
+  it('returns ok + run rows on the happy path (with computed duration + source)', async () => {
+    stubFetch(() => ({ body: laBody() }));
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    const r = await GET(req('GET', 'https://loom.test/api/monitor/activities?days=7'));
+    expect(r.status).toBe(200);
+    expectJson(r);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.days).toBe(7);
+    expect(j.rows[0].name).toBe('nightly-orders-pipeline');
+    expect(j.rows[0].status).toBe('Succeeded');
+    expect(j.rows[0].source).toBe('adf');
+    expect(j.rows[0].itemType).toBe('Pipeline');
+    expect(j.rows[0].durationMs).toBe(862000); // 14m22s
+  });
+
+  it('sends KQL with the isfuzzy Synapse union by default', async () => {
+    const fetchMock = stubFetch(() => ({ body: laBody() }));
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    await GET(req('GET', 'https://loom.test/api/monitor/activities'));
+    const laCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/query'));
+    expect(laCall).toBeTruthy();
+    const sent = JSON.parse(String((laCall![1] as RequestInit).body));
+    expect(sent.query).toContain('ADFPipelineRun');
+    expect(sent.query).toContain('union isfuzzy=true');
+    expect(sent.query).toContain('SynapseIntegrationPipelineRuns');
+  });
+
+  it('omits the Synapse union when synapse=0', async () => {
+    const fetchMock = stubFetch(() => ({ body: laBody() }));
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    await GET(req('GET', 'https://loom.test/api/monitor/activities?synapse=0'));
+    const laCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/query'));
+    const sent = JSON.parse(String((laCall![1] as RequestInit).body));
+    expect(sent.query).not.toContain('SynapseIntegrationPipelineRuns');
+  });
+
+  it('applies the status filter case-insensitively', async () => {
+    stubFetch(() => ({ body: laBody() }));
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    const hit = await GET(req('GET', 'https://loom.test/api/monitor/activities?status=succeeded'));
+    expect((await hit.json()).total).toBe(1);
+    const miss = await GET(req('GET', 'https://loom.test/api/monitor/activities?status=Failed'));
+    expect((await miss.json()).total).toBe(0);
+  });
+
+  it('honest-gates when LOOM_LOG_ANALYTICS_WORKSPACE_ID unset', async () => {
+    delete process.env.LOOM_LOG_ANALYTICS_WORKSPACE_ID;
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    const r = await GET(req('GET', 'https://loom.test/api/monitor/activities'));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.gate.missing).toContain('LOOM_LOG_ANALYTICS_WORKSPACE_ID');
+  });
+});
+
 describe('GET /api/monitor/alerts', () => {
   it('returns alert rules scoped to Loom RGs', async () => {
     stubFetch(() => ({ body: { value: [{ id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.Insights/metricAlerts/a', name: 'a', properties: { enabled: true, severity: 1, scopes: [] } }] } }));
