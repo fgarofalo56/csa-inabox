@@ -1,90 +1,83 @@
-# spark-compute — parity with Fabric notebook Spark compute
+# spark-compute — parity with Fabric workspace "Spark settings" (Pool / Environment / Jobs)
 
-Source UI: Fabric notebook **Spark session** / Azure ML Serverless Spark
-Reference: <https://learn.microsoft.com/azure/machine-learning/how-to-submit-spark-jobs>
-Also: <https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session>
-Run date: 2026-06-09
+Source UI:
+- Fabric workspace **Spark settings** → https://learn.microsoft.com/fabric/data-engineering/workspace-admin-settings
+- Azure Databricks **Pool configuration** → https://learn.microsoft.com/azure/databricks/compute/pools
+- Azure Databricks **Compute / runtime** → https://learn.microsoft.com/azure/databricks/compute/configure
+- Azure Databricks **Libraries** → https://learn.microsoft.com/azure/databricks/libraries
+- Azure Databricks **Spark configuration** → https://learn.microsoft.com/azure/databricks/spark/conf
 
-Loom surfaces:
+Loom surface: `lib/panes/spark-compute.tsx` (`SparkComputePane`), wired into the
+workspace Settings drawer (`lib/components/workspace-settings-drawer.tsx`, tab
+**Spark compute**). BFF: `app/api/admin/workspaces/[id]/spark/{pools,runtime,environment,jobs}/route.ts`.
+Clients: `lib/clients/spark-config-client.ts` (orchestration) +
+`lib/azure/databricks-scale-client.ts` (instance pools / libraries / spark-conf).
+Store: Cosmos `workspace-spark-config` (PK `/workspaceId`).
 
-- Commercial/GCC backend: `lib/azure/aml-spark-client.ts` → `AmlSparkClient`,
-  `AmlSparkNotConfiguredError`
-- Cell wrapper: `lib/azure/aml-spark-runner.ts` → `buildRunnerPy()`
-- GCC-High/IL5 backend: `lib/azure/synapse-livy-client.ts` (Livy interactive
-  sessions)
+Azure-native default — Databricks is the backend; **no Microsoft Fabric
+capacity or workspace is required** (.claude/rules/no-fabric-dependency.md).
 
-This is the **notebook Spark cell-execution backend** — distinct from
-`spark-environment.md` (the Environment item editor). The Fabric Spark capacity
-maps **Azure-native** to Azure ML Serverless Spark (public clouds) or Synapse
-Livy (government). There is **no dependency on real Microsoft Fabric** — cells
-execute against Azure Spark with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+## Fabric / Databricks feature inventory → Loom coverage
 
-## Fabric/Azure feature inventory (grounded in Learn)
-
-1. Execute a `%%pyspark` cell against a managed Spark pool
-2. Capture stdout / results
-3. Interactive session lifecycle (create, keepalive, teardown)
-4. Spark magic commands (`%%configure`, `%%info`, etc.)
-5. Per-session Spark config
-
-## Loom coverage
-
-| Capability | Status | Backend |
+### Pool tab
+| Capability | Loom | Backend per control |
 |---|---|---|
-| `%%pyspark` cell execution (Commercial/GCC) | ✅ Built | AML Serverless Spark standalone job: upload `run.py` blob → register code asset → submit `jobType:'Spark'` → poll → read `result.json` |
-| Cell stdout capture | ✅ Built | `buildRunnerPy()` uses `contextlib.redirect_stdout` + base64-encoded cell source |
-| `%%pyspark` cell execution (GCC-High/IL5) | ✅ Built | Synapse Livy interactive sessions: `createLivySession()` → `createLivyStatement()` → poll → `normalizeLivyOutput()` |
-| Livy magic interception (`%%configure`, `%%info`, …) | ✅ Built | `parseMagicKind()` + `parseConfigureMagic()` |
-| Per-session Spark config | ✅ Built | `parseConfigureMagic()` applied to session create |
-| Session keepalive | ✅ Built | `keepaliveLivySession()` |
-| Session teardown | ✅ Built | `killLivySession()` |
-| AML backend config gate | ⚠️ Honest gate | `AmlSparkNotConfiguredError` names the missing env (`LOOM_AML_WORKSPACE` …) + bicep module |
-| Livy backend config gate | ⚠️ Honest gate | route checks `LOOM_SYNAPSE_WORKSPACE`; 503 with exact hint |
+| Starter pool (pre-warmed, no config) | ✅ | `POST .../spark/pools {action:'starter'}` → Cosmos `pool.mode='starter'` |
+| Custom pool — pin workspace to a pool | ✅ | `POST .../spark/pools {action:'select'}` → Cosmos `pool.mode='custom'` |
+| Create instance pool (name, node type) | ✅ | `POST .../spark/pools {action:'create'}` → Databricks `POST /api/2.0/instance-pools/create` |
+| Min idle / max capacity | ✅ | create spec `min_idle_instances` / `max_capacity` |
+| Idle auto-termination minutes | ✅ | create spec `idle_instance_autotermination_minutes` |
+| On-demand vs Spot availability | ✅ | create spec `azure_attributes.availability` |
+| Live pool stats (idle / used) | ✅ | `GET /api/2.0/instance-pools/list` → `stats` |
+| Delete pool | ✅ | `DELETE .../spark/pools?poolId=` → `POST /api/2.0/instance-pools/delete` |
 
-Zero ❌ rows. Both backends are fully built; the only ⚠️ gates are honest
-infra-config gates naming the exact env var / module, per `no-vaporware.md`.
+### Runtime tab
+| Capability | Loom | Backend per control |
+|---|---|---|
+| Databricks runtime version | ✅ | `GET /api/2.0/clusters/spark-versions` → ClusterSpec `spark_version` |
+| Node family filter (VM category) | ✅ | `GET /api/2.0/clusters/list-node-types` `category` |
+| Worker node type | ✅ | ClusterSpec `node_type_id` |
+| Driver node type (or same as worker) | ✅ | ClusterSpec `driver_node_type_id` |
+| Autoscale (min/max workers) | ✅ | ClusterSpec `autoscale` |
+| Fixed worker count | ✅ | ClusterSpec `num_workers` |
+| Persist as workspace default | ✅ | `POST .../spark/runtime` → Cosmos `runtime` |
 
-## Backend per control
+### Environment tab
+| Capability | Loom | Backend per control |
+|---|---|---|
+| PyPI package set | ✅ | Cosmos `environment.pypi`; `POST /api/2.0/libraries/install` |
+| Maven coordinate set | ✅ | Cosmos `environment.maven`; install/uninstall |
+| Live library status on a cluster | ✅ | `GET /api/2.0/libraries/cluster-status` |
+| Install / uninstall on a live cluster | ✅ | `POST /api/2.0/libraries/{install,uninstall}` |
+| Session-level (notebook-scoped) packages toggle | ✅ | Cosmos `environment.sessionLevelPackages` |
+| No live cluster selected | ⚠️ honest-gate | MessageBar: pick a cluster; set is still persisted |
 
-- **Commercial/GCC** — `AmlSparkClient` runs each cell as an AML Serverless
-  Spark standalone job: it uploads a generated `run.py` (from `buildRunnerPy()`,
-  which wraps the user's base64-encoded cell source in a stdout redirect) to
-  blob, registers it as a code asset, submits a `jobType:'Spark'` job, polls to
-  terminal, and reads back `result.json`.
-- **GCC-High/IL5** — `synapse-livy-client.ts` drives Synapse Spark Livy
-  interactive sessions: create session (with any `%%configure` config) →
-  `createLivyStatement()` per cell → poll → `normalizeLivyOutput()`; magic
-  commands are intercepted client-side; sessions are kept alive and torn down
-  explicitly.
-- **Gates** — each backend throws a typed *NotConfigured* error that the BFF
-  renders as a MessageBar naming the env var + bicep module to provision.
+### Jobs tab
+| Capability | Loom | Backend per control |
+|---|---|---|
+| Session idle termination (minutes) | ✅ | Cosmos `jobs.session_timeout_minutes` → ClusterSpec `autotermination_minutes` |
+| Optimistic cluster admission | ✅ | `spark.databricks.optimisticAdmission` (via `buildJobSparkConf`) |
+| Reserved driver cores | ✅ | `spark.databricks.driver.reservedCores` |
+| Dynamic executor allocation | ✅ (mapped to autoscale) | ClusterSpec `autoscale`; honest note that `spark.dynamicAllocation.*` is unsupported on Databricks classic clusters |
+| Preview of materialized `spark_conf` | ✅ | `GET .../spark/jobs` → `buildJobSparkConf` |
 
-## Per-cloud notes
+## Honest gates (⚠️ — full surface still renders)
+- `LOOM_DATABRICKS_HOSTNAME` unset → `sparkConfigGate()` 503 `not_configured` with the exact env var to set + the "Allow pool creation" entitlement note.
+- Sovereign cloud without Azure Databricks (GCC-High / DoD) → 503 `not_available_in_cloud`; the pane shows a MessageBar directing to the Synapse Spark pool path.
 
-| Cloud | Default backend |
-|---|---|
-| Commercial | AML Serverless Spark (`LOOM_NOTEBOOK_BACKEND=aml-spark`) |
-| GCC | AML Serverless Spark (Azure public) |
-| GCC-High | Synapse Livy — AML Serverless Spark unavailable in Azure Government |
-| IL5 | Synapse Livy |
+## Per-cloud
+| | Commercial | GCC | GCC-High | DoD |
+|---|---|---|---|---|
+| Azure Databricks available | Yes | Yes | No | No |
+| Instance Pools API | Full | Full | gate | gate |
+| Behavior when unavailable | — | — | honest MessageBar | honest MessageBar |
 
-## Bicep sync
-
-- AML path: `LOOM_AML_WORKSPACE` (+ subscription/RG) env in `admin-plane/main.bicep`
-  `apps[]`; the AML workspace + the console UAMI's `AzureML Data Scientist` grant
-  are in the landing-zone bicep.
-- Livy path: `LOOM_SYNAPSE_WORKSPACE` env; Synapse Spark pool + UAMI Synapse
-  roles in the landing-zone bicep. The `il5.bicepparam` / `gcc-high.bicepparam`
-  default `LOOM_NOTEBOOK_BACKEND=synapse-livy`.
+## Backend wiring
+- AAD bearer to resource `2ff814a6-3304-4ab8-85cb-cd0e6f879c1d` (Azure Databricks); Console UAMI must be workspace admin **and** hold "Allow pool creation".
+- `LOOM_DATABRICKS_HOSTNAME` already injected by `platform/fiab/bicep/modules/admin-plane/main.bicep`; no new env var required.
+- Cosmos `workspace-spark-config` created lazily by `cosmos-client.ts` (no ARM pre-step).
 
 ## Verification
-
-- Default path works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset — AML or Livy,
-  never a Fabric host.
-- Live walk (Commercial): run a `%%pyspark` cell, confirm the AML job is
-  submitted and `result.json` stdout is returned. Live walk (GCC-High): run a
-  cell, confirm a Livy session is created, the statement executes, output is
-  normalized, and the session is kept alive then torn down.
-
-Grade: **A** — both Azure-native Spark backends fully built with magic/session
-support; only honest infra-config gates.
+- `npx tsc --noEmit` clean on all touched files (full project 0 errors).
+- `databricks-scale-client.test.ts` — 9/9 green: instance-pool create/edit/delete/list REST contract, library install/uninstall, `buildJobSparkConf` purity (no `spark.dynamicAllocation.*` emitted).
+- E2E (operator): with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET, open a workspace → Settings → Spark compute → create a real custom pool (appears in the Databricks portal), save runtime/jobs (persist in Cosmos and apply on next cluster create). With `LOOM_DATABRICKS_HOSTNAME` unset, the honest MessageBar renders.

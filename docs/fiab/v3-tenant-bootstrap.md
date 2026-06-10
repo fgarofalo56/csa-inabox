@@ -1186,3 +1186,37 @@ filter (e.g. `[Region] = "East"`) and a hidden column → Save → **Test as rol
 with a tenant UPN. The result grid returns only the filtered rows and omits the
 OLS-hidden column — that JSON is the receipt. Not available in the DoD (IL6)
 boundary (AAS is not offered there; the tab shows a DoD gate).
+## Spark / compute configuration — Databricks "Allow pool creation" entitlement {#spark-compute-pool-entitlement}
+
+The workspace **Spark compute** surface (Settings → Spark compute; F13) configures
+Databricks instance pools, runtime, environment libraries, and job defaults. It is
+Azure-native by default — **no Microsoft Fabric capacity or workspace is required** —
+and reuses the existing `LOOM_DATABRICKS_HOSTNAME` env var (already injected into the
+Console Container App by `platform/fiab/bicep/modules/admin-plane/main.bicep`). **No new
+env var or bicep resource is needed.**
+
+One workspace-admin action gates pool creation. The Console UAMI (which authenticates to
+Databricks as an AAD principal via the SCIM-provisioned workspace identity) must hold the
+**Allow pool creation** entitlement. By default only Databricks workspace admins have it.
+Grant it once:
+
+- In the Databricks workspace **Admin Settings → Identity and access → Service principals**,
+  select the Console UAMI service principal and enable **Allow instance pool creation**, OR
+- via the SCIM Entitlements API:
+  ```
+  PATCH https://<workspace-host>/api/2.0/preview/scim/v2/ServicePrincipals/<id>
+  { "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "add", "path": "entitlements",
+                     "value": [{ "value": "allow-instance-pool-create" }] }] }
+  ```
+
+Without the entitlement, `POST /api/2.0/instance-pools/create` returns **403
+PERMISSION_DENIED** and the create-pool dialog surfaces that verbatim (no fake success).
+Reading pools / runtime / node-types and saving runtime/jobs defaults to Cosmos all work
+without it. The Cosmos `workspace-spark-config` container is created lazily by
+`cosmos-client.ts` — no ARM pre-step.
+
+In **GCC-High / DoD** Azure Databricks is not offered; the surface renders an honest
+MessageBar (`not_available_in_cloud`) directing operators to the Synapse Spark pool path.
+
+
