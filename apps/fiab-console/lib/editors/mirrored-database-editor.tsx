@@ -115,7 +115,11 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [wizardInitial, setWizardInitial] = useState<
-    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean } | undefined
+    {
+      sourceType?: string; server?: string; database?: string; connectionId?: string;
+      tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean;
+      projectId?: string; serviceName?: string; gateway?: string; syncUser?: string;
+    } | undefined
   >(undefined);
 
   const loadList = useCallback(async (wsId: string) => {
@@ -238,6 +242,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       connectionId: sc.connectionId || '',
       tables: Array.isArray(sc.tables) ? sc.tables : [],
       includeIcebergTables: !!sc.includeIcebergTables,
+      projectId: sc.projectId || '',
+      serviceName: sc.serviceName || '',
+      gateway: sc.gateway || '',
+      syncUser: sc.syncUser || '',
       displayName: detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '',
     });
     setWizardOpen(true);

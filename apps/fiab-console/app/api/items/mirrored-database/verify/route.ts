@@ -50,7 +50,22 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Non-SQL sources authenticate with their own credential at mirror time.
+  // BigQuery + Oracle authenticate with their own credential / gateway at mirror
+  // time. Return precise, source-specific guidance (no fake success).
+  if (sourceType === 'GoogleBigQuery') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `BigQuery (project ${server}, dataset ${database}) authenticates with a Google service-account key — validated when the mirror first runs the Azure-native copy (ADF Google BigQuery V2 connector → ADLS Bronze). Confirm the service-account JSON is stored in the connection's Key Vault secret and the account has BigQuery Data Viewer + Job User on the project.`,
+    });
+  }
+  if (sourceType === 'Oracle') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `Oracle (host ${server}, service ${database}) is reached through the on-prem data gateway / self-hosted integration runtime — validated when the mirror first runs the Azure-native copy (ADF Oracle connector → ADLS Bronze). Confirm the gateway is online and the sync user has the LogMiner + SELECT_CATALOG_ROLE + SELECT ANY TABLE grants.`,
+    });
+  }
+
+  // Other non-SQL sources authenticate with their own credential at mirror time.
   return NextResponse.json({
     ok: true, verified: false,
     detail: `${sourceType || 'This source'} authenticates with its own credential — the connection is validated when the mirror first syncs. Ensure the server/database are correct and the credential (or managed identity) is granted read access.`,

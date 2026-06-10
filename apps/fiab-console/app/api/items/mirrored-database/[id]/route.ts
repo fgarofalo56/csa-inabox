@@ -65,7 +65,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       definition: liveDefinition,
       status: { mirroringStatus: st.mirroringStatus || 'NotStarted', error: st.lastRun?.error },
       // Source config so the editor can pre-fill the Edit form + Test connection.
-      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [], includeIcebergTables: !!st.includeIcebergTables },
+      // BigQuery (projectId) + Oracle (serviceName/gateway/syncUser) round-trip too.
+      source: {
+        sourceType: st.sourceType, server: st.server, database: st.database,
+        connectionId: st.connectionId, tables: st.tables || [],
+        includeIcebergTables: !!st.includeIcebergTables,
+        projectId: st.projectId, serviceName: st.serviceName, gateway: st.gateway, syncUser: st.syncUser,
+      },
       lastRun: st.lastRun || null,
       tables,
     });
@@ -122,6 +128,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       server: body?.server ?? state.server,
       database: body?.database ?? state.database,
       connectionId: body?.connectionId !== undefined ? body.connectionId : state.connectionId,
+      // BigQuery + Oracle source-specific fields (undefined = leave prior value).
+      projectId: body?.projectId !== undefined ? body.projectId : state.projectId,
+      serviceName: body?.serviceName !== undefined ? body.serviceName : state.serviceName,
+      gateway: body?.gateway !== undefined ? body.gateway : state.gateway,
+      syncUser: body?.syncUser !== undefined ? body.syncUser : state.syncUser,
       tables,
       includeIcebergTables: body?.includeIcebergTables !== undefined ? !!body.includeIcebergTables : state.includeIcebergTables,
     };
@@ -136,7 +147,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     return NextResponse.json({
       ok: true,
       mirroredDatabase: { id: next.id, displayName: next.displayName, description: next.description },
-      source: { sourceType: nextState.sourceType, server: nextState.server, database: nextState.database, connectionId: nextState.connectionId, tables: nextState.tables, includeIcebergTables: !!nextState.includeIcebergTables },
+      source: {
+        sourceType: nextState.sourceType, server: nextState.server, database: nextState.database,
+        connectionId: nextState.connectionId, tables: nextState.tables,
+        includeIcebergTables: !!nextState.includeIcebergTables,
+        projectId: nextState.projectId, serviceName: nextState.serviceName, gateway: nextState.gateway, syncUser: nextState.syncUser,
+      },
     });
   } catch (e: any) {
     if (e?.code === 404) return err('mirrored database not found', 404);

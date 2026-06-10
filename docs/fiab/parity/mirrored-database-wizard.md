@@ -8,19 +8,26 @@ databases/tables → Connect** onboarding flow, and the Azure portal's
 linked-service + table-selection experience.
 
 Source UI (grounded in Microsoft Learn):
-- Mirroring source picker (Azure SQL DB/MI, SQL Server, Snowflake, Cosmos DB, PostgreSQL) — https://learn.microsoft.com/fabric/mirroring/overview
+- Mirroring source picker (Azure SQL DB/MI, SQL Server, Snowflake, Cosmos DB, PostgreSQL, **Google BigQuery**, **Oracle**) — https://learn.microsoft.com/fabric/mirroring/overview
+- Google BigQuery mirroring (project id + dataset) — https://learn.microsoft.com/fabric/mirroring/google-bigquery
+- Oracle mirroring (host + service name + on-prem data gateway + sync user) — https://learn.microsoft.com/fabric/mirroring/oracle
+- Oracle required sync-user permissions (LogMiner, SELECT_CATALOG_ROLE, SELECT ANY TABLE) — https://learn.microsoft.com/fabric/mirroring/oracle-limitations#required-permissions
 - Create + connect + select tables (Azure SQL) — https://learn.microsoft.com/fabric/mirroring/azure-sql-database-tutorial
 - Connection with Key Vault-stored credentials — https://learn.microsoft.com/fabric/data-factory/how-to-use-azure-key-vault-secrets-pipeline-activities
 - ADF Change Data Capture (the no-Fabric backend) — https://learn.microsoft.com/azure/data-factory/concepts-change-data-capture-resource
+- ADF Google BigQuery V2 connector (Azure-native default copy) — https://learn.microsoft.com/azure/data-factory/connector-google-bigquery
+- ADF Oracle connector via self-hosted IR (Azure-native default copy) — https://learn.microsoft.com/azure/data-factory/connector-oracle
 
 ## Azure/Fabric feature inventory → Loom coverage
 
 | Capability (Fabric/Azure)                                    | Loom coverage | Backend per control |
 |--------------------------------------------------------------|---------------|---------------------|
-| Pick a source type from a gallery of connectors              | ✅ built (8 source cards) | client state |
+| Pick a source type from a gallery of connectors              | ✅ built (10 source cards incl. Google BigQuery + Oracle) | client state |
 | Create/select a connection (no plaintext creds)              | ✅ built (ConnectionBuilder + dropdown) | `/api/connections` → Key Vault secretRef |
 | Server / database coordinates                                | ✅ built (fields, prefilled from connection) | item state (Cosmos) |
-| Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe) |
+| **BigQuery project id + dataset fields**                     | ✅ built (source-aware step 2) | `state.projectId` + `state.database` (Cosmos) |
+| **Oracle host + service name + on-prem gateway (SHIR) + sync user fields** | ✅ built (source-aware step 2) | `state.{server,serviceName,gateway,syncUser}` (Cosmos) |
+| Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe for SQL family; source-specific honest note for BigQuery/Oracle) |
 | Enumerate source tables                                      | ✅ built (Load tables) | `/[id]/tables` (credential-aware, KV secretRef) + `/source-tables` (pre-create) |
 | Include/exclude a subset of tables                           | ✅ built (checkbox grid + All/None) | persisted to `state.tables` |
 | **Include Iceberg tables** (Snowflake only, Fabric Build 2026)| ✅ built (Snowflake-only checkbox in step 3) | persisted to `state.includeIcebergTables` + `mirroring.json` source.typeProperties.includeIcebergTables; threaded into the engine `MirrorSource` on Start |
@@ -30,6 +37,7 @@ Source UI (grounded in Microsoft Learn):
 | Start replication → initial load + CDC                       | ✅ built (Start) | ADF CDC → Bronze **Delta** (opt-in) or built-in CSV snapshot engine — both Azure-native |
 | Monitor per-table replication (rows/bytes/last sync)         | ✅ built (replication grid) | `state.tablesStatus` |
 | Snowflake / Open-mirroring continuous CDC                    | ⚠️ honest-gate | engine returns a disclosed follow-up gate (`no-vaporware.md`) |
+| BigQuery / Oracle replication (Azure-native default)         | ⚠️ honest-gate | Start dispatches to ADF copy (Google BigQuery V2 / Oracle connector → ADLS Bronze); gate names the exact linked-service env vars + source grants until configured (`no-vaporware.md`) |
 
 ## Backend wiring
 
