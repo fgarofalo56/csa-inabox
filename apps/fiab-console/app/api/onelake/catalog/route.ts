@@ -72,6 +72,8 @@ interface WorkspaceNodeOut {
   id: string;
   name: string;
   domain?: string;
+  /** Workspace owner (UPN of the principal who created/registered it). */
+  owner?: string;
 }
 
 interface CatalogFacetsOut {
@@ -112,7 +114,7 @@ function shapeSearchHit(h: GovernanceCatalogHit): CatalogItemOut {
 
 function shapeCosmosItem(
   i: any,
-  wsMap: Map<string, { id: string; name: string; domain?: string }>,
+  wsMap: Map<string, { id: string; name: string; domain?: string; owner?: string }>,
 ): CatalogItemOut {
   const st = i.state || {};
   const endorsement = (st.endorsement || (st.certified ? 'Certified' : undefined)) as string | undefined;
@@ -225,25 +227,31 @@ export async function GET(request: Request) {
     }
 
     // ── Workspace tree (always Cosmos on the Azure-native default path) ───────
+    // Single-partition read: the workspaces container is partitioned by
+    // /tenantId, so scoping the query with partitionKey: s.claims.oid keeps this
+    // off the cross-partition fan-out path. `c.createdBy` projects the real
+    // workspace owner into the tree (Fabric parity — the catalog sidebar shows
+    // who administers each workspace).
     const wsC = await workspacesContainer();
     const { resources: workspaces } = await wsC.items
       .query(
         {
-          query: 'SELECT c.id, c.name, c.domain FROM c WHERE c.tenantId = @t',
+          query: 'SELECT c.id, c.name, c.domain, c.createdBy FROM c WHERE c.tenantId = @t',
           parameters: [{ name: '@t', value: s.claims.oid }],
         },
         { partitionKey: s.claims.oid },
       )
       .fetchAll();
 
-    const wsMap = new Map<string, { id: string; name: string; domain?: string }>(
-      workspaces.map((w: any) => [w.id, { id: w.id, name: w.name, domain: w.domain }]),
+    const wsMap = new Map<string, { id: string; name: string; domain?: string; owner?: string }>(
+      workspaces.map((w: any) => [w.id, { id: w.id, name: w.name, domain: w.domain, owner: w.createdBy }]),
     );
     const callerWorkspaceIds = Array.from(wsMap.keys());
     const workspaceNodes = workspaces.map<WorkspaceNodeOut>((w: any) => ({
       id: w.id,
       name: w.name,
       domain: w.domain,
+      owner: w.createdBy,
     }));
 
     // ── Path A: AI Search (Azure-native DEFAULT) ─────────────────────────────
@@ -296,14 +304,34 @@ export async function GET(request: Request) {
       });
     }
 
+    // Partition-safe fan-out: the items container is partitioned by
+    // /workspaceId, so issue ONE single-partition read per workspace (scoped by
+    // partitionKey) in parallel rather than a single cross-partition
+    // ARRAY_CONTAINS scan that fans across every physical partition. This keeps
+    // RU cost flat as the tenant's workspace/item count grows. Per-workspace
+    // failures are isolated (a workspace the UAMI can't read never aborts the
+    // whole catalog).
     const itC = await itemsContainer();
-    const { resources: rawItems } = await itC.items
-      .query({
-        query:
-          'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.createdBy, c.updatedAt, c.createdAt, c.state FROM c WHERE ARRAY_CONTAINS(@ws, c.workspaceId)',
-        parameters: [{ name: '@ws', value: callerWorkspaceIds }],
-      })
-      .fetchAll();
+    const perWorkspace = await Promise.all(
+      callerWorkspaceIds.map(async (wsId) => {
+        try {
+          const { resources } = await itC.items
+            .query(
+              {
+                query:
+                  'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.createdBy, c.updatedAt, c.createdAt, c.state FROM c WHERE c.workspaceId = @ws',
+                parameters: [{ name: '@ws', value: wsId }],
+              },
+              { partitionKey: wsId },
+            )
+            .fetchAll();
+          return resources;
+        } catch {
+          return [] as any[];
+        }
+      }),
+    );
+    const rawItems = perWorkspace.flat();
 
     const ql = q.toLowerCase();
     const shaped = rawItems
