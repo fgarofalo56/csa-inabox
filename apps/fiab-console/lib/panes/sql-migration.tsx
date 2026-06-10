@@ -62,7 +62,16 @@ const useStyles = makeStyles({
     border: `2px dashed ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     textAlign: 'center',
+    transitionProperty: 'border-color, background-color',
+    transitionDuration: tokens.durationNormal,
   },
+  uploadZoneDrag: {
+    borderColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  cardBody: { display: 'flex', flexDirection: 'column', gap: '16px', padding: '0 16px 16px' },
+  sectionLabel: { display: 'block', marginBottom: '4px' },
+  hint: { color: tokens.colorNeutralForeground3 },
   summaryGrid: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
   summaryCard: {
     minWidth: '120px', padding: '12px 16px',
@@ -124,6 +133,7 @@ export function SqlMigrationPane() {
   const [assessError, setAssessError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResponse | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   const step = importResult ? 3 : assessment ? 2 : 1;
 
@@ -149,6 +159,24 @@ export function SqlMigrationPane() {
     } finally {
       setAssessing(false);
     }
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (assessing) return;
+    const file = e.dataTransfer.files?.[0] || null;
+    if (file) void onFile(file);
+  }, [assessing, onFile]);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (!assessing) setDragOver(true);
+  }, [assessing]);
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
   }, []);
 
   const runImport = useCallback(async () => {
@@ -223,7 +251,11 @@ export function SqlMigrationPane() {
           { n: 2, label: 'Assess compatibility' },
           { n: 3, label: 'Import to Synapse' },
         ].map((st) => (
-          <div key={st.n} className={`${s.stepPill} ${step >= st.n ? s.stepActive : ''}`}>
+          <div
+            key={st.n}
+            className={`${s.stepPill} ${step >= st.n ? s.stepActive : ''}`}
+            aria-current={step === st.n ? 'step' : undefined}
+          >
             <Badge appearance={step >= st.n ? 'filled' : 'outline'} color={step >= st.n ? 'brand' : 'subtle'} size="small">{st.n}</Badge>
             {st.label}
           </div>
@@ -246,9 +278,25 @@ export function SqlMigrationPane() {
           header={<Subtitle2>1. Upload data-tier package</Subtitle2>}
           description={<Caption1>A .dacpac is the schema package produced by SqlPackage / SSDT / SSMS &quot;Extract Data-tier Application&quot;.</Caption1>}
         />
-        <div className={s.uploadZone}>
+        <div
+          className={`${s.uploadZone} ${dragOver ? s.uploadZoneDrag : ''}`}
+          role="button"
+          tabIndex={0}
+          aria-label="Upload a .dacpac file — drag and drop or activate to browse"
+          aria-disabled={assessing || undefined}
+          onClick={() => !assessing && fileRef.current?.click()}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && !assessing) {
+              e.preventDefault();
+              fileRef.current?.click();
+            }
+          }}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+        >
           <Database24Regular style={{ fontSize: 36, color: tokens.colorBrandForeground1 }} />
-          <Body1>{fileName ? <strong>{fileName}</strong> : 'Choose a .dacpac file to assess'}</Body1>
+          <Body1>{fileName ? <strong>{fileName}</strong> : 'Drag a .dacpac here, or browse to choose one'}</Body1>
           <input
             ref={fileRef}
             type="file"
@@ -258,10 +306,10 @@ export function SqlMigrationPane() {
             onChange={(e) => onFile(e.target.files?.[0] || null)}
           />
           <div className={s.actions}>
-            <Button appearance="primary" icon={<ArrowUpload24Regular />} disabled={assessing} onClick={() => fileRef.current?.click()}>
+            <Button appearance="primary" icon={<ArrowUpload24Regular />} disabled={assessing} onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>
               {fileName ? 'Choose a different file' : 'Choose .dacpac'}
             </Button>
-            {(assessment || fileName) && <Button appearance="subtle" onClick={reset}>Reset</Button>}
+            {(assessment || fileName) && <Button appearance="subtle" onClick={(e) => { e.stopPropagation(); reset(); }}>Reset</Button>}
           </div>
           {assessing && <Spinner size="small" label="Parsing and assessing schema…" />}
         </div>
@@ -284,7 +332,7 @@ export function SqlMigrationPane() {
             header={<Subtitle2>2. Compatibility assessment — {assessment.databaseName}</Subtitle2>}
             description={<Caption1>Assessed against Azure Synapse Dedicated SQL pool feature support.</Caption1>}
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 16px 16px' }}>
+          <div className={s.cardBody}>
             <div className={s.summaryGrid}>
               <SummaryCard num={sum.tables} label="Tables" />
               <SummaryCard num={sum.views} label="Views" />
@@ -314,22 +362,26 @@ export function SqlMigrationPane() {
 
             {assessment.findings && assessment.findings.length > 0 && (
               <div>
-                <Caption1 style={{ marginBottom: 4, display: 'block' }}>Findings</Caption1>
+                <Caption1 className={s.sectionLabel}>Findings</Caption1>
                 <LoomDataTable<CompatFinding>
                   columns={findingCols}
                   rows={assessment.findings}
                   getRowId={(r) => `${r.rule}:${r.object}`}
+                  ariaLabel="Compatibility findings"
+                  empty="No compatibility findings."
                 />
               </div>
             )}
 
             <Divider />
             <div>
-              <Caption1 style={{ marginBottom: 4, display: 'block' }}>Table inventory</Caption1>
+              <Caption1 className={s.sectionLabel}>Table inventory</Caption1>
               <LoomDataTable<TableRow>
                 columns={tableCols}
                 rows={assessment.tables || []}
                 getRowId={(r) => `${r.schema}.${r.name}`}
+                ariaLabel="Table inventory"
+                empty="No tables in this package."
               />
             </div>
 
@@ -344,7 +396,7 @@ export function SqlMigrationPane() {
                 Import compatible schema to Synapse
               </Button>
               {importing && <Spinner size="small" label="Executing DDL on the dedicated pool…" />}
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={s.hint}>
                 {assessment.plan?.statements.filter((x) => !x.skipped && !/^\s*--/.test(x.sql)).length || 0} statement(s) will run.
               </Caption1>
             </div>
@@ -360,7 +412,7 @@ export function SqlMigrationPane() {
             header={<Subtitle2>3. Import receipt</Subtitle2>}
             description={importResult.target && <Caption1>{importResult.target.server} / {importResult.target.database}</Caption1>}
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 16px 16px' }}>
+          <div className={s.cardBody}>
             {importGated ? (
               <MessageBar intent="warning">
                 <MessageBarBody>
@@ -384,6 +436,8 @@ export function SqlMigrationPane() {
                     columns={resultCols}
                     rows={importResult.results}
                     getRowId={(r) => `${r.kind}:${r.object}`}
+                    ariaLabel="Import results per object"
+                    empty="No objects were executed."
                   />
                 )}
                 <div className={s.actions}>
