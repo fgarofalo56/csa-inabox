@@ -42,16 +42,21 @@ import {
   Notebook20Regular, Server20Regular, Database20Regular, BranchFork20Regular,
   Play16Regular, Stop16Regular, Open16Regular, Flow20Regular,
   Search20Regular, Warning20Regular, FolderOpen20Regular,
+  Pipeline20Regular, Beaker20Regular, BrainCircuit20Regular, Rocket20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 240 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: 240 },
+  header: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
+  headerActions: { display: 'flex', columnGap: tokens.spacingHorizontalXXS },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  groupLayout: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  scrollArea: { overflow: 'auto', flex: 1, minHeight: 0 },
+  loadingPad: { padding: tokens.spacingHorizontalS },
+  muted: { color: tokens.colorNeutralForeground3 },
 });
 
 const JOBS_ROUTE = '/api/databricks/jobs';
@@ -60,6 +65,10 @@ const CL_ROUTE = '/api/databricks/clusters';
 const WH_ROUTE = '/api/databricks/warehouses';
 const REPO_ROUTE = '/api/databricks/repos';
 const CAT_ROUTE = '/api/databricks/catalogs';
+const DLT_ROUTE = '/api/databricks/pipelines';
+const MLFLOW_EXP_ROUTE = '/api/databricks/mlflow/experiments';
+const MLFLOW_MODEL_ROUTE = '/api/databricks/mlflow/models';
+const SERVING_ROUTE = '/api/databricks/serving-endpoints';
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -72,8 +81,13 @@ interface ClusterRow { cluster_id: string; name: string; state?: string; spark_v
 interface WarehouseRow { id: string; name: string; state?: string; cluster_size?: string; serverless?: boolean }
 interface RepoRow { id: number; name: string; path?: string; provider?: string; branch?: string }
 interface CatalogRow { name: string; type?: string; comment?: string }
+interface DltRow { pipeline_id: string; name?: string; state?: string }
+interface MlflowExpRow { experiment_id: string; name: string }
+interface MlflowModelRow { name: string; latest_versions?: Array<{ version: string; current_stage?: string }> }
+interface ServingRow { name: string; state?: { ready?: string } }
 
-type CreateGroup = 'notebook' | 'cluster' | 'warehouse' | 'repo';
+type CreateGroup = 'notebook' | 'cluster' | 'warehouse' | 'repo'
+  | 'dlt' | 'mlflow-experiment' | 'mlflow-model' | 'serving-endpoint';
 
 function clusterColor(state?: string) {
   if (state === 'RUNNING') return 'success' as const;
@@ -85,6 +99,12 @@ function warehouseColor(state?: string) {
   if (state === 'STARTING' || state === 'STOPPING') return 'warning' as const;
   return 'informative' as const;
 }
+function dltColor(state?: string) {
+  if (state === 'RUNNING' || state === 'COMPLETED') return 'success' as const;
+  if (state === 'DEPLOYING' || state === 'STARTING' || state === 'RESETTING') return 'warning' as const;
+  if (state === 'FAILED') return 'danger' as const;
+  return 'informative' as const;
+}
 
 export interface DatabricksWorkspaceTreeProps {
   /** Currently selected job (highlighted in the tree). */
@@ -93,6 +113,8 @@ export interface DatabricksWorkspaceTreeProps {
   onOpenJob?: (jobId: number) => void;
   /** Start a brand-new job in the host editor (Databricks jobs need ≥1 task — authored in the editor, not blind-created). */
   onNewJob?: () => void;
+  /** Open a DLT pipeline in the host editor (e.g. deep-link to the Databricks pipeline). */
+  onOpenPipeline?: (pipelineId: string) => void;
   /** Increment to force a refresh from the parent (e.g. after a save/create). */
   refreshKey?: number;
 }
@@ -101,7 +123,7 @@ export interface DatabricksWorkspaceTreeProps {
  * A typed, Databricks-faithful Workspace navigator.
  */
 export function DatabricksWorkspaceTree({
-  selectedJobId = null, onOpenJob, onNewJob, refreshKey = 0,
+  selectedJobId = null, onOpenJob, onNewJob, onOpenPipeline, refreshKey = 0,
 }: DatabricksWorkspaceTreeProps) {
   const s = useStyles();
 
@@ -116,6 +138,13 @@ export function DatabricksWorkspaceTree({
   const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
   const [repos, setRepos] = useState<RepoRow[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogRow[]>([]);
+  const [dltPipelines, setDltPipelines] = useState<DltRow[]>([]);
+  const [mlflowExperiments, setMlflowExperiments] = useState<MlflowExpRow[]>([]);
+  const [registeredModels, setRegisteredModels] = useState<MlflowModelRow[]>([]);
+  const [servingEndpoints, setServingEndpoints] = useState<ServingRow[]>([]);
+  // Serving endpoints are not GA on Azure Government; the route may 404/403. We
+  // keep an honest note rather than fabricating an empty list.
+  const [servingNote, setServingNote] = useState<string | null>(null);
 
   const [nbPath] = useState('/Workspace');
   const [busy, setBusy] = useState(false);
@@ -127,6 +156,8 @@ export function DatabricksWorkspaceTree({
   const [createSize, setCreateSize] = useState('X-Small');
   const [repoUrl, setRepoUrl] = useState('');
   const [repoProvider, setRepoProvider] = useState('gitHub');
+  const [servingModel, setServingModel] = useState('');
+  const [servingVersion, setServingVersion] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
 
   function applyGate(body: any): boolean {
@@ -137,14 +168,20 @@ export function DatabricksWorkspaceTree({
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [jr, nr, cr, wr, rr, kr] = await Promise.all([
+      const [jr, nr, cr, wr, rr, kr, dr, er, mr, sr] = await Promise.all([
         fetch(JOBS_ROUTE).then(readJson),
         fetch(`${NB_ROUTE}?path=${encodeURIComponent(nbPath)}`).then(readJson),
         fetch(CL_ROUTE).then(readJson),
         fetch(WH_ROUTE).then(readJson),
         fetch(REPO_ROUTE).then(readJson),
         fetch(CAT_ROUTE).then(readJson),
+        fetch(DLT_ROUTE).then(readJson),
+        fetch(MLFLOW_EXP_ROUTE).then(readJson),
+        fetch(MLFLOW_MODEL_ROUTE).then(readJson),
+        fetch(SERVING_ROUTE).then(readJson),
       ]);
+      // The not_configured gate is driven only by the core routes; the four
+      // optional surfaces (DLT/MLflow/serving) are best-effort and never gate.
       for (const b of [jr, nr, cr, wr, rr, kr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (jr.ok) setJobs(jr.jobs || []); else setError(jr.error || 'failed to list jobs');
@@ -153,6 +190,11 @@ export function DatabricksWorkspaceTree({
       if (wr.ok) setWarehouses(wr.warehouses || []);
       if (rr.ok) setRepos(rr.repos || []);
       if (kr.ok) setCatalogs(kr.catalogs || []);
+      if (dr.ok) setDltPipelines(dr.pipelines || []);
+      if (er.ok) setMlflowExperiments(er.experiments || []);
+      if (mr.ok) setRegisteredModels(mr.models || []);
+      if (sr.ok) { setServingEndpoints(sr.endpoints || []); setServingNote(null); }
+      else setServingNote(sr.error || null);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -169,6 +211,7 @@ export function DatabricksWorkspaceTree({
     setCreateGroup(g); setCreateName(''); setCreateError(null);
     setCreateLang('PYTHON'); setCreateSize('X-Small');
     setRepoUrl(''); setRepoProvider('gitHub');
+    setServingModel(''); setServingVersion('');
   }, []);
 
   const submitCreate = useCallback(async () => {
@@ -188,6 +231,20 @@ export function DatabricksWorkspaceTree({
       } else if (createGroup === 'repo') {
         if (!repoUrl.trim()) { setCreateError('Remote Git URL is required.'); setBusy(false); return; }
         route = REPO_ROUTE; payload = { url: repoUrl.trim(), provider: repoProvider };
+      } else if (createGroup === 'dlt') {
+        if (!createName.trim()) { setCreateError('Name is required.'); setBusy(false); return; }
+        // A DLT pipeline must reference ≥1 source library; default a notebook path under /Workspace.
+        route = DLT_ROUTE; payload = { name: createName.trim(), notebookPath: `/Workspace/${createName.trim()}` };
+      } else if (createGroup === 'mlflow-experiment') {
+        if (!createName.trim()) { setCreateError('Name is required (e.g. /Users/me/exp).'); setBusy(false); return; }
+        route = MLFLOW_EXP_ROUTE; payload = { name: createName.trim() };
+      } else if (createGroup === 'mlflow-model') {
+        if (!createName.trim()) { setCreateError('Name is required.'); setBusy(false); return; }
+        route = MLFLOW_MODEL_ROUTE; payload = { name: createName.trim() };
+      } else if (createGroup === 'serving-endpoint') {
+        if (!createName.trim()) { setCreateError('Name is required.'); setBusy(false); return; }
+        if (!servingModel.trim() || !servingVersion.trim()) { setCreateError('Model name and version are required.'); setBusy(false); return; }
+        route = SERVING_ROUTE; payload = { name: createName.trim(), model_name: servingModel.trim(), model_version: servingVersion.trim() };
       }
       const res = await fetch(route, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
@@ -202,7 +259,7 @@ export function DatabricksWorkspaceTree({
     } finally {
       setBusy(false);
     }
-  }, [createGroup, createName, createLang, createSize, repoUrl, repoProvider, nbPath, loadAll]);
+  }, [createGroup, createName, createLang, createSize, repoUrl, repoProvider, servingModel, servingVersion, nbPath, loadAll]);
 
   const del = useCallback(async (route: string, query: string) => {
     setBusy(true); setError(null);
@@ -241,6 +298,10 @@ export function DatabricksWorkspaceTree({
   const fWarehouses = useMemo(() => warehouses.filter((w) => match(w.name)), [warehouses, f]);
   const fRepos = useMemo(() => repos.filter((r) => match(r.name)), [repos, f]);
   const fCatalogs = useMemo(() => catalogs.filter((c) => match(c.name)), [catalogs, f]);
+  const fDlt = useMemo(() => dltPipelines.filter((p) => match(p.name || p.pipeline_id)), [dltPipelines, f]);
+  const fExperiments = useMemo(() => mlflowExperiments.filter((e) => match(e.name)), [mlflowExperiments, f]);
+  const fModels = useMemo(() => registeredModels.filter((m) => match(m.name)), [registeredModels, f]);
+  const fServing = useMemo(() => servingEndpoints.filter((e) => match(e.name)), [servingEndpoints, f]);
 
   // ---------------------------------------------------------------
   // Render helpers
@@ -287,7 +348,7 @@ export function DatabricksWorkspaceTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Workspace</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span className={s.headerActions}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -301,6 +362,10 @@ export function DatabricksWorkspaceTree({
                 <MenuItem icon={<Server20Regular />} onClick={() => openCreate('cluster')}>Cluster</MenuItem>
                 <MenuItem icon={<Database20Regular />} onClick={() => openCreate('warehouse')}>SQL Warehouse</MenuItem>
                 <MenuItem icon={<BranchFork20Regular />} onClick={() => openCreate('repo')}>Repo (Git folder)</MenuItem>
+                <MenuItem icon={<Pipeline20Regular />} onClick={() => openCreate('dlt')}>DLT pipeline</MenuItem>
+                <MenuItem icon={<Beaker20Regular />} onClick={() => openCreate('mlflow-experiment')}>MLflow experiment</MenuItem>
+                <MenuItem icon={<BrainCircuit20Regular />} onClick={() => openCreate('mlflow-model')}>Registered model</MenuItem>
+                <MenuItem icon={<Rocket20Regular />} onClick={() => openCreate('serving-endpoint')}>Serving endpoint</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -320,16 +385,16 @@ export function DatabricksWorkspaceTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading workspace…" /></div>}
+      {loading && <div className={s.loadingPad}><Spinner size="tiny" label="Loading workspace…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Workspace error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
 
-      <div style={{ overflow: 'auto', flex: 1 }}>
+      <div className={s.scrollArea}>
         <Tree aria-label="Databricks workspace" defaultOpenItems={['g-jobs']}>
           {/* Jobs */}
           <TreeItem itemType="branch" value="g-jobs">
-            {groupHeader('Jobs', <Flow20Regular />, jobs.length, onNewJob ? () => onNewJob() : undefined, 'New job (opens editor)')}
+            {groupHeader('Jobs', <Flow20Regular />, f ? fJobs.length : jobs.length, onNewJob ? () => onNewJob() : undefined, 'New job (opens editor)')}
             <Tree>
               {fJobs.length === 0 && <TreeItem itemType="leaf" value="j-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No jobs'}</Caption1></TreeItemLayout></TreeItem>}
               {fJobs.map((j) => (
@@ -359,7 +424,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Notebooks / Workspace files */}
           <TreeItem itemType="branch" value="g-notebooks">
-            {groupHeader('Notebooks', <Notebook20Regular />, notebooks.length, () => openCreate('notebook'), 'New notebook')}
+            {groupHeader('Notebooks', <Notebook20Regular />, f ? fNotebooks.length : notebooks.length, () => openCreate('notebook'), 'New notebook')}
             <Tree>
               {fNotebooks.length === 0 && <TreeItem itemType="leaf" value="n-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : `Empty (${nbPath})`}</Caption1></TreeItemLayout></TreeItem>}
               {fNotebooks.map((n) => {
@@ -384,7 +449,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Clusters */}
           <TreeItem itemType="branch" value="g-clusters">
-            {groupHeader('Clusters', <Server20Regular />, clusters.length, () => openCreate('cluster'), 'New cluster')}
+            {groupHeader('Clusters', <Server20Regular />, f ? fClusters.length : clusters.length, () => openCreate('cluster'), 'New cluster')}
             <Tree>
               {fClusters.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No clusters'}</Caption1></TreeItemLayout></TreeItem>}
               {fClusters.map((c) => {
@@ -411,7 +476,7 @@ export function DatabricksWorkspaceTree({
 
           {/* SQL Warehouses */}
           <TreeItem itemType="branch" value="g-warehouses">
-            {groupHeader('SQL Warehouses', <Database20Regular />, warehouses.length, () => openCreate('warehouse'), 'New SQL warehouse')}
+            {groupHeader('SQL Warehouses', <Database20Regular />, f ? fWarehouses.length : warehouses.length, () => openCreate('warehouse'), 'New SQL warehouse')}
             <Tree>
               {fWarehouses.length === 0 && <TreeItem itemType="leaf" value="w-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No SQL warehouses'}</Caption1></TreeItemLayout></TreeItem>}
               {fWarehouses.map((w) => {
@@ -440,7 +505,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Repos */}
           <TreeItem itemType="branch" value="g-repos">
-            {groupHeader('Repos', <BranchFork20Regular />, repos.length, () => openCreate('repo'), 'New Git folder')}
+            {groupHeader('Repos', <BranchFork20Regular />, f ? fRepos.length : repos.length, () => openCreate('repo'), 'New Git folder')}
             <Tree>
               {fRepos.length === 0 && <TreeItem itemType="leaf" value="r-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Git folders'}</Caption1></TreeItemLayout></TreeItem>}
               {fRepos.map((r) => (
@@ -462,7 +527,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Unity Catalog (read-only) */}
           <TreeItem itemType="branch" value="g-catalogs">
-            {groupHeader('Unity Catalog', <Database20Regular />, catalogs.length, undefined)}
+            {groupHeader('Unity Catalog', <Database20Regular />, f ? fCatalogs.length : catalogs.length, undefined)}
             <Tree>
               {fCatalogs.length === 0 && <TreeItem itemType="leaf" value="uc-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No catalogs'}</Caption1></TreeItemLayout></TreeItem>}
               {fCatalogs.map((c) => (
@@ -480,25 +545,125 @@ export function DatabricksWorkspaceTree({
             </Tree>
           </TreeItem>
 
-          {/* Honest gate rows — Databricks exposes these; we don't wire them yet. */}
-          <TreeItem itemType="branch" value="g-not-wired">
-            <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
+          {/* DLT pipelines (Lakeflow Declarative Pipelines) */}
+          <TreeItem itemType="branch" value="g-dlt">
+            {groupHeader('DLT Pipelines', <Pipeline20Regular />, f ? fDlt.length : dltPipelines.length, () => openCreate('dlt'), 'New DLT pipeline')}
             <Tree>
-              {[
-                ['DLT pipelines', '/api/2.0/pipelines — Delta Live Tables pipeline list/create/start; data plane not wired yet.'],
-                ['MLflow experiments & models', '/api/2.0/mlflow/* — experiments, registered models; not wired yet.'],
-                ['Dashboards / Queries / Alerts', '/api/2.0/lakeview, /api/2.0/sql/queries|alerts — Databricks SQL authoring objects; not wired yet.'],
-                ['Model serving endpoints', '/api/2.0/serving-endpoints — real-time model serving; not wired yet.'],
-              ].map(([label, why]) => (
-                <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
-                  <Tooltip content={why} relationship="description">
+              {fDlt.length === 0 && <TreeItem itemType="leaf" value="dlt-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No DLT pipelines'}</Caption1></TreeItemLayout></TreeItem>}
+              {fDlt.map((p) => {
+                const running = p.state === 'RUNNING' || p.state === 'DEPLOYING';
+                return (
+                  <TreeItem key={p.pipeline_id} itemType="leaf" value={`dlt-${p.pipeline_id}`}>
+                    <TreeItemLayout iconBefore={<Pipeline20Regular />}>
+                      <span className={s.leafRow}>
+                        <span
+                          role={onOpenPipeline ? 'button' : undefined} tabIndex={onOpenPipeline ? 0 : undefined}
+                          style={{ cursor: onOpenPipeline ? 'pointer' : undefined }}
+                          onClick={() => onOpenPipeline?.(p.pipeline_id)}
+                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenPipeline) { e.preventDefault(); onOpenPipeline(p.pipeline_id); } }}
+                        >
+                          {p.name || p.pipeline_id}
+                        </span>
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          {p.state && <Badge size="small" appearance="filled" color={dltColor(p.state)}>{p.state}</Badge>}
+                          {running
+                            ? <Tooltip content="Stop update" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy} onClick={() => post(DLT_ROUTE, { pipelineId: p.pipeline_id, action: 'stop' })} aria-label={`Stop ${p.name}`} /></Tooltip>
+                            : <Tooltip content="Start update" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy} onClick={() => post(DLT_ROUTE, { pipelineId: p.pipeline_id, action: 'start' })} aria-label={`Start ${p.name}`} /></Tooltip>}
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(DLT_ROUTE, `pipelineId=${encodeURIComponent(p.pipeline_id)}`)} aria-label={`Delete ${p.name}`} /></Tooltip>
+                        </span>
+                      </span>
+                    </TreeItemLayout>
+                  </TreeItem>
+                );
+              })}
+            </Tree>
+          </TreeItem>
+
+          {/* MLflow experiments */}
+          <TreeItem itemType="branch" value="g-mlflow-exp">
+            {groupHeader('MLflow Experiments', <Beaker20Regular />, f ? fExperiments.length : mlflowExperiments.length, () => openCreate('mlflow-experiment'), 'New MLflow experiment')}
+            <Tree>
+              {fExperiments.length === 0 && <TreeItem itemType="leaf" value="exp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No experiments'}</Caption1></TreeItemLayout></TreeItem>}
+              {fExperiments.map((e) => (
+                <TreeItem key={e.experiment_id} itemType="leaf" value={`exp-${e.experiment_id}`}>
+                  <TreeItemLayout iconBefore={<Beaker20Regular />}>
+                    <span className={s.leafRow}>
+                      <span>{e.name}</span>
+                      <span className={s.leafActions}><Caption1>{e.experiment_id}</Caption1></span>
+                    </span>
+                  </TreeItemLayout>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
+          {/* MLflow registered models */}
+          <TreeItem itemType="branch" value="g-mlflow-model">
+            {groupHeader('Registered Models', <BrainCircuit20Regular />, f ? fModels.length : registeredModels.length, () => openCreate('mlflow-model'), 'Register a new model')}
+            <Tree>
+              {fModels.length === 0 && <TreeItem itemType="leaf" value="model-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No registered models'}</Caption1></TreeItemLayout></TreeItem>}
+              {fModels.map((m) => {
+                const latest = m.latest_versions?.[0];
+                return (
+                  <TreeItem key={m.name} itemType="leaf" value={`model-${m.name}`}>
+                    <TreeItemLayout iconBefore={<BrainCircuit20Regular />}>
+                      <span className={s.leafRow}>
+                        <span>{m.name}</span>
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          {latest && <Badge size="small" appearance="outline">v{latest.version}{latest.current_stage ? ` · ${latest.current_stage}` : ''}</Badge>}
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(MLFLOW_MODEL_ROUTE, `name=${encodeURIComponent(m.name)}`)} aria-label={`Delete ${m.name}`} /></Tooltip>
+                        </span>
+                      </span>
+                    </TreeItemLayout>
+                  </TreeItem>
+                );
+              })}
+            </Tree>
+          </TreeItem>
+
+          {/* Model serving endpoints */}
+          <TreeItem itemType="branch" value="g-serving">
+            {groupHeader('Serving Endpoints', <Rocket20Regular />, f ? fServing.length : servingEndpoints.length, () => openCreate('serving-endpoint'), 'New serving endpoint')}
+            <Tree>
+              {servingNote && (
+                <TreeItem itemType="leaf" value="serving-note">
+                  <Tooltip content={servingNote} relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">coming</Badge>
+                      <span className={s.muted}>Serving unavailable</span>{' '}
+                      <Badge size="small" appearance="tint" color="warning">gov / not provisioned</Badge>
                     </TreeItemLayout>
                   </Tooltip>
                 </TreeItem>
+              )}
+              {!servingNote && fServing.length === 0 && <TreeItem itemType="leaf" value="serving-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No serving endpoints'}</Caption1></TreeItemLayout></TreeItem>}
+              {fServing.map((e) => (
+                <TreeItem key={e.name} itemType="leaf" value={`serving-${e.name}`}>
+                  <TreeItemLayout iconBefore={<Rocket20Regular />}>
+                    <span className={s.leafRow}>
+                      <span>{e.name}</span>
+                      <span className={s.leafActions} onClick={(ev) => ev.stopPropagation()}>
+                        {e.state?.ready && <Badge size="small" appearance="filled" color={e.state.ready === 'READY' ? 'success' : 'warning'}>{e.state.ready}</Badge>}
+                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(SERVING_ROUTE, `name=${encodeURIComponent(e.name)}`)} aria-label={`Delete ${e.name}`} /></Tooltip>
+                      </span>
+                    </span>
+                  </TreeItemLayout>
+                </TreeItem>
               ))}
+            </Tree>
+          </TreeItem>
+
+          {/* Honest gate — Lakeview dashboards/queries/alerts (separate surface, tracked). */}
+          <TreeItem itemType="branch" value="g-not-wired">
+            <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
+            <Tree>
+              <TreeItem itemType="leaf" value="nw-lakeview">
+                <Tooltip content="/api/2.0/lakeview — Lakeview dashboards, plus SQL queries/alerts authoring objects; the rich authoring surface is tracked as a separate parity task." relationship="description">
+                  <TreeItemLayout iconBefore={<Warning20Regular />}>
+                    <span className={s.muted}>Dashboards / Queries / Alerts (Lakeview)</span>{' '}
+                    <Badge size="small" appearance="tint" color="warning">coming</Badge>
+                  </TreeItemLayout>
+                </Tooltip>
+              </TreeItem>
             </Tree>
           </TreeItem>
         </Tree>
@@ -512,6 +677,10 @@ export function DatabricksWorkspaceTree({
               New {createGroup === 'notebook' ? 'notebook'
                 : createGroup === 'cluster' ? 'cluster'
                 : createGroup === 'warehouse' ? 'SQL warehouse'
+                : createGroup === 'dlt' ? 'DLT pipeline'
+                : createGroup === 'mlflow-experiment' ? 'MLflow experiment'
+                : createGroup === 'mlflow-model' ? 'registered model'
+                : createGroup === 'serving-endpoint' ? 'serving endpoint'
                 : 'Git folder'}
             </DialogTitle>
             <DialogContent>
@@ -563,11 +732,47 @@ export function DatabricksWorkspaceTree({
                   </Caption1>
                 </>
               )}
+              {createGroup === 'dlt' && (
+                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  Creates a triggered DLT (Lakeflow Declarative) pipeline referencing a notebook at
+                  <code> /Workspace/{createName || '<name>'}</code> (development mode). Author the notebook,
+                  add libraries, and bind a UC target catalog in the Databricks pipeline editor. POST
+                  <code> /api/2.0/pipelines</code>.
+                </Caption1>
+              )}
+              {createGroup === 'mlflow-experiment' && (
+                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  Creates an MLflow experiment to group runs. Use an absolute workspace path
+                  (e.g. <code>/Users/you@org/{createName || 'my-experiment'}</code>). POST
+                  <code> /api/2.0/mlflow/experiments/create</code>.
+                </Caption1>
+              )}
+              {createGroup === 'mlflow-model' && (
+                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  Registers a new model. Use a UC three-level name
+                  (<code>catalog.schema.model</code>) for a Unity Catalog-governed model, or a bare name for
+                  the workspace registry. POST <code>/api/2.0/mlflow/registered-models/create</code>.
+                </Caption1>
+              )}
+              {createGroup === 'serving-endpoint' && (
+                <>
+                  <Field label="Model name (UC)" required style={{ marginTop: 8 }} hint="catalog.schema.model">
+                    <Input value={servingModel} onChange={(_, d) => setServingModel(d.value)} placeholder="main.ml.churn" />
+                  </Field>
+                  <Field label="Model version" required style={{ marginTop: 8 }}>
+                    <Input value={servingVersion} onChange={(_, d) => setServingVersion(d.value)} placeholder="1" />
+                  </Field>
+                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                    Creates a Small, scale-to-zero serving endpoint hosting that model version. POST
+                    <code> /api/2.0/serving-endpoints</code>. Not GA on Azure Government (GCC-High/DoD).
+                  </Caption1>
+                </>
+              )}
               {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>
-              <Button appearance="primary" onClick={submitCreate} disabled={busy || (createGroup === 'repo' ? !repoUrl.trim() : !createName.trim())}>{busy ? 'Creating…' : 'Create'}</Button>
+              <Button appearance="primary" onClick={submitCreate} disabled={busy || (createGroup === 'repo' ? !repoUrl.trim() : !createName.trim()) || (createGroup === 'serving-endpoint' && (!servingModel.trim() || !servingVersion.trim()))}>{busy ? 'Creating…' : 'Create'}</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>

@@ -29,7 +29,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
-  PlugConnected20Regular, CheckmarkCircle16Filled, ShieldTask20Regular, DatabasePlug20Regular,
+  PlugConnected20Regular, CheckmarkCircle16Filled, ShieldTask20Regular, DatabasePlugConnected20Regular,
   Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -455,7 +455,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
             {mirrorId && detail && <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={openEdit}>Edit</Button>}
             {mirrorId && detail && <Button appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={testing} onClick={testConnection}>{testing ? 'Testing…' : 'Test connection'}</Button>}
             {sqlPaired && (
-              <Button appearance="outline" icon={<DatabasePlug20Regular />}
+              <Button appearance="outline" icon={<DatabasePlugConnected20Regular />}
                 onClick={() => router.push(`/items/synapse-serverless-sql-pool/${encodeURIComponent(sqlPaired.itemId)}${sqlPaired.database ? `?database=${encodeURIComponent(sqlPaired.database)}` : ''}`)}
                 title={sqlPaired.endpoint ? `Serverless SQL endpoint: ${sqlPaired.endpoint}` : 'Open the paired Serverless SQL analytics endpoint'}>
                 SQL analytics endpoint

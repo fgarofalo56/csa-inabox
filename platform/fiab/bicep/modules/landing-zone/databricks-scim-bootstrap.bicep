@@ -3,11 +3,14 @@
 // reach the Databricks workspace which rejects all non-VNet traffic).
 //
 // Registers the Console UAMI as a Databricks workspace ServicePrincipal
-// with the four entitlements every Loom Cluster editor needs end-to-end:
+// with the entitlements every Loom Databricks editor needs end-to-end:
 //   - workspace-access          : sign in, browse, run notebooks
 //   - databricks-sql-access     : connect SQL warehouses / Lakeview
 //   - allow-cluster-create      : POST /api/2.1/clusters/create
 //   - allow-instance-pool-create: POST /api/2.0/instance-pools/create
+//   - databricks-jobs-api-access: POST /api/2.0/pipelines (DLT), MLflow
+//     experiments/models, serving-endpoints — the Unity Catalog write-path
+//     editor's DLT/MLflow/Serving create surfaces. Without it those POSTs 403.
 //
 // History: pre-2026-05-27 builds only granted workspace-access +
 // databricks-sql-access, which produced the
@@ -80,7 +83,7 @@ resource bootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       echo "Token length: ${#TOKEN}"
       if [ -z "$TOKEN" ]; then echo "FAILED to acquire token"; exit 1; fi
 
-      ENTS='[{"value":"workspace-access"},{"value":"databricks-sql-access"},{"value":"allow-cluster-create"},{"value":"allow-instance-pool-create"}]'
+      ENTS='[{"value":"workspace-access"},{"value":"databricks-sql-access"},{"value":"allow-cluster-create"},{"value":"allow-instance-pool-create"},{"value":"databricks-jobs-api-access"}]'
 
       echo "POSTing SCIM ServicePrincipal (or PATCHing entitlements if it exists)..."
       RESP=$(curl -sS -w "\nHTTP_CODE=%{http_code}" -X POST \
@@ -93,7 +96,8 @@ resource bootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
 
       # If the SP already exists (409), look it up and PATCH the entitlements
       # so existing deployments inherit allow-cluster-create + allow-instance-
-      # pool-create without manual remediation.
+      # pool-create + databricks-jobs-api-access (DLT/MLflow/serving) without
+      # manual remediation.
       if [ "$CODE" = "409" ]; then
         echo "SP exists; resolving id + PATCHing entitlements..."
         LIST=$(curl -sS \

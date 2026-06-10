@@ -51,7 +51,7 @@ import {
   Flash16Regular,
   ChevronDown16Regular,
 } from '@fluentui/react-icons';
-import { WAREHOUSE_PERSONA, type CopilotMode } from '@/lib/azure/copilot-personas';
+import { WAREHOUSE_PERSONA, type CopilotMode } from '@/lib/azure/copilot-personas-sql';
 
 export type WarehouseCopilotView =
   | 'idle'
