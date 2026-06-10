@@ -1,12 +1,12 @@
 /**
- * /api/cosmos/container-settings — a container's TTL + indexing policy.
+ * /api/cosmos/container-settings — a container's TTL + indexing + conflict policy.
  *
- *   GET   ?db=<name>&container=<name>                       → { ok, container: ContainerDetail }
- *   PATCH { db, container, defaultTtl?, indexingPolicy? }   → { ok, container: ContainerDetail }
+ *   GET   ?db=<name>&container=<name>                                          → { ok, container: ContainerDetail }
+ *   PATCH { db, container, defaultTtl?, indexingPolicy?, conflictResolutionPolicy? } → { ok, container: ContainerDetail }
  *
  * Real backend (no JSON textareas — the panel builds these from form rows):
  *   GET   …/sqlDatabases/{db}/containers/{c}                    (full resource shape)
- *   PUT   …/sqlDatabases/{db}/containers/{c}                    (TTL + indexingPolicy)
+ *   PUT   …/sqlDatabases/{db}/containers/{c}                    (TTL + indexingPolicy + conflictResolutionPolicy)
  *   (ARM api-version 2024-11-15) via lib/azure/cosmos-account-client.ts.
  *
  * defaultTtl semantics on PATCH:
@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getContainer, updateContainerSettings,
   type CosmosIndexingPolicy,
+  type CosmosConflictResolutionPolicy,
 } from '@/lib/azure/cosmos-account-client';
 import { requireSession, gateResponse, errorResponse, readBody } from '../_shared';
 
@@ -48,16 +49,18 @@ export async function PATCH(req: NextRequest) {
       db?: string; container?: string;
       defaultTtl?: number | null;
       indexingPolicy?: CosmosIndexingPolicy;
+      conflictResolutionPolicy?: CosmosConflictResolutionPolicy;
     }>(req);
     if (!body.db?.trim() || !body.container?.trim()) {
       return NextResponse.json({ ok: false, error: 'db and container are required' }, { status: 400 });
     }
-    if (body.defaultTtl === undefined && !body.indexingPolicy) {
-      return NextResponse.json({ ok: false, error: 'nothing to update (provide defaultTtl and/or indexingPolicy)' }, { status: 400 });
+    if (body.defaultTtl === undefined && !body.indexingPolicy && !body.conflictResolutionPolicy) {
+      return NextResponse.json({ ok: false, error: 'nothing to update (provide defaultTtl, indexingPolicy and/or conflictResolutionPolicy)' }, { status: 400 });
     }
     const detail = await updateContainerSettings(body.db.trim(), body.container.trim(), {
       defaultTtl: body.defaultTtl,
       indexingPolicy: body.indexingPolicy,
+      conflictResolutionPolicy: body.conflictResolutionPolicy,
     });
     return NextResponse.json({ ok: true, container: detail });
   } catch (e) {

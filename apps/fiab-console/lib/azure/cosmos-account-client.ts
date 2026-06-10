@@ -377,10 +377,30 @@ export interface CosmosUniqueKeyPolicy {
   uniqueKeys: { paths: string[] }[];
 }
 
+/** ARM ConflictResolutionPolicy shape (properties.resource.conflictResolutionPolicy).
+ *  mode 'LastWriterWins' — uses conflictResolutionPath (defaults to "/_ts"; any
+ *    numeric property path works; highest value wins).
+ *  mode 'Custom' — uses conflictResolutionProcedure (stored-proc resource id;
+ *    may be empty, in which case unresolved conflicts accumulate in the
+ *    container's conflicts feed for the app to drain).
+ *  Conflicts only actually occur when the account has
+ *  enableMultipleWriteLocations:true; the policy is stored on every container
+ *  regardless and can be read/edited on any account.
+ *  Source: https://learn.microsoft.com/azure/cosmos-db/conflict-resolution-policies
+ */
+export interface CosmosConflictResolutionPolicy {
+  mode: 'LastWriterWins' | 'Custom';
+  /** LWW only. Path to a numeric property; highest value wins. Defaults to "/_ts". */
+  conflictResolutionPath?: string;
+  /** Custom mode only. Stored-procedure resource id (may be empty — means conflicts feed). */
+  conflictResolutionProcedure?: string;
+}
+
 /** ContainerSummary + the policies the Settings panel edits. */
 export interface ContainerDetail extends ContainerSummary {
   indexingPolicy?: CosmosIndexingPolicy;
   uniqueKeyPolicy?: CosmosUniqueKeyPolicy;
+  conflictResolutionPolicy?: CosmosConflictResolutionPolicy;
 }
 
 function shapeIndexingPolicy(raw: any): CosmosIndexingPolicy | undefined {
@@ -406,6 +426,30 @@ function shapeUniqueKeyPolicy(raw: any): CosmosUniqueKeyPolicy | undefined {
   if (!raw || !Array.isArray(raw.uniqueKeys)) return undefined;
   return {
     uniqueKeys: raw.uniqueKeys.map((k: any) => ({ paths: Array.isArray(k?.paths) ? k.paths : [] })),
+  };
+}
+
+function shapeConflictResolutionPolicy(raw: any): CosmosConflictResolutionPolicy | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const mode = raw.mode === 'Custom' ? 'Custom' : 'LastWriterWins';
+  return {
+    mode,
+    conflictResolutionPath: raw.conflictResolutionPath || undefined,
+    conflictResolutionProcedure: raw.conflictResolutionProcedure || undefined,
+  };
+}
+
+/** Build the ARM `properties.resource.conflictResolutionPolicy` payload. */
+function conflictResolutionPolicyToArm(p: CosmosConflictResolutionPolicy): any {
+  if (p.mode === 'Custom') {
+    return {
+      mode: 'Custom',
+      conflictResolutionProcedure: (p.conflictResolutionProcedure || '').trim(),
+    };
+  }
+  return {
+    mode: 'LastWriterWins',
+    conflictResolutionPath: (p.conflictResolutionPath || '').trim() || '/_ts',
   };
 }
 
@@ -448,6 +492,8 @@ export interface CreateContainerInput {
   indexingPolicy?: CosmosIndexingPolicy;
   /** Unique-key constraints — set ONLY at creation time (immutable afterwards). */
   uniqueKeyPolicy?: CosmosUniqueKeyPolicy;
+  /** Conflict-resolution policy (LWW path / Custom sproc). Editable post-create too. */
+  conflictResolutionPolicy?: CosmosConflictResolutionPolicy;
 }
 
 export async function createContainer(db: string, input: CreateContainerInput): Promise<ContainerSummary> {
@@ -467,6 +513,7 @@ export async function createContainer(db: string, input: CreateContainerInput): 
   if (input.indexingPolicy) resource.indexingPolicy = indexingPolicyToArm(input.indexingPolicy);
   const uk = uniqueKeyPolicyToArm(input.uniqueKeyPolicy);
   if (uk) resource.uniqueKeyPolicy = uk;
+  if (input.conflictResolutionPolicy) resource.conflictResolutionPolicy = conflictResolutionPolicyToArm(input.conflictResolutionPolicy);
   const body = { properties: { resource, options } };
   const path = `/sqlDatabases/${encodeURIComponent(db)}/containers/${encodeURIComponent(id)}`;
   const res = await armFetch(path, { method: 'PUT', body: JSON.stringify(body) });
@@ -495,6 +542,7 @@ export async function getContainer(db: string, container: string): Promise<Conta
     throughput,
     indexingPolicy: shapeIndexingPolicy(r.indexingPolicy),
     uniqueKeyPolicy: shapeUniqueKeyPolicy(r.uniqueKeyPolicy),
+    conflictResolutionPolicy: shapeConflictResolutionPolicy(r.conflictResolutionPolicy),
   };
 }
 
@@ -503,6 +551,8 @@ export interface UpdateContainerSettingsInput {
   defaultTtl?: number | null;
   /** New indexing policy (replaces the current one when present). */
   indexingPolicy?: CosmosIndexingPolicy;
+  /** New conflict-resolution policy (replaces the current one when present). */
+  conflictResolutionPolicy?: CosmosConflictResolutionPolicy;
 }
 
 /**
@@ -523,6 +573,7 @@ export async function updateContainerSettings(
   const resource: any = { ...(current?.properties?.resource || {}) };
   for (const k of Object.keys(resource)) { if (k.startsWith('_')) delete resource[k]; }
   if (input.indexingPolicy) resource.indexingPolicy = indexingPolicyToArm(input.indexingPolicy);
+  if (input.conflictResolutionPolicy) resource.conflictResolutionPolicy = conflictResolutionPolicyToArm(input.conflictResolutionPolicy);
   if (input.defaultTtl === null) {
     delete resource.defaultTtl; // omitted body = TTL off
   } else if (typeof input.defaultTtl === 'number') {

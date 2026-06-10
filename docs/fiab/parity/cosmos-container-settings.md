@@ -33,11 +33,13 @@ via the Console UAMI (DocumentDB Account Contributor, already granted in
 | Settings — indexing-policy edit (paths + composite)     | ✅ panel Indexing | PUT container `resource.indexingPolicy` |
 | Settings — partition key (read-only, immutable)         | ✅ panel (display) | GET container |
 | Settings — unique keys (read-only, immutable)           | ✅ panel (display + note) | GET container `resource.uniqueKeyPolicy` |
-| Settings — conflict resolution policy                   | ⚠️ honest gate (multi-region write accounts only) | — |
+| Settings — conflict resolution policy                   | ✅ panel Conflict Resolution (mode dropdown + LWW path / Custom sproc) | PATCH container `resource.conflictResolutionPolicy` |
 
-Zero ❌. The only non-built row is the honest conflict-resolution gate, which
-applies only to multi-region write accounts (a real Azure prerequisite, not a
-Loom shortcut) per no-vaporware.md.
+Zero ❌. Every Azure portal Data Explorer capability for the container Settings
+surface is built. The conflict-resolution form carries an honest **info**
+MessageBar noting conflicts are only exercised on multi-region-write accounts
+(<code>enableMultipleWriteLocations</code>) — that is an accurate Azure runtime
+note, not a gate: the policy reads and writes on any account.
 
 ## No raw JSON (loom_no_freeform_config)
 
@@ -57,3 +59,4 @@ no JSON textarea anywhere.
 
 - `creating a container with autoscale + a composite index + TTL` → POST `/api/cosmos/containers` body carries `maxThroughput`, `indexingPolicy.compositeIndexes`, `defaultTtl`; the wizard then opens the new container's Settings tab which GETs `/api/cosmos/container-settings` → the ARM control-plane shape reflects all three (the receipt).
 - `editing throughput changes RU/s live` → panel Scale Save → PATCH `/api/cosmos/container-throughput` → ARM PUT `throughputSettings/default` → re-GET returns the new RU/s, shown in the panel.
+- `editing conflict policy to Custom + sproc` → panel Conflict Resolution Save → PATCH `/api/cosmos/container-settings` body carries `conflictResolutionPolicy: { mode: 'Custom', conflictResolutionProcedure }` → the container PUT re-sends the full resource with the new `conflictResolutionPolicy` field → re-GET confirms the stored policy. Switching to Last-Writer-Wins instead sends `{ mode: 'LastWriterWins', conflictResolutionPath }` (defaults to `/_ts`). Covered by `lib/components/cosmos/__tests__/conflict-resolution.test.tsx`.
