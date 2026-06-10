@@ -211,11 +211,14 @@ export function RtiHubView() {
     }
   }
 
-  function onSubscribed() {
+  function onSubscribed(result?: { link?: string }) {
     dispatchToast(
       <Toast><ToastTitle>Eventstream created</ToastTitle>
-        <ToastBody>Subscribed the selected source — it now appears under Data streams.</ToastBody></Toast>,
-      { intent: 'success', timeout: 8000 },
+        <ToastBody>
+          Subscribed the selected source — it now appears under Data streams.
+          {result?.link ? <> <Link href={result.link}>Open eventstream editor</Link></> : null}
+        </ToastBody></Toast>,
+      { intent: 'success', timeout: 9000 },
     );
     load();
   }

@@ -14,12 +14,13 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle,
+  Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Subtitle2, Body1, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowLeft20Regular, PlugConnected20Regular, Search20Regular } from '@fluentui/react-icons';
+import { ArrowLeft20Regular, Open20Regular, PlugConnected20Regular, Search20Regular } from '@fluentui/react-icons';
 import {
   SOURCE_CONNECTORS, SOURCE_CATEGORIES, type SourceConnector, type SourceCategory,
 } from './source-catalog';
@@ -56,8 +57,12 @@ interface Props {
   workspaces: Array<{ id: string; name: string }>;
   /** Pre-selected workspace id (optional). */
   defaultWorkspaceId?: string;
-  /** Called after a successful connect so the parent can refresh the streams list. */
-  onConnected?: () => void;
+  /**
+   * Called after a successful connect so the parent can refresh the streams
+   * list. Receives the created eventstream's editor link (when the BFF returns
+   * one) so the parent can offer an "Open eventstream editor" affordance.
+   */
+  onConnected?: (result?: { link?: string; eventstreamId?: string }) => void;
   /** Trigger button (rendered by parent). Optional in controlled mode. */
   trigger?: React.ReactElement;
   /**
@@ -106,6 +111,7 @@ export function ConnectSourceDialog({
   const [error, setError] = useState<string | null>(null);
   const [errorHint, setErrorHint] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [createdLink, setCreatedLink] = useState<string | null>(null);
 
   const connectors = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -116,6 +122,7 @@ export function ConnectSourceDialog({
   function reset() {
     setPicked(null); setDisplayName(''); setProps({});
     setError(null); setErrorHint(null); setSuccess(null); setBusy(false);
+    setCreatedLink(null);
   }
 
   function pick(c: SourceConnector, preProps?: Record<string, string>, preName?: string) {
@@ -130,7 +137,7 @@ export function ConnectSourceDialog({
       }
     }
     setProps(allowed);
-    setError(null); setErrorHint(null); setSuccess(null);
+    setError(null); setErrorHint(null); setSuccess(null); setCreatedLink(null);
   }
 
   const missingRequired = picked
@@ -169,7 +176,11 @@ export function ConnectSourceDialog({
           ? `Eventstream creation accepted (long-running). It will appear in All data streams shortly.`
           : `Connected. Created eventstream "${displayName.trim()}" — open it to wire processing + destinations.`,
       );
-      onConnected?.();
+      setCreatedLink(typeof j.link === 'string' ? j.link : null);
+      onConnected?.({
+        link: typeof j.link === 'string' ? j.link : undefined,
+        eventstreamId: typeof j.eventstreamId === 'string' ? j.eventstreamId : undefined,
+      });
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -228,7 +239,18 @@ export function ConnectSourceDialog({
                   </MessageBar>
                 )}
                 {success && (
-                  <MessageBar intent="success"><MessageBarBody>{success}</MessageBarBody></MessageBar>
+                  <MessageBar intent="success">
+                    <MessageBarBody>{success}</MessageBarBody>
+                    {createdLink && (
+                      <MessageBarActions>
+                        <Link href={createdLink} style={{ textDecoration: 'none' }}>
+                          <Button appearance="primary" size="small" icon={<Open20Regular />}>
+                            Open eventstream editor
+                          </Button>
+                        </Link>
+                      </MessageBarActions>
+                    )}
+                  </MessageBar>
                 )}
               </div>
             ) : (
