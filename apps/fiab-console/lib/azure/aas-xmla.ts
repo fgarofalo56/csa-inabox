@@ -176,3 +176,32 @@ export function parseRowset(xml: string): { columns: string[]; rows: unknown[][]
 
   return { columns, rows: aligned };
 }
+
+// ---------------------------------------------------------------------------
+// Paginated-report (RDL) support: parse an RDL data-source connection string
+// of the form `asazure://<region>.asazure.windows.net/<server>;Initial
+// Catalog=<db>` into the target the DAX executor (`executeDaxQuery` in
+// aas-client) consumes. Azure-native (Azure Analysis Services) — no Fabric.
+// Returns null when the connection string is not an asazure:// target so the
+// renderer falls through to its Synapse-serverless default.
+// ---------------------------------------------------------------------------
+export interface AasDaxTarget {
+  region: string;
+  server: string;
+  database: string;
+}
+
+export function parseAasConnectionString(
+  connectionString: string,
+  fallbackDatabase = '',
+): AasDaxTarget | null {
+  if (!connectionString || !/asazure:\/\//i.test(connectionString)) return null;
+  const m = connectionString.match(/asazure:\/\/([^.]+)\.[^/]+\/([^;/\s]+)/i);
+  if (!m) return null;
+  const catalog = connectionString.match(/Initial Catalog\s*=\s*([^;]+)/i);
+  return {
+    region: m[1],
+    server: m[2],
+    database: (catalog ? catalog[1].trim() : '') || fallbackDatabase,
+  };
+}

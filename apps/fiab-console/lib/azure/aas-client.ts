@@ -2658,3 +2658,20 @@ export async function executeDax(
 // (tile-query route's lazy fall-through). Name kept stable for compatibility
 // with the dashboard-tiles PR.
 export { aasXmlaGate as aasDashboardTileGate };
+
+// ---------------------------------------------------------------------------
+// Paginated-report (RDL) support: run a DAX dataset query against an Azure
+// Analysis Services model and return a column/row-array shape (what the RDL
+// renderer consumes). Thin adapter over `executeAasQuery` (the mature AAS
+// REST /query path) — Azure-native, no Fabric/Power BI dependency.
+// ---------------------------------------------------------------------------
+export async function executeDaxQuery(
+  target: { region: string; server: string; database: string },
+  statement: string,
+): Promise<{ columns: string[]; rows: unknown[][] }> {
+  const out = await executeAasQuery(target.region, target.server, target.database, statement);
+  const rows = ((out as { results?: { tables?: { rows?: Record<string, unknown>[] }[] }[] })
+    ?.results?.[0]?.tables?.[0]?.rows ?? []) as Record<string, unknown>[];
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  return { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+}

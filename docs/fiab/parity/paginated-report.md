@@ -1,111 +1,80 @@
-# paginated-report — parity with Power BI Paginated Report (RDL)
+# paginated-report — parity with Power BI / SSRS Paginated Reports (RDL)
 
-Source UI: Power BI Report Builder / Fabric Paginated report editor
-(https://learn.microsoft.com/power-bi/paginated-reports/report-builder-power-bi)
-and the Power BI `exportToFile` API
-(https://learn.microsoft.com/rest/api/power-bi/reports/export-to-file-in-group).
-Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` → `PaginatedReportDesigner`.
+Source UI: Power BI Report Builder / SSRS report viewer
+- https://learn.microsoft.com/power-bi/paginated-reports/paginated-reports-report-builder-power-bi
+- https://learn.microsoft.com/power-bi/paginated-reports/report-builder-parameters
+- https://learn.microsoft.com/sql/reporting-services/report-design/tables-tablix-region-report-builder
 
-CSA Loom builds a **Loom-native RDL authoring + render stack** as the
-**Azure-native default** — authoring and PDF/Excel/Word export work with **zero
-Microsoft Fabric / Power BI capacity** bound (`.claude/rules/no-fabric-dependency.md`).
-The Power BI `exportToFile` path (which requires a Premium P1+/Embedded A4+
-capacity) is an opt-in alternative reached only when a Power BI workspace is
-explicitly bound.
+Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` → `PaginatedReportEditor`
 
-## Azure / Fabric feature inventory
+CSA Loom renders paginated reports **Azure-native by default** — no Microsoft
+Fabric / Power BI workspace is required (per `no-fabric-dependency.md`). An RDL
+authored in Report Builder / SSRS is imported into the Loom item, parsed, and
+rendered over Synapse Serverless SQL (or Azure Analysis Services for
+`asazure://` datasets). Power BI is a strictly opt-in alternative source.
 
-Report Builder's authoring surface for a paginated (.rdl) report:
+## Power BI / SSRS feature inventory
 
-1. **Data source** — connect to a relational source (Azure SQL, Synapse, etc.).
-2. **Dataset** — a query (T-SQL) against a data source; fields inferred from the
-   result; query designer / text editor.
-3. **Parameters** — name, data type, prompt, default value.
-4. **Tablix** (table / matrix) — detail columns, row groups, header row,
-   per-cell expressions, aggregates (`=Sum`, `=Count`, `=Avg`, `=Max`, `=Min`),
-   totals.
-5. **Page setup** — page size (A4 / Letter / Legal), orientation
-   (Portrait / Landscape), page breaks.
-6. **Expression editor** — `Fields!X.Value`, aggregate functions, VB.NET.
-7. **Page header / footer** — repeating bands.
-8. **Export** — render to **PDF, Excel (XLSX), Word (DOCX)**, PPTX, CSV, XML,
-   MHTML, image.
-9. **Preview / run** — render in-editor with parameter values.
+| # | Capability (real Report Builder / RDL viewer) | Notes |
+|---|-----------------------------------------------|-------|
+| 1 | Open / load a report definition (.rdl)        | Report Builder opens .rdl; the service hosts a published report |
+| 2 | Report parameters surfaced as a prompt bar    | typed inputs, dropdowns from valid-value lists, defaults, Boolean toggles |
+| 3 | Run report with chosen parameter values       | dataset queries re-execute with the bound parameters |
+| 4 | Multi-page layout (tablix / table / list / chart, matrix) | data regions paginate at the RDL page height |
+| 5 | Page navigation (first / prev / next / last, page N of M) | viewer pager |
+| 6 | Datasets execute against the report's data source | SQL / DAX / OData etc. |
+| 7 | Export (PDF / Excel / Word / CSV / image)     | viewer export menu |
+| 8 | Schedule / subscribe                          | delivery to email / file share |
 
 ## Loom coverage
 
-| Capability | Loom coverage | Backend |
-|---|---|---|
-| Data source (AzureSQL / Synapse / Cosmos / ADLS) | ✅ built (`DataSourceDialog`) | `upsertRdlDefinition` → Cosmos `paginated-report-definitions` (PK /workspaceId) |
-| Dataset query editor (Monaco T-SQL) | ✅ built (`DatasetDialog`) | `/api/items/paginated-report/[id]/preview` → real TDS `executeQuery` |
-| Dataset field inference + sample capture | ✅ built ("Run preview") | preview route infers field types + captures `sampleRows` from the live query |
-| Parameters (name / type / prompt / default) | ✅ built (`ParameterDialog`) | `RdlParameter[]` in the definition |
-| Tablix — detail columns | ✅ built (`AddTablixWizard`) | columns multiselect from dataset fields |
-| Tablix — row groups | ✅ built | row-group multiselect |
-| Tablix — column headers (editable labels) | ✅ built | `headerRow` |
-| Per-cell expression + aggregates (Sum/Count/Avg/Max/Min) | ✅ built (`TablixDesignSurface`) | `cells[][].expression`; aggregates render as a bold totals row |
-| Page size + orientation | ✅ built (Report card dropdowns) | `pageSize` / `pageOrientation`; ReportLab page geometry |
-| Page break per tablix | ✅ built (Switch) | `pageBreak`; ReportLab `PageBreak` / DOCX `add_page_break` |
-| Object tree (sources / datasets / report items / parameters) | ✅ built (Fluent `Tree`) | left panel |
-| **Export → PDF** | ⚠️ honest-gate (`LOOM_PAGINATED_RENDER_URL`) | `paginated-report-renderer` Function → **ReportLab** |
-| **Export → Excel** | ⚠️ honest-gate | Function → **openpyxl** |
-| **Export → Word** | ⚠️ honest-gate | Function → **python-docx** |
-| Power BI `exportToFile` (Fabric opt-in) | ⚠️ honest-gate (Premium capacity) | `powerbi-client` ExportTo (only when a Power BI workspace is bound) |
-| Column groups (matrix) | ❌ follow-up | — |
-| VB.NET expression evaluator (arbitrary `=…`) | ❌ follow-up (curated aggregates only) | — |
-| Page header / footer bands | ❌ follow-up | — |
-| PPTX / CSV / XML / MHTML / image export | ❌ follow-up | — |
-| Live query at render time | ❌ follow-up (renders from save-time `sampleRows`) | needs Function MI Database Reader per source |
+| # | Capability | Status | Where |
+|---|-----------|--------|-------|
+| 1 | Import .rdl definition (file upload → stored on the item) | ✅ built | `PaginatedReportEditor` (Import .rdl) → `PUT /api/items/paginated-report/[id]/definition` → Cosmos `state.rdlXml` |
+| 2 | Parameter prompt panel (typed Input / number / datetime, valid-value Dropdown, Boolean Switch, defaults seeded) | ✅ built | left panel, driven by `extractParams()` over the parsed RDL |
+| 3 | Run report with parameter values (injection-safe `@Name` binds) | ✅ built | `renderPaginatedReport` → `resolveParamValues` → Synapse `executeQuery(..., binds)` |
+| 4 | Multi-page tablix / table / list / chart layout | ✅ built | `buildSections` + `paginateSections` (rows-per-page from RDL / `LOOM_RDL_ROWS_PER_PAGE`) |
+| 5 | Page navigation (Page N of M, Prev / Next) | ✅ built | main panel pager; server-side pagination returns one page per request |
+| 6 | Datasets execute against a real Azure backend | ✅ built | Synapse Serverless SQL (default), Azure Analysis Services XMLA for `asazure://` (`aas-client`), or Power BI executeQueries (opt-in) |
+| 7 | Export (PDF / Excel / …) | ⚠️ honest-gate | opt-in Power BI path can call ExportTo; the Azure-native renderer surfaces data in-grid. Tracked for a follow-up renderer-side PDF export. |
+| 8 | Schedule / subscribe | ⚠️ honest-gate | report subscriptions are a separate tracked workstream (see backlog) |
 
-The honest-gate rows render the **full designer**; only the **Export** ribbon
-buttons disable with the tooltip *"Set LOOM_PAGINATED_RENDER_URL to enable
-export"* plus a Fluent MessageBar naming the env var + bicep module. This is the
-allowed config-only state per `no-vaporware.md` — authoring is always live.
+Chart regions render their bound data as a grid in this PR (visual chart
+rendering is a UI follow-up); the data is real, not a placeholder.
 
 ## Backend per control
 
-- **Authoring CRUD** → `GET/PUT /api/items/paginated-report/[id]/definition` →
-  `getRdlDefinition` / `upsertRdlDefinition` (Cosmos, AAD-only via the Console
-  UAMI; no account keys, no Fabric).
-- **Dataset preview** → `POST /api/items/paginated-report/[id]/preview` → real
-  TDS `executeQuery` (azure-sql-client / synapse-sql-client). Cosmos/ADLS
-  sources fall back to manual field entry (honest 400).
-- **Export** → `POST /api/items/paginated-report/[id]/render` → loads the
-  definition from Cosmos, delegates to the `paginated-report-renderer` Azure
-  Function (`/api/render`, Function key via `?code=`), streams the binary back
-  with an `attachment` `Content-Disposition`.
-- **Capability probe** → `GET /api/items/paginated-report/capabilities` →
-  `{ renderDeployed }` so the designer pre-disables Export instead of clicking
-  into a 503.
+| Control | Backend |
+|---------|---------|
+| Import .rdl | `PUT /api/items/paginated-report/[id]/definition` → `saveItemState` (Cosmos) |
+| Load params | `GET /api/items/paginated-report/[id]/definition` → `parseRdlMetadata` |
+| Run / page nav | `POST /api/items/paginated-report/[id]/render` → `renderPaginatedReport` |
+| SQL dataset | `synapse-sql-client.executeQuery` (TDS, parameter binds) |
+| DAX dataset (`asazure://`) | `aas-client.executeDaxQuery` (AAS XMLA) |
+| DAX dataset (opt-in Power BI) | `powerbi-client.executeDatasetQueries` |
+| Opt-in RDL pull | `powerbi-client.downloadReportDefinition` (Power BI REST, opt-in only) |
 
-## Per-cloud
+## No-Fabric verification
 
-| Cloud | `LOOM_PAGINATED_RENDER_URL` (Azure Function) | Power BI `exportToFile` (opt-in) |
-|---|---|---|
-| Commercial | `*.azurewebsites.net` — full support | `api.powerbi.com` — Premium P1+/Embedded A4+ |
-| GCC | `*.azurewebsites.net` — full support | `api.powerbigov.us` — same Premium requirement |
-| GCC-High | `*.azurewebsites.us`; bicep `environment().suffixes.storage` resolves `core.usgovcloudapi.net` automatically | `api.high.powerbigov.us` — limited GA |
-| IL5 | AzureUSGovernment endpoints — full support | same GCC-High restrictions |
+With `LOOM_DEFAULT_FABRIC_WORKSPACE` and `LOOM_PAGINATED_REPORT_BACKEND` unset
+(or `azure`), the editor imports an .rdl, builds the parameter form, runs, and
+renders multi-page tablix data from Synapse — the Power BI REST host is never
+called on this path (`downloadReportDefinition` runs only when the backend is
+explicitly `powerbi`/`fabric` with a bound workspace). When Synapse is not yet
+provisioned the route returns an honest infra gate naming `LOOM_SYNAPSE_WORKSPACE`.
 
-The Function renderer has **zero cloud-specific code**. Cosmos is not required
-to render (the definition arrives in the request body).
+## Sovereign-cloud matrix
 
-List, detail, and dataset refresh (when Power BI opt-in is enabled) use Power BI REST; the sovereign host is resolved by `cloud-endpoints.ts`. Works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+| Aspect | Commercial / GCC | GCC-High / IL5 / DoD |
+|--------|------------------|----------------------|
+| Synapse SQL dataset auth | `database.windows.net` | `database.usgovcloudapi.net` |
+| AAS XMLA host | `asazure.windows.net` | `asazure.usgovcloudapi.net` |
+| Opt-in Power BI REST host | `api.powerbi.com` | `api.powerbigov.us` |
+| Opt-in Power BI scope | `analysis.windows.net/powerbi/api` | `analysis.usgovcloudapi.net/powerbi/api` |
 
-| Cloud | Power BI REST host | Notes |
-|---|---|---|
-| Commercial | `api.powerbi.com` | List + metadata + dataset-backed refresh work; in-place embed/format-export honest-gated to the pbi-paginated SDK. |
-| GCC | `api.powerbigov.us` | Same coverage as Commercial; the pbi-paginated-SDK honest-gate is unchanged. |
-| GCC-High / IL4 | `api.high.powerbigov.us` | Same coverage. |
-| DoD / IL5 | `api.mil.powerbigov.us` | Same coverage. |
+All resolved via `cloud-endpoints.ts` (`aasSuffix`, `pbiApiBase`, `pbiApiScope`,
+`getSqlSuffix`) and locked by `cloud-matrix.test.ts`.
 
-## Verification
-
-Acceptance receipt (this PR): a tablix report authored against a dataset,
-exported to **PDF + Excel + Word** — all three open correctly. The Excel/Word
-totals row computes `=Sum` over the captured rows (Units 120+98+143 = **361**,
-Revenue = **172,340.75**). Three files attached to the PR body + the unit suite
-`lib/azure/__tests__/paginated-report-client.test.ts` (12 tests, green).
-
-Grade: A — every authoring row built ✅; export rows are disclosed honest-gates
-(`LOOM_PAGINATED_RENDER_URL`), zero dead buttons, zero fake data.
+Grade: A — Azure-native default renders multi-page real data with parameters and
+page navigation; two disclosed honest-gates (export / subscribe) for follow-up
+workstreams. Zero dead buttons, zero fake data.

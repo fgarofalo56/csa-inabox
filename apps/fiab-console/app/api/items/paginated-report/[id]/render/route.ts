@@ -1,88 +1,96 @@
 /**
  * POST /api/items/paginated-report/[id]/render
- *   body: { workspaceId: string, format: 'pdf' | 'xlsx' | 'docx',
- *           parameterValues?: Array<{ name, value }> }
  *
- * Renders the Loom-native RDL definition (loaded from Cosmos) to a binary file
- * by delegating to the `paginated-report-renderer` Azure Function (ReportLab /
- * openpyxl / python-docx). Azure-native — NO Microsoft Fabric / Power BI
- * dependency.
+ * Renders a Loom-native paginated report (RDL) — the Azure-native DEFAULT
+ * backend (no Microsoft Fabric / Power BI workspace required).
  *
- * Honest-gate (no-vaporware.md): when LOOM_PAGINATED_RENDER_URL is unset the
- * route returns 503 + a NotConfiguredHint naming the env var + bicep module so
- * the editor can surface the exact remediation. Authoring is unaffected.
+ * Body:
+ *   {
+ *     rdl?: string,                     // live import preview (overrides stored)
+ *     params?: Record<string,string[]>, // { State: ['WA'] }
+ *     page?: number,                    // 1-based page, default 1
+ *     run?: boolean,                    // false → return param schema only
+ *     workspaceId?: string,             // opt-in Power BI backend only
+ *     reportId?: string, datasetId?: string,
+ *   }
+ *
+ * RDL source precedence: body.rdl → item.state.rdlXml (Cosmos) → opt-in Power BI
+ * (LOOM_PAGINATED_REPORT_BACKEND=powerbi|fabric + workspace/report). Datasets
+ * execute against Synapse Serverless SQL by default, Azure Analysis Services for
+ * `asazure://` sources, or Power BI executeQueries on the opt-in path.
+ *
+ * Returns RdlRenderResult JSON, or a structured honest gate ({ ok:false, error,
+ * hint }) when no definition exists or the Azure backend isn't provisioned.
  */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import {
-  getRdlDefinition,
-  renderReport,
-  paginatedRenderGate,
-  type RdlExportFormat,
-} from '@/lib/azure/paginated-report-client';
-import type { NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { loadKustoItem, KustoError } from '@/lib/azure/kusto-client';
+import { renderPaginatedReport, RdlRenderError } from '@/lib/azure/paginated-report-renderer';
+import { PowerBiError } from '@/lib/azure/powerbi-client';
+import { AasError } from '@/lib/azure/aas-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 55;
-
-const FORMATS: RdlExportFormat[] = ['pdf', 'xlsx', 'docx'];
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
   const { id } = await ctx.params;
-
-  let body: { workspaceId?: string; format?: string; parameterValues?: Array<{ name: string; value: string }> };
-  try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid json body' }, { status: 400 }); }
-
-  const workspaceId = body.workspaceId;
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  const format = (body.format || 'pdf').toLowerCase() as RdlExportFormat;
-  if (!FORMATS.includes(format)) {
-    return NextResponse.json({ ok: false, error: `unsupported format '${format}' (pdf|xlsx|docx)` }, { status: 400 });
-  }
-
-  // Honest infra gate — renderer Function not deployed in this environment.
-  const gate = paginatedRenderGate();
-  if (gate) {
-    const hint: NotConfiguredHint = {
-      missingEnvVar: gate.missingEnvVar,
-      bicepModule: 'azure-functions/paginated-report-renderer/deploy/main.bicep',
-      bicepStatus:
-        'optional module; deploy separately, then set LOOM_PAGINATED_RENDER_URL on the Console ' +
-        '(admin-plane param loomPaginatedRenderUrl) to the output functionUrl',
-      followUp:
-        'az deployment group create -g <fn-rg> -f azure-functions/paginated-report-renderer/deploy/main.bicep ' +
-        '-p loomCosmosEndpoint=... loomCosmosAccountName=...',
-    };
-    return NextResponse.json({ ok: false, error: gate.detail, hint }, { status: 503 });
-  }
-
-  let definition;
-  try {
-    definition = await getRdlDefinition(workspaceId, id);
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
-  }
-  if (!definition) {
-    return NextResponse.json({ ok: false, error: 'report not saved yet — Save the report before exporting' }, { status: 404 });
-  }
-  if (!definition.tablixes.length) {
-    return NextResponse.json({ ok: false, error: 'report has no tablix to render — add a tablix first' }, { status: 400 });
-  }
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const bodyRdl = typeof body?.rdl === 'string' ? body.rdl : '';
+  const userParams = (body?.params && typeof body.params === 'object') ? (body.params as Record<string, string[]>) : {};
+  const page = parseInt(String(body?.page ?? '1'), 10) || 1;
+  const run = body?.run !== false;
+  const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId.trim() : '';
+  const reportId = typeof body?.reportId === 'string' ? body.reportId.trim() : '';
+  const datasetId = typeof body?.datasetId === 'string' ? body.datasetId.trim() : '';
 
   try {
-    const out = await renderReport(definition, format, body.parameterValues || []);
-    return new NextResponse(out.bytes as any, {
-      status: 200,
-      headers: {
-        'content-type': out.mimeType,
-        'content-disposition': `attachment; filename="${out.fileName}"`,
-        'cache-control': 'no-store',
-      },
+    // Default Azure-native source: the Loom item's stored RDL definition.
+    let storedRdl = '';
+    let reportName = '';
+    const item = await loadKustoItem(id, 'paginated-report', session.claims.oid);
+    if (item) {
+      storedRdl = typeof item.state?.rdlXml === 'string' ? item.state.rdlXml : '';
+      reportName = item.displayName || '';
+    }
+
+    const result = await renderPaginatedReport({
+      rdlXml: bodyRdl || storedRdl || undefined,
+      source: bodyRdl ? 'import' : 'item',
+      reportName,
+      userParams,
+      page,
+      run,
+      pbiWorkspaceId: workspaceId || undefined,
+      pbiReportId: reportId || undefined,
+      pbiDatasetId: datasetId || undefined,
     });
+    return NextResponse.json(result);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    if (e instanceof RdlRenderError) {
+      return NextResponse.json({ ok: false, error: e.message, hint: e.hint }, { status: e.status });
+    }
+    if (e instanceof PowerBiError) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: e.status });
+    }
+    if (e instanceof AasError) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: e.status ?? 502 });
+    }
+    // Honest Azure infra gate (e.g. "Missing env var: LOOM_SYNAPSE_WORKSPACE").
+    const msg = e?.message || String(e);
+    if (/Missing env var/i.test(msg)) {
+      return NextResponse.json({
+        ok: false,
+        error: msg,
+        hint: 'The Azure-native renderer executes RDL datasets against Synapse Serverless SQL. '
+          + 'Set LOOM_SYNAPSE_WORKSPACE (and deploy the Synapse workspace) to enable rendering.',
+      }, { status: 409 });
+    }
+    const status = e instanceof KustoError ? e.status : 500;
+    return NextResponse.json({ ok: false, error: msg }, { status });
   }
 }

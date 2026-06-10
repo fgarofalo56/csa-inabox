@@ -1493,3 +1493,21 @@ export async function updateFabricModelDefinition(
   );
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// Paginated-report (RDL) support: download an RDL definition from a Power BI
+// workspace report via the REST /Export endpoint. STRICTLY OPT-IN — only used
+// when the paginated-report backend is explicitly 'powerbi'/'fabric' with a
+// bound workspace+report (no-fabric-dependency.md). The Azure-native default
+// renderer path never calls this.
+// ---------------------------------------------------------------------------
+export async function downloadReportDefinition(workspaceId: string, reportId: string): Promise<string> {
+  const token = await getToken(POWERBI_SCOPE);
+  const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/Export`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new PowerBiError(text || `rdl download failed (${res.status})`, res.status, text, url);
+  }
+  return res.text();
+}
