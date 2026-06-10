@@ -25,6 +25,30 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.33.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.32.0...csa-inabox-v0.33.0) (2026-06-10)
+
+
+### Features
+
+* **csa-loom:** ADX cluster lifecycle + RBAC principal mgmt + RLS authoring ([#1076](https://github.com/fgarofalo56/csa-inabox/issues/1076)) ([74c0244](https://github.com/fgarofalo56/csa-inabox/commit/74c0244d2580365b8000f251c709703f9b53d2e4))
+* **csa-loom:** AI Foundry fine-tuning, evals run/upload, span-tree tracing + Images/Audio playgrounds ([#1078](https://github.com/fgarofalo56/csa-inabox/issues/1078)) ([2849d66](https://github.com/fgarofalo56/csa-inabox/commit/2849d66b259fe7053469ef40208f70552625f97b))
+* **csa-loom:** AI Search indexer scheduling + semantic/vector designers + debug sessions ([#1077](https://github.com/fgarofalo56/csa-inabox/issues/1077)) ([71f8a9c](https://github.com/fgarofalo56/csa-inabox/commit/71f8a9cf9e5c302de0e08204d4a2ea7206913c56))
+* **csa-loom:** Databricks UC write-path + DLT/MLflow/Serving + lineage (audit-t18) ([#1073](https://github.com/fgarofalo56/csa-inabox/issues/1073)) ([80bba45](https://github.com/fgarofalo56/csa-inabox/commit/80bba455451cae51ea961c04bb8777cba78e30f0))
+* **csa-loom:** Monitor alert-rule authoring (create/edit/enable/delete) ([#1082](https://github.com/fgarofalo56/csa-inabox/issues/1082)) ([1d946e9](https://github.com/fgarofalo56/csa-inabox/commit/1d946e97fc7966707f8b639627844aac31e40768))
+* **csa-loom:** Power Platform maker authoring in-Loom (canvas/flow/table) ([#1086](https://github.com/fgarofalo56/csa-inabox/issues/1086)) ([ea1bef8](https://github.com/fgarofalo56/csa-inabox/commit/ea1bef8a1afdc689913511b3f4c78a2d11ad73e9))
+* **csa-loom:** SQL DB keys & constraints inline designer (audit-t24) ([#1081](https://github.com/fgarofalo56/csa-inabox/issues/1081)) ([a095ab5](https://github.com/fgarofalo56/csa-inabox/commit/a095ab5f46758d38691dd9c45382a35c4bb4b17e))
+* **csa-loom:** UC write-path — ownership transfer + catalog type + tags (audit-t18) ([#1074](https://github.com/fgarofalo56/csa-inabox/issues/1074)) ([9e56044](https://github.com/fgarofalo56/csa-inabox/commit/9e56044342c6ffc95ebc30e6d3378ac33c3b0145))
+* **csa-loom:** wire ADF Change Data Capture (preview) REST + editor ([#1080](https://github.com/fgarofalo56/csa-inabox/issues/1080)) ([4759a29](https://github.com/fgarofalo56/csa-inabox/commit/4759a2930e4fc6704322df3de50c286b22fbbab0))
+* **csa-loom:** wire Cosmos conflict-resolution policy (audit-T27) ([#1083](https://github.com/fgarofalo56/csa-inabox/issues/1083)) ([d0346e8](https://github.com/fgarofalo56/csa-inabox/commit/d0346e8298afc1ecbff7578a53042e2c53283b02))
+* **csa-loom:** wire Event Hubs Capture / Geo-DR / SAS rotation / private endpoints ([#1075](https://github.com/fgarofalo56/csa-inabox/issues/1075)) ([66b1e13](https://github.com/fgarofalo56/csa-inabox/commit/66b1e13a1ee95b94fb3f7721ce779dcfa2becc03))
+* **csa-loom:** wire EventhouseEditor "New dashboard" ribbon to real creation flow ([#1072](https://github.com/fgarofalo56/csa-inabox/issues/1072)) ([9a5ae72](https://github.com/fgarofalo56/csa-inabox/commit/9a5ae721d64c2b09ab408adbade2b9e24934decd))
+* **csa-loom:** wire Synapse KQL scripts + Spark job definitions in workspace tree ([#1084](https://github.com/fgarofalo56/csa-inabox/issues/1084)) ([ac153d0](https://github.com/fgarofalo56/csa-inabox/commit/ac153d061953b8f81d3ad563cc5cf52d56990837))
+
+
+### Miscellaneous
+
+* **csa-loom:** pin workflow agent models to opus + persist fast builder & wave 10/11 specs ([#1088](https://github.com/fgarofalo56/csa-inabox/issues/1088)) ([bdc5e76](https://github.com/fgarofalo56/csa-inabox/commit/bdc5e763c364b6a4400569ff79a67ac4fb317453))
+
 ## [0.32.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.31.0...csa-inabox-v0.32.0) (2026-06-10)
 
 
