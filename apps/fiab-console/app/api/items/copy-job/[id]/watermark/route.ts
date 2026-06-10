@@ -1,10 +1,11 @@
 /**
  * GET /api/items/copy-job/[id]/watermark
  *
- * Reads this copy job's high-water mark from the dbo.copy_watermark control
- * table in Azure SQL (azure-sql-client, real TDS+AAD — no mock). Backs the
- * Watermark panel in the Copy job editor and lets the UI prove incremental
- * runs advanced the watermark.
+ * Reads this copy job's checkpoint from the dbo.copy_watermark control table in
+ * Azure SQL (azure-sql-client, real TDS+AAD — no mock). The same row backs both
+ * Incremental mode (high-water mark in last_value) and CDC mode (last processed
+ * log-sequence number in last_value). Backs the Watermark / CDC checkpoint panel
+ * in the Copy job editor and lets the UI prove each run advanced the checkpoint.
  *
  * When LOOM_COPYJOB_CONTROL_SQL_SERVER is unset the route returns an honest
  * config gate (configured:false + the exact env var + bicep module) rather than

@@ -5,15 +5,17 @@
  *
  * Fabric's Copy job is a simplified, guided incremental-copy experience: a
  * wizard (Source → Destination → Mode → Update → Mapping → Review) that
- * materialises an incremental pipeline and tracks a watermark so each run
- * moves only the delta. Loom builds the SAME experience on Azure-native
+ * materialises a copy pipeline and tracks a checkpoint so each run moves only
+ * the delta. Mode can be Full, Incremental (watermark column), or CDC (native
+ * SQL Server change tracking). Loom builds the SAME experience on Azure-native
  * backends (no-fabric-dependency):
  *
  *   • Wizard           → CopyJobWizard (guided, typed controls — no raw JSON)
  *   • Materialisation  → real ADF pipeline via upsertPipeline (adf-client)
- *   • Watermark        → dbo.copy_watermark control table in Azure SQL,
+ *   • Watermark / LSN  → dbo.copy_watermark control table in Azure SQL,
  *                        read here through the azure-sql-client, written by the
- *                        pipeline's StoredProcedure activity each run.
+ *                        pipeline's StoredProcedure activity each run. CDC mode
+ *                        stores the last processed LSN in the same row.
  *
  * No Microsoft Fabric capacity / workspace is required. Every list / save / run
  * hits real Azure; errors surface verbatim in a MessageBar.
@@ -137,6 +139,7 @@ function specFromState(state?: Record<string, any>): Partial<CopyJobSpec> {
     writeMode: s.writeMode || 'Append',
     watermarkCol: s.watermarkCol,
     sourceName: s.sourceName,
+    cdcCaptureInstance: s.cdcCaptureInstance,
     mergeKeys: s.mergeKeys,
     mappings: Array.isArray(s.mappings) ? s.mappings : [],
   };
@@ -161,6 +164,9 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const persisted = useMemo(() => specFromState(cosmosItem?.state), [cosmosItem]);
   const configured = !!persisted.source?.linkedService && !!persisted.sink?.linkedService && !!persisted.sink?.table;
   const isIncremental = persisted.mode === 'Incremental';
+  const isCdc = persisted.mode === 'CDC';
+  // Both Incremental and CDC track their checkpoint in dbo.copy_watermark.
+  const tracksCheckpoint = isIncremental || isCdc;
 
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
@@ -229,7 +235,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create copy job"
-        intro="A Copy job moves data source → destination with a guided wizard. It supports full and incremental copy; incremental copy tracks a watermark in an Azure SQL control table so each run moves only changed rows. Create it, then click Configure wizard." />
+        intro="A Copy job moves data source → destination with a guided wizard. It supports full, incremental (watermark column), and CDC (native SQL Server change tracking — inserts, updates, and deletes) copy modes; the incremental and CDC checkpoints live in an Azure SQL control table so each run moves only changed rows. Create it, then click Configure wizard." />
     );
   }
 
@@ -287,9 +293,11 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                       <Caption1 className={styles.label}>Destination</Caption1>
                       <Body1 className={styles.mono}>{persisted.sink?.linkedService} · {persisted.sink?.type} · {persisted.sink?.table}</Body1>
                       <Caption1 className={styles.label}>Copy mode</Caption1>
-                      <Body1><Badge appearance="tint" color={isIncremental ? 'brand' : 'informative'}>{persisted.mode}</Badge></Body1>
+                      <Body1><Badge appearance="tint" color={isCdc ? 'success' : isIncremental ? 'brand' : 'informative'}>{isCdc ? 'CDC' : persisted.mode}</Badge></Body1>
                       {isIncremental && <><Caption1 className={styles.label}>Watermark column</Caption1><Body1 className={styles.mono}>{persisted.watermarkCol || '—'}</Body1></>}
                       {isIncremental && <><Caption1 className={styles.label}>Control-table key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
+                      {isCdc && <><Caption1 className={styles.label}>Capture instance</Caption1><Body1 className={styles.mono}>{persisted.cdcCaptureInstance || `${(persisted.source?.sourceTable || '').replace('.', '_') || 'default'} (default)`}</Body1></>}
+                      {isCdc && <><Caption1 className={styles.label}>LSN checkpoint key</Caption1><Body1 className={styles.mono}>{persisted.sourceName || persisted.source?.sourceTable || '—'}</Body1></>}
                       <Caption1 className={styles.label}>Update method</Caption1>
                       <Body1>{persisted.writeMode}{persisted.writeMode === 'Merge' && persisted.mergeKeys ? ` (keys: ${persisted.mergeKeys})` : ''}</Body1>
                       <Caption1 className={styles.label}>Column mappings</Caption1>
@@ -300,30 +308,41 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                   )}
                 </div>
 
-                {isIncremental && (
+                {tracksCheckpoint && (
                   <div className={styles.card}>
-                    <Subtitle2>Watermark</Subtitle2>
+                    <Subtitle2>{isCdc ? 'CDC checkpoint (LSN)' : 'Watermark'}</Subtitle2>
+                    {isCdc && (
+                      <Caption1 className={styles.label}>
+                        CDC mode reads net inserts, updates, and deletes from the source via{' '}
+                        <code>cdc.fn_cdc_get_net_changes_*</code>. The source database and table must have native change
+                        data capture enabled (<code>sys.sp_cdc_enable_db</code> / <code>sys.sp_cdc_enable_table</code> with{' '}
+                        <code>@supports_net_changes = 1</code>). Each run advances the stored log-sequence number below.
+                      </Caption1>
+                    )}
                     {wmConfigured === false && (
                       <MessageBar intent="warning">
                         <MessageBarBody>
                           <MessageBarTitle>Control table not configured</MessageBarTitle>
-                          Incremental copy persists its watermark in <code>dbo.copy_watermark</code> in Azure SQL.
+                          {isCdc ? 'CDC' : 'Incremental'} copy persists its {isCdc ? 'last processed LSN' : 'watermark'} in{' '}
+                          <code>dbo.copy_watermark</code> in Azure SQL.
                           Set <code>{wmMissing || 'LOOM_COPYJOB_CONTROL_SQL_SERVER'}</code> on the console app and deploy{' '}
                           <code>{wmModule || 'platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep'}</code> to create the
-                          table and stored procedure. Full copy works without this; incremental runs will fail until it is set.
+                          table and stored procedure. Full copy works without this; {isCdc ? 'CDC' : 'incremental'} runs will fail until it is set.
                         </MessageBarBody>
                       </MessageBar>
                     )}
                     {wmConfigured && !watermark && (
                       <Caption1 className={styles.label}>
-                        No watermark recorded yet — the first incremental run full-loads the source and writes the initial high-water mark.
+                        {isCdc
+                          ? 'No LSN checkpoint recorded yet — the first CDC run reads from the table’s minimum CDC LSN and stores the current max LSN.'
+                          : 'No watermark recorded yet — the first incremental run full-loads the source and writes the initial high-water mark.'}
                       </Caption1>
                     )}
                     {wmConfigured && watermark && (
                       <div className={styles.specGrid}>
                         <Caption1 className={styles.label}>Source key</Caption1><Body1 className={styles.mono}>{watermark.source}</Body1>
                         <Caption1 className={styles.label}>Table</Caption1><Body1 className={styles.mono}>{watermark.table_name}</Body1>
-                        <Caption1 className={styles.label}>Last value</Caption1><Body1 className={styles.mono}>{watermark.last_value ?? '—'}</Body1>
+                        <Caption1 className={styles.label}>{isCdc ? 'Last processed LSN' : 'Last value'}</Caption1><Body1 className={styles.mono}>{watermark.last_value ?? '—'}</Body1>
                         <Caption1 className={styles.label}>Updated</Caption1><Body1>{fmtTs(watermark.updated_utc)}</Body1>
                       </div>
                     )}

@@ -1,15 +1,19 @@
 // =====================================================================
-// Copy Job watermark control table (F14)
+// Copy Job watermark / CDC LSN checkpoint control table (F14 + T79)
 //
 // Creates dbo.copy_watermark + dbo.usp_write_watermark in an existing Azure
 // SQL database, and (optionally) grants the ADF factory managed identity and
-// the Loom console UAMI the rights they need to read/write the watermark.
+// the Loom console UAMI the rights they need to read/write the checkpoint.
 //
-// This is the Azure-native backing for the Fabric Copy job's incremental
-// watermark (no-fabric-dependency.md). The Loom console ALSO self-heals the
-// table + procedure on first incremental run (via TDS+AAD), so this module is
-// primarily for pre-provisioning + granting the ADF factory identity — which
-// the console cannot grant itself.
+// This is the Azure-native backing for the Fabric Copy job's incremental copy
+// (no-fabric-dependency.md). The single last_value column stores EITHER an
+// incremental high-water mark (Incremental mode) OR the last processed CDC
+// log-sequence number as a 0x… hex string (CDC mode — native SQL Server change
+// tracking via cdc.fn_cdc_get_net_changes_*). No schema change is needed for
+// CDC — both modes share the (source, table_name) → last_value row. The Loom
+// console ALSO self-heals the table + procedure on first incremental/CDC run
+// (via TDS+AAD), so this module is primarily for pre-provisioning + granting the
+// ADF factory identity — which the console cannot grant itself.
 //
 // Auth model: the deployment script runs as `scriptIdentity` (a UAMI that MUST
 // be configured as an Entra admin on the target SQL server). It connects with
