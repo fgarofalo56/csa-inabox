@@ -302,6 +302,22 @@ module eventhubs 'eventhubs.bicep' = {
   }
 }
 
+// Business Events — Event Grid custom topic for the /business-events publishing
+// surface (Azure-native Activator structured signals). Fans out to the
+// telemetry Event Hub so published business events are also durable + appear in
+// the Real-Time hub. Console UAMI granted EventGrid Data Sender + Contributor.
+module eventgridBusiness 'eventgrid-business.bicep' = {
+  name: 'dlz-eventgrid-business'
+  params: {
+    location: location
+    consolePrincipalId: consolePrincipalId
+    eventHubResourceId: '${eventhubs.outputs.namespaceId}/eventhubs/${eventhubs.outputs.telemetryHubName}'
+    workspaceId: adminPlaneLawId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
 // =====================================================================
 // 6. ADX database (on the Admin Plane shared cluster)
 // =====================================================================
