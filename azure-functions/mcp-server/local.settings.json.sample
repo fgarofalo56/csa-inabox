@@ -8,6 +8,8 @@
     "LOOM_RESOURCE_GROUPS": "rg-csa-loom-admin-eastus2,rg-csa-loom-dlz-single-eastus2",
     "LOOM_AI_SEARCH_SERVICE": "<search-service-name or https url>",
     "LOOM_AI_SEARCH_INDEX": "loom-items",
+    "LOOM_DLZ_RG": "rg-csa-loom-dlz-single-eastus2",
+    "LOOM_ADF_NAME": "adf-loom-default-eastus2",
     "LOOM_ARM_ENDPOINT": "https://management.azure.com"
   }
 }

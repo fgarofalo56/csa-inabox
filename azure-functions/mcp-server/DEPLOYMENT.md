@@ -9,13 +9,39 @@ Loom orchestrator. A Loom deployment is fully functional without it.
 
 ## What it exposes
 
+### Catalog / inventory (read-only)
+
 | Tool | What it does | Backend |
 |------|--------------|---------|
 | `loom_search_catalog` | Keyword search the Loom catalog | AI Search `loom-items` index (REST) |
 | `loom_list_resources` | List Azure resources in the Loom RGs | ARM `…/resources` |
 | `loom_list_deployments` | Recent ARM/bicep deployments, newest first | ARM `…/deployments` |
 
-All tools are read-only and call real Azure REST with the Function App's managed
+### Data movement — pipelines / copy jobs / data flows
+
+Author, consume, and diagnose the Loom data-movement surface. Backed by the same
+Azure Data Factory the Loom console BFF uses (`Microsoft.DataFactory/factories`,
+ARM REST) — the Azure-native default backend for the data-pipeline / copy-job /
+dataflow Loom items. **No Microsoft Fabric dependency** (works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset).
+
+| Tool | Mode | What it does | Backend |
+|------|------|--------------|---------|
+| `loom_list_pipelines` | consume | List pipelines + activity counts | ADF `…/pipelines` |
+| `loom_get_pipeline` | consume | Full pipeline definition | ADF `…/pipelines/{name}` |
+| `loom_list_dataflows` | consume | List mapping/wrangling data flows | ADF `…/dataflows` |
+| `loom_upsert_pipeline` | **author** | Create/update a pipeline (activities JSON) | ADF `PUT …/pipelines/{name}` |
+| `loom_validate_pipeline` | author | Syntactic/reference validation | ADF `…/validatePipeline` |
+| `loom_run_pipeline` | **run** | Trigger a run, return runId | ADF `…/pipelines/{name}/createRun` |
+| `loom_list_pipeline_runs` | diagnose | Recent runs (status, duration, error) | ADF `…/queryPipelineRuns` |
+| `loom_diagnose_run` | diagnose | Per-activity output for one run | ADF `…/queryActivityruns` |
+
+The author/run tools require **Data Factory Contributor** on the factory; the
+read/diagnose tools work with **Reader**. Configure with the `adfName` +
+`dlzResourceGroup` deploy params; when unset, the data-movement tools
+honest-gate (a precise error naming the missing app setting).
+
+All tools call real Azure REST with the Function App's managed
 identity. When a backing service/permission is missing, the tool returns an
 **honest error** naming the exact setting/role to fix — never a fake result.
 
@@ -49,8 +75,13 @@ returns **503** naming the missing setting — it never serves tools anonymously
      -p keyVaultName=<kv> apiKeySecretName=loom-mcp-api-key \
         loomSubscriptionId=<sub> \
         loomResourceGroups="['rg-csa-loom-admin-eastus2','rg-csa-loom-dlz-single-eastus2']" \
-        aiSearchService=<search-service-name>
+        aiSearchService=<search-service-name> \
+        dlzResourceGroup=rg-csa-loom-dlz-single-eastus2 \
+        adfName=adf-loom-default-eastus2
    ```
+
+   (Omit `dlzResourceGroup` / `adfName` to ship without the data-movement tools —
+   they then honest-gate until set.)
 
 3. Publish the code:
 
@@ -64,6 +95,10 @@ returns **503** naming the missing setting — it never serves tools anonymously
      output `principalId` **Reader** on each RG in `loomResourceGroups`.
    - `loom_search_catalog`: grant the output `principalId` **Search Index Data
      Reader** on the AI Search service, or set `LOOM_AI_SEARCH_KEY`.
+   - Data-movement tools: grant the output `principalId` **Data Factory
+     Contributor** on the Loom Data Factory (`adfName`) for the author/run tools
+     (`loom_upsert_pipeline` / `loom_run_pipeline`); **Reader** suffices for the
+     read/diagnose tools (`loom_list_pipelines`, `loom_list_pipeline_runs`, …).
 
 5. Register it in Loom: Admin → MCP servers → add `https://<host>/api/mcp` with
    the API key as a Key Vault `secretRef` (see the Connect-MCP-tools panel).

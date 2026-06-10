@@ -257,3 +257,17 @@ TOOLS: dict[str, Tool] = {
         ),
     ]
 }
+
+
+# ── data-movement tools (pipelines / copy jobs / data flows) ──────────────────
+#
+# Registered from mcp_tools_data_movement so the data-movement surface lives in
+# its own module but is exposed through the single TOOLS registry the server
+# iterates. Import is best-effort: if the optional module is absent the catalog
+# tools above still serve (the server never crashes on a partial deployment).
+try:
+    from mcp_tools_data_movement import build_tools as _build_data_movement_tools  # type: ignore
+
+    TOOLS.update(_build_data_movement_tools())
+except Exception:  # pragma: no cover - defensive: keep core tools serving
+    pass
