@@ -19,9 +19,9 @@
  * from a real TDS round-trip, or an honest MessageBar gate.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner,
+  Subtitle2, Caption1, Badge, Button, Spinner,
   Dropdown, Option, Field, Input, Checkbox,
   TabList, Tab,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -30,7 +30,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Search20Regular, DocumentSearch20Regular, Sparkle20Regular,
-  Eye20Regular, Add20Regular, Delete20Regular,
+  Eye20Regular, Add20Regular, Delete20Regular, Filter16Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
@@ -42,12 +42,33 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: 12, padding: 4, minHeight: 0 },
   toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 16,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: 16,
     display: 'flex', flexDirection: 'column', gap: 12, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  cardHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  cardHeadIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
   },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
   actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  sectionHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, flexWrap: 'wrap', marginTop: 4,
+  },
+  filter: { minWidth: '200px' },
+  tableWrap: {
+    overflow: 'auto', maxHeight: 320,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+  },
+  empty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+    padding: '20px 12px', textAlign: 'center', color: tokens.colorNeutralForeground3,
+  },
   full: { width: '100%' },
 });
 
@@ -95,6 +116,33 @@ async function callWizard(base: string, qs: string, payload: any): Promise<ExecR
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
   });
   return r.json();
+}
+
+function CardHead({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
+  const s = useStyles();
+  return (
+    <div className={s.cardHead}>
+      <span className={s.cardHeadIcon} aria-hidden>{icon}</span>
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <Subtitle2>{title}</Subtitle2>
+        {children ? <Caption1>{children}</Caption1> : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
+  const s = useStyles();
+  return (
+    <TableRow>
+      <TableCell colSpan={colSpan}>
+        <div className={s.empty}>
+          <Search20Regular />
+          <Caption1>{label}</Caption1>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
 }
 
 function PreviewPane({ sql }: { sql: string }) {
@@ -244,8 +292,9 @@ function FtCatalogWizard({ ctx }: { ctx: PanelCtx }) {
 
   return (
     <div className={s.card}>
-      <Subtitle2>Create a full-text catalog</Subtitle2>
-      <Body1>A catalog is a logical container for one or more full-text indexes. Create one before creating a full-text index.</Body1>
+      <CardHead icon={<DocumentSearch20Regular />} title="Create a full-text catalog">
+        A catalog is a logical container for one or more full-text indexes. Create one before creating a full-text index.
+      </CardHead>
       <div className={s.grid2}>
         <Field label="Catalog name" required validationMessage={ready ? undefined : 'Letters, digits and underscore; must start with a letter or underscore.'} validationState={ready ? 'none' : 'error'}>
           <Input value={catalogName} onChange={(_, d) => setCatalogName(d.value)} placeholder="ftCatalog" />
@@ -317,8 +366,9 @@ function FtIndexWizard({ ctx }: { ctx: PanelCtx }) {
 
   return (
     <div className={s.card}>
-      <Subtitle2>Create a full-text index</Subtitle2>
-      <Body1>One full-text index per table. It needs a unique, single-column, non-nullable index as its KEY INDEX and must belong to a catalog.</Body1>
+      <CardHead icon={<DocumentSearch20Regular />} title="Create a full-text index">
+        One full-text index per table. It needs a unique, single-column, non-nullable index as its KEY INDEX and must belong to a catalog.
+      </CardHead>
       {catalogs.length === 0 && (
         <MessageBar intent="warning">
           <MessageBarBody><MessageBarTitle>No full-text catalog yet</MessageBarTitle>Create one on the Full-text catalog tab first.</MessageBarBody>
@@ -421,8 +471,9 @@ function VectorIndexWizard({ ctx, vectorReady, caps }: { ctx: PanelCtx; vectorRe
 
   return (
     <div className={s.card}>
-      <Subtitle2>Create a DiskANN vector index</Subtitle2>
-      <Body1>Native <code>CREATE VECTOR INDEX</code> builds a DiskANN graph over a <code>vector</code> column for approximate nearest-neighbour search (<code>VECTOR_SEARCH</code>). Available on Azure SQL Database / SQL Server 2025.</Body1>
+      <CardHead icon={<Sparkle20Regular />} title="Create a DiskANN vector index">
+        Native <code>CREATE VECTOR INDEX</code> builds a DiskANN graph over a <code>vector</code> column for approximate nearest-neighbour search (<code>VECTOR_SEARCH</code>). Available on Azure SQL Database / SQL Server 2025.
+      </CardHead>
       {!vectorReady && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -484,6 +535,7 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
   const s = useStyles();
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<ExecResult | null>(null);
+  const [filter, setFilter] = useState('');
 
   const drop = async (wizard: string, params: any, key: string) => {
     setBusy(key); setResult(null);
@@ -493,9 +545,36 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
     setBusy(null);
   };
 
+  const q = filter.trim().toLowerCase();
+  const match = (...vals: (string | number | boolean | undefined)[]) =>
+    !q || vals.some((v) => String(v ?? '').toLowerCase().includes(q));
+
+  const catalogs = state.ftCatalogs.filter((c) => match(c.catalog_name));
+  const ftIndexes = state.ftIndexes.filter((fi) => match(fi.schema_name, fi.table_name, fi.columns, fi.catalog_name));
+  const vectorIndexes = state.vectorIndexes.filter((vi) => match(vi.schema_name, vi.table_name, vi.index_name, vi.distance_metric));
+  const totalShown = catalogs.length + ftIndexes.length + vectorIndexes.length;
+
   return (
     <div className={s.card}>
-      <Subtitle2>Full-text catalogs</Subtitle2>
+      <div className={s.sectionHead}>
+        <CardHead icon={<Eye20Regular />} title="Existing search objects">
+          Live from the database catalog views. Filter, review and drop full-text catalogs, full-text indexes and vector indexes.
+        </CardHead>
+        <Input
+          className={s.filter}
+          size="small"
+          value={filter}
+          onChange={(_, d) => setFilter(d.value)}
+          placeholder="Filter by name, table, catalog…"
+          contentBefore={<Filter16Regular />}
+          aria-label="Filter search objects"
+        />
+      </div>
+
+      <div className={s.sectionHead}>
+        <Subtitle2>Full-text catalogs</Subtitle2>
+        <Badge appearance="tint" color="informative">{catalogs.length}</Badge>
+      </div>
       <div className={s.tableWrap}>
         <Table size="small" aria-label="Full-text catalogs">
           <TableHeader><TableRow>
@@ -503,10 +582,10 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
             <TableHeaderCell>Accent sensitive</TableHeaderCell><TableHeaderCell>Items</TableHeaderCell><TableHeaderCell>Drop</TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
-            {state.ftCatalogs.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No full-text catalogs.</Caption1></TableCell></TableRow>}
-            {state.ftCatalogs.map((c) => (
+            {catalogs.length === 0 && <EmptyRow colSpan={5} label={q ? 'No catalogs match the filter.' : 'No full-text catalogs yet — create one on the Full-text catalog tab.'} />}
+            {catalogs.map((c) => (
               <TableRow key={c.catalog_name}>
-                <TableCell>{c.catalog_name}</TableCell>
+                <TableCell>{c.catalog_name}{c.is_default && <Badge style={{ marginLeft: 6 }} size="small" appearance="tint" color="brand">default</Badge>}</TableCell>
                 <TableCell>{c.is_default ? 'Yes' : 'No'}</TableCell>
                 <TableCell>{c.accent_sensitive ? 'Yes' : 'No'}</TableCell>
                 <TableCell>{c.item_count ?? '—'}</TableCell>
@@ -520,7 +599,10 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
         </Table>
       </div>
 
-      <Subtitle2>Full-text indexes</Subtitle2>
+      <div className={s.sectionHead}>
+        <Subtitle2>Full-text indexes</Subtitle2>
+        <Badge appearance="tint" color="informative">{ftIndexes.length}</Badge>
+      </div>
       <div className={s.tableWrap}>
         <Table size="small" aria-label="Full-text indexes">
           <TableHeader><TableRow>
@@ -529,14 +611,16 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
             <TableHeaderCell>Enabled</TableHeaderCell><TableHeaderCell>Drop</TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
-            {state.ftIndexes.length === 0 && <TableRow><TableCell colSpan={6}><Caption1>No full-text indexes.</Caption1></TableCell></TableRow>}
-            {state.ftIndexes.map((fi) => (
+            {ftIndexes.length === 0 && <EmptyRow colSpan={6} label={q ? 'No indexes match the filter.' : 'No full-text indexes yet — create one on the Full-text index tab.'} />}
+            {ftIndexes.map((fi) => (
               <TableRow key={`${fi.schema_name}.${fi.table_name}`}>
                 <TableCell>{fi.schema_name}.{fi.table_name}</TableCell>
                 <TableCell>{fi.columns}</TableCell>
                 <TableCell>{fi.catalog_name}</TableCell>
                 <TableCell>{fi.change_tracking}</TableCell>
-                <TableCell>{fi.is_enabled ? 'Yes' : 'No'}</TableCell>
+                <TableCell>
+                  <Badge size="small" appearance="tint" color={fi.is_enabled ? 'success' : 'subtle'}>{fi.is_enabled ? 'Enabled' : 'Disabled'}</Badge>
+                </TableCell>
                 <TableCell>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={!!busy}
                     onClick={() => drop('ft-index-drop', { schema: fi.schema_name, tableName: fi.table_name }, `fti:${fi.schema_name}.${fi.table_name}`)}>Drop</Button>
@@ -547,7 +631,10 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
         </Table>
       </div>
 
-      <Subtitle2>Vector indexes</Subtitle2>
+      <div className={s.sectionHead}>
+        <Subtitle2>Vector indexes</Subtitle2>
+        <Badge appearance="tint" color="informative">{vectorIndexes.length}</Badge>
+      </div>
       <div className={s.tableWrap}>
         <Table size="small" aria-label="Vector indexes">
           <TableHeader><TableRow>
@@ -555,13 +642,13 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
             <TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Drop</TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
-            {state.vectorIndexes.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No vector indexes.</Caption1></TableCell></TableRow>}
-            {state.vectorIndexes.map((vi) => (
+            {vectorIndexes.length === 0 && <EmptyRow colSpan={5} label={q ? 'No vector indexes match the filter.' : 'No vector indexes yet — create one on the Vector index tab.'} />}
+            {vectorIndexes.map((vi) => (
               <TableRow key={`${vi.schema_name}.${vi.table_name}.${vi.index_name}`}>
                 <TableCell>{vi.schema_name}.{vi.table_name}</TableCell>
                 <TableCell>{vi.index_name}</TableCell>
                 <TableCell>{vi.distance_metric}</TableCell>
-                <TableCell>{vi.vector_index_type}</TableCell>
+                <TableCell><Badge size="small" appearance="tint" color="brand">{vi.vector_index_type}</Badge></TableCell>
                 <TableCell>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={!!busy}
                     onClick={() => drop('vector-index-drop', { indexName: vi.index_name, schema: vi.schema_name, tableName: vi.table_name }, `vi:${vi.index_name}`)}>Drop</Button>
@@ -571,6 +658,9 @@ function ExistingObjects({ state, ctx }: { state: SearchState; ctx: PanelCtx }) 
           </TableBody>
         </Table>
       </div>
+      {q && totalShown === 0 && (
+        <Caption1>No objects match “{filter}”. Clear the filter to see all search objects.</Caption1>
+      )}
       <ResultBar result={result} />
     </div>
   );
