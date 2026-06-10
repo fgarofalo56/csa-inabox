@@ -1015,6 +1015,205 @@ export async function showTableUpdatePolicy(
   return { policy, raw };
 }
 
+// ============================================================
+// Database / table RBAC — Kusto data-plane principal management.
+//
+// ADX database & table security roles are NOT Azure RBAC roleDefinitions; they
+// are assigned with Kusto control commands against /v1/rest/mgmt. The caller
+// (Console UAMI) holds AllDatabasesAdmin on the cluster (adx-cluster.bicep
+// `adxConsoleAdmin` principalAssignment), so it can add/drop database- and
+// table-scoped principals. Grounded in Microsoft Learn:
+//   .show database <db> principals / .show table <T> principals
+//   .add/.drop database <db> <role> ('<fqn>')
+//   .add/.drop table <T> <role> ('<fqn>')
+// Database roles: admins | users | viewers | unrestrictedviewers | ingestors | monitors
+// Table roles:    admins | ingestors
+// Principal FQN:  aaduser=<email>  |  aadapp=<appId>;<tenantId>  |  aadgroup=<email>
+// No mocks — every value comes from a live control command.
+// ============================================================
+
+/** Database-scoped security roles a Loom user may assign. */
+export const KUSTO_DATABASE_ROLES = [
+  'admins', 'users', 'viewers', 'unrestrictedviewers', 'ingestors', 'monitors',
+] as const;
+export type KustoDatabaseRole = (typeof KUSTO_DATABASE_ROLES)[number];
+
+/** Table-scoped security roles (ADX exposes only these two at table scope). */
+export const KUSTO_TABLE_ROLES = ['admins', 'ingestors'] as const;
+export type KustoTableRole = (typeof KUSTO_TABLE_ROLES)[number];
+
+export type KustoPrincipalType = 'User' | 'App' | 'Group';
+
+export interface KustoPrincipalRow {
+  role: string;
+  principalType: string;
+  displayName: string;
+  objectId: string;
+  fqn: string;
+}
+
+/**
+ * Build the Kusto principal FQN literal from a structured type + value.
+ *   User  → aaduser=<email>
+ *   App   → aadapp=<appId>;<tenantId>   (value already in "appId;tenantId" form)
+ *   Group → aadgroup=<email-or-objectId>
+ * Exported so the BFF route assembles the FQN server-side (the UI never builds
+ * raw KQL — loom-no-freeform-config). Throws on an obviously malformed value.
+ */
+export function buildKustoPrincipalFqn(type: KustoPrincipalType, value: string): string {
+  const v = (value || '').trim();
+  if (!v) throw new KustoError('buildKustoPrincipalFqn: principal value is required', 400);
+  // FQN literals are embedded inside a single-quoted KQL string; reject quotes
+  // / parens so we can't break out of the literal.
+  if (/['()]/.test(v)) {
+    throw new KustoError('buildKustoPrincipalFqn: principal value contains illegal characters', 400);
+  }
+  if (type === 'App') {
+    // appId;tenantId — both required for an application principal.
+    if (!/^[^;]+;[^;]+$/.test(v)) {
+      throw new KustoError("buildKustoPrincipalFqn: App principal must be 'appId;tenantId'", 400);
+    }
+    return `aadapp=${v}`;
+  }
+  if (v.includes(';')) {
+    throw new KustoError('buildKustoPrincipalFqn: User/Group value must not contain ";"', 400);
+  }
+  return type === 'Group' ? `aadgroup=${v}` : `aaduser=${v}`;
+}
+
+function shapePrincipalRows(r: KustoQueryResult): KustoPrincipalRow[] {
+  const idx = (c: string) => r.columns.indexOf(c);
+  const roleIdx = idx('Role');
+  const typeIdx = idx('PrincipalType');
+  const nameIdx = idx('PrincipalDisplayName');
+  const oidIdx = idx('PrincipalObjectId');
+  const fqnIdx = idx('PrincipalFQN');
+  return r.rows.map((row) => ({
+    role: String(row[roleIdx >= 0 ? roleIdx : 0] ?? ''),
+    principalType: typeIdx >= 0 ? String(row[typeIdx] ?? '') : '',
+    displayName: nameIdx >= 0 ? String(row[nameIdx] ?? '') : '',
+    objectId: oidIdx >= 0 ? String(row[oidIdx] ?? '') : '',
+    fqn: fqnIdx >= 0 ? String(row[fqnIdx] ?? '') : '',
+  }));
+}
+
+/** `.show database ["db"] principals` — every assigned database-scope principal. */
+export async function showDatabasePrincipals(db: string): Promise<KustoPrincipalRow[]> {
+  const r = await executeMgmtCommand(db, `.show database ${qName(db)} principals`);
+  return shapePrincipalRows(r);
+}
+
+/** `.show table ["T"] principals` — every assigned table-scope principal. */
+export async function showTablePrincipals(db: string, table: string): Promise<KustoPrincipalRow[]> {
+  if (!table.trim()) throw new KustoError('showTablePrincipals: table is required', 400);
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} principals`);
+  return shapePrincipalRows(r);
+}
+
+function assertDatabaseRole(role: string): KustoDatabaseRole {
+  if (!(KUSTO_DATABASE_ROLES as readonly string[]).includes(role)) {
+    throw new KustoError(`Unsupported database role "${role}"`, 400);
+  }
+  return role as KustoDatabaseRole;
+}
+function assertTableRole(role: string): KustoTableRole {
+  if (!(KUSTO_TABLE_ROLES as readonly string[]).includes(role)) {
+    throw new KustoError(`Unsupported table role "${role}" (table scope allows admins | ingestors)`, 400);
+  }
+  return role as KustoTableRole;
+}
+
+/** `.add database ["db"] <role> ('<fqn>') skip-results`. */
+export async function addDatabasePrincipal(db: string, role: string, fqn: string): Promise<KustoQueryResult> {
+  const r = assertDatabaseRole(role);
+  return executeMgmtCommand(db, `.add database ${qName(db)} ${r} ('${fqn}') skip-results`);
+}
+/** `.drop database ["db"] <role> ('<fqn>') skip-results`. */
+export async function dropDatabasePrincipal(db: string, role: string, fqn: string): Promise<KustoQueryResult> {
+  const r = assertDatabaseRole(role);
+  return executeMgmtCommand(db, `.drop database ${qName(db)} ${r} ('${fqn}') skip-results`);
+}
+/** `.add table ["T"] <role> ('<fqn>') skip-results`. */
+export async function addTablePrincipal(db: string, table: string, role: string, fqn: string): Promise<KustoQueryResult> {
+  if (!table.trim()) throw new KustoError('addTablePrincipal: table is required', 400);
+  const r = assertTableRole(role);
+  return executeMgmtCommand(db, `.add table ${qName(table)} ${r} ('${fqn}') skip-results`);
+}
+/** `.drop table ["T"] <role> ('<fqn>') skip-results`. */
+export async function dropTablePrincipal(db: string, table: string, role: string, fqn: string): Promise<KustoQueryResult> {
+  if (!table.trim()) throw new KustoError('dropTablePrincipal: table is required', 400);
+  const r = assertTableRole(role);
+  return executeMgmtCommand(db, `.drop table ${qName(table)} ${r} ('${fqn}') skip-results`);
+}
+
+// ============================================================
+// Row-Level Security (RLS) policy authoring — Kusto control commands.
+//
+// Grounded in Microsoft Learn (Row Level Security policy):
+//   .alter table ["T"] policy row_level_security enable|disable "<KQL query>"
+//   .show  table ["T"] policy row_level_security
+// The Query parameter is a full KQL expression string (or a stored-function
+// call like "MyRlsFunction()"). Requires Table Admin / Database Admin — the
+// Console UAMI holds AllDatabasesAdmin. The query validator lives in
+// kusto-rls-predicate.ts (re-exported below) and runs server-side before the
+// command is issued. No Fabric dependency — applies to ADX + Eventhouse alike.
+// ============================================================
+
+export { KUSTO_RLS_QUERY_MAX, validateKustoRlsQuery } from './kusto-rls-predicate';
+
+export interface KustoRlsPolicy {
+  isEnabled: boolean;
+  query: string;
+  raw: string;
+}
+
+/**
+ * `.show table ["T"] policy row_level_security` — the current RLS policy.
+ * The Policy column carries `{ "Query": "...", "IsEnabled": true|false }`.
+ * Returns null when no RLS policy is set on the table.
+ */
+export async function showTableRlsPolicy(db: string, table: string): Promise<KustoRlsPolicy | null> {
+  if (!table.trim()) throw new KustoError('showTableRlsPolicy: table is required', 400);
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} policy row_level_security`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  if (!raw.trim()) return null;
+  try {
+    const p = JSON.parse(raw);
+    return { isEnabled: !!p?.IsEnabled, query: String(p?.Query ?? ''), raw };
+  } catch {
+    return { isEnabled: false, query: '', raw };
+  }
+}
+
+/**
+ * `.alter table ["T"] policy row_level_security (enable|disable) "<query>"`.
+ *
+ * When enabling, `query` is the KQL predicate that filters rows for the calling
+ * principal (validated by validateKustoRlsQuery before this is called by the
+ * BFF). When disabling we still pass the query through so it is retained for a
+ * later re-enable. A non-empty, validatable query is required to enable.
+ */
+export async function alterTableRlsPolicy(
+  db: string, table: string, enabled: boolean, query: string,
+): Promise<KustoQueryResult> {
+  if (!table.trim()) throw new KustoError('alterTableRlsPolicy: table is required', 400);
+  const q = (query || '').trim();
+  if (enabled && !q) {
+    throw new KustoError('alterTableRlsPolicy: a KQL predicate query is required to enable RLS', 400);
+  }
+  // The query is embedded in a double-quoted KQL string literal; escape any
+  // embedded backslashes + double-quotes.
+  const escaped = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const verb = enabled ? 'enable' : 'disable';
+  return executeMgmtCommand(
+    db,
+    `.alter table ${qName(table)} policy row_level_security ${verb} "${escaped}"`,
+  );
+}
+
 /** `.show database <db> schema as json` — flat read-only schema object. */
 export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
   const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);

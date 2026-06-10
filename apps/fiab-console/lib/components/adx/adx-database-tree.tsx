@@ -47,6 +47,7 @@ import {
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
   DataHistogram16Regular, Code16Regular, ChartMultiple16Regular,
+  ShieldKeyhole16Regular,
 } from '@fluentui/react-icons';
 import { IngestionMappingWizardDialog } from './ingestion-mapping-wizard';
 import {
@@ -105,6 +106,13 @@ export interface AdxDatabaseTreeProps {
   onGetData?: (tableName: string) => void;
   /** Called when the user clicks "Create dashboard" on a table. Parent creates + navigates. */
   onCreateDashboard?: (tableName: string) => void;
+  /**
+   * Called when the user clicks the per-table Row-Level Security shield. When
+   * provided, the parent owns the RLS editor (e.g. KqlDatabaseEditor's drawer);
+   * when omitted the tree opens its own inline RLS dialog so the navigator is
+   * fully functional standalone.
+   */
+  onEditRls?: (tableName: string) => void;
 }
 
 /**
@@ -151,7 +159,7 @@ function insertScriptKql(table: string): string {
 }
 
 /** A typed, ADX/Fabric-faithful KQL database object navigator. */
-export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTable, onDropTable, refreshKey = 0, onGetData, onCreateDashboard }: AdxDatabaseTreeProps) {
+export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTable, onDropTable, refreshKey = 0, onGetData, onCreateDashboard, onEditRls }: AdxDatabaseTreeProps) {
   const s = useStyles();
 
   const idq = `id=${encodeURIComponent(itemId)}`;
@@ -190,6 +198,58 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
 
   // ---- inline drop-confirm dialog (used when the parent doesn't own drop) ----
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  // ---- inline Row-Level Security dialog (used when the parent doesn't own RLS) ----
+  const [rlsTarget, setRlsTarget] = useState<string | null>(null);
+  const [rlsEnabled, setRlsEnabled] = useState(false);
+  const [rlsQuery, setRlsQuery] = useState('');
+  const [rlsLoading, setRlsLoading] = useState(false);
+  const [rlsBusy, setRlsBusy] = useState(false);
+  const [rlsError, setRlsError] = useState<string | null>(null);
+  const [rlsNotice, setRlsNotice] = useState<string | null>(null);
+
+  const RLS = `/api/adx/rls?${idq}`;
+
+  const openRls = useCallback(async (tableName: string) => {
+    // Parent-owned editor wins (e.g. KqlDatabaseEditor drawer).
+    if (onEditRls) { onEditRls(tableName); return; }
+    setRlsTarget(tableName); setRlsError(null); setRlsNotice(null);
+    setRlsEnabled(false); setRlsQuery(''); setRlsLoading(true);
+    try {
+      const body = await fetch(`${RLS}&table=${encodeURIComponent(tableName)}`).then(readJson);
+      if (applyGate(body)) { setRlsLoading(false); setRlsTarget(null); return; }
+      if (body.ok && body.policy) {
+        setRlsEnabled(!!body.policy.isEnabled);
+        setRlsQuery(body.policy.query || '');
+      }
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setRlsLoading(false);
+    }
+  }, [onEditRls, RLS]);
+
+  const submitRls = useCallback(async () => {
+    if (!rlsTarget) return;
+    setRlsBusy(true); setRlsError(null); setRlsNotice(null);
+    try {
+      const res = await fetch(`/api/adx/rls?${idq}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ table: rlsTarget, enabled: rlsEnabled, query: rlsQuery }),
+      });
+      const body = await readJson(res);
+      if (applyGate(body)) { setRlsBusy(false); return; }
+      if (!body.ok) { setRlsError(body.error || 'failed to set RLS policy'); setRlsBusy(false); return; }
+      setRlsNotice(
+        `RLS ${body.policy?.isEnabled ? 'enabled' : 'disabled'} on ${rlsTarget}.` +
+        (body.warning ? ` Warning: ${body.warning}` : ''),
+      );
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setRlsBusy(false);
+    }
+  }, [rlsTarget, rlsEnabled, rlsQuery, idq]);
 
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) { setGate({ missing: body.missing }); return true; }
@@ -394,7 +454,9 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                         {onAlterTable && (
                           <Tooltip content="Edit schema (.alter-merge table)" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} disabled={busy} onClick={() => onAlterTable(t.name)} aria-label={`Edit schema of ${t.name}`} /></Tooltip>
                         )}
-                        {/* 7. Delete table — parent-owned drop (with inline confirm fallback) or direct .drop table T ifexists */}
+                        {/* 7. Row-level security — .alter table T policy row_level_security (parent-owned editor or inline dialog) */}
+                        <Tooltip content="Row-level security" relationship="label"><Button size="small" appearance="subtle" icon={<ShieldKeyhole16Regular />} disabled={busy} onClick={() => openRls(t.name)} aria-label={`Row-level security for ${t.name}`} /></Tooltip>
+                        {/* 8. Delete table — parent-owned drop (with inline confirm fallback) or direct .drop table T ifexists */}
                         <Tooltip content="Delete table" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => { if (onDropTable) onDropTable(t.name); else setDropTarget(t.name); }} aria-label={`Drop ${t.name}`} /></Tooltip>
                       </span>
                     </span>
@@ -559,7 +621,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             <Tree>
               {[
                 ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
-                ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
                 ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
                 ['Continuous-export authoring', '.create-or-alter continuous-export over an external table; needs an external table + Database Admin. Listed read-only above.'],
               ].map(([label, why]) => (
@@ -604,6 +665,56 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 }}
               >
                 {busy ? 'Dropping…' : 'Drop table'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Row-Level Security dialog (inline; used when the parent doesn't own RLS) */}
+      <Dialog open={rlsTarget !== null} onOpenChange={(_, d) => { if (!d.open) setRlsTarget(null); }}>
+        <DialogSurface style={{ maxWidth: 620 }}>
+          <DialogBody>
+            <DialogTitle>Row-level security · {rlsTarget}</DialogTitle>
+            <DialogContent>
+              {rlsLoading ? <Spinner size="tiny" label="Loading RLS policy…" /> : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Sets <code>.alter table [&quot;{rlsTarget}&quot;] policy row_level_security</code>.
+                      The query is a KQL predicate (or a stored-function call) that filters rows for the
+                      calling principal — e.g.{' '}
+                      <code>{rlsTarget} | where current_principal_is_member_of(&apos;aadgroup=analysts@contoso.com&apos;)</code>.
+                      Requires Database / Table Admin.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Switch
+                    checked={rlsEnabled}
+                    label={rlsEnabled ? 'RLS enabled' : 'RLS disabled'}
+                    onChange={(_, d) => setRlsEnabled(!!d.checked)}
+                  />
+                  <Field label="RLS query (KQL predicate)" required={rlsEnabled}>
+                    <Textarea
+                      value={rlsQuery}
+                      onChange={(_, d) => setRlsQuery(d.value)}
+                      rows={5}
+                      style={{ fontFamily: 'Consolas, monospace' }}
+                      placeholder={`${rlsTarget ?? 'T'} | where current_principal_is_member_of('aadgroup=analysts@contoso.com')`}
+                    />
+                  </Field>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Test without affecting users in the query editor with{' '}
+                    <code>set query_force_row_level_security;</code>.
+                  </Caption1>
+                  {rlsNotice && <MessageBar intent="success"><MessageBarBody>{rlsNotice}</MessageBarBody></MessageBar>}
+                  {rlsError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RLS error</MessageBarTitle>{rlsError}</MessageBarBody></MessageBar>}
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setRlsTarget(null)} disabled={rlsBusy}>Close</Button>
+              <Button appearance="primary" onClick={submitRls} disabled={rlsBusy || rlsLoading || (rlsEnabled && !rlsQuery.trim())}>
+                {rlsBusy ? 'Applying…' : (rlsEnabled ? 'Enable RLS' : 'Disable RLS')}
               </Button>
             </DialogActions>
           </DialogBody>

@@ -51,6 +51,8 @@ import {
   ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
+import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
 import {
   ColumnGridDesigner, toKustoSchema, parseKustoSchema, validateColumns,
@@ -3279,6 +3281,55 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // Detach-follower busy flag
   const [detaching, setDetaching] = useState(false);
 
+  // ── RBAC + cluster lifecycle + per-table RLS (this task) ────────────────
+  // Manage-principals (RBAC) drawer-dialog, cluster lifecycle dialog, and the
+  // per-table Row-Level Security dialog opened from the navigator shield.
+  const [rbacOpen, setRbacOpen] = useState(false);
+  const [clusterOpen, setClusterOpen] = useState(false);
+  const [rlsTable, setRlsTable] = useState<string | null>(null);
+  const [rlsEnabled, setRlsEnabled] = useState(false);
+  const [rlsQuery, setRlsQuery] = useState('');
+  const [rlsLoading, setRlsLoading] = useState(false);
+  const [rlsBusy, setRlsBusy] = useState(false);
+  const [rlsError, setRlsError] = useState<string | null>(null);
+  const [rlsNotice, setRlsNotice] = useState<string | null>(null);
+
+  const openRlsEditor = useCallback(async (tableName: string) => {
+    setRlsTable(tableName); setRlsError(null); setRlsNotice(null);
+    setRlsEnabled(false); setRlsQuery(''); setRlsLoading(true);
+    try {
+      const res = await fetch(`/api/adx/rls?id=${encodeURIComponent(id)}&table=${encodeURIComponent(tableName)}`);
+      const body = await res.json().catch(() => ({}));
+      if (body?.ok && body.policy) { setRlsEnabled(!!body.policy.isEnabled); setRlsQuery(body.policy.query || ''); }
+      else if (!body?.ok && body?.error) setRlsError(body.error);
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setRlsLoading(false);
+    }
+  }, [id]);
+
+  const submitRlsEditor = useCallback(async () => {
+    if (!rlsTable) return;
+    setRlsBusy(true); setRlsError(null); setRlsNotice(null);
+    try {
+      const res = await fetch(`/api/adx/rls?id=${encodeURIComponent(id)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ table: rlsTable, enabled: rlsEnabled, query: rlsQuery }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!body?.ok) { setRlsError(body?.error || 'failed to set RLS policy'); setRlsBusy(false); return; }
+      setRlsNotice(
+        `RLS ${body.policy?.isEnabled ? 'enabled' : 'disabled'} on ${rlsTable}.` +
+        (body.warning ? ` Warning: ${body.warning}` : ''),
+      );
+    } catch (e: any) {
+      setRlsError(e?.message || String(e));
+    } finally {
+      setRlsBusy(false);
+    }
+  }, [id, rlsTable, rlsEnabled, rlsQuery]);
+
   const router = useRouter();
 
   // The workspace item record (for workspaceId, needed by "Create dashboard").
@@ -4138,11 +4189,14 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         ]},
         { label: 'Manage', actions: [
           { label: 'Data policies', onClick: () => { setKql('.show database policy caching\n.show database policy retention'); } },
+          { label: 'Manage principals (RBAC)', onClick: () => setRbacOpen(true), title: 'Add/remove database & table principals (Kusto .add/.drop principal commands)' },
+          { label: 'Row-level security', onClick: () => { const first = info?.tables?.[0]?.name; if (first) openRlsEditor(first); }, disabled: isFollower || !(info?.tables && info.tables.length), title: isFollower ? roTitle : (!(info?.tables && info.tables.length) ? 'No tables yet — create a table first' : 'Author the RLS predicate per table (.alter table policy row_level_security)') },
+          { label: 'Cluster lifecycle & scale', onClick: () => setClusterOpen(true), title: 'Stop/start/scale/delete the ADX cluster (ARM)' },
           { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring requires Fabric-managed cluster (LOOM_KUSTO_FABRIC_MANAGED=true)' },
         ]},
       ]},
     ];
-  }, [openWizard, openFnEditor, openDcWizard, info?.isFollower]);
+  }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, info?.isFollower, info?.tables]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -4162,6 +4216,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               onEditFunction={(fn) => openFnEditor(fn)}
               onGetData={(tableName) => openWizard('ingest', tableName)}
               onCreateDashboard={createDashboardFromTable}
+              onEditRls={openRlsEditor}
             />
           )
           : (
@@ -5061,6 +5116,90 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               el?.focus();
             }}
           />
+
+          {/* RBAC — Manage principals (database + table scope) */}
+          <Dialog open={rbacOpen} onOpenChange={(_, d) => setRbacOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 720 }}>
+              <DialogBody>
+                <DialogTitle>Manage principals (RBAC) · {info?.database || 'KQL database'}</DialogTitle>
+                <DialogContent>
+                  <AdxRbacPanel
+                    itemId={id}
+                    database={info?.database}
+                    tables={(info?.tables ?? []).map((t) => t.name)}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setRbacOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Cluster lifecycle + scale (ARM) */}
+          <Dialog open={clusterOpen} onOpenChange={(_, d) => setClusterOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 720 }}>
+              <DialogBody>
+                <DialogTitle>ADX cluster — lifecycle &amp; scale</DialogTitle>
+                <DialogContent>
+                  <AdxClusterEditor onChanged={() => load()} />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setClusterOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Row-Level Security — per table (.alter table policy row_level_security) */}
+          <Dialog open={rlsTable !== null} onOpenChange={(_, d) => { if (!d.open) setRlsTable(null); }}>
+            <DialogSurface style={{ maxWidth: 640 }}>
+              <DialogBody>
+                <DialogTitle>Row-level security · {rlsTable}</DialogTitle>
+                <DialogContent>
+                  {rlsLoading ? <Spinner size="tiny" label="Loading RLS policy…" /> : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          Sets <code>.alter table [&quot;{rlsTable}&quot;] policy row_level_security</code>.
+                          The query is a KQL predicate (or a stored-function call) that filters rows for
+                          the calling principal — e.g.{' '}
+                          <code>{rlsTable} | where current_principal_is_member_of(&apos;aadgroup=analysts@contoso.com&apos;)</code>.
+                          Requires Database / Table Admin.
+                        </MessageBarBody>
+                      </MessageBar>
+                      <Switch
+                        checked={rlsEnabled}
+                        label={rlsEnabled ? 'RLS enabled' : 'RLS disabled'}
+                        onChange={(_, d) => setRlsEnabled(!!d.checked)}
+                      />
+                      <Field label="RLS query (KQL predicate)" required={rlsEnabled}>
+                        <Textarea
+                          value={rlsQuery}
+                          onChange={(_, d) => setRlsQuery(d.value)}
+                          rows={5}
+                          style={{ fontFamily: 'Consolas, monospace' }}
+                          placeholder={`${rlsTable ?? 'T'} | where current_principal_is_member_of('aadgroup=analysts@contoso.com')`}
+                        />
+                      </Field>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Test without affecting users in the query editor with{' '}
+                        <code>set query_force_row_level_security;</code>.
+                      </Caption1>
+                      {rlsNotice && <MessageBar intent="success"><MessageBarBody>{rlsNotice}</MessageBarBody></MessageBar>}
+                      {rlsError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RLS error</MessageBarTitle>{rlsError}</MessageBarBody></MessageBar>}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setRlsTable(null)} disabled={rlsBusy}>Close</Button>
+                  <Button appearance="primary" onClick={submitRlsEditor} disabled={rlsBusy || rlsLoading || (rlsEnabled && !rlsQuery.trim())}>
+                    {rlsBusy ? 'Applying…' : (rlsEnabled ? 'Enable RLS' : 'Disable RLS')}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

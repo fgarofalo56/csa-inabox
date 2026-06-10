@@ -197,6 +197,19 @@ resource consoleMonitoringContributor 'Microsoft.Authorization/roleAssignments@2
 // PATCH the cluster SKU (kusto-arm-client.ts updateKustoClusterSku). Monitoring
 // Contributor alone cannot change the SKU — ARM returns 403 — so the scale
 // drawer would surface an honest-gate MessageBar without this grant.
+//
+// Azure Kusto Contributor ALSO covers the full cluster lifecycle exposed by the
+// KQL-database editor's "Cluster lifecycle & scale" dialog
+// (kusto-arm-client.ts stopKustoCluster / startKustoCluster / deleteKustoCluster
+// + updateKustoClusterAutoscale / updateKustoStreamingIngest): it includes
+// Microsoft.Kusto/clusters/{stop,start}/action, write (PATCH), and delete. No
+// extra role assignment is needed for stop/start/delete.
+//
+// Database & table RBAC (the "Manage principals" dialog) is handled separately
+// by ADX data-plane control commands (.add/.drop database|table principal),
+// which require the Console UAMI's AllDatabasesAdmin grant below
+// (adxConsoleAdmin) — NOT an Azure roleAssignment. Row-Level Security
+// (.alter table policy row_level_security) likewise rides AllDatabasesAdmin.
 // Role ID 833127c3-3d62-4978-9c27-c0a5e418f64f is cloud-agnostic.
 resource consoleKustoContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: adxCluster

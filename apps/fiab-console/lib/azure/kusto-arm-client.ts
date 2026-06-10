@@ -174,6 +174,57 @@ export async function updateKustoClusterSku(
 }
 
 // ============================================================
+// Cluster lifecycle — stop / start / delete (ARM REST).
+//
+// Grounded in Microsoft Learn (Clusters - Stop / Start / Delete REST ops):
+//   POST   .../clusters/{name}/stop  — async (202), releases compute, data survives
+//   POST   .../clusters/{name}/start — async (202), ~10-min warm-up
+//   DELETE .../clusters/{name}       — async (202); 14-day soft-delete window
+// All return 202 (long-running op) on the live service; we surface a provisional
+// provisioningState the caller renders in an async-receipt MessageBar.
+//
+// Auth: the Console UAMI's "Azure Kusto Contributor" grant
+// (833127c3-3d62-4978-9c27-c0a5e418f64f, granted in adx-cluster.bicep) includes
+// Microsoft.Kusto/clusters/stop/action + start/action + delete; no extra role
+// needed. Same sovereign-cloud ARM host via armBase() as the rest of this file.
+// No mocks. Real ARM REST only.
+// ============================================================
+
+export async function stopKustoCluster(): Promise<{ provisioningState: string }> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(`${clusterUrl(cfg)}/stop?api-version=${KUSTO_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202 && r.status !== 204) {
+    throw new KustoArmError(r.status, await r.text(), `stopKustoCluster failed ${r.status}`);
+  }
+  return { provisioningState: r.status === 202 ? 'Stopping' : 'Stopped' };
+}
+
+export async function startKustoCluster(): Promise<{ provisioningState: string }> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(`${clusterUrl(cfg)}/start?api-version=${KUSTO_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202 && r.status !== 204) {
+    throw new KustoArmError(r.status, await r.text(), `startKustoCluster failed ${r.status}`);
+  }
+  return { provisioningState: r.status === 202 ? 'Starting' : 'Running' };
+}
+
+/**
+ * DELETE the entire ADX cluster. Async (202). Azure keeps the cluster in a
+ * 14-day soft-delete window unless the resource carries the tag
+ * `opt-out-of-soft-delete=true`. The caller (cluster-editor "Danger zone")
+ * gates this behind a type-the-name confirmation.
+ */
+export async function deleteKustoCluster(): Promise<{ provisioningState: string }> {
+  const cfg = readKustoArmConfig();
+  const r = await callArm(`${clusterUrl(cfg)}?api-version=${KUSTO_API}`, { method: 'DELETE' });
+  // 200 (sync), 202 (async), 204 (already gone) are all success.
+  if (!r.ok && r.status !== 202 && r.status !== 204) {
+    throw new KustoArmError(r.status, await r.text(), `deleteKustoCluster failed ${r.status}`);
+  }
+  return { provisioningState: r.status === 202 ? 'Deleting' : 'Deleted' };
+}
+
+// ============================================================
 // Data connections (EventHub kind) — ARM REST
 //   Microsoft.Kusto/clusters/{name}/databases/{db}/dataConnections[/{name}]
 //   api-version = KUSTO_API (2023-08-15)
