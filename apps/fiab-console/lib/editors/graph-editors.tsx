@@ -11,8 +11,14 @@
  *    semantics) are dispatched via the existing /api/items/kql-database/[id]/query
  *    route, so no new BFF endpoints required here.
  *  - Vector store: backend picker (Cosmos vCore / AI Search / pgvector) +
- *    create-index form. Live similarity test deferred to v3.x — for now we
- *    persist the index spec into item state.
+ *    create-index form. Live similarity test is fully wired against Azure AI
+ *    Search: POST /api/items/vector-store/[id]/search dispatches to
+ *    foundry-client.vectorSearch() (k-NN + optional hybrid). Requires the
+ *    LOOM_AI_SEARCH_SERVICE env var and the Console UAMI 'Search Index Data
+ *    Contributor' RBAC on the search service (see ai-search.bicep) — without
+ *    them the route returns a 503 honest gate naming both. The non-ai-search
+ *    backends (cosmos-nosql / cosmos-vcore / pgvector) persist their spec to
+ *    Cosmos and surface an honest infra gate in the editor.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
