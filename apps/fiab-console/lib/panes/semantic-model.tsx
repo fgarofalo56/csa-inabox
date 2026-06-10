@@ -27,14 +27,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
-  makeStyles, tokens, Title2, Subtitle2, Caption1, Body1,
-  Badge, Button, Select, Spinner, Divider,
+  makeStyles, shorthands, tokens, Title2, Subtitle2, Caption1, Body1,
+  Badge, Button, Select, Spinner, Divider, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
 } from '@fluentui/react-components';
 import {
   Database20Regular, CloudArrowUp20Regular, Table20Regular,
+  DatabaseStack16Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
 
 interface AasDatabaseLite {
   name: string;
@@ -81,17 +83,26 @@ interface DeployResult {
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' },
+  loading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '240px',
+  },
   header: { display: 'flex', alignItems: 'center', gap: '12px' },
   spacer: { flex: 1 },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
     paddingTop: '16px', paddingRight: '20px', paddingBottom: '16px', paddingLeft: '20px',
     display: 'flex', flexDirection: 'column', gap: '12px',
   },
   cardHead: { display: 'flex', alignItems: 'center', gap: '8px' },
-  cardIcon: { fontSize: '20px', color: tokens.colorBrandForeground1, display: 'flex' },
+  cardIcon: {
+    fontSize: '20px', color: tokens.colorBrandForeground1,
+    display: 'flex', alignItems: 'center',
+  },
+  cardCount: { marginLeft: 'auto' },
   deployRow: { display: 'flex', alignItems: 'flex-end', gap: '12px', flexWrap: 'wrap' },
   field: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '220px' },
   fieldLabel: { color: tokens.colorNeutralForeground2, fontWeight: 600 },
@@ -101,13 +112,24 @@ const useStyles = makeStyles({
     gap: '10px',
   },
   dbTile: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     paddingTop: '12px', paddingRight: '14px', paddingBottom: '12px', paddingLeft: '14px',
     display: 'flex', flexDirection: 'column', gap: '6px',
+    transitionProperty: 'box-shadow, border-color, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
+      boxShadow: tokens.shadow4,
+    },
   },
-  dbName: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 },
+  dbName: {
+    display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600,
+    color: tokens.colorNeutralForeground1,
+  },
+  tileIcon: { color: tokens.colorBrandForeground1, display: 'flex', flexShrink: 0 },
   badgeRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
   meta: { color: tokens.colorNeutralForeground3 },
 });
@@ -149,7 +171,13 @@ export function SemanticModelWorkspacePane() {
 
   const deploy = useMutation({ mutationFn: deployModel });
 
-  if (isLoading) return <Spinner label="Loading semantic models…" />;
+  if (isLoading) {
+    return (
+      <div className={styles.loading}>
+        <Spinner size="medium" label="Loading semantic models…" />
+      </div>
+    );
+  }
   if (data && data.status === 401) return <SignInRequired subject="semantic models" />;
   if (!data || !data.ok) {
     return (
@@ -173,9 +201,14 @@ export function SemanticModelWorkspacePane() {
         <Title2>Semantic models</Title2>
         <div className={styles.spacer} />
         {data.serverName && (
-          <Badge appearance="tint" color="brand" icon={<Database20Regular />}>
-            {data.serverName}{data.region ? ` · ${data.region}` : ''}
-          </Badge>
+          <Tooltip
+            relationship="label"
+            content={`Env-pinned Azure Analysis Services server${data.region ? ` in ${data.region}` : ''}`}
+          >
+            <Badge appearance="tint" color="brand" icon={<Database20Regular />}>
+              {data.serverName}{data.region ? ` · ${data.region}` : ''}
+            </Badge>
+          </Tooltip>
         )}
       </div>
 
@@ -212,12 +245,15 @@ export function SemanticModelWorkspacePane() {
           <div className={styles.cardHead}>
             <span className={styles.cardIcon}><Database20Regular /></span>
             <Subtitle2>Tabular databases on {data.serverName}</Subtitle2>
+            <Badge className={styles.cardCount} appearance="tint" color="informative" size="small">
+              {databases.length}
+            </Badge>
           </div>
-          <div className={styles.dbGrid}>
+          <div className={styles.dbGrid} role="list" aria-label="Tabular databases">
             {databases.map((db) => (
-              <div key={db.name} className={styles.dbTile}>
+              <div key={db.name} className={styles.dbTile} role="listitem">
                 <div className={styles.dbName}>
-                  <Table20Regular /> {db.name}
+                  <span className={styles.tileIcon}><DatabaseStack16Regular /></span> {db.name}
                 </div>
                 <div className={styles.badgeRow}>
                   {db.storageMode && (
@@ -336,14 +372,25 @@ export function SemanticModelWorkspacePane() {
         <div className={styles.cardHead}>
           <span className={styles.cardIcon}><Table20Regular /></span>
           <Subtitle2>Loom-native models</Subtitle2>
+          {loomModels.length > 0 && (
+            <Badge className={styles.cardCount} appearance="tint" color="brand" size="small">
+              {loomModels.length}
+            </Badge>
+          )}
         </div>
         {loomModels.length === 0 ? (
-          <Body1 className={styles.meta}>No Loom-native semantic models in this tenant yet.</Body1>
+          <EmptyState
+            icon={<Table20Regular />}
+            title="No Loom-native semantic models yet"
+            body="Loom-native models work without any tabular server. Create a semantic model item to define tables, measures, and relationships — then deploy it to the tabular engine from here."
+          />
         ) : (
-          <div className={styles.dbGrid}>
+          <div className={styles.dbGrid} role="list" aria-label="Loom-native semantic models">
             {loomModels.map((m) => (
-              <div key={m.id} className={styles.dbTile}>
-                <div className={styles.dbName}><Table20Regular /> {m.name}</div>
+              <div key={m.id} className={styles.dbTile} role="listitem">
+                <div className={styles.dbName}>
+                  <span className={styles.tileIcon}><Table20Regular /></span> {m.name}
+                </div>
                 <Caption1 className={styles.meta}>{m.tableCount} {m.tableCount === 1 ? 'table' : 'tables'}</Caption1>
               </div>
             ))}
