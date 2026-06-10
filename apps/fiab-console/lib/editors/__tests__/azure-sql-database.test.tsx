@@ -20,10 +20,10 @@ import { UnifiedSqlDatabaseEditor } from '../unified-sql-database-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
 describe('AzureSqlDatabaseEditor', () => {
-  beforeEach(() => { installFetchMock({}); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('mounts and surfaces at least one ribbon button', async () => {
+    installFetchMock({});
     let err: unknown = null;
     try {
       render(<AzureSqlDatabaseEditor item={makeItem('azure-sql-database', 'Azure SQL database')} id="new" />);
@@ -32,6 +32,55 @@ describe('AzureSqlDatabaseEditor', () => {
       expect(ribbon.querySelectorAll('button').length).toBeGreaterThan(0);
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
+  });
+
+  it('mounts the live sys.* schema browser (SqlDbTree) in the left pane once a server + database are selected', async () => {
+    const m = installFetchMock({
+      // useSqlServers() inventory.
+      '/api/items/azure-sql-server': () => ({ ok: true, servers: [{ name: 'loom-sql-01', location: 'eastus2', fqdn: 'loom-sql-01.database.windows.net' }] }),
+      // useSqlDatabases() — route reads ?server= only.
+      '/api/items/azure-sql-server/current/databases': () => ({ ok: true, databases: [{ name: 'appdb' }] }),
+      // sys.* navigator routes (real backend; mocked transport here).
+      '/api/sqldb/tables': () => ({ ok: true, database: 'appdb', tables: [{ objectId: 1, schema: 'dbo', name: 'Orders', fullName: 'dbo.Orders', type: 'U', rowCount: 7 }] }),
+      '/api/sqldb/views': () => ({ ok: true, views: [] }),
+      '/api/sqldb/procedures': () => ({ ok: true, procedures: [] }),
+      '/api/sqldb/functions': () => ({ ok: true, functions: [] }),
+      '/api/sqldb/schemas': () => ({ ok: true, schemas: [{ schemaId: 1, name: 'dbo' }] }),
+      '/api/sqldb/table-types': () => ({ ok: true, tableTypes: [] }),
+    });
+    const calls = m.calls;
+
+    render(<AzureSqlDatabaseEditor item={makeItem('azure-sql-database', 'Azure SQL database')} id="sqldb-fixture" />);
+
+    // Pick the server, then the database, via the left-pane native <select>s.
+    await waitFor(() => expect(screen.getAllByRole('option', { name: /loom-sql-01/i }).length).toBeGreaterThan(0));
+    const serverSelect = screen.getAllByRole('combobox')
+      .find((el) => within(el).queryAllByRole('option', { name: /loom-sql-01/i }).length > 0);
+    expect(serverSelect).toBeTruthy();
+    fireEvent.change(serverSelect!, { target: { value: 'loom-sql-01' } });
+
+    await waitFor(() => expect(screen.getAllByRole('option', { name: /appdb/i }).length).toBeGreaterThan(0));
+    const dbSelect = screen.getAllByRole('combobox')
+      .find((el) => within(el).queryAllByRole('option', { name: /appdb/i }).length > 0);
+    expect(dbSelect).toBeTruthy();
+    fireEvent.change(dbSelect!, { target: { value: 'appdb' } });
+
+    // Click the left-pane "Browse objects" button to open the schema browser.
+    // (Both the ribbon and the left pane expose this label once connected, so
+    // target the first match — either opens the browser.)
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Browse objects$/i }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Browse objects$/i })[0]);
+
+    // SqlDbTree mounts and pulls the real table from the (mocked) sys.tables backend.
+    await waitFor(() => expect(screen.getByRole('tree', { name: /SQL database objects/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('dbo.Orders')).toBeInTheDocument());
+
+    // Proves the browser targeted the user-selected connection via the
+    // explicit ?server=&database= override (no Fabric workspace consulted).
+    const sqldbCall = calls.find((c) => c.url.includes('/api/sqldb/tables'));
+    expect(sqldbCall?.url).toMatch(/server=loom-sql-01/);
+    expect(sqldbCall?.url).toMatch(/database=appdb/);
+    expect(sqldbCall?.url).not.toMatch(/workspaceId=[^&]+/);
   });
 });
 

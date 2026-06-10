@@ -56,6 +56,19 @@
 > separate (mirroring honest-gated; SQL-2025 is its own item type). Rows below
 > are updated accordingly.
 
+> **rev.3 — standalone `AzureSqlDatabaseEditor` schema browser wired (audit-t16).**
+> The secondary, server-scoped `AzureSqlDatabaseEditor` (in `azure-sql-editors.tsx`,
+> used standalone, not the registered item editor) previously carried a
+> deferred-to-v3.x note in its left pane ("Tables, schemas, and sample queries
+> deferred to v3.x"). That gate is removed: once a server + database are picked
+> from its ARM dropdowns, a **Browse objects** affordance (left-pane button +
+> **Schema → Browse objects** ribbon action) mounts the same `SqlDbTree`
+> navigator over the same `sys.*`-over-TDS backend, using the explicit
+> `?server=&database=` BFF override (so **no** Fabric workspace is consulted —
+> `workspaceId=""`). `Script as CREATE/ALTER/DROP` from the tree's context menus
+> loads DDL into the Query tab — the schema-import path. Both Azure SQL editors
+> now expose the rich object tree.
+
 ---
 
 ## Azure portal blade inventory → Loom coverage → backend

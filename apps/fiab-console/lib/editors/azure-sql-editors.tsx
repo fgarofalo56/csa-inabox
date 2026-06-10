@@ -630,6 +630,10 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const [mirrorState, setMirrorState] = useState<any>(null);
   const [sql2025State, setSql2025State] = useState<any>(null);
 
+  // Left-pane schema-object browser (live sys.* over TDS via SqlDbTree).
+  const [schemaTab, setSchemaTab] = useState<'none' | 'browser'>('none');
+  const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+
   // Geo-replica dialog
   const [geoOpen, setGeoOpen] = useState(false);
   const [replicaServer, setReplicaServer] = useState('');
@@ -774,6 +778,9 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
       { label: '2025', actions: [
         { label: 'Probe engine', onClick: canRun ? probe2025 : undefined, disabled: !canRun },
       ]},
+      { label: 'Schema', actions: [
+        { label: 'Browse objects', onClick: canRun ? () => setSchemaTab((t) => (t === 'none' ? 'browser' : 'none')) : undefined, disabled: !canRun, title: !canRun ? 'pick server + database first' : 'Toggle the sys.* object browser in the left pane' },
+      ]},
     ]},
   ], [canRun, loading, run, toggleMirror, probe2025, newTsql, openGeo]);
 
@@ -841,9 +848,61 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
             </MessageBar>
           )}
           <Caption1>
-            The console MI must be the AAD admin on the server (or a member of the AAD admin group).
-            Tables, schemas, and sample queries deferred to v3.x.
+            The console UAMI must be the Microsoft Entra admin on the server (or a member of the Entra
+            admin group). Select a server and database above to browse tables, views, and schemas over live TDS.
           </Caption1>
+          {server && database && (
+            schemaTab === 'none' ? (
+              <Button
+                size="small"
+                appearance="outline"
+                icon={<Database20Regular />}
+                onClick={() => setSchemaTab('browser')}
+              >
+                Browse objects
+              </Button>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <Caption1>Schema browser — <strong>{database}</strong></Caption1>
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    icon={<ArrowDownload20Regular />}
+                    onClick={() => setBrowserRefreshKey((k) => k + 1)}
+                    aria-label="Refresh schema browser"
+                  />
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    onClick={() => setSchemaTab('none')}
+                    aria-label="Close schema browser"
+                  >
+                    Close
+                  </Button>
+                </div>
+                <div style={{
+                  flex: 1,
+                  minHeight: 360,
+                  border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  borderRadius: 4,
+                  overflow: 'hidden',
+                }}>
+                  <SqlDbTree
+                    workspaceId=""
+                    itemId={id}
+                    server={server}
+                    database={database}
+                    refreshKey={browserRefreshKey}
+                    onOpenQuery={(sql) => {
+                      setSqlText(sql);
+                      setTab('query');
+                    }}
+                  />
+                </div>
+              </>
+            )
+          )}
         </div>
       }
       main={
