@@ -1017,6 +1017,12 @@ export interface OrchestrateOptions {
    *  advertised to the model — execution still resolves against the full
    *  registry. e.g. ['dax_','loom_'] for the DAX persona. */
   toolPrefixes?: string[];
+  /** Alias of systemPromptOverride — used by persona-scoped surfaces (e.g. the
+   *  Report Copilot). Honored as a fallback in the system-message build. */
+  systemPrompt?: string;
+  /** Alias of registryOverride — a persona-scoped tool registry (MCP shim NOT
+   *  applied). Used by the Report Copilot. */
+  registry?: LoomToolRegistry;
 }
 
 interface ChatMessage {
@@ -1422,18 +1428,19 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     return;
   }
 
-  const reg = opts.registryOverride ?? getRegistry();
+  const reg = opts.registryOverride ?? opts.registry ?? getRegistry();
   // Register any connected external MCP tool servers (Build 2026 "Connect MCP
   // tools") so agent-loom can call them alongside the built-in Loom tools.
   // Best-effort: a missing/unreachable MCP server never breaks the chat. Skip
-  // entirely for a scoped persona registry (registryOverride) — those expose a
-  // deliberately tight tool set.
-  if (!opts.registryOverride) {
+  // entirely for a scoped persona registry (registryOverride / registry) —
+  // those expose a deliberately tight tool set.
+  if (!opts.registryOverride && !opts.registry) {
     try {
       const { buildMcpShim } = await import('./mcp-shim');
       await buildMcpShim(reg, userOid);
     } catch { /* MCP shim optional — continue with built-in tools */ }
   }
+
 
   // Persona switch: when a known persona id is supplied, override the system
   // prompt and narrow the exposed tool set to the persona's allowedTools (+ any
@@ -1453,7 +1460,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
   const systemPrompt = persona?.systemPrompt || SYSTEM_PROMPT;
   const messages: ChatMessage[] = [
-    { role: 'system', content: opts.systemPromptOverride ?? opts.personaSystemPrompt ?? systemPrompt },
+    { role: 'system', content: opts.systemPromptOverride ?? opts.personaSystemPrompt ?? opts.systemPrompt ?? systemPrompt },
   ];
   // Inject per-surface context (e.g. the activator id + existing rule names) as
   // a second system message so the model grounds its draft in the live editor.

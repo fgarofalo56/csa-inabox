@@ -12511,6 +12511,224 @@ interface ReportLite {
   modifiedDateTime?: string; modifiedBy?: string; reportType?: string;
 }
 
+// ── Report Copilot ────────────────────────────────────────────────────────
+// Narrative-summary + suggest-visuals over the Loom tabular semantic layer
+// (Synapse Dedicated SQL pool) — NO Power BI dependency (no-fabric-dependency.md).
+// Streams from POST /api/items/report/copilot; an approved visual is POSTed to
+// /api/items/report/<id>/visual which writes it to the report's state.content
+// where the Loom-native viewer renders it.
+
+type CopilotStep =
+  | { kind: 'thought'; content: string }
+  | { kind: 'tool_call'; name: string; args: unknown; callId: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: any; error?: string }
+  | { kind: 'final'; content: string }
+  | { kind: 'error'; error: string };
+
+interface PendingVisual {
+  visualType: string; title: string; field: string; sql: string;
+  position?: { x: number; y: number; width: number; height: number };
+}
+
+interface LoomVisualEntry { type: string; title: string; field?: string; config?: any }
+interface LoomPageEntry { name: string; displayName?: string; visuals?: LoomVisualEntry[] }
+
+/**
+ * ReportCopilotPanel — bound to the report item's Cosmos id (`reportId`).
+ * Grounds its narrative on real Synapse aggregates and lets the user approve a
+ * suggested visual, which is written to the report's Loom-native content.
+ */
+function ReportCopilotPanel({ reportId, reportName }: { reportId: string; reportName?: string }) {
+  const s = useStyles();
+  const [prompt, setPrompt] = useState('');
+  const [running, setRunning] = useState(false);
+  const [steps, setSteps] = useState<CopilotStep[]>([]);
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingVisual | null>(null);
+  const [aoaiGate, setAoaiGate] = useState<string | null>(null);
+  const [topError, setTopError] = useState<string | null>(null);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pages, setPages] = useState<LoomPageEntry[]>([]);
+
+  // Load the report's Loom-native content (pages + visuals) so newly-added
+  // visuals are visible immediately. Reads state.content via the loom: pages route.
+  const loadLoomContent = useCallback(async () => {
+    if (!reportId) return;
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent('loom:' + reportId)}/pages?workspaceId=loom-native`);
+      const j = await r.json();
+      setPages(j.ok && Array.isArray(j.pages) ? j.pages : []);
+    } catch { setPages([]); }
+  }, [reportId]);
+  useEffect(() => { loadLoomContent(); }, [loadLoomContent]);
+
+  const run = useCallback(async () => {
+    const p = prompt.trim();
+    if (!p || running) return;
+    setRunning(true); setSteps([]); setNarrative(null); setPending(null);
+    setAoaiGate(null); setTopError(null); setApplyMsg(null);
+    try {
+      const res = await fetch('/api/items/report/copilot', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: p, reportId }),
+      });
+      if (res.status === 503) {
+        const j = await res.json().catch(() => ({}));
+        setAoaiGate(j.error || 'No AOAI deployment wired to the Foundry hub.');
+        setRunning(false); return;
+      }
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}));
+        setTopError(j.error || `HTTP ${res.status}`); setRunning(false); return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = ''; let currentEvent = 'message';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) currentEvent = line.slice(6).trim();
+          else if (line.startsWith('data:')) {
+            const data = line.slice(5).trim();
+            if (!data) continue;
+            try {
+              const parsed = JSON.parse(data);
+              if (currentEvent === 'step') {
+                const step = parsed as CopilotStep;
+                setSteps((prev) => [...prev, step]);
+                if (step.kind === 'final') setNarrative(step.content || '');
+                if (step.kind === 'tool_result' && step.name === 'report_suggest_visual' && step.result?.ok && step.result?.suggestion) {
+                  setPending(step.result.suggestion as PendingVisual);
+                }
+              }
+            } catch { /* skip malformed SSE line */ }
+          }
+        }
+      }
+    } catch (e: any) {
+      setTopError(e?.message || String(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [prompt, running, reportId]);
+
+  const addVisual = useCallback(async () => {
+    if (!pending || !reportId) return;
+    setApplyBusy(true); setApplyMsg(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/visual`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: pending }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setApplyMsg({ ok: true, text: `Added "${j.visual?.title}" to ${j.pageName || 'the report'} (${j.backend}).` });
+        setPending(null);
+        await loadLoomContent();
+      } else {
+        setApplyMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) {
+      setApplyMsg({ ok: false, text: e?.message || String(e) });
+    } finally {
+      setApplyBusy(false);
+    }
+  }, [pending, reportId, loadLoomContent]);
+
+  const totalVisuals = pages.reduce((n, p) => n + (p.visuals?.length || 0), 0);
+
+  return (
+    <div className={s.card} style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <Sparkle16Regular />
+        <Subtitle2>Report Copilot</Subtitle2>
+        <Badge appearance="tint" color="brand">Loom-native · Synapse</Badge>
+      </div>
+      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+        Generate a narrative summary of {reportName ? `“${reportName}”` : 'this report'} grounded on real aggregates from the bound
+        CSA Loom semantic model (Synapse Dedicated SQL pool), and get a suggested visual you can add to the report. No Power BI required.
+      </Caption1>
+      <Textarea
+        placeholder='e.g. "Summarize total revenue by product category and suggest a chart."'
+        value={prompt}
+        onChange={(_e, d) => setPrompt(d.value)}
+        rows={2}
+        disabled={running}
+      />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <Button appearance="primary" icon={running ? <Spinner size="tiny" /> : <Sparkle16Regular />} disabled={running || !prompt.trim()} onClick={run}>
+          {running ? 'Working…' : 'Generate narrative & visual'}
+        </Button>
+      </div>
+
+      {aoaiGate && (
+        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Copilot model not deployed</MessageBarTitle>
+            {aoaiGate} Deploy a gpt-4o / gpt-4.1 class model in Azure AI Foundry, then set it under Admin → Tenant settings → Copilot &amp; Agents.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {topError && (
+        <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{topError}</MessageBarBody></MessageBar>
+      )}
+
+      {narrative && (
+        <div className={s.card} style={{ marginTop: 8, backgroundColor: tokens.colorNeutralBackground2 }}>
+          <Subtitle2 style={{ display: 'block', marginBottom: 4 }}>Narrative summary</Subtitle2>
+          <Body1 style={{ whiteSpace: 'pre-wrap' }}>{narrative}</Body1>
+        </div>
+      )}
+
+      {pending && (
+        <MessageBar intent="info" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Suggested visual</MessageBarTitle>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+              <Badge appearance="filled" color="brand">{pending.visualType}</Badge>
+              <span><strong>{pending.title}</strong></span>
+              <Caption1>field: {pending.field}</Caption1>
+            </div>
+            <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'var(--loom-font-mono, ui-monospace, monospace)' }}>{pending.sql}</Caption1>
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="primary" icon={applyBusy ? <Spinner size="tiny" /> : <Add20Regular />} disabled={applyBusy} onClick={addVisual}>
+              {applyBusy ? 'Adding…' : 'Add to report'}
+            </Button>
+            <Button appearance="subtle" disabled={applyBusy} onClick={() => setPending(null)}>Dismiss</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+      {applyMsg && (
+        <MessageBar intent={applyMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{applyMsg.text}</MessageBarBody></MessageBar>
+      )}
+
+      <div className={s.card} style={{ marginTop: 8 }}>
+        <Subtitle2 style={{ display: 'block', marginBottom: 6 }}>Report content (Loom-native) · {totalVisuals} visual{totalVisuals === 1 ? '' : 's'}</Subtitle2>
+        {pages.length === 0 && <Caption1>No Loom-native visuals yet. Generate one above to add the first.</Caption1>}
+        {pages.map((p, i) => (
+          <div key={p.name || i} style={{ marginBottom: 6 }}>
+            <Caption1><strong>{p.displayName || p.name}</strong></Caption1>
+            {(p.visuals || []).length === 0 && <div><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>— no visuals</Caption1></div>}
+            {(p.visuals || []).map((v, j) => (
+              <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0' }}>
+                <Badge appearance="outline" color="brand">{v.type}</Badge>
+                <span>{v.title}</span>
+                {v.field && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {v.field}</Caption1>}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReportLikeEditor({
   item, id, kind, listPath, detailPathBase,
 }: {
@@ -12558,6 +12776,9 @@ function ReportLikeEditor({
   // Report main view: the in-Loom Visual designer (build visuals over the
   // model with Fields/Format/Filters panes) vs the live Power BI embed.
   const [reportView, setReportView] = useState<'design' | 'view'>('design');
+  // Report Copilot (narrative + suggest-visuals) — Loom-native, bound to this
+  // report item's Cosmos id (the editor `id` prop). Works with or without PBI.
+  const [copilotOpen, setCopilotOpen] = useState(kind === 'report');
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -12845,8 +13066,11 @@ function ReportLikeEditor({
         { label: 'Apply theme', onClick: hasReport ? () => setShowThemeDialog(true) : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'apply a built-in or custom JSON theme to the embedded report (report.applyTheme)' },
         { label: 'Reset theme', onClick: hasReport ? resetTheme : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reset the report to its authored theme (report.resetTheme)' },
       ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'Copilot', actions: [
+        { label: copilotOpen ? 'Hide Report Copilot' : 'Report Copilot', onClick: () => setCopilotOpen((v) => !v), title: 'narrative summary + suggested visuals over the bound Loom semantic model (no Power BI required)' },
+      ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme, copilotOpen]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -12914,6 +13138,7 @@ function ReportLikeEditor({
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
           {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
+          {kind === 'report' && copilotOpen && <ReportCopilotPanel reportId={id} reportName={report?.name} />}
           {!powerBiConfigured && (
             <MessageBar intent="info" style={{ marginBottom: 12 }}>
               <MessageBarBody>
