@@ -259,7 +259,12 @@ function fabricSourceType(kind: string | undefined): string {
     case 'azure-sql': return 'AzureSqlDatabase';
     case 'snowflake': return 'Snowflake';
     case 'cosmos': return 'CosmosDb';
+    // BigQuery + Oracle integrate into Fabric via open mirroring partners
+    // (Google BigQuery preview / Oracle GoldenGate), so the opt-in Fabric path
+    // models them as GenericMirror. The Azure-native DEFAULT (ADF copy → Bronze)
+    // never reaches this function — it is the no-Fabric path below.
     case 'bigquery': return 'GenericMirror';
+    case 'oracle': return 'GenericMirror';
     default: return 'AzureSqlDatabase';
   }
 }

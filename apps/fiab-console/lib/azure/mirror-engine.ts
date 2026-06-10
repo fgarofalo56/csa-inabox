@@ -600,15 +600,30 @@ export async function runMirrorSnapshot(
     '. Query it from Synapse Serverless SQL, a Loom notebook, or attach it to a lakehouse via Weave.';
 
   if (!engineCanSnapshot(src.sourceType)) {
+    // BigQuery + Oracle replicate via the ADF copy backend (Google BigQuery V2 /
+    // Oracle connectors → ADLS Bronze), not the built-in TDS/PG/Cosmos snapshot
+    // engine. Give source-specific guidance so the gate names the exact Azure
+    // path + grants rather than a generic "follow-up".
+    let message =
+      `${src.sourceType || 'This source'} authenticates with its own runtime — its Azure-native copy ` +
+      '(ADF / Synapse Link) is a disclosed follow-up. Azure SQL DB/MI, SQL Server, PostgreSQL, and ' +
+      'Cosmos DB replicate now via this engine.';
+    if (src.sourceType === 'GoogleBigQuery') {
+      message =
+        'BigQuery mirrors via the Azure-native ADF copy backend (Google BigQuery V2 connector → ADLS Bronze). ' +
+        'Configure the ADF CDC env vars (LOOM_ADF_NAME + LOOM_MIRROR_SOURCE_LINKED_SERVICE pointing at a ' +
+        'GoogleBigQueryV2 linked service holding the service-account key, + LOOM_MIRROR_ADLS_LINKED_SERVICE), ' +
+        'then Start. No Microsoft Fabric required.';
+    } else if (src.sourceType === 'Oracle') {
+      message =
+        'Oracle mirrors via the Azure-native ADF copy backend (Oracle connector through the on-prem data ' +
+        'gateway / self-hosted IR → ADLS Bronze). Configure the ADF CDC env vars (LOOM_ADF_NAME + ' +
+        'LOOM_MIRROR_SOURCE_LINKED_SERVICE pointing at an Oracle linked service bound to the gateway with the ' +
+        'sync-user credential, + LOOM_MIRROR_ADLS_LINKED_SERVICE), then Start. No Microsoft Fabric required.';
+    }
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
-      gate: {
-        missing: `${src.sourceType} copy runtime`,
-        message:
-          `${src.sourceType || 'This source'} authenticates with its own runtime — its Azure-native copy ` +
-          '(ADF / Synapse Link) is a disclosed follow-up. Azure SQL DB/MI, SQL Server, PostgreSQL, and ' +
-          'Cosmos DB replicate now via this engine.',
-      },
+      gate: { missing: `${src.sourceType} copy runtime`, message },
       note,
     };
   }

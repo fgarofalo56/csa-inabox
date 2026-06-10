@@ -1090,6 +1090,36 @@ of RBAC, grant the **Console UAMI** the `Storage Blob Delegator` role on the DLZ
 storage account (it is not part of the default grant set). The editor's "Producer
 credentials → SAS" tab surfaces this as an honest gate with the exact command.
 
+## BigQuery + Oracle mirror sources (Fabric Build 2026 #19) {#mirror-bigquery-oracle}
+
+The mirror wizard's **Google BigQuery** and **Oracle** source cards capture the
+source-specific connection coordinates the Azure-native default backend (ADF copy
+→ ADLS Bronze Delta) needs. **No Microsoft Fabric** is involved on the default
+path; Fabric open-mirroring (Google BigQuery preview / Oracle GoldenGate) is the
+opt-in alternative only.
+
+**No NEW env var is introduced** — both reuse the existing ADF CDC plumbing
+(`LOOM_ADF_NAME`, `LOOM_MIRROR_SOURCE_LINKED_SERVICE`,
+`LOOM_MIRROR_ADLS_LINKED_SERVICE`). The one-time tenant setup is the *source-side*
+prerequisite the wizard surfaces as an honest gate:
+
+| Source | Wizard fields | One-time tenant prerequisite |
+|---|---|---|
+| **Google BigQuery** | GCP project id, dataset, Key Vault connection holding the service-account JSON | An ADF **GoogleBigQueryV2** linked service bound to the service-account key; the SA needs **BigQuery Data Viewer** + **BigQuery Job User** on the project. Point `LOOM_MIRROR_SOURCE_LINKED_SERVICE` at it. |
+| **Oracle** | host, service name/SID, on-prem data gateway (SHIR), sync user, Key Vault connection holding the sync-user secret | An **on-prem data gateway / self-hosted integration runtime** that can reach the Oracle listener, plus an ADF **Oracle** linked service bound to it. The sync user needs `CREATE SESSION`, `SELECT_CATALOG_ROLE`, `EXECUTE_CATALOG_ROLE`, `SELECT ANY TABLE`, `LOGMINING` (see Learn). Point `LOOM_MIRROR_SOURCE_LINKED_SERVICE` at it. |
+
+Until the linked services are configured, **Start** returns a precise gate naming
+the exact env var + grants (no fake "Running"), and **Verify** returns a
+source-specific reachability note (the service-account / gateway is validated when
+the copy first runs). All wizard fields render + persist regardless, so the
+surface is never empty.
+
+Learn references: [BigQuery mirroring](https://learn.microsoft.com/fabric/mirroring/google-bigquery) ·
+[Oracle mirroring](https://learn.microsoft.com/fabric/mirroring/oracle) ·
+[Oracle required permissions](https://learn.microsoft.com/fabric/mirroring/oracle-limitations#required-permissions) ·
+[ADF BigQuery V2 connector](https://learn.microsoft.com/azure/data-factory/connector-google-bigquery) ·
+[ADF Oracle connector](https://learn.microsoft.com/azure/data-factory/connector-oracle).
+
 ## Item-level Share — per-database Azure RBAC (Access control / IAM) {#sql-database-share-rbac}
 
 The **Share** tab in the SQL database editor mirrors the Azure portal *Access

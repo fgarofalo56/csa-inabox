@@ -47,10 +47,17 @@ export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTyp
   { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
   { id: 'CosmosDb', name: 'Azure Cosmos DB', accent: '#3999c6', connTypes: ['cosmos'] },
   { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['generic-sql', 'connection-string' as string] },
+  { id: 'GoogleBigQuery', name: 'Google BigQuery', accent: '#4285f4', connTypes: ['generic-sql', 'connection-string' as string] },
+  { id: 'Oracle', name: 'Oracle Database', accent: '#c74634', connTypes: ['generic-sql', 'connection-string' as string] },
   { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
 ];
+
+/** Sources whose connection needs a GCP project id + dataset rather than a SQL server FQDN. */
+const BIGQUERY_SOURCES = new Set(['GoogleBigQuery']);
+/** Sources whose connection needs a self-hosted/on-prem gateway (IR) + sync user. */
+const GATEWAY_SOURCES = new Set(['Oracle']);
 
 const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
@@ -98,7 +105,20 @@ export interface MirrorSourceWizardProps {
   /** Present when editing — the mirror being edited (enables credential-aware table load). */
   mirrorId?: string;
   /** Prefill for the edit flow. */
-  initialSrc?: { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean };
+  initialSrc?: {
+    sourceType?: string; server?: string; database?: string; connectionId?: string;
+    tables?: MirrorTableSpec[]; displayName?: string;
+    /** Snowflake-only: also mirror Snowflake-managed Iceberg tables. */
+    includeIcebergTables?: boolean;
+    /** BigQuery: GCP project id (lands in source.typeProperties.projectId). */
+    projectId?: string;
+    /** Oracle: TNS service name / SID (the connectable "database" surrogate). */
+    serviceName?: string;
+    /** Oracle: on-prem data gateway / self-hosted IR name that reaches the source. */
+    gateway?: string;
+    /** Oracle: the source sync user the engine connects as. */
+    syncUser?: string;
+  };
   onClose: () => void;
   onCreated: (mirrorId: string, displayName: string) => void;
   onUpdated: (mirrorId: string) => void;
@@ -114,6 +134,12 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [createServer, setCreateServer] = useState('');
   const [createDb, setCreateDb] = useState('');
   const [createName, setCreateName] = useState('');
+  // Source-specific credential fields. BigQuery uses projectId + dataset (=database);
+  // Oracle uses serviceName + gateway (on-prem data gateway / SHIR) + syncUser.
+  const [projectId, setProjectId] = useState('');
+  const [serviceName, setServiceName] = useState('');
+  const [gateway, setGateway] = useState('');
+  const [syncUser, setSyncUser] = useState('');
   const [connId, setConnId] = useState('');
   // Snowflake-only: also mirror Snowflake-managed Iceberg tables (Fabric Build
   // 2026 parity). When on, the engine enumerates + replicates Iceberg tables
@@ -131,6 +157,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [createErr, setCreateErr] = useState<string | null>(null);
 
   const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || MIRROR_SOURCES[0], [createSrc]);
+  const isBigQuery = BIGQUERY_SOURCES.has(createSrc);
+  const isOracle = GATEWAY_SOURCES.has(createSrc);
 
   const loadConnections = useCallback(async () => {
     try {
@@ -150,10 +178,15 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       setCreateDb(initialSrc.database || '');
       setConnId(initialSrc.connectionId || '');
       setCreateName(initialSrc.displayName || '');
+      setProjectId(initialSrc.projectId || '');
+      setServiceName(initialSrc.serviceName || '');
+      setGateway(initialSrc.gateway || '');
+      setSyncUser(initialSrc.syncUser || '');
       setSelTables(new Set((initialSrc.tables || []).map(tkey)));
       setIncludeIceberg(!!initialSrc.includeIcebergTables);
     } else {
       setCreateSrc('AzureSqlDatabase'); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateName('');
+      setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
       setSelTables(new Set());
       setIncludeIceberg(false);
     }
@@ -172,9 +205,20 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     }
   }, [pickedConn]);
 
+  // Effective {server, database} the engine/BFF consume — BigQuery uses
+  // projectId/dataset, Oracle uses host/serviceName, everything else server/db.
+  const effServer = useMemo(
+    () => (isBigQuery ? (projectId.trim() || createServer.trim()) : createServer.trim()),
+    [isBigQuery, projectId, createServer],
+  );
+  const effDb = useMemo(
+    () => (isBigQuery ? createDb.trim() : isOracle ? (serviceName.trim() || createDb.trim()) : createDb.trim()),
+    [isBigQuery, isOracle, createDb, serviceName],
+  );
+
   const loadSourceTables = useCallback(async () => {
-    if (!createServer.trim() && createSrc !== 'CosmosDb') { setTablesMsg('Enter the server/host and database first.'); return; }
-    if (!createDb.trim()) { setTablesMsg('Enter the database first.'); return; }
+    if (!effServer && createSrc !== 'CosmosDb') { setTablesMsg(isBigQuery ? 'Enter the GCP project and dataset first.' : 'Enter the server/host and database first.'); return; }
+    if (!effDb) { setTablesMsg(isBigQuery ? 'Enter the dataset first.' : isOracle ? 'Enter the service name first.' : 'Enter the database first.'); return; }
     setTablesLoading(true); setTablesMsg(null); setAvailTables(null);
     try {
       // Editing an existing mirror → credential-aware per-item route (resolves the
@@ -183,7 +227,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/tables?workspaceId=${encodeURIComponent(workspaceId)}`)
         : await fetch('/api/items/mirrored-database/source-tables', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sourceType: createSrc, server: createServer.trim(), database: createDb.trim() }),
+            body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb }),
           });
       const j = await r.json();
       if (!j.ok) { setTablesMsg(j.error || 'Could not list tables.'); setAvailTables([]); return; }
@@ -191,22 +235,22 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       if (!(j.tables || []).length) setTablesMsg('No tables found.');
     } catch (e: any) { setTablesMsg(e?.message || String(e)); setAvailTables([]); }
     finally { setTablesLoading(false); }
-  }, [createSrc, createServer, createDb, mirrorId, workspaceId]);
+  }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId]);
 
   const runVerify = useCallback(async () => {
-    if (!createServer.trim() || !createDb.trim()) { setVerify({ status: 'err', msg: 'Enter the server and database first.' }); return; }
+    if (!effServer || !effDb) { setVerify({ status: 'err', msg: isBigQuery ? 'Enter the GCP project and dataset first.' : isOracle ? 'Enter the host and service name first.' : 'Enter the server and database first.' }); return; }
     setVerify({ status: 'busy' });
     try {
       const r = await fetch('/api/items/mirrored-database/verify', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sourceType: createSrc, server: createServer.trim(), database: createDb.trim() }),
+        body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb }),
       });
       const j = await r.json();
       if (j.ok && j.verified) setVerify({ status: 'ok', msg: j.detail });
       else if (j.ok) setVerify({ status: 'warn', msg: j.detail });
       else setVerify({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'verification failed') });
     } catch (e: any) { setVerify({ status: 'err', msg: e?.message || String(e) }); }
-  }, [createSrc, createServer, createDb]);
+  }, [createSrc, effServer, effDb, isBigQuery, isOracle]);
 
   const submit = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -214,15 +258,23 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     try {
       // Iceberg-table inclusion is Snowflake-only (Fabric Build 2026 parity).
       const wantIceberg = createSrc === 'Snowflake' && includeIceberg;
+      // The engine reads a flat {server, database} pair (effServer/effDb,
+      // memoized above). BigQuery has no SQL server FQDN — the connectable
+      // "database" is the dataset, plus a GCP projectId. Oracle's connectable
+      // "database" is the TNS service name, with an on-prem data gateway (SHIR) +
+      // a sync user. Map source-specific fields onto the canonical pair so
+      // Start/verify/source-tables all work unchanged.
+      const sourceTypeProps: Record<string, unknown> = { server: effServer, database: effDb };
+      if (isBigQuery && projectId.trim()) sourceTypeProps.projectId = projectId.trim();
+      if (isOracle) {
+        if (serviceName.trim()) sourceTypeProps.serviceName = serviceName.trim();
+        if (gateway.trim()) sourceTypeProps.gateway = gateway.trim();
+        if (syncUser.trim()) sourceTypeProps.syncUser = syncUser.trim();
+      }
+      if (wantIceberg) sourceTypeProps.includeIcebergTables = true;
       const mirroringDef = {
         properties: {
-          source: {
-            type: createSrc,
-            typeProperties: {
-              server: createServer, database: createDb,
-              ...(wantIceberg ? { includeIcebergTables: true } : {}),
-            },
-          },
+          source: { type: createSrc, typeProperties: sourceTypeProps },
           target: { type: 'MountedRelationalDatabase', typeProperties: { format: 'Delta' } },
         },
       };
@@ -231,7 +283,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       };
       const payload = {
         displayName: createName.trim(), definition, sourceType: createSrc,
-        server: createServer.trim(), database: createDb.trim(),
+        server: effServer, database: effDb,
+        projectId: isBigQuery ? (projectId.trim() || undefined) : undefined,
+        serviceName: isOracle ? (serviceName.trim() || undefined) : undefined,
+        gateway: isOracle ? (gateway.trim() || undefined) : undefined,
+        syncUser: isOracle ? (syncUser.trim() || undefined) : undefined,
         connectionId: connId || undefined,
         tables: (availTables || []).filter((t) => selTables.has(tkey(t))),
         includeIcebergTables: wantIceberg,
@@ -252,7 +308,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         onCreated(newId || '', createName.trim());
       }
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, createServer, createDb, connId, includeIceberg, editing, mirrorId, availTables, selTables, onCreated, onUpdated]);
+  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, editing, mirrorId, availTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -269,7 +325,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   {MIRROR_SOURCES.map((src) => (
                     <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
                       style={{ borderLeftColor: src.accent }}
-                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); if (src.id !== 'Snowflake') setIncludeIceberg(false); }} role="button" tabIndex={0}>
+                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); setProjectId(''); setServiceName(''); setGateway(''); setSyncUser(''); setVerify({ status: 'idle' }); if (src.id !== 'Snowflake') setIncludeIceberg(false); }} role="button" tabIndex={0}>
                       <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
                       <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
                     </div>
@@ -283,8 +339,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>2</span><Subtitle2>Connection &amp; authentication</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  Pick a saved connection or create one. Credentials are stored in Key Vault — choose SQL password /
-                  connection string / service principal so the source accepts the login (no “token-identified principal” errors).
+                  {isBigQuery
+                    ? 'BigQuery authenticates with a Google service-account key. Create a connection-string connection holding the service-account JSON (stored in Key Vault), then enter the GCP project + dataset below.'
+                    : isOracle
+                    ? 'Oracle reaches its source through an on-prem data gateway (self-hosted integration runtime). Create a connection-string / SQL-password connection (sync user credential → Key Vault), then enter the host, service name, gateway, and sync user below.'
+                    : 'Pick a saved connection or create one. Credentials are stored in Key Vault — choose SQL password / connection string / service principal so the source accepts the login (no “token-identified principal” errors).'}
                 </Caption1>
                 <div className={s.connRow} style={{ marginTop: 8 }}>
                   <Field style={{ flex: 1 }}>
@@ -306,14 +365,44 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
-                  <Field label="Server / host" style={{ flex: 1 }}>
-                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
-                  </Field>
-                  <Field label="Database" style={{ flex: 1 }}>
-                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
-                  </Field>
-                </div>
+                {isBigQuery ? (
+                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <Field label="GCP project id" required hint="The Google Cloud project that owns the dataset." style={{ flex: 1 }}>
+                      <Input value={projectId} onChange={(_, d) => { setProjectId(d.value); setVerify({ status: 'idle' }); }} placeholder="my-gcp-project" />
+                    </Field>
+                    <Field label="Dataset" required hint="The BigQuery dataset to mirror." style={{ flex: 1 }}>
+                      <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="analytics" disabled={!!pickedConn?.database} />
+                    </Field>
+                  </div>
+                ) : isOracle ? (
+                  <>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                      <Field label="Host" required hint="Oracle listener host (and :port if not 1521)." style={{ flex: 1 }}>
+                        <Input value={createServer} onChange={(_, d) => { setCreateServer(d.value); setVerify({ status: 'idle' }); }} placeholder="oracle.contoso.com:1521" disabled={!!pickedConn?.host} />
+                      </Field>
+                      <Field label="Service name / SID" required hint="The TNS service name (e.g. ORCLPDB1)." style={{ flex: 1 }}>
+                        <Input value={serviceName} onChange={(_, d) => { setServiceName(d.value); setVerify({ status: 'idle' }); }} placeholder="ORCLPDB1" />
+                      </Field>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                      <Field label="On-prem data gateway (SHIR)" required hint="The self-hosted integration runtime / on-prem data gateway that can reach Oracle." style={{ flex: 1 }}>
+                        <Input value={gateway} onChange={(_, d) => setGateway(d.value)} placeholder="loom-onprem-ir" />
+                      </Field>
+                      <Field label="Sync user" hint="The Oracle user the engine connects as (LogMiner + SELECT grants)." style={{ flex: 1 }}>
+                        <Input value={syncUser} onChange={(_, d) => setSyncUser(d.value)} placeholder="FABRIC_SYNC" />
+                      </Field>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <Field label="Server / host" style={{ flex: 1 }}>
+                      <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
+                    </Field>
+                    <Field label="Database" style={{ flex: 1 }}>
+                      <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
+                    </Field>
+                  </div>
+                )}
                 <div style={{ marginTop: 10 }}>
                   <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
                     {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
@@ -393,8 +482,24 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <div className={s.summary} style={{ marginTop: 10 }}>
                   <span className={s.sumKey}>Source</span><span>{srcDef.name}</span>
                   <span className={s.sumKey}>Connection</span><span>{pickedConn ? `${pickedConn.name} (${pickedConn.authMethod})` : 'manual / managed identity'}</span>
-                  <span className={s.sumKey}>Server</span><span><code>{createServer || '—'}</code></span>
-                  <span className={s.sumKey}>Database</span><span><code>{createDb || '—'}</code></span>
+                  {isBigQuery ? (
+                    <>
+                      <span className={s.sumKey}>Project</span><span><code>{projectId || '—'}</code></span>
+                      <span className={s.sumKey}>Dataset</span><span><code>{createDb || '—'}</code></span>
+                    </>
+                  ) : isOracle ? (
+                    <>
+                      <span className={s.sumKey}>Host</span><span><code>{createServer || '—'}</code></span>
+                      <span className={s.sumKey}>Service</span><span><code>{serviceName || '—'}</code></span>
+                      <span className={s.sumKey}>Gateway</span><span><code>{gateway || '—'}</code></span>
+                      {syncUser && (<><span className={s.sumKey}>Sync user</span><span><code>{syncUser}</code></span></>)}
+                    </>
+                  ) : (
+                    <>
+                      <span className={s.sumKey}>Server</span><span><code>{createServer || '—'}</code></span>
+                      <span className={s.sumKey}>Database</span><span><code>{createDb || '—'}</code></span>
+                    </>
+                  )}
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>

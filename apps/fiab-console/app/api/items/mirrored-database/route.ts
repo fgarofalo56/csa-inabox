@@ -73,6 +73,13 @@ export async function POST(req: NextRequest) {
         tables: Array.isArray(body?.tables) ? body.tables : [],
         // Snowflake-only: also mirror Snowflake-managed Iceberg tables.
         includeIcebergTables: !!body?.includeIcebergTables,
+        // Source-specific fields surfaced by the wizard for BigQuery (projectId)
+        // and Oracle (serviceName + on-prem data gateway/SHIR + syncUser). Stored
+        // flat so Start/edit/monitor read them without re-parsing the definition.
+        projectId: body?.projectId || srcProps.projectId || undefined,
+        serviceName: body?.serviceName || srcProps.serviceName || undefined,
+        gateway: body?.gateway || srcProps.gateway || undefined,
+        syncUser: body?.syncUser || srcProps.syncUser || undefined,
         mirroringStatus: 'NotStarted',
       },
       createdBy: s.claims.upn || s.claims.email || s.claims.oid,

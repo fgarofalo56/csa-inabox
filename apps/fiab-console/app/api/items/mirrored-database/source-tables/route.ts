@@ -39,6 +39,16 @@ export async function POST(req: NextRequest) {
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+    } else if (sourceType === 'GoogleBigQuery') {
+      return NextResponse.json(
+        { ok: false, gate: true, error: 'BigQuery datasets are enumerated by the Azure-native copy (ADF Google BigQuery V2 connector) at run time. Leave the table list empty to mirror every table in the dataset, or list them as schema.table (schema = dataset).' },
+        { status: 200 },
+      );
+    } else if (sourceType === 'Oracle') {
+      return NextResponse.json(
+        { ok: false, gate: true, error: 'Oracle tables are read through the on-prem data gateway by the Azure-native copy (ADF Oracle connector) at run time. Leave the table list empty to mirror everything, or list them as SCHEMA.TABLE (the schema/owner is required for Oracle).' },
+        { status: 200 },
+      );
     } else {
       return NextResponse.json(
         { ok: false, gate: true, error: `${sourceType || 'This source'} can't be enumerated here — leave the table list empty to mirror everything the engine discovers.` },
