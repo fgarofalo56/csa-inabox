@@ -365,6 +365,45 @@ az role assignment create \
 `.show data connections` in the KQL editor — the connection lists with
 `State = Running` and rows appear in the target table within seconds.
 
+## ADX cluster lifecycle + database/table RBAC + RLS {#adx-lifecycle-rbac-rls}
+
+The KQL-database editor's **Manage** ribbon exposes three admin surfaces, all
+Azure-native (no Fabric tenant required, works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset):
+
+- **Cluster lifecycle & scale** — stop / start / delete the cluster, change the
+  SKU + instance count, toggle optimized autoscale and streaming ingestion.
+  Backed by ARM (`/api/admin/scaling/adx` GET/POST/PUT →
+  `kusto-arm-client.ts`). **Prereq:** the Console UAMI's **Azure Kusto
+  Contributor** grant at the cluster scope (role
+  `833127c3-3d62-4978-9c27-c0a5e418f64f`, granted by
+  `admin-plane/adx-cluster.bicep` `consoleKustoContributor`). That role already
+  includes `Microsoft.Kusto/clusters/{stop,start}/action`, write, and delete —
+  **no extra role assignment is needed.**
+- **Manage principals (RBAC)** — add/remove database- and table-scoped
+  principals (`/api/adx/principals` → `.add/.drop database|table <role>`).
+- **Row-level security** — author the per-table RLS predicate
+  (`/api/adx/rls` → `.alter table <T> policy row_level_security`).
+
+Both data-plane surfaces (RBAC + RLS) ride the Console UAMI's
+**AllDatabasesAdmin** grant on the cluster — an ADX `principalAssignments` child
+resource (`adxConsoleAdmin` in `admin-plane/adx-cluster.bicep`), **not** an
+Azure RBAC roleAssignment. On a **greenfield** deploy this is automatic. For a
+**BYO / existing** cluster, grant it once:
+
+```bash
+UAMI_OID=$(az identity show -g <admin-rg> -n <console-uami> --query principalId -o tsv)
+az kusto cluster-principal-assignment create \
+  -g <adx-cluster-rg> --cluster-name <adx-cluster-name> \
+  --principal-assignment-name console-uami-alldatabasesadmin \
+  --principal-id "$UAMI_OID" --principal-type App --role AllDatabasesAdmin
+```
+
+**Verify:** in the KQL editor, open **Manage › Manage principals**, add a viewer,
+and confirm it lists; open a table's RLS shield, enable a predicate, and run
+`.show table <T> policy row_level_security` — the policy returns
+`IsEnabled = true` with your query.
+
 ## Cost Management + Diagnostics (Console UAMI subscription grants)
 Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
 bicep can't express them):
