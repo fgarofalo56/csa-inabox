@@ -99,19 +99,38 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0,
   },
-  entity: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' },
-  fieldRow: { display: 'flex', gap: '8px', alignItems: 'center' },
-  code: {
-    fontFamily: 'Consolas, monospace', fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto',
-    background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', padding: '12px', margin: 0,
+  entity: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px',
+    backgroundColor: tokens.colorNeutralBackground2,
   },
-  head: { display: 'flex', alignItems: 'center', gap: '8px' },
+  fieldRow: { display: 'flex', gap: '8px', alignItems: 'center', minWidth: 0 },
+  fieldRowNested: { paddingLeft: '16px' },
+  fieldName: { flex: 1, minWidth: 0 },
+  code: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto',
+    backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium, padding: '12px', margin: 0,
+  },
+  head: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  spacer: { marginLeft: 'auto' },
+  headActions: { marginLeft: 'auto', display: 'flex', gap: '8px' },
   pickList: {
     maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px', padding: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: '8px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    '& .fui-Checkbox': { borderRadius: tokens.borderRadiusSmall, paddingInline: '4px' },
+    '& .fui-Checkbox:hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  previewWrap: { maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
+  previewWrap: {
+    maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    '& thead th': {
+      position: 'sticky', top: 0, zIndex: 1,
+      backgroundColor: tokens.colorNeutralBackground2,
+    },
+  },
+  metaRow: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', color: tokens.colorNeutralForeground3 },
 });
 
 function CopyBtn({ text }: { text: string }) {
@@ -364,9 +383,9 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
         <Subtitle2>Rayfin app</Subtitle2>
         <Badge appearance="outline" color="warning">Preview</Badge>
         {binding.model ? <Badge appearance="tint" color="brand" icon={<Database20Regular />}>Bound: {binding.model}</Badge> : null}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <Button appearance="outline" icon={<Open20Regular />} as="a" href="https://learn.microsoft.com/fabric/apps/overview" target="_blank">Docs</Button>
-          <Button appearance="outline" icon={<Open20Regular />} as="a" href="https://github.com/microsoft/rayfin" target="_blank">Repo</Button>
+        <div className={s.headActions}>
+          <Button appearance="outline" icon={<Open20Regular />} as="a" href="https://learn.microsoft.com/fabric/apps/overview" target="_blank" rel="noreferrer">Docs</Button>
+          <Button appearance="outline" icon={<Open20Regular />} as="a" href="https://github.com/microsoft/rayfin" target="_blank" rel="noreferrer">Repo</Button>
           <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
         </div>
       </div>
@@ -410,23 +429,25 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
             {spec.entities.map((e, i) => (
               <div key={i} className={s.entity}>
                 <div className={s.fieldRow}>
-                  <Input value={e.name} onChange={(_, d) => patchEntity(i, { name: d.value })} />
-                  <Button size="small" appearance="subtle" icon={<Add20Regular />}
+                  <Input className={s.fieldName} value={e.name} aria-label={`Entity ${i + 1} name`} onChange={(_, d) => patchEntity(i, { name: d.value })} />
+                  <Button size="small" appearance="outline" icon={<Add20Regular />}
                     onClick={() => patchEntity(i, { fields: [...e.fields, { name: 'field', type: 'text' }] })}>Field</Button>
                   <Tooltip content="Remove entity" relationship="label">
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                    <Button size="small" appearance="subtle" aria-label={`Remove entity ${e.name || i + 1}`} icon={<Delete20Regular />}
                       onClick={() => patch({ entities: spec.entities.filter((_, idx) => idx !== i) })} />
                   </Tooltip>
                 </div>
                 {e.fields.map((f, fi) => (
-                  <div key={fi} className={s.fieldRow} style={{ paddingLeft: 16 }}>
-                    <Input size="small" value={f.name} onChange={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, name: d.value } : x) })} />
-                    <Dropdown size="small" value={f.type} selectedOptions={[f.type]}
+                  <div key={fi} className={`${s.fieldRow} ${s.fieldRowNested}`}>
+                    <Input className={s.fieldName} size="small" value={f.name} aria-label="Field name" onChange={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, name: d.value } : x) })} />
+                    <Dropdown size="small" value={f.type} aria-label="Field type" selectedOptions={[f.type]}
                       onOptionSelect={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, type: (d.optionValue as FieldType) } : x) })}>
                       {(['text', 'boolean', 'date', 'number'] as FieldType[]).map((t) => <Option key={t} value={t}>{t}</Option>)}
                     </Dropdown>
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                      onClick={() => patchEntity(i, { fields: e.fields.filter((_, xi) => xi !== fi) })} />
+                    <Tooltip content="Remove field" relationship="label">
+                      <Button size="small" appearance="subtle" aria-label={`Remove field ${f.name || fi + 1}`} icon={<Delete20Regular />}
+                        onClick={() => patchEntity(i, { fields: e.fields.filter((_, xi) => xi !== fi) })} />
+                    </Tooltip>
                   </div>
                 ))}
               </div>
@@ -435,12 +456,12 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
 
           {/* Right — generated artifacts */}
           <div className={s.card}>
-            <div className={s.head}><Subtitle2>rayfin/model.ts</Subtitle2><div style={{ marginLeft: 'auto' }}><CopyBtn text={modelTs} /></div></div>
+            <div className={s.head}><Subtitle2>rayfin/model.ts</Subtitle2><div className={s.spacer}><CopyBtn text={modelTs} /></div></div>
             <MonacoTextarea value={modelTs} onChange={() => { /* read-only */ }} language="typescript" height={200} readOnly lineNumbers={false} ariaLabel="Generated Rayfin model" />
             <Caption1>Decorator API per @microsoft/rayfin-core — verify against the current SDK version (preview).</Caption1>
 
             <Divider />
-            <div className={s.head}><Subtitle2>Deploy commands</Subtitle2><div style={{ marginLeft: 'auto' }}><CopyBtn text={commands} /></div></div>
+            <div className={s.head}><Subtitle2>Deploy commands</Subtitle2><div className={s.spacer}><CopyBtn text={commands} /></div></div>
             <pre className={s.code}>{commands}</pre>
           </div>
         </div>
@@ -540,7 +561,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
           <div className={s.card}>
             <div className={s.head}>
               <Subtitle2>Read view preview</Subtitle2>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <div className={s.headActions}>
                 <Button size="small" appearance="primary" icon={<Play20Regular />}
                   onClick={runPreview} disabled={previewing || !binding.model || (binding.measures.length === 0 && binding.groupBy.length === 0)}>
                   {previewing ? 'Running…' : 'Run preview'}
@@ -556,14 +577,22 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
 
             {preview ? (
               <>
-                <Caption1>{preview.rowCount} row(s) · {preview.executionMs} ms{preview.truncated ? ' · truncated' : ''}</Caption1>
+                <div className={s.metaRow}>
+                  <Badge appearance="tint" color="informative">{preview.rowCount} row{preview.rowCount === 1 ? '' : 's'}</Badge>
+                  <Badge appearance="tint" color="brand">{preview.executionMs} ms</Badge>
+                  {preview.truncated ? <Badge appearance="tint" color="warning">truncated</Badge> : null}
+                </div>
                 <div className={s.previewWrap}>
                   <Table size="small" aria-label="Read view preview">
                     <TableHeader>
                       <TableRow>{preview.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
                     </TableHeader>
                     <TableBody>
-                      {preview.rows.slice(0, 200).map((r, ri) => (
+                      {preview.rows.length === 0 ? (
+                        <TableRow>
+                          <TableCell><Caption1>The bound model returned no rows for this selection.</Caption1></TableCell>
+                        </TableRow>
+                      ) : preview.rows.slice(0, 200).map((r, ri) => (
                         <TableRow key={ri}>{r.map((v, ci) => <TableCell key={ci}>{fmtCell(v)}</TableCell>)}</TableRow>
                       ))}
                     </TableBody>
@@ -573,11 +602,11 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
             ) : null}
 
             <Divider />
-            <div className={s.head}><Subtitle2>Read-view DAX</Subtitle2><div style={{ marginLeft: 'auto' }}><CopyBtn text={bindingDax} /></div></div>
+            <div className={s.head}><Subtitle2>Read-view DAX</Subtitle2><div className={s.spacer}><CopyBtn text={bindingDax} /></div></div>
             <pre className={s.code}>{bindingDax}</pre>
 
             <Divider />
-            <div className={s.head}><Subtitle2>rayfin/data/model-view.ts</Subtitle2><div style={{ marginLeft: 'auto' }}><CopyBtn text={connector} /></div></div>
+            <div className={s.head}><Subtitle2>rayfin/data/model-view.ts</Subtitle2><div className={s.spacer}><CopyBtn text={connector} /></div></div>
             <MonacoTextarea value={connector} onChange={() => { /* read-only */ }} language="typescript" height={220} readOnly lineNumbers={false} ariaLabel="Generated model-bound connector" />
           </div>
         </div>
