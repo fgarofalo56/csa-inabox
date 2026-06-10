@@ -38,6 +38,7 @@ import {
 import {
   ArrowClockwise16Regular, Dismiss16Regular, Open16Regular,
   CheckmarkCircle16Filled, ErrorCircle16Filled, Clock16Regular,
+  Checkmark12Filled, Sparkle24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -80,6 +81,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: '10px',
+    boxShadow: tokens.shadow2,
   },
   taskGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' },
   taskTile: {
@@ -91,19 +93,64 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '4px',
     background: tokens.colorNeutralBackground1,
-    ':hover': { background: tokens.colorNeutralBackground1Hover },
+    transitionProperty: 'background, border-color, box-shadow',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { background: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorNeutralStroke1 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
   },
-  stepperRow: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  taskTileSelected: {
+    borderColor: tokens.colorBrandStroke1,
+    boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
+    background: tokens.colorNeutralBackground1Selected,
+  },
+  // ── Stepper ──────────────────────────────────────────────────────
+  stepper: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', paddingBottom: '2px' },
+  stepItem: {
+    display: 'inline-flex', alignItems: 'center', gap: '6px',
+    background: 'transparent', border: 'none', padding: '4px 6px',
+    borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
+    color: tokens.colorNeutralForeground1, font: 'inherit',
+    ':disabled': { cursor: 'not-allowed', opacity: 0.55 },
+    ':hover:enabled': { background: tokens.colorNeutralBackground1Hover },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
+  },
   stepDot: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: '22px', height: '22px', borderRadius: '50%',
-    background: tokens.colorNeutralBackground3, fontSize: '12px',
+    width: '24px', height: '24px', borderRadius: '50%',
+    background: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+    fontSize: '12px', fontWeight: 600, flexShrink: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  stepDotActive: { background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand },
+  stepDotActive: {
+    background: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+    borderColor: tokens.colorBrandBackground,
+  },
+  stepDotDone: {
+    background: tokens.colorPaletteGreenBackground2,
+    color: tokens.colorPaletteGreenForeground1,
+    borderColor: tokens.colorPaletteGreenBorder1,
+  },
+  stepConnector: { width: '20px', height: '2px', background: tokens.colorNeutralStroke2, flexShrink: 0 },
+  stepConnectorDone: { background: tokens.colorPaletteGreenBorder1 },
   fieldRow: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
   navRow: { display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '8px' },
   reviewGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 16px', fontSize: '13px' },
   statusCell: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+  uriHint: {
+    fontFamily: tokens.fontFamilyMonospace,
+    background: tokens.colorNeutralBackground3,
+    padding: '6px 8px', borderRadius: tokens.borderRadiusSmall,
+    wordBreak: 'break-all',
+  },
+  runsToolbar: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  runsSpacer: { flex: 1 },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+    padding: '28px 12px', textAlign: 'center', color: tokens.colorNeutralForeground3,
+  },
+  actionCell: { display: 'flex', gap: '4px' },
 });
 
 interface ClusterLite { name: string; vmSize?: string; state?: string; provisioningState?: string }
@@ -160,6 +207,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
   const [jobs, setJobs] = useState<AutoMlJobLite[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [cancelingName, setCancelingName] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('All');
 
   const isNew = id === 'new';
 
@@ -233,6 +281,18 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
     const folder = mltableFolder.trim().replace(/^\/+/, '').replace(/\/+$/, '');
     return folder ? `${base.replace(/\/+$/, '')}/${folder}/` : base;
   }, [selectedDatastore, mltableFolder]);
+
+  // Status facets for the Runs filter, derived from the live job list.
+  const statusFacets = useMemo(() => {
+    const set = new Set<string>();
+    jobs.forEach((j) => { if (j.status) set.add(j.status); });
+    return ['All', ...Array.from(set).sort()];
+  }, [jobs]);
+
+  const filteredJobs = useMemo(
+    () => (statusFilter === 'All' ? jobs : jobs.filter((j) => (j.status || '') === statusFilter)),
+    [jobs, statusFilter],
+  );
 
   const stepIndex = STEPS.indexOf(step);
 
@@ -350,20 +410,35 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
 
         {tab === 'wizard' && (
           <>
-            {/* Stepper */}
-            <div className={styles.stepperRow}>
-              {STEPS.map((s, i) => (
-                <span key={s} className={styles.stepperRow}>
-                  <span
-                    className={`${styles.stepDot} ${i <= stepIndex ? styles.stepDotActive : ''}`}
-                    onClick={() => { if (i < stepIndex || stepValid(STEPS[i - 1] || 'Task')) setStep(s); }}
-                    style={{ cursor: 'pointer' }}
-                  >{i + 1}</span>
-                  <Caption1 style={{ fontWeight: step === s ? 600 : 400 }}>{s}</Caption1>
-                  {i < STEPS.length - 1 && <span style={{ color: tokens.colorNeutralForeground4 }}>›</span>}
-                </span>
-              ))}
-            </div>
+            {/* Stepper — accessible progress nav: completed steps show a check,
+                the active step is brand-filled, future steps are reachable only
+                when the prior step validates. */}
+            <nav className={styles.stepper} aria-label="AutoML wizard steps">
+              {STEPS.map((s, i) => {
+                const done = i < stepIndex;
+                const active = i === stepIndex;
+                const reachable = i <= stepIndex || stepValid(STEPS[i - 1] || 'Task');
+                return (
+                  <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      type="button"
+                      className={styles.stepItem}
+                      disabled={!reachable}
+                      aria-current={active ? 'step' : undefined}
+                      onClick={() => { if (reachable) setStep(s); }}
+                    >
+                      <span className={`${styles.stepDot} ${active ? styles.stepDotActive : done ? styles.stepDotDone : ''}`}>
+                        {done ? <Checkmark12Filled /> : i + 1}
+                      </span>
+                      <Caption1 style={{ fontWeight: active ? 600 : 400 }}>{s}</Caption1>
+                    </button>
+                    {i < STEPS.length - 1 && (
+                      <span className={`${styles.stepConnector} ${done ? styles.stepConnectorDone : ''}`} aria-hidden />
+                    )}
+                  </span>
+                );
+              })}
+            </nav>
 
             {submitError && (
               <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Submit failed</MessageBarTitle>{submitError}</MessageBarBody></MessageBar>
@@ -380,16 +455,12 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                   {TASKS.map((t) => (
                     <div
                       key={t.task}
-                      className={styles.taskTile}
-                      style={task === t.task ? {
-                        borderColor: tokens.colorBrandStroke1,
-                        boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
-                        background: tokens.colorNeutralBackground1Selected,
-                      } : undefined}
+                      className={`${styles.taskTile} ${task === t.task ? styles.taskTileSelected : ''}`}
                       onClick={() => setTask(t.task)}
                       role="button"
+                      aria-pressed={task === t.task}
                       tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setTask(t.task); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTask(t.task); } }}
                     >
                       <Body1 style={{ fontWeight: 600 }}>{t.title}</Body1>
                       <Caption1>{t.description}</Caption1>
@@ -426,7 +497,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                   </Field>
                 </div>
                 {trainingDataUri && (
-                  <Caption1 style={{ fontFamily: 'monospace' }}>Training data URI: {trainingDataUri}</Caption1>
+                  <Caption1 className={styles.uriHint}>Training data URI: {trainingDataUri}</Caption1>
                 )}
                 <div className={styles.fieldRow}>
                   <Field label="Target column" required style={{ minWidth: 220 }}
@@ -577,15 +648,43 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
 
         {tab === 'runs' && (
           <div className={styles.card}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className={styles.runsToolbar}>
               <Subtitle2>AutoML runs</Subtitle2>
+              {jobs.length > 0 && (
+                <Badge appearance="tint" color="informative">{filteredJobs.length} of {jobs.length}</Badge>
+              )}
+              <span className={styles.runsSpacer} />
+              {jobs.length > 0 && (
+                <Field label="Status" orientation="horizontal">
+                  <Dropdown
+                    size="small"
+                    style={{ minWidth: 140 }}
+                    selectedOptions={[statusFilter]}
+                    value={statusFilter}
+                    onOptionSelect={(_, d) => setStatusFilter(d.optionValue || 'All')}
+                  >
+                    {statusFacets.map((s) => <Option key={s} value={s} text={s}>{s}</Option>)}
+                  </Dropdown>
+                </Field>
+              )}
               <Button size="small" icon={<ArrowClockwise16Regular />} onClick={loadJobs} disabled={jobsLoading}>Refresh</Button>
               {jobsLoading && <Spinner size="extra-tiny" />}
             </div>
             {configured && jobs.length === 0 && !jobsLoading && (
-              <Body1>No AutoML runs yet. Submit one from the New AutoML job tab.</Body1>
+              <div className={styles.emptyState}>
+                <Sparkle24Regular />
+                <Body1 style={{ fontWeight: 600 }}>No AutoML runs yet</Body1>
+                <Caption1>Submit a job from the New AutoML job tab and it will appear here with live status.</Caption1>
+                <Button appearance="primary" onClick={() => { setTab('wizard'); setStep('Task'); }}>New AutoML job</Button>
+              </div>
             )}
-            {jobs.length > 0 && (
+            {configured && jobs.length > 0 && filteredJobs.length === 0 && (
+              <div className={styles.emptyState}>
+                <Body1>No runs match the “{statusFilter}” filter.</Body1>
+                <Button size="small" appearance="subtle" onClick={() => setStatusFilter('All')}>Clear filter</Button>
+              </div>
+            )}
+            {filteredJobs.length > 0 && (
               <Table size="small">
                 <TableHeader>
                   <TableRow>
@@ -599,7 +698,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {jobs.map((jb) => {
+                  {filteredJobs.map((jb) => {
                     const terminal = ['Completed', 'Failed', 'Canceled', 'NotResponding'].includes(jb.status || '');
                     return (
                       <TableRow key={jb.name}>
@@ -612,7 +711,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                         <TableCell>{jb.experimentName || '—'}</TableCell>
                         <TableCell>{jb.createdAt ? new Date(jb.createdAt).toLocaleString() : '—'}</TableCell>
                         <TableCell>
-                          <div style={{ display: 'flex', gap: 4 }}>
+                          <div className={styles.actionCell}>
                             {jb.studioUrl && (
                               <Link href={jb.studioUrl} target="_blank" rel="noreferrer">
                                 <Button size="small" icon={<Open16Regular />} appearance="subtle">Studio</Button>
