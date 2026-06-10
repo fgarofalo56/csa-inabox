@@ -28,6 +28,7 @@ import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
+  ArrowSync20Regular, Dismiss20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -105,6 +106,38 @@ const useStyles = makeStyles({
   treePad: { padding: 8 },
   formRow: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 },
   fullWidth: { width: '100%' },
+  // SQL database schema-object browser (left pane)
+  sqlLeftPane: {
+    padding: 8,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    height: '100%',
+    minHeight: 0,
+  },
+  schemaHint: { color: tokens.colorNeutralForeground3 },
+  schemaBrowserHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  schemaBrowserTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+    marginRight: 'auto',
+  },
+  schemaBrowserBox: {
+    flex: 1,
+    minHeight: 360,
+    display: 'flex',
+    flexDirection: 'column',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+  },
 });
 
 interface QueryResponse {
@@ -630,6 +663,10 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const [mirrorState, setMirrorState] = useState<any>(null);
   const [sql2025State, setSql2025State] = useState<any>(null);
 
+  // Left-pane schema-object browser (live sys.* over TDS via SqlDbTree).
+  const [schemaTab, setSchemaTab] = useState<'none' | 'browser'>('none');
+  const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+
   // Geo-replica dialog
   const [geoOpen, setGeoOpen] = useState(false);
   const [replicaServer, setReplicaServer] = useState('');
@@ -774,6 +811,9 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
       { label: '2025', actions: [
         { label: 'Probe engine', onClick: canRun ? probe2025 : undefined, disabled: !canRun },
       ]},
+      { label: 'Schema', actions: [
+        { label: 'Browse objects', onClick: canRun ? () => setSchemaTab((t) => (t === 'none' ? 'browser' : 'none')) : undefined, disabled: !canRun, title: !canRun ? 'pick server + database first' : 'Toggle the sys.* object browser in the left pane' },
+      ]},
     ]},
   ], [canRun, loading, run, toggleMirror, probe2025, newTsql, openGeo]);
 
@@ -781,7 +821,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     <ItemEditorChrome
       item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
+        <div className={s.sqlLeftPane}>
           <div className={s.formRow}>
             <Label>Server</Label>
             <select
@@ -840,10 +880,59 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               </MessageBarBody>
             </MessageBar>
           )}
-          <Caption1>
-            The console MI must be the AAD admin on the server (or a member of the AAD admin group).
-            Tables, schemas, and sample queries deferred to v3.x.
+          <Caption1 className={s.schemaHint}>
+            The console UAMI must be the Microsoft Entra admin on the server (or a member of the Entra
+            admin group). Select a server and database above to browse tables, views, and schemas over live TDS.
           </Caption1>
+          {server && database && (
+            schemaTab === 'none' ? (
+              <Button
+                size="small"
+                appearance="outline"
+                icon={<Database20Regular />}
+                onClick={() => setSchemaTab('browser')}
+              >
+                Browse objects
+              </Button>
+            ) : (
+              <>
+                <div className={s.schemaBrowserHeader}>
+                  <Caption1 className={s.schemaBrowserTitle}>Schema browser</Caption1>
+                  <Tooltip content="Reload objects from sys.* catalog" relationship="label">
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      icon={<ArrowSync20Regular />}
+                      onClick={() => setBrowserRefreshKey((k) => k + 1)}
+                      aria-label="Refresh schema browser"
+                    />
+                  </Tooltip>
+                  <Tooltip content="Close schema browser" relationship="label">
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      icon={<Dismiss20Regular />}
+                      onClick={() => setSchemaTab('none')}
+                      aria-label="Close schema browser"
+                    />
+                  </Tooltip>
+                </div>
+                <div className={s.schemaBrowserBox}>
+                  <SqlDbTree
+                    workspaceId=""
+                    itemId={id}
+                    server={server}
+                    database={database}
+                    refreshKey={browserRefreshKey}
+                    onOpenQuery={(sql) => {
+                      setSqlText(sql);
+                      setTab('query');
+                    }}
+                  />
+                </div>
+              </>
+            )
+          )}
         </div>
       }
       main={
