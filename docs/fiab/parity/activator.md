@@ -95,7 +95,7 @@ the exact definition entity / control required — never a fake list (per
 | Stop | `POST /api/items/activator/[id]/stop?workspaceId=…` → PATCH triggers Stopped |
 | Enable / disable rule | `PATCH /api/items/activator/[id]/rules?ruleId=&enabled=` → `enableMonitorRule`/`disableMonitorRule` → `patchScheduledQueryRule` (ARM PATCH `properties.enabled`, GA api `2023-12-01`); state persisted on `state.rules`. Fabric opt-in → `setTriggerState`. |
 | Delete rule | `DELETE /api/items/activator/[id]/rules?ruleId=` → `deleteMonitorActivatorRule` → `deleteScheduledQueryRule` (ARM DELETE) + splice `state.rules`. Fabric opt-in → `deleteTrigger`. |
-| Workspace Activator overview (Rules / Objects / Action-history tabs) | `lib/panes/activator.tsx` → `GET /api/items/activator` + per-activator `GET .../rules` (LoomDataTable). Objects = distinct KQL source tables across `state.rules`. Action history = `GET /api/items/activator/[id]/history` (`Microsoft.AlertsManagement/alerts`). All Azure-native; no `seedRules` mock. |
+| Workspace Activator overview (Rules / Objects / Action-history tabs) | `lib/panes/activator.tsx`, mounted at the `/activator` route (`app/activator/page.tsx`) → `GET /api/loom/workspaces` (picker) + `GET /api/items/activator` + per-activator `GET .../rules` (LoomDataTable). Objects = distinct KQL source tables across `state.rules`. Action history = `GET /api/items/activator/[id]/history` (`Microsoft.AlertsManagement/alerts`). All Azure-native; no `seedRules` mock — enable/disable + delete round-trip to ARM. |
 | Bundle fallback (no workspace) | `loadContentBackedItem` → `activatorRuleFromContent(state.content)` (Cosmos) |
 
 Token scope for the Fabric path: `https://analysis.windows.net/powerbi/api/.default`
