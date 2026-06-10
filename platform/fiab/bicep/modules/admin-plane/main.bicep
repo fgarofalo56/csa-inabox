@@ -319,6 +319,10 @@ param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
 @description('Approval Logic App resource group. Empty defaults to LOOM_DLZ_RG (where the DLZ approval Logic App is deployed).')
 param loomApprovalLogicAppRg string = ''
 
+@description('Optional shared secret guarding the Plan approval callback endpoint (/api/items/plan/<id>/approval-callback). When set, the approval Logic App callback URL must carry ?key=<secret>; the plan-approval route appends it automatically. Empty = open callback (acceptable for unclassified approval coordination; harden for CUI/IL5).')
+@secure()
+param loomApprovalCallbackSecret string = ''
+
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
@@ -1511,6 +1515,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // bicep module + env var (no Fabric / Power Automate dependency).
             { name: 'LOOM_APPROVAL_LOGIC_APP_NAME', value: loomApprovalLogicAppName }
             { name: 'LOOM_APPROVAL_LOGIC_APP_RG', value: !empty(loomApprovalLogicAppRg) ? loomApprovalLogicAppRg : loomDlzRg }
+            // audit-T13: optional shared secret guarding the Plan approval
+            // callback (/api/items/plan/<id>/approval-callback). Empty = open.
+            { name: 'LOOM_APPROVAL_CALLBACK_SECRET', value: loomApprovalCallbackSecret }
             // Report subscriptions (scheduled report export + email). The
             // Function name is non-empty only when reportSubscriptionsEnabled —
             // the subscriptions BFF surfaces an honest delivery gate to the
