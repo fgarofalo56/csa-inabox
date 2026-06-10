@@ -551,7 +551,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // (Synapse Serverless preferred, Databricks UC otherwise). S3/GCS/Dataverse
   // render the create form and honest-gate on submit. Registry is the Cosmos
   // `lakehouse-shortcuts` container. See docs/fiab/design/lakehouse-shortcuts.md.
-  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
+  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
   type ShortcutKind = 'files' | 'tables';
   interface ShortcutRow {
     id: string; lakehouseId: string; name: string; kind: ShortcutKind;

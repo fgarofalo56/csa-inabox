@@ -75,6 +75,7 @@ import {
   Folder20Regular,
   Key16Regular,
   PlugConnected20Regular,
+  PlugConnected32Regular,
 } from '@fluentui/react-icons';
 import type { ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 
@@ -166,6 +167,24 @@ const useStyles = makeStyles({
   entryName: { flex: 1, cursor: 'pointer' },
   actions: { display: 'flex', gap: '4px' },
   empty: { padding: '24px', textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '40px 24px',
+    textAlign: 'center',
+    color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  emptyIcon: {
+    fontSize: '32px',
+    lineHeight: 1,
+    color: tokens.colorNeutralForeground4,
+  },
+  emptyText: { maxWidth: '420px' },
   stepBody: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '520px' },
 });
 
@@ -596,9 +615,12 @@ export function ShortcutListGrid({ itemType = 'lakehouse', lakehouseId, rows, lo
   }
   if (!rows || rows.length === 0) {
     return (
-      <div className={styles.empty}>
-        <PlugConnected20Regular />
-        <Body1>No shortcuts yet. Create one to surface another lakehouse&apos;s data here without copying it.</Body1>
+      <div className={styles.emptyState} role="status">
+        <PlugConnected32Regular className={styles.emptyIcon} />
+        <Body1 className={styles.emptyText}>No shortcuts yet</Body1>
+        <Caption1 className={styles.emptyText}>
+          Create one to surface another lakehouse&apos;s data here without copying it — a zero-copy pointer on ADLS Gen2.
+        </Caption1>
       </div>
     );
   }
@@ -701,7 +723,10 @@ export function ShortcutsPanel({ itemType = 'lakehouse', lakehouseId, workspaceI
   return (
     <div className={styles.root}>
       <div className={styles.toolbar}>
-        <Body1><b>Shortcuts</b> — zero-copy pointers to other lakehouse data (Azure-native, no Fabric)</Body1>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <PlugConnected20Regular style={{ color: tokens.colorBrandForeground1 }} />
+          <Body1><b>Shortcuts</b> — zero-copy pointers to other lakehouse data (Azure-native, no Fabric)</Body1>
+        </span>
         <div style={{ display: 'flex', gap: 8 }}>
           <Button appearance="secondary" icon={<ArrowSync16Regular />} onClick={load}>Refresh</Button>
           <Button appearance="primary" icon={<Add20Regular />} onClick={() => setWizardOpen(true)}>New shortcut</Button>
