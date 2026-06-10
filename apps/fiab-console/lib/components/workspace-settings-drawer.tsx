@@ -33,6 +33,7 @@ import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/work
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import { NetworkingPane } from '@/lib/panes/networking';
 import { GitIntegrationPane } from '@/lib/panes/git-integration';
+import { SparkComputePane } from '@/lib/panes/spark-compute';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 
@@ -55,7 +56,7 @@ const useStyles = makeStyles({
   row: { display: 'flex', gap: 8, alignItems: 'center' },
 });
 
-type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';
 
 export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChange, hideTrigger }: Props) {
   const styles = useStyles();
@@ -92,6 +93,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             <Tab value="git">Git integration</Tab>
             <Tab value="onelake">OneLake</Tab>
             <Tab value="encryption">Encryption</Tab>
+            <Tab value="spark">Spark compute</Tab>
             <Tab value="sensitivity">Sensitivity</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
@@ -102,6 +104,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             {tab === 'git' && <GitIntegrationPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
+            {tab === 'spark' && <SparkComputePane workspaceId={workspace.id} />}
             {tab === 'sensitivity' && <DeferredSection
               title="Sensitivity label"
               body="Sensitivity labels require Microsoft Purview Information Protection. Workspace-level enforcement lands when the Purview governance pillar wires up (see docs/fiab/v118-handoff.md governance backlog)."

@@ -1539,6 +1539,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // value embeds a non-deterministic workspace id so it is patched
             // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
             { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            // The same hostname also backs the workspace Spark / compute
+            // configuration surface (Settings → Spark compute; F13) — instance
+            // pools, runtime, environment libraries, and job defaults. No extra
+            // env var is required; the only one-time admin action is granting the
+            // Console UAMI the Databricks "Allow pool creation" entitlement
+            // (see docs/fiab/v3-tenant-bootstrap.md#spark-compute-pool-entitlement).
             // Optional warehouse pin for lakehouse liquid-clustering DDL
             // (ALTER TABLE … CLUSTER BY). Blank → route auto-selects the first
             // RUNNING SQL Warehouse.
