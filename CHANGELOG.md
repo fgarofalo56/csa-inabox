@@ -25,6 +25,29 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.31.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.30.0...csa-inabox-v0.31.0) (2026-06-10)
+
+
+### Features
+
+* **csa-loom:** Activator pane persists rules to Azure Monitor (live CRUD + Objects/History) ([#1053](https://github.com/fgarofalo56/csa-inabox/issues/1053)) ([47a8a92](https://github.com/fgarofalo56/csa-inabox/commit/47a8a92e6282f7a0049f3cd2adea3f14474f350a))
+* **csa-loom:** Monitor hub real activity feed from Log Analytics ([#1051](https://github.com/fgarofalo56/csa-inabox/issues/1051)) ([2b5d57c](https://github.com/fgarofalo56/csa-inabox/commit/2b5d57cb38cc32844df8317e6ea2d612072035bd))
+* **csa-loom:** OneLake catalog live items + dynamic workspace tree ([#1052](https://github.com/fgarofalo56/csa-inabox/issues/1052)) ([014bdbe](https://github.com/fgarofalo56/csa-inabox/commit/014bdbe810ec42c5f0b48bcc7cce56e18c22f924))
+* **csa-loom:** real /warehouse query surface — Monaco T-SQL, results grid, Explain + History tabs ([#1054](https://github.com/fgarofalo56/csa-inabox/issues/1054)) ([eb0d00d](https://github.com/fgarofalo56/csa-inabox/commit/eb0d00d8577a51515f8f0bac1048a99e443bedf7))
+* **csa-loom:** RTI hub pane — live sources + wired "open eventstream editor" + alias route ([#1055](https://github.com/fgarofalo56/csa-inabox/issues/1055)) ([7c28f88](https://github.com/fgarofalo56/csa-inabox/commit/7c28f88d22e1c028ad83ff2795c157f65e062a19))
+* **csa-loom:** unify Loom-native paginated-report RDL renderer onto main ([#993](https://github.com/fgarofalo56/csa-inabox/issues/993)) ([#1048](https://github.com/fgarofalo56/csa-inabox/issues/1048)) ([ba68ab6](https://github.com/fgarofalo56/csa-inabox/commit/ba68ab6fa131914489c9b17d91c53a45b1ea4777))
+
+
+### Code Refactoring
+
+* **csa-loom:** remove dead SemanticModelPane workspace surface ([#1056](https://github.com/fgarofalo56/csa-inabox/issues/1056)) ([a411ffb](https://github.com/fgarofalo56/csa-inabox/commit/a411ffb1bcc2125cdb222f886912db58a631f7d3))
+
+
+### Miscellaneous
+
+* **csa-loom:** persist autopilot workflows + audit backlog (durability) ([#1058](https://github.com/fgarofalo56/csa-inabox/issues/1058)) ([3c78ca7](https://github.com/fgarofalo56/csa-inabox/commit/3c78ca70310d55131a79a47ef1e10fbb69d67415))
+* **csa-loom:** remove dead deployment-pipelines stub pane (audit-T07) ([#1057](https://github.com/fgarofalo56/csa-inabox/issues/1057)) ([99177d1](https://github.com/fgarofalo56/csa-inabox/commit/99177d1769af745b1698ddc3ea8472ff2c089eca))
+
 ## [0.30.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.29.0...csa-inabox-v0.30.0) (2026-06-10)
 
 
