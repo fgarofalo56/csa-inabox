@@ -716,6 +716,10 @@ param loomMirrorBackend string = 'adf-cdc'
 @allowed(['adls', 'fabric'])
 param loomLakehouseBackend string = 'adls'
 
+@description('OneLake catalog Explore-tab backend selector (LOOM_CATALOG_BACKEND). Default: azure (AI Search loom-governance-items index, falling back to Cosmos when AI Search is not deployed — no Fabric/OneLake REST on the default path). Alternative: fabric (opt-in OneLake REST; additionally gated by sovereign-cloud reachability).')
+@allowed(['azure', 'fabric'])
+param loomCatalogBackend string = 'azure'
+
 // NOTE: loomSemanticBackend is declared once earlier in this file (the
 // allow-list there is the union of all opt-in backends). loomAasServer /
 // loomAasModel / loomAasDatabase are also declared once earlier (semantic-model
@@ -1663,6 +1667,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
+            // OneLake catalog Explore-tab backend (azure=AI Search/Cosmos default; fabric=opt-in OneLake REST).
+            { name: 'LOOM_CATALOG_BACKEND', value: loomCatalogBackend }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
