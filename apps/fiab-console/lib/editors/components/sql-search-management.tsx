@@ -37,6 +37,13 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: 8,
   },
   dialogGrid: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 460 },
+  rowActions: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' },
+  colList: { display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' },
+  colRow: { display: 'flex', gap: 8, alignItems: 'center' },
+  colLang: { minWidth: 160 },
+  bgRunning: { color: tokens.colorNeutralForeground3 },
+  dialogWide: { maxWidth: 640, width: '92vw' },
+  dialogMed: { maxWidth: 560, width: '92vw' },
 });
 
 // Common LCIDs for the FTS column-language dropdown (grounded in sys.fulltext_languages).
@@ -270,7 +277,7 @@ export function FullTextSearchPanel({ id, server, database }: { id: string; serv
                   <TableCell>{str(f.catalog_name)}</TableCell>
                   <TableCell>{str(f.change_tracking)}</TableCell>
                   <TableCell>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    <div className={s.rowActions}>
                       <Button size="small" appearance="subtle" icon={<Play20Regular />} disabled={busy} onClick={() => populate(schema, table, 'START FULL')}>Full pop</Button>
                       <Button size="small" appearance="subtle" disabled={busy} onClick={() => populate(schema, table, 'START INCREMENTAL')}>Incr</Button>
                       <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busy} onClick={() => setConfirmDrop({ schema, table })}>Drop</Button>
@@ -306,7 +313,7 @@ export function FullTextSearchPanel({ id, server, database }: { id: string; serv
 
       {/* New FTS index dialog */}
       <Dialog open={ftsOpen} onOpenChange={(_, d) => setFtsOpen(d.open)}>
-        <DialogSurface style={{ maxWidth: 640, width: '92vw' }}>
+        <DialogSurface className={s.dialogWide}>
           <DialogBody>
             <DialogTitle>New full-text index</DialogTitle>
             <DialogContent>
@@ -320,17 +327,17 @@ export function FullTextSearchPanel({ id, server, database }: { id: string; serv
                 {ftsTable && (
                   <>
                     <Field label="Columns to index (text columns)" required>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflow: 'auto' }}>
+                      <div className={s.colList}>
                         {colsForTable.length === 0 && <Caption1>No FTS-eligible (char/varchar/text/xml/varbinary) columns on this table.</Caption1>}
                         {colsForTable.map((c) => {
                           const name = str(c.column_name);
                           const checked = name in ftsCols;
                           return (
-                            <div key={name} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <div key={name} className={s.colRow}>
                               <Checkbox checked={checked} label={`${name} (${str(c.data_type)})`}
                                 onChange={(_, d) => setFtsCols((prev) => { const next = { ...prev }; if (d.checked) next[name] = ''; else delete next[name]; return next; })} />
                               {checked && (
-                                <Dropdown size="small" style={{ minWidth: 160 }} selectedOptions={[ftsCols[name]]} value={FTS_LANGUAGES.find((l) => l.lcid === ftsCols[name])?.label || 'Server default'}
+                                <Dropdown size="small" className={s.colLang} selectedOptions={[ftsCols[name]]} value={FTS_LANGUAGES.find((l) => l.lcid === ftsCols[name])?.label || 'Server default'}
                                   onOptionSelect={(_, d) => setFtsCols((prev) => ({ ...prev, [name]: d.optionValue || '' }))} aria-label={`Language for ${name}`}>
                                   {FTS_LANGUAGES.map((l) => <Option key={l.lcid} value={l.lcid}>{l.label}</Option>)}
                                 </Dropdown>
@@ -517,7 +524,7 @@ export function VectorIndexPanel({ id, server, database }: { id: string; server:
 
       {/* New vector index dialog */}
       <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
-        <DialogSurface style={{ maxWidth: 560, width: '92vw' }}>
+        <DialogSurface className={s.dialogMed}>
           <DialogBody>
             <DialogTitle>New vector index</DialogTitle>
             <DialogContent>
