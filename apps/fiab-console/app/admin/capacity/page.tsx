@@ -15,6 +15,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
+import { OpsCopilotPane } from '@/lib/components/admin/ops-copilot-pane';
 
 function portalUrl(id: string): string {
   // Azure portal deep-link to the resource Overview blade.
@@ -570,6 +571,17 @@ export default function CapacityPage() {
             }
           >
             <ScaleManagePanel />
+          </Section>
+
+          <Section
+            title="Ops Copilot"
+            actions={
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Natural language → ARM / config action, with approval diff + RBAC gate
+              </Caption1>
+            }
+          >
+            <OpsCopilotPane />
           </Section>
 
           <Section
