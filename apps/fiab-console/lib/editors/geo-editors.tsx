@@ -22,7 +22,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
-  TabList, Tab,
+  TabList, Tab, Checkbox, Dropdown, Option, Field, Divider,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -146,6 +146,23 @@ const useStyles = makeStyles({
   },
   treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   field: { display: 'flex', flexDirection: 'column', gap: 4 },
+  codeBlock: {
+    fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
+    margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto',
+  },
+  enrichGroup: {
+    display: 'flex', flexDirection: 'column', gap: '8px',
+    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  schemaRow: {
+    display: 'flex', flexDirection: 'column', gap: '2px',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+  },
 });
 
 const SAMPLE_GEO_KQL = `// Geoanalytics — KQL with built-in geo functions
@@ -283,9 +300,73 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   );
 }
 
-interface GeoDatasetState { adlsPath: string; geomColumn: string; format: 'geojson' | 'parquet' | 'csv'; [k: string]: unknown }
+interface GeoDatasetState { adlsPath: string; geomColumn: string; format: 'geojson' | 'parquet' | 'csv'; srid: string; [k: string]: unknown }
 
 interface ContainerInfoDTO { name: string; url: string }
+
+/** Storage-format options for the dataset Inspect probe. */
+const GEO_FORMAT_OPTIONS: Array<{ value: GeoDatasetState['format']; label: string }> = [
+  { value: 'parquet', label: 'Parquet (+ WKB geometry)' },
+  { value: 'geojson', label: 'GeoJSON (line-delimited)' },
+  { value: 'csv', label: 'CSV (lat / lon columns)' },
+];
+
+/** SRID picker options — the spatial reference systems the dataset declares. */
+const GEO_SRID_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '4326', label: '4326 (WGS84 — lat/lon)' },
+  { value: '3857', label: '3857 (Web Mercator)' },
+  { value: '2263', label: '2263 (NY State Plane, ft)' },
+  { value: 'custom', label: '(custom EPSG)' },
+];
+
+/**
+ * Detect the on-the-wire geometry encoding of a single cell value so the
+ * schema panel can badge it. WKB columns come back from Synapse Serverless as
+ * a hex blob (BINARY/BYTE_ARRAY → varbinary); GeoJSON is an object/array
+ * literal; everything else that looks like `POINT(...)` / `POLYGON(...)` is WKT.
+ */
+function detectGeometryEncoding(value: unknown): 'GeoJSON' | 'WKB' | 'WKT' | null {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  if (s.startsWith('{') || s.startsWith('[')) return 'GeoJSON';
+  if (/^(0x)?[0-9A-Fa-f]+$/.test(s) && s.replace(/^0x/, '').length >= 10) return 'WKB';
+  if (/^(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION)\s*[(Z]/i.test(s)) return 'WKT';
+  return null;
+}
+
+/**
+ * Schema tree for the geo-dataset left panel. Renders one row per column from
+ * the Inspect OPENROWSET probe. The geometry column (state.geomColumn) is
+ * badged with its detected encoding (WKB/WKT/GeoJSON) from the row-0 value.
+ * Pure presentational — driven by the real {columns, rows} the Synapse
+ * Serverless query route returns.
+ */
+function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows: unknown[][]; geomColumn: string }) {
+  const s = useStyles();
+  const row0 = Array.isArray(rows) && rows.length > 0 ? rows[0] : [];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Caption1 style={{ fontWeight: 600 }}>Schema ({columns.length} column{columns.length === 1 ? '' : 's'})</Caption1>
+      {columns.map((c, i) => {
+        const cell = Array.isArray(row0) ? (row0 as unknown[])[i] : undefined;
+        const isGeom = c.toLowerCase() === (geomColumn || '').toLowerCase();
+        const enc = isGeom ? detectGeometryEncoding(cell) : null;
+        const preview = cell == null ? '∅' : String(cell).slice(0, 64);
+        return (
+          <div key={c} className={s.schemaRow}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <Caption1 style={{ fontWeight: isGeom ? 700 : 500, color: isGeom ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1 }}>{c}</Caption1>
+              {isGeom && <Badge appearance="tint" color="brand" size="small">geometry</Badge>}
+              {enc && <Badge appearance="outline" color="informative" size="small">{enc}</Badge>}
+            </div>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function useLakehouseContainers() {
   const [containers, setContainers] = useState<ContainerInfoDTO[] | null>(null);
@@ -324,7 +405,7 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
 function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
-    adlsPath: '', geomColumn: 'geometry', format: 'parquet',
+    adlsPath: '', geomColumn: 'geometry', format: 'parquet', srid: '4326',
   });
   const lh = useLakehouseContainers();
   const split = splitAdlsPath(state.adlsPath || '');
@@ -339,14 +420,28 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
   const inspect = useCallback(async () => {
     if (!state.adlsPath) { setInspectResult({ error: 'Select a container and path first.' }); return; }
     setInspecting(true); setInspectResult(null);
-    const fmt = state.format === 'csv' ? "FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE" : "FORMAT = 'PARQUET'";
+    // Build the OPENROWSET clause per format. Parquet infers a typed schema by
+    // column name (BINARY/BYTE_ARRAY WKB → varbinary, shown as a hex blob); CSV
+    // pulls header columns; GeoJSON is not columnar, so we read it as a single
+    // raw line per row (FIELDQUOTE 0x0b ensures the JSON commas/braces don't
+    // split fields) and the panel inspects the structure of line 0.
+    let fmt: string;
+    let geojsonNote = false;
+    if (state.format === 'csv') {
+      fmt = "FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE";
+    } else if (state.format === 'geojson') {
+      fmt = "FORMAT = 'CSV', PARSER_VERSION = '1.0', FIELDTERMINATOR = '0x0b', FIELDQUOTE = '0x0b', ROWTERMINATOR = '0x0a'";
+      geojsonNote = true;
+    } else {
+      fmt = "FORMAT = 'PARQUET'";
+    }
     const sql = `SELECT TOP 1 * FROM OPENROWSET(BULK '${state.adlsPath.replace(/'/g, "''")}', ${fmt}) AS r;`;
     try {
       const r = await fetch(`/api/items/synapse-serverless-sql-pool/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql }),
       });
-      setInspectResult({ ...(await r.json()), sql, status: r.status });
+      setInspectResult({ ...(await r.json()), sql, status: r.status, geojsonNote });
     } catch (e: any) { setInspectResult({ error: e?.message || String(e) }); }
     finally { setInspecting(false); }
   }, [state.adlsPath, state.format, id]);
@@ -363,34 +458,44 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>Browse ADLS Gen2 — geometry-column inspector deferred to v3.x.</Caption1></div>}
+      leftPanel={
+        <div className={s.treePad}>
+          {inspectResult?.ok && Array.isArray(inspectResult.columns) && inspectResult.columns.length > 0 ? (
+            <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
+          ) : (
+            <Caption1>
+              Geometry inspector — click <strong>Inspect</strong> to probe the dataset&rsquo;s first row via
+              Synapse Serverless <code>OPENROWSET</code>. The inferred columns appear here, with the geometry
+              column badged by its encoding (WKB / WKT / GeoJSON).
+            </Caption1>
+          )}
+        </div>
+      }
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
           <Subtitle2>Geo dataset</Subtitle2>
-          <div className={s.field}><Label>ADLS container</Label>
-            <select
-              value={split.container}
-              onChange={(e) => {
-                const newContainer = e.target.value;
+          <Field label="ADLS container">
+            <Dropdown
+              value={split.container || ''}
+              selectedOptions={split.container ? [split.container] : []}
+              placeholder={
+                lh.loading ? 'Loading containers…'
+                  : (lh.containers?.length ?? 0) === 0 ? (lh.error ? 'Container discovery failed' : 'No ADLS containers found')
+                  : 'Select a container'
+              }
+              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
+              onOptionSelect={(_, d) => {
+                const newContainer = d.optionValue || '';
                 const url = (lh.containers || []).find((c) => c.name === newContainer)?.url;
                 setState((p) => ({ ...p, adlsPath: joinAdlsPath(newContainer, split.suffix, url) }));
               }}
-              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
-              {lh.loading && <option value="">Loading containers…</option>}
-              {!lh.loading && (lh.containers?.length ?? 0) === 0 && (
-                <option value="">{lh.error ? 'Container discovery failed' : 'No ADLS containers found'}</option>
-              )}
-              {!lh.loading && (lh.containers?.length ?? 0) > 0 && !split.container && (
-                <option value="">Select a container</option>
-              )}
               {(lh.containers || []).map((c) => (
-                <option key={c.name} value={c.name}>{c.name}</option>
+                <Option key={c.name} value={c.name}>{c.name}</Option>
               ))}
-            </select>
-          </div>
+            </Dropdown>
+          </Field>
           {lh.error && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -404,27 +509,45 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.field}><Label>Path suffix (under selected container)</Label>
+          <Field label="Path suffix (under selected container)" hint={`Effective path: ${state.adlsPath || '(select a container)'}`}>
             <Input
               value={split.suffix}
               onChange={(_: unknown, d: any) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
               placeholder="geo/events/"
               disabled={!split.container}
             />
-          </div>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Effective path: <code>{state.adlsPath || '(select a container)'}</code>
-          </Caption1>
-          <div className={s.field}><Label>Geometry column</Label>
+          </Field>
+          <Field label="Geometry column">
             <Input value={state.geomColumn} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
-          </div>
-          <div className={s.field}><Label>Format</Label>
-            <select value={state.format} onChange={(e) => setState((p) => ({ ...p, format: e.target.value as GeoDatasetState['format'] }))} style={{ padding: 6 }}>
-              <option value="parquet">Parquet (+ WKB geometry)</option>
-              <option value="geojson">GeoJSON (line-delimited)</option>
-              <option value="csv">CSV (lat / lon columns)</option>
-            </select>
-          </div>
+          </Field>
+          <Field label="Format">
+            <Dropdown
+              value={GEO_FORMAT_OPTIONS.find((o) => o.value === state.format)?.label || ''}
+              selectedOptions={[state.format]}
+              onOptionSelect={(_, d) => setState((p) => ({ ...p, format: (d.optionValue as GeoDatasetState['format']) || 'parquet' }))}
+            >
+              {GEO_FORMAT_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Spatial reference (SRID / EPSG)">
+            {(() => {
+              const sridSelection = GEO_SRID_OPTIONS.some((o) => o.value === state.srid) ? state.srid : 'custom';
+              return (
+                <Dropdown
+                  value={GEO_SRID_OPTIONS.find((o) => o.value === sridSelection)?.label || ''}
+                  selectedOptions={[sridSelection]}
+                  onOptionSelect={(_, d) => setState((p) => ({ ...p, srid: d.optionValue === 'custom' ? '' : (d.optionValue || '') }))}
+                >
+                  {GEO_SRID_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                </Dropdown>
+              );
+            })()}
+            {!GEO_SRID_OPTIONS.some((o) => o.value === state.srid) && (
+              <Input value={state.srid} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, srid: d.value }))} placeholder="EPSG code, e.g. 27700" />
+            )}
+          </Field>
+          <Divider />
+          <Subtitle2>Geometry inspector</Subtitle2>
           <MessageBar intent="info">
             <MessageBarBody>
               <strong>Inspect</strong> probes the first row via Synapse Serverless <code>OPENROWSET</code> over the
@@ -434,6 +557,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
           <Button appearance="primary" icon={<Play20Regular />} onClick={inspect} disabled={inspecting || !state.adlsPath}>
             {inspecting ? 'Inspecting…' : 'Inspect first row (OPENROWSET)'}
           </Button>
+          {inspecting && <Spinner size="tiny" label="Probing dataset…" labelPosition="after" />}
           {inspectResult && (
             inspectResult.error || inspectResult.status >= 400 ? (
               <MessageBar intent={inspectResult.status === 503 || inspectResult.notDeployed ? 'warning' : 'error'}>
@@ -444,10 +568,26 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
               </MessageBar>
             ) : (
               <>
+                {inspectResult.geojsonNote && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>GeoJSON is not columnar</MessageBarTitle>
+                      Synapse Serverless reads GeoJSON as raw lines (one feature per row) rather than a typed schema.
+                      The first feature&rsquo;s structure is shown below; for a typed geometry schema, store the dataset
+                      as Parquet (with a WKB geometry column) and re-inspect.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {Array.isArray(inspectResult.columns) && inspectResult.columns.length > 0 && (
+                  <>
+                    <Subtitle2>Inferred schema</Subtitle2>
+                    <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
+                  </>
+                )}
                 <Caption1>Probe query:</Caption1>
-                <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{inspectResult.sql}</pre>
+                <pre className={s.codeBlock}>{inspectResult.sql}</pre>
                 <Caption1>First row:</Caption1>
-                <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(inspectResult.rows || inspectResult.result || inspectResult, null, 2)}</pre>
+                <pre className={s.codeBlock}>{JSON.stringify(inspectResult.rows || inspectResult.result || inspectResult, null, 2)}</pre>
               </>
             )
           )}
@@ -608,8 +748,9 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
               <GeoJsonMap geojson={resultGeo} />
             </>
           )}
+          {loading && <Spinner size="small" label="Running query…" labelPosition="after" />}
           {result && (
-            <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+            <pre className={s.codeBlock}>
               {JSON.stringify(result, null, 2)}
             </pre>
           )}
@@ -672,21 +813,39 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
   });
   const adf = useAdfPipelines();
+  // Azure Maps gate — reverse-geocode requires Azure Maps, which is not
+  // provisioned in GCC-High / IL5 (bicep never sets the key there). Same gate
+  // pattern as the GeoMap raster basemap.
+  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
   const [triggering, setTriggering] = useState(false);
-  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [triggerMsg, setTriggerMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const triggerRun = useCallback(async () => {
-    if (!state.adfPipelineName) { setTriggerMsg('Set ADF pipeline name first.'); return; }
+    if (!state.adfPipelineName) { setTriggerMsg({ intent: 'error', text: 'Pick a target ADF pipeline first.' }); return; }
     setTriggering(true); setTriggerMsg(null);
     try {
-      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(state.adfPipelineName)}/run`, {
+      // The geo flags persist to Cosmos item state; the run route reads them
+      // back and maps them to real ADF pipeline parameters. Persist first so an
+      // unsaved flag change is honored on the run (no stale state on the server).
+      if (dirty) await save();
+      const r = await fetch(`/api/items/geo-pipeline/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ parameters: { enrichH3: state.enrichH3, reverseGeocode: state.reverseGeocode, bufferMeters: state.bufferMeters } }),
       });
       const j = await r.json();
-      setTriggerMsg(j?.ok ? `Triggered run ${j.runId || ''}` : (j?.error || `HTTP ${r.status}`));
-    } catch (e: any) { setTriggerMsg(e?.message || String(e)); }
+      if (j?.ok) {
+        const used = Array.isArray(j.parametersUsed) ? j.parametersUsed : [];
+        const skipped = Array.isArray(j.parametersSkipped) ? j.parametersSkipped : [];
+        setTriggerMsg({
+          intent: 'success',
+          text: `Triggered run ${j.runId || ''} on "${j.pipelineName}".` +
+            (used.length ? ` Parameters passed: ${used.join(', ')}.` : '') +
+            (skipped.length ? ` Not declared by pipeline (skipped): ${skipped.join(', ')}.` : ''),
+        });
+      } else {
+        setTriggerMsg({ intent: j?.notDeployed || r.status === 412 ? 'warning' : 'error', text: j?.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) { setTriggerMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setTriggering(false); }
-  }, [state.adfPipelineName, state.enrichH3, state.reverseGeocode, state.bufferMeters]);
+  }, [id, state.adfPipelineName, dirty, save]);
   const canSave = dirty && !saving;
   const canTrigger = !!state.adfPipelineName && !triggering;
   const ribbon: RibbonTab[] = useMemo(() => [
@@ -701,29 +860,34 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>Underlying ADF pipeline (existing slug <code>adf-pipeline</code>) does the work; this item layers on geo enrichment flags.</Caption1></div>}
+      leftPanel={<div className={s.treePad}><Caption1>This item layers geo-enrichment flags onto a real ADF pipeline. At Trigger run the flags are posted as ADF pipeline parameters (<code>enrichH3</code>, <code>reverseGeocode</code>, <code>bufferMeters</code>).</Caption1></div>}
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <div className={s.field}><Label>ADF pipeline (target)</Label>
-            <select
-              value={state.adfPipelineName}
-              onChange={(e) => setState((p) => ({ ...p, adfPipelineName: e.target.value }))}
+          <Field label="ADF pipeline (target)">
+            <Dropdown
+              value={state.adfPipelineName || ''}
+              selectedOptions={state.adfPipelineName ? [state.adfPipelineName] : []}
+              placeholder={
+                adf.loading ? 'Loading pipelines…'
+                  : (adf.pipelines?.length ?? 0) === 0 ? (adf.error ? 'Discovery failed' : 'No ADF pipelines in factory')
+                  : 'Select a pipeline'
+              }
               disabled={adf.loading || (adf.pipelines?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              onOptionSelect={(_, d) => setState((p) => ({ ...p, adfPipelineName: d.optionValue || '' }))}
             >
-              {adf.loading && <option value="">Loading pipelines…</option>}
-              {!adf.loading && (adf.pipelines?.length ?? 0) === 0 && (
-                <option value="">{adf.error ? 'Discovery failed' : 'No ADF pipelines in factory'}</option>
-              )}
-              {!adf.loading && (adf.pipelines?.length ?? 0) > 0 && !state.adfPipelineName && (
-                <option value="">Select a pipeline</option>
-              )}
               {(adf.pipelines || []).map((p) => (
-                <option key={p.name} value={p.name}>{p.name}</option>
+                <Option key={p.name} value={p.name} text={p.name}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <Body1>{p.name}</Body1>
+                    {p.properties?.description && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.properties.description}</Caption1>
+                    )}
+                  </div>
+                </Option>
               ))}
-            </select>
-          </div>
+            </Dropdown>
+          </Field>
           {adf.error && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -736,21 +900,58 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.field}><Label>Enrichments</Label>
-            <label><input type="checkbox" checked={state.enrichH3} onChange={(e) => setState((p) => ({ ...p, enrichH3: e.target.checked }))} /> Add H3 cell id at resolution 7</label>
-            <label><input type="checkbox" checked={state.reverseGeocode} onChange={(e) => setState((p) => ({ ...p, reverseGeocode: e.target.checked }))} /> Reverse-geocode (requires Azure Maps account)</label>
+          <div className={s.field}>
+            <Label>Enrichments</Label>
+            <div className={s.enrichGroup}>
+              <Checkbox
+                checked={state.enrichH3}
+                onChange={(_, d) => setState((p) => ({ ...p, enrichH3: !!d.checked }))}
+                label={<span>Add H3 cell id at resolution 7 (<code>enrichH3: Bool</code>)</span>}
+              />
+              <Checkbox
+                checked={state.reverseGeocode && !!mapsKey}
+                disabled={!mapsKey}
+                onChange={(_, d) => setState((p) => ({ ...p, reverseGeocode: !!d.checked }))}
+                label={<span>Reverse-geocode (<code>reverseGeocode: Bool</code>)</span>}
+              />
+            </div>
           </div>
-          <div className={s.field}><Label>Buffer (meters; 0 = no buffer)</Label>
-            <Input type="number" value={String(state.bufferMeters)} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
-          </div>
+          {!mapsKey && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Reverse-geocode requires Azure Maps</MessageBarTitle>
+                Azure Maps is not provisioned in this deployment (and is unavailable in GCC-High / IL5). Set
+                <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> on the Console Container App after provisioning
+                <code>Microsoft.Maps/accounts</code> to enable this flag. H3 and buffer enrichments work without it.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <Field label="Buffer (meters; 0 = no buffer)" hint="ADF parameter bufferMeters: Int">
+            <Input type="number" min={0} value={String(state.bufferMeters)} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
+          </Field>
+          {adf.error && /Missing env var|not configured/i.test(adf.error) && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADF not configured</MessageBarTitle>
+                Set <code>LOOM_ADF_NAME</code>, <code>LOOM_DLZ_RG</code>, and <code>LOOM_SUBSCRIPTION_ID</code> on the
+                Console Container App and grant the UAMI Data Factory Contributor.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <MessageBar intent="info">
             <MessageBarBody>
-              Hooks into the existing <code>adf-pipeline</code> slug — at trigger time, the geo flags are
-              materialized as parameters on the run. Wiring deferred to v3.x; today the flags persist to
-              Cosmos via PATCH /api/cosmos-items/geo-pipeline/{`{id}`}.
+              At <strong>Trigger run</strong>, the geo-enrichment flags are posted to ADF as pipeline parameters
+              (<code>enrichH3</code>, <code>reverseGeocode</code>, <code>bufferMeters</code>) on a real{' '}
+              <code>createRun</code> against the selected pipeline. The target pipeline must declare these
+              parameter names (use the <code>loom-geo-enrich</code> starter pipeline, which pre-declares them).
+              The flags also persist to Cosmos via PATCH /api/cosmos-items/geo-pipeline/{`{id}`}.
             </MessageBarBody>
           </MessageBar>
-          {triggerMsg && <Caption1>{triggerMsg}</Caption1>}
+          {triggerMsg && (
+            <MessageBar intent={triggerMsg.intent}>
+              <MessageBarBody>{triggerMsg.text}</MessageBarBody>
+            </MessageBar>
+          )}
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }

@@ -40,7 +40,8 @@ values, Backends, Subscriptions, Gateways).
 | **Subscriptions** — list with scope + state | ✅ built | `GET /api/apim/subscriptions` → `listSubscriptions()` → ARM `GET …/subscriptions` |
 | Create subscription (name + scope: all APIs / product / API) | ✅ built (＋New dialog, active) | `POST /api/apim/subscriptions` → `createSubscription()` → ARM `PUT …/subscriptions/{sid}` |
 | Delete subscription | ✅ built (inline) | `DELETE /api/apim/subscriptions?id=` → `deleteSubscription()` → ARM `DELETE …/subscriptions/{sid}` (If-Match: *) |
-| Subscription keys (primary/secondary, regenerate) | ⚠️ deferred | client has `getSubscriptionKeys` (used by API test console); tree-level key reveal deferred |
+| Subscription state (Suspend / Activate / Cancel) | ✅ built (inline state-badge `Menu` in the product editor Subscriptions tab) | `PATCH /api/marketplace/subscriptions/[sid]` → `updateSubscription()` → ARM `PATCH …/subscriptions/{sid}` `{ properties: { state } }` (If-Match: *) |
+| Subscription key reveal + regenerate (primary/secondary) | ✅ built (Show keys + per-key Regen in the product editor Subscriptions tab) | `POST /api/marketplace/subscriptions/[sid]/keys` (reveal) and `POST …/keys/regenerate?which=primary\|secondary` → `regenerateSubscriptionKey()` + `getSubscriptionKeys()` → ARM `POST …/regeneratePrimaryKey\|regenerateSecondaryKey` + `listSecrets` |
 | **Gateways** — list self-hosted gateways | ✅ built (read-only group) | `GET /api/apim/gateways` → `listGateways()` → ARM `GET …/gateways` |
 | Register / provision a self-hosted gateway | ⚠️ honest read-only | gateway provisioning is a tenant/infra action (deploy gateway container + token); read-only here |
 | **Policies** — global / API / product policy XML | ⚠️ honest "coming" row at tree | full XML editor lives in `ApimPolicyEditor` (`/items/apim-policy/...`); client `getPolicy`/`upsertPolicy` back it; tree-level scope picker deferred |
@@ -55,7 +56,10 @@ row under **More (in the editor / coming)** with a tooltip naming where it
 already lives, or as a read-only group (Gateways). Nothing renders a fake list
 and no button is a dead stub. The four ⚠️ "coming" rows (policy XML editor at the
 tree, API operations authoring, OpenAPI import wizard, revisions/versions) point
-at the API/product/policy editors that implement them today.
+at the API/product/policy editors that implement them today. Subscription
+**state transitions** (Suspend / Activate / Cancel) and **key regeneration** are
+now built directly in the product editor's Subscriptions tab — the prior "read +
+reveal only" honest-gate is removed and replaced with live ARM write paths.
 
 ## Grade
 
