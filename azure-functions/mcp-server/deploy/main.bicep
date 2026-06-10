@@ -18,6 +18,10 @@
 //     the output principalId Reader on each RG in loomResourceGroups.
 //   - Grant 'Search Index Data Reader' on the AI Search service (catalog tool):
 //     grant the output principalId that role, or set LOOM_AI_SEARCH_KEY.
+//   - Grant 'Data Factory Contributor' on the Loom Data Factory (data-movement
+//     author/run tools — loom_upsert_pipeline / loom_run_pipeline): grant the
+//     output principalId that role on the factory (Reader suffices for the
+//     read/diagnose tools). Set adfName + dlzResourceGroup to enable them.
 //
 // Apply:
 //   az deployment group create -g <rg> \
@@ -61,6 +65,12 @@ param aiSearchService string = ''
 
 @description('AI Search index for the catalog tool.')
 param aiSearchIndex string = 'loom-items'
+
+@description('Resource group of the Loom default Data Factory (for the data-movement tools). Empty = those tools honest-gate.')
+param dlzResourceGroup string = ''
+
+@description('Loom default Data Factory name backing the data-movement (pipeline/copy-job/dataflow) tools. Empty = those tools honest-gate.')
+param adfName string = ''
 
 @description('ARM endpoint (Gov: https://management.usgovcloudapi.net).')
 param armEndpoint string = environment().resourceManager
@@ -132,6 +142,8 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'LOOM_RESOURCE_GROUPS', value: join(loomResourceGroups, ',') }
         { name: 'LOOM_AI_SEARCH_SERVICE', value: aiSearchService }
         { name: 'LOOM_AI_SEARCH_INDEX', value: aiSearchIndex }
+        { name: 'LOOM_DLZ_RG', value: dlzResourceGroup }
+        { name: 'LOOM_ADF_NAME', value: adfName }
         { name: 'LOOM_ARM_ENDPOINT', value: armEndpoint }
       ]
     }

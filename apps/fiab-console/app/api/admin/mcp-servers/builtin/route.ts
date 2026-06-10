@@ -44,6 +44,9 @@ export async function GET() {
     endpoint: mcpEndpoint,
     healthEndpoint,
     name: 'Loom built-in tools',
-    description: 'Vetted read-only Loom tools (catalog search, ARM resources, deployments).',
+    description:
+      'Vetted Loom tools: catalog search, ARM resources/deployments (read-only), and ' +
+      'data-movement — author, run, and diagnose pipelines / copy jobs / data flows on the ' +
+      'Loom Data Factory (Azure-native, no Fabric dependency).',
   });
 }
