@@ -46,13 +46,17 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 240 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: 240 },
+  header: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
+  headerActions: { display: 'flex', columnGap: tokens.spacingHorizontalXXS },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  groupLayout: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  scrollArea: { overflow: 'auto', flex: 1, minHeight: 0 },
+  loadingPad: { padding: tokens.spacingHorizontalS },
+  muted: { color: tokens.colorNeutralForeground3 },
 });
 
 const JOBS_ROUTE = '/api/databricks/jobs';
@@ -344,7 +348,7 @@ export function DatabricksWorkspaceTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Workspace</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span className={s.headerActions}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -381,16 +385,16 @@ export function DatabricksWorkspaceTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading workspace…" /></div>}
+      {loading && <div className={s.loadingPad}><Spinner size="tiny" label="Loading workspace…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Workspace error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
 
-      <div style={{ overflow: 'auto', flex: 1 }}>
+      <div className={s.scrollArea}>
         <Tree aria-label="Databricks workspace" defaultOpenItems={['g-jobs']}>
           {/* Jobs */}
           <TreeItem itemType="branch" value="g-jobs">
-            {groupHeader('Jobs', <Flow20Regular />, jobs.length, onNewJob ? () => onNewJob() : undefined, 'New job (opens editor)')}
+            {groupHeader('Jobs', <Flow20Regular />, f ? fJobs.length : jobs.length, onNewJob ? () => onNewJob() : undefined, 'New job (opens editor)')}
             <Tree>
               {fJobs.length === 0 && <TreeItem itemType="leaf" value="j-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No jobs'}</Caption1></TreeItemLayout></TreeItem>}
               {fJobs.map((j) => (
@@ -420,7 +424,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Notebooks / Workspace files */}
           <TreeItem itemType="branch" value="g-notebooks">
-            {groupHeader('Notebooks', <Notebook20Regular />, notebooks.length, () => openCreate('notebook'), 'New notebook')}
+            {groupHeader('Notebooks', <Notebook20Regular />, f ? fNotebooks.length : notebooks.length, () => openCreate('notebook'), 'New notebook')}
             <Tree>
               {fNotebooks.length === 0 && <TreeItem itemType="leaf" value="n-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : `Empty (${nbPath})`}</Caption1></TreeItemLayout></TreeItem>}
               {fNotebooks.map((n) => {
@@ -445,7 +449,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Clusters */}
           <TreeItem itemType="branch" value="g-clusters">
-            {groupHeader('Clusters', <Server20Regular />, clusters.length, () => openCreate('cluster'), 'New cluster')}
+            {groupHeader('Clusters', <Server20Regular />, f ? fClusters.length : clusters.length, () => openCreate('cluster'), 'New cluster')}
             <Tree>
               {fClusters.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No clusters'}</Caption1></TreeItemLayout></TreeItem>}
               {fClusters.map((c) => {
@@ -472,7 +476,7 @@ export function DatabricksWorkspaceTree({
 
           {/* SQL Warehouses */}
           <TreeItem itemType="branch" value="g-warehouses">
-            {groupHeader('SQL Warehouses', <Database20Regular />, warehouses.length, () => openCreate('warehouse'), 'New SQL warehouse')}
+            {groupHeader('SQL Warehouses', <Database20Regular />, f ? fWarehouses.length : warehouses.length, () => openCreate('warehouse'), 'New SQL warehouse')}
             <Tree>
               {fWarehouses.length === 0 && <TreeItem itemType="leaf" value="w-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No SQL warehouses'}</Caption1></TreeItemLayout></TreeItem>}
               {fWarehouses.map((w) => {
@@ -501,7 +505,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Repos */}
           <TreeItem itemType="branch" value="g-repos">
-            {groupHeader('Repos', <BranchFork20Regular />, repos.length, () => openCreate('repo'), 'New Git folder')}
+            {groupHeader('Repos', <BranchFork20Regular />, f ? fRepos.length : repos.length, () => openCreate('repo'), 'New Git folder')}
             <Tree>
               {fRepos.length === 0 && <TreeItem itemType="leaf" value="r-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Git folders'}</Caption1></TreeItemLayout></TreeItem>}
               {fRepos.map((r) => (
@@ -523,7 +527,7 @@ export function DatabricksWorkspaceTree({
 
           {/* Unity Catalog (read-only) */}
           <TreeItem itemType="branch" value="g-catalogs">
-            {groupHeader('Unity Catalog', <Database20Regular />, catalogs.length, undefined)}
+            {groupHeader('Unity Catalog', <Database20Regular />, f ? fCatalogs.length : catalogs.length, undefined)}
             <Tree>
               {fCatalogs.length === 0 && <TreeItem itemType="leaf" value="uc-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No catalogs'}</Caption1></TreeItemLayout></TreeItem>}
               {fCatalogs.map((c) => (
@@ -543,7 +547,7 @@ export function DatabricksWorkspaceTree({
 
           {/* DLT pipelines (Lakeflow Declarative Pipelines) */}
           <TreeItem itemType="branch" value="g-dlt">
-            {groupHeader('DLT Pipelines', <Pipeline20Regular />, dltPipelines.length, () => openCreate('dlt'), 'New DLT pipeline')}
+            {groupHeader('DLT Pipelines', <Pipeline20Regular />, f ? fDlt.length : dltPipelines.length, () => openCreate('dlt'), 'New DLT pipeline')}
             <Tree>
               {fDlt.length === 0 && <TreeItem itemType="leaf" value="dlt-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No DLT pipelines'}</Caption1></TreeItemLayout></TreeItem>}
               {fDlt.map((p) => {
@@ -577,7 +581,7 @@ export function DatabricksWorkspaceTree({
 
           {/* MLflow experiments */}
           <TreeItem itemType="branch" value="g-mlflow-exp">
-            {groupHeader('MLflow Experiments', <Beaker20Regular />, mlflowExperiments.length, () => openCreate('mlflow-experiment'), 'New MLflow experiment')}
+            {groupHeader('MLflow Experiments', <Beaker20Regular />, f ? fExperiments.length : mlflowExperiments.length, () => openCreate('mlflow-experiment'), 'New MLflow experiment')}
             <Tree>
               {fExperiments.length === 0 && <TreeItem itemType="leaf" value="exp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No experiments'}</Caption1></TreeItemLayout></TreeItem>}
               {fExperiments.map((e) => (
@@ -595,7 +599,7 @@ export function DatabricksWorkspaceTree({
 
           {/* MLflow registered models */}
           <TreeItem itemType="branch" value="g-mlflow-model">
-            {groupHeader('Registered Models', <BrainCircuit20Regular />, registeredModels.length, () => openCreate('mlflow-model'), 'Register a new model')}
+            {groupHeader('Registered Models', <BrainCircuit20Regular />, f ? fModels.length : registeredModels.length, () => openCreate('mlflow-model'), 'Register a new model')}
             <Tree>
               {fModels.length === 0 && <TreeItem itemType="leaf" value="model-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No registered models'}</Caption1></TreeItemLayout></TreeItem>}
               {fModels.map((m) => {
@@ -619,13 +623,13 @@ export function DatabricksWorkspaceTree({
 
           {/* Model serving endpoints */}
           <TreeItem itemType="branch" value="g-serving">
-            {groupHeader('Serving Endpoints', <Rocket20Regular />, servingEndpoints.length, () => openCreate('serving-endpoint'), 'New serving endpoint')}
+            {groupHeader('Serving Endpoints', <Rocket20Regular />, f ? fServing.length : servingEndpoints.length, () => openCreate('serving-endpoint'), 'New serving endpoint')}
             <Tree>
               {servingNote && (
                 <TreeItem itemType="leaf" value="serving-note">
                   <Tooltip content={servingNote} relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>Serving unavailable</span>{' '}
+                      <span className={s.muted}>Serving unavailable</span>{' '}
                       <Badge size="small" appearance="tint" color="warning">gov / not provisioned</Badge>
                     </TreeItemLayout>
                   </Tooltip>
@@ -655,7 +659,7 @@ export function DatabricksWorkspaceTree({
               <TreeItem itemType="leaf" value="nw-lakeview">
                 <Tooltip content="/api/2.0/lakeview — Lakeview dashboards, plus SQL queries/alerts authoring objects; the rich authoring surface is tracked as a separate parity task." relationship="description">
                   <TreeItemLayout iconBefore={<Warning20Regular />}>
-                    <span style={{ color: tokens.colorNeutralForeground3 }}>Dashboards / Queries / Alerts (Lakeview)</span>{' '}
+                    <span className={s.muted}>Dashboards / Queries / Alerts (Lakeview)</span>{' '}
                     <Badge size="small" appearance="tint" color="warning">coming</Badge>
                   </TreeItemLayout>
                 </Tooltip>

@@ -30,9 +30,10 @@ import {
 } from '@/lib/components/catalog/lineage-canvas';
 
 const useStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 12, padding: 12, minHeight: 0, flex: 1 },
-  head: { display: 'flex', alignItems: 'center', gap: 8 },
-  target: { fontFamily: 'Consolas, monospace', fontSize: 13, color: tokens.colorNeutralForeground1 },
+  wrap: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalM, minHeight: 0, flex: 1 },
+  head: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalS },
+  target: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1 },
+  emptyHint: { color: tokens.colorNeutralForeground3 },
 });
 
 export interface UcLineagePanelProps {
@@ -105,7 +106,7 @@ export function UcLineagePanel({ fullName }: UcLineagePanelProps) {
       )}
 
       {!error && !loading && edges.length === 0 && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        <Caption1 className={s.emptyHint}>
           No upstream or downstream lineage recorded for this table yet. Run a job or query that reads
           from / writes to it, then refresh.
         </Caption1>
