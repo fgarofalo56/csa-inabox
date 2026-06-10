@@ -82,25 +82,18 @@ let _accessRequestWorkflow: Container | null = null;
 // ARM/Bicep pre-step beyond the account+database (the Console UAMI already holds
 // Cosmos DB Built-in Data Contributor at account scope).
 let _savedQueries: Container | null = null;
-// Foundation admin containers (shared cloud-endpoints resolver task). All six
-// are Loom-native, Azure-backed registries with NO Fabric dependency.
+// Foundation admin containers (shared cloud-endpoints resolver task) — only
+// the two with NO main-side equivalent are declared here. `embed-codes`,
+// `org-visuals`, `task-flows`, and `azure-connections` are all declared
+// further down by parallel feature branches and reused as-is.
 //   loom-workspaces    — admin Workspace Catalog (one row per Loom-managed
 //                        workspace), PK /tenantId so the admin workspace-picker
 //                        hits a single physical partition. Distinct from the
 //                        BFF `workspaces` config container.
 //   workspace-folders  — Loom-native folder hierarchy (OneLake folder parity),
 //                        PK /workspaceId so the Explorer tree hits one partition.
-//   embed-codes        — tenant-scoped embed codes (one per embedded report /
-//                        dashboard), PK /tenantId.
-//   org-visuals        — org-level visual templates (theme / branding / layouts),
-//                        PK /tenantId.
-// (`task-flows` and `azure-connections` are declared below — they were added
-//  in parallel branches and carry workspace-scoped PKs; we reuse those single
-//  declarations rather than duplicating them here.)
 let _loomWorkspaces: Container | null = null;
 let _workspaceFolders: Container | null = null;
-let _embedCodes: Container | null = null;
-let _orgVisuals: Container | null = null;
 let _pbiDashboardOverlays: Container | null = null;
 // Paginated-report (RDL) definitions — the Loom-native authoring document for
 // the paginated-report editor (data sources, datasets, tablixes, parameters).
@@ -514,8 +507,6 @@ async function ensure() {
   // skip bicep. Partition keys MUST match cosmos.bicep exactly.
   _loomWorkspaces    = await mk('loom-workspaces',    '/tenantId');
   _workspaceFolders  = await mk('workspace-folders',  '/workspaceId');
-  _embedCodes        = await mk('embed-codes',         '/tenantId');
-  _orgVisuals        = await mk('org-visuals',         '/tenantId');
   // Loom-native overlay for Power BI / AAS dashboards: pinned-DAX tiles, Q&A
   // (Copilot→DAX) tiles, streaming (ADX/KQL) tiles, and the grid layout. Stored
   // separately from the Power BI REST tile list so the PBI ACL never gates the
@@ -632,12 +623,9 @@ export async function orgVisualsContainer(): Promise<Container> { await ensure()
 export async function loomWorkspacesContainer(): Promise<Container>  { await ensure(); return _loomWorkspaces!; }
 /** Workspace-native folder hierarchy (OneLake folder parity), PK /workspaceId. */
 export async function workspaceFoldersContainer(): Promise<Container> { await ensure(); return _workspaceFolders!; }
-/** Tenant-scoped embed codes (one per embedded report/dashboard), PK /tenantId. */
-export async function embedCodesContainer(): Promise<Container>       { await ensure(); return _embedCodes!; }
-/** Org-level visual templates (theme/branding/layouts), PK /tenantId. */
-export async function orgVisualsContainer(): Promise<Container>       { await ensure(); return _orgVisuals!; }
-// (taskFlowsContainer + azureConnectionsContainer accessors live above — the
-//  workspace-scoped variants were added in parallel branches and already exist.)
+// (embedCodesContainer + orgVisualsContainer + taskFlowsContainer +
+//  azureConnectionsContainer accessors live further down — they were declared
+//  by parallel feature branches and are reused as-is.)
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -773,7 +761,6 @@ const KNOWN_CONTAINER_IDS = [
   'saved-queries',
   // Foundation admin containers (shared cloud-endpoints resolver task).
   'loom-workspaces', 'workspace-folders',
-  'embed-codes', 'org-visuals',
   'pbi-dashboard-overlays',
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
