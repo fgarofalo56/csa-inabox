@@ -33,6 +33,7 @@ import {
   tokens,
   Button,
   Badge,
+  CounterBadge,
   Select,
   Tab,
   TabList,
@@ -105,6 +106,10 @@ interface ObjectRow {
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px' },
   header: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
+  titleGroup: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  subtitle: { color: tokens.colorNeutralForeground3 },
+  tabLabel: { display: 'inline-flex', alignItems: 'center', gap: '6px' },
+  historyCaption: { color: tokens.colorNeutralForeground3 },
   spacer: { flex: 1 },
   bar: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
   actions: { display: 'flex', gap: '6px', alignItems: 'center' },
@@ -387,7 +392,12 @@ export function ActivatorPane() {
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <Title2>Activator</Title2>
+        <div className={styles.titleGroup}>
+          <Title2>Activator</Title2>
+          <Caption1 className={styles.subtitle}>
+            Detect-and-act rules across this workspace, backed by Azure Monitor scheduled-query alerts.
+          </Caption1>
+        </div>
         <Badge color="brand">Azure Monitor scheduled-query rules</Badge>
         {ruleRows.length > 0 && (
           <Badge appearance="tint" color="success">{activeRules} active / {ruleRows.length} rules</Badge>
@@ -434,9 +444,24 @@ export function ActivatorPane() {
       )}
 
       <TabList selectedValue={activeTab} onTabSelect={(_, d) => setActiveTab(d.value as typeof activeTab)}>
-        <Tab value="rules">Rules</Tab>
-        <Tab value="objects">Objects</Tab>
-        <Tab value="history">Action history</Tab>
+        <Tab value="rules">
+          <span className={styles.tabLabel}>
+            Rules
+            {ruleRows.length > 0 && <CounterBadge count={ruleRows.length} appearance="ghost" size="small" />}
+          </span>
+        </Tab>
+        <Tab value="objects">
+          <span className={styles.tabLabel}>
+            Objects
+            {objectRows.length > 0 && <CounterBadge count={objectRows.length} appearance="ghost" size="small" />}
+          </span>
+        </Tab>
+        <Tab value="history">
+          <span className={styles.tabLabel}>
+            Action history
+            {history && history.length > 0 && <CounterBadge count={history.length} appearance="ghost" size="small" />}
+          </span>
+        </Tab>
       </TabList>
 
       {activeTab === 'rules' && (
@@ -469,7 +494,7 @@ export function ActivatorPane() {
       {activeTab === 'history' && (
         <>
           <div className={styles.bar}>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={styles.historyCaption}>
               Fired and resolved Azure Monitor alert instances across this workspace&apos;s activators.
             </Caption1>
             <div className={styles.spacer} />
