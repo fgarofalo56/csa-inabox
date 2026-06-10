@@ -22,6 +22,7 @@ import {
   TableSimple20Regular,
   Timer20Regular,
   DatabasePlugConnected20Regular,
+  DatabaseArrowUp20Regular,
   Copy20Regular,
   Checkmark20Regular,
 } from '@fluentui/react-icons';
@@ -288,6 +289,14 @@ export function WarehousePane() {
         <Title2>Warehouse</Title2>
         <div className={styles.spacer} />
         <div className={styles.actions}>
+          <Button
+            appearance="secondary"
+            icon={<DatabaseArrowUp20Regular />}
+            as="a"
+            href="/warehouse/migration"
+          >
+            Migrate database
+          </Button>
           <Button
             appearance="secondary"
             icon={<Flowchart24Regular />}

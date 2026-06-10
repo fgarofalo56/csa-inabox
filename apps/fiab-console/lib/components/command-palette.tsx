@@ -30,6 +30,7 @@ const PAGES: Cmd[] = [
   { id: 'deploy', label: 'Deployment pipelines', sub: 'Dev → Test → Prod', href: '/deployment-pipelines', group: 'Navigation' },
   { id: 'admin', label: 'Admin portal', sub: 'Tenant settings + 7 more', href: '/admin', group: 'Navigation' },
   { id: 'setup', label: 'Setup wizard', sub: 'Loom tenant bootstrap', href: '/setup', group: 'Navigation' },
+  { id: 'sql-migration', label: 'SQL DB Migration Assistant', sub: 'Import a .dacpac into the Synapse SQL pool', href: '/warehouse/migration', group: 'Navigation' },
   // Admin subpages
   { id: 'a-ten', label: 'Tenant settings', sub: 'Admin · switches', href: '/admin/tenant-settings', group: 'Admin' },
   { id: 'a-cap', label: 'Capacity settings', sub: 'Admin · SKUs', href: '/admin/capacity', group: 'Admin' },
