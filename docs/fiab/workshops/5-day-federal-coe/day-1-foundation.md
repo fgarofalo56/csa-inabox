@@ -123,7 +123,7 @@ from Day 2 onward are described in
 
 ## Homework
 
-- Read the [governance overview](../../governance/index.md).
+- Read the [governance overview](../../governance/catalog.md).
 - Confirm your DLZ CIDR ranges and ER/VPN connectivity with your network team.
 
 ## Federal-specific emphasis

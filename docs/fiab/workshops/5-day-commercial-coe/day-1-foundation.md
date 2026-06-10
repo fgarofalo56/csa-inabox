@@ -105,7 +105,7 @@ regulated verticals).
 
 ## Homework
 
-- Read the [governance overview](../../governance/index.md).
+- Read the [governance overview](../../governance/catalog.md).
 - Confirm your DLZ networking matches your vertical's policy (public + private
   mix per customer choice).
 
