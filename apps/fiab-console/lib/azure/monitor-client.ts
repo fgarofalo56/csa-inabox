@@ -521,6 +521,140 @@ ${itemClause}
 }
 
 // ----------------------------------------------------------------------------
+// 4c) Monitor hub activity feed — pipeline/job/refresh run history via KQL
+// ----------------------------------------------------------------------------
+
+/** One run in the Monitor-hub activity feed (one pipeline/job execution). */
+export interface ActivityFeedRow {
+  timeGenerated: string;   // TimeGenerated (ISO 8601)
+  name: string;            // PipelineName / job name
+  runId?: string;
+  itemType: string;        // "Pipeline" | "Synapse Pipeline" | "ARM Operation"
+  status?: string;         // Succeeded | Failed | InProgress | Cancelled
+  start?: string;          // ISO 8601
+  end?: string;            // ISO 8601
+  durationMs?: number;
+  submitter?: string;      // TriggerName or caller UPN
+  errorCode?: string;
+  errorMessage?: string;
+  source: 'adf' | 'synapse' | 'arm';
+}
+
+export interface ActivityFeedOpts {
+  days?: number;            // lookback window; default 30; clamped 1..90
+  limit?: number;           // row cap; default 200; clamped 1..500
+  includeSynapse?: boolean; // union SynapseIntegrationPipelineRuns (default true)
+  includeArmLog?: boolean;  // also fold in ARM control-plane Activity Log events
+}
+
+/**
+ * Monitor-hub activity feed: pipeline / job run history from Log Analytics.
+ *
+ * Primary source: ADFPipelineRun (Azure Data Factory diagnostic logs, routed
+ * to the LAW by landing-zone/adf.bicep with logAnalyticsDestinationType:
+ * 'Dedicated'). Optionally unioned with SynapseIntegrationPipelineRuns.
+ *
+ * `union isfuzzy=true` means a missing SynapseIntegrationPipelineRuns table
+ * (no Synapse deployment) contributes 0 rows rather than erroring — so the
+ * Azure-native default works with no Fabric and no Synapse.
+ *
+ * Honest gate: throws MonitorNotConfiguredError when
+ * LOOM_LOG_ANALYTICS_WORKSPACE_ID is unset, so the route renders a MessageBar.
+ */
+export async function queryActivityFeed(opts: ActivityFeedOpts = {}): Promise<ActivityFeedRow[]> {
+  const workspaceId = logAnalyticsWorkspaceId();
+  if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+
+  const days = Math.min(90, Math.max(1, opts.days ?? 30));
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
+  const timespan = `P${days}D`;
+
+  const synapseUnion = opts.includeSynapse !== false
+    ? `
+union isfuzzy=true (SynapseIntegrationPipelineRuns
+| where TimeGenerated >= ago(${days}d)
+| project TimeGenerated, Name=PipelineName, RunId, ItemType="Synapse Pipeline",
+          Status, Start, End, Submitter="", ErrorCode="", ErrorMessage="")`
+    : '';
+
+  const kql = `
+ADFPipelineRun
+| where TimeGenerated >= ago(${days}d)
+| project TimeGenerated, Name=PipelineName, RunId, ItemType="Pipeline",
+          Status, Start, End, Submitter=TriggerName, ErrorCode, ErrorMessage
+${synapseUnion}
+| order by TimeGenerated desc
+| take ${limit}
+`.trim();
+
+  const result = await queryLogs(kql, timespan);
+  const at = (name: string) => result.columns.indexOf(name);
+  const tIdx = at('TimeGenerated');
+  const nIdx = at('Name');
+  const rIdx = at('RunId');
+  const iIdx = at('ItemType');
+  const sIdx = at('Status');
+  const stIdx = at('Start');
+  const enIdx = at('End');
+  const suIdx = at('Submitter');
+  const ecIdx = at('ErrorCode');
+  const emIdx = at('ErrorMessage');
+
+  const str = (row: unknown[], idx: number): string => (idx >= 0 ? String(row[idx] ?? '') : '');
+
+  const rows: ActivityFeedRow[] = result.rows.map((row): ActivityFeedRow => {
+    const start = str(row, stIdx);
+    const end = str(row, enIdx);
+    let durationMs: number | undefined;
+    if (start && end) {
+      const ms = new Date(end).getTime() - new Date(start).getTime();
+      if (Number.isFinite(ms) && ms >= 0) durationMs = ms;
+    }
+    const itemType = str(row, iIdx) || 'Pipeline';
+    return {
+      timeGenerated: str(row, tIdx),
+      name: str(row, nIdx),
+      runId: str(row, rIdx) || undefined,
+      itemType,
+      status: str(row, sIdx) || undefined,
+      start: start || undefined,
+      end: end || undefined,
+      durationMs,
+      submitter: str(row, suIdx) || undefined,
+      errorCode: str(row, ecIdx) || undefined,
+      errorMessage: str(row, emIdx) || undefined,
+      source: itemType === 'Synapse Pipeline' ? 'synapse' : 'adf',
+    };
+  });
+
+  // Optionally fold in ARM control-plane Activity Log events (infra ops). A
+  // misconfigured subscription never fails the LA result — it just omits these.
+  if (opts.includeArmLog) {
+    try {
+      const armEvents = await listActivityLog({ days });
+      for (const e of armEvents) {
+        rows.push({
+          timeGenerated: e.eventTimestamp,
+          name: e.operationName || e.resourceType || '(arm operation)',
+          itemType: 'ARM Operation',
+          status: e.status,
+          start: e.eventTimestamp,
+          submitter: e.caller,
+          source: 'arm',
+        });
+      }
+      rows.sort(
+        (a, b) => new Date(b.timeGenerated).getTime() - new Date(a.timeGenerated).getTime(),
+      );
+    } catch {
+      /* ARM activity log is optional — never fails the LA result */
+    }
+  }
+
+  return rows;
+}
+
+// ----------------------------------------------------------------------------
 // 5) Activity log — ARM Activity Log REST
 // ----------------------------------------------------------------------------
 
