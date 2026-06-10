@@ -74,3 +74,56 @@ describe('CopyJobEditor', () => {
     });
   });
 });
+
+describe('CopyJobEditor — CDC mode', () => {
+  beforeEach(() => {
+    installFetchMock({
+      '/api/adf/linked-services': () => ({
+        ok: true,
+        linkedServices: [
+          { name: 'AzureSql_src', properties: { type: 'AzureSqlDatabase' } },
+          { name: 'AzureSql_sink', properties: { type: 'AzureSqlDatabase' } },
+        ],
+      }),
+      '/api/items/copy-job/cj-cdc/runs': () => ({ ok: true, runs: [] }),
+      // The control table stores the last processed LSN as a 0x… hex string.
+      '/api/items/copy-job/cj-cdc/watermark': () => ({
+        ok: true, configured: true,
+        watermark: { source: 'orders', table_name: 'dbo.orders', last_value: '0x0000003B000001A80004', updated_utc: '2026-02-01T00:05:00Z' },
+      }),
+      '/api/items/copy-job/cj-cdc': () => ({
+        ok: true,
+        item: {
+          id: 'cj-cdc',
+          workspaceId: 'ws-1',
+          displayName: 'cdc-fixture',
+          state: {
+            source: { linkedService: 'AzureSql_src', type: 'AzureSqlSource', sourceTable: 'dbo.orders' },
+            sink: { linkedService: 'AzureSql_sink', type: 'AzureSqlSink', table: 'bronze.orders' },
+            mode: 'CDC',
+            writeMode: 'Merge',
+            mergeKeys: 'id',
+            sourceName: 'orders',
+            cdcCaptureInstance: 'dbo_orders',
+            mappings: [],
+          },
+        },
+      }),
+    });
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('renders the CDC checkpoint panel with the persisted LSN + capture instance', async () => {
+    render(<CopyJobEditor item={makeItem('copy-job', 'Copy Job')} id="cj-cdc" />);
+    // Capture instance from the persisted spec.
+    await waitFor(() => {
+      expect(screen.getByText('dbo_orders')).toBeInTheDocument();
+    });
+    // CDC checkpoint panel renders the last processed LSN read from the control table.
+    await waitFor(() => {
+      expect(screen.getByText('0x0000003B000001A80004')).toBeInTheDocument();
+    });
+    // The panel is titled for CDC, not the generic watermark.
+    expect(screen.getByText(/CDC checkpoint/i)).toBeInTheDocument();
+  });
+});

@@ -262,8 +262,8 @@ const REGISTRY: Record<string, LearnEntry> = {
   },
   'copy-job': {
     title: 'Copy job',
-    summary: 'Simple data movement: source → sink, no transformations. Optimized for bulk loads with built-in retry + fault tolerance.',
-    docsUrl: 'https://learn.microsoft.com/fabric/data-factory/what-is-copy-job',
+    summary: 'Guided data movement: source → sink. Full, incremental (watermark), or CDC (native SQL Server change tracking — inserts, updates, deletes) copy modes, with built-in retry + fault tolerance.',
+    docsUrl: 'https://learn.microsoft.com/fabric/data-factory/cdc-copy-job',
   },
   'spark-job-definition': {
     title: 'Spark job definition',

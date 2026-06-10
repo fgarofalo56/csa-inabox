@@ -11,14 +11,27 @@
  *         → LookupNewWatermark (Script, MAX(<col>) on the source)
  *           → IncrementalCopyActivity (Copy, WHERE <col> > old AND <= new)
  *             → UpdateWatermark (StoredProcedure, dbo.usp_write_watermark)
+ *   CDC mode         → native SQL Server change tracking (Azure SQL / SQL
+ *       Server / MI). The 4-activity pattern reads NET inserts/updates/deletes
+ *       between the last processed LSN and the current max LSN:
+ *       LookupOldLsn (Script, reads dbo.copy_watermark — last LSN as hex)
+ *         → LookupMaxLsn (Script, sys.fn_cdc_get_max_lsn() on the source)
+ *           → CdcCopyActivity (Copy, cdc.fn_cdc_get_net_changes_<instance>())
+ *             → UpdateWatermark (StoredProcedure, persists the new max LSN)
+ *       The change rows are upserted (Merge) so the destination tracks the
+ *       current state of each row (Fabric CDC SCD Type 1).
  *
- * The watermark lives in dbo.copy_watermark in Azure SQL — deployed by
- * platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and addressed via
- * LOOM_COPYJOB_CONTROL_SQL_SERVER / LOOM_COPYJOB_CONTROL_SQL_DB. When the
- * control server env is unset, Full mode still runs; Incremental mode returns a
- * precise 503 naming the missing env var + bicep module (no-vaporware.md).
+ * The watermark / LSN checkpoint lives in dbo.copy_watermark in Azure SQL —
+ * deployed by platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and
+ * addressed via LOOM_COPYJOB_CONTROL_SQL_SERVER / LOOM_COPYJOB_CONTROL_SQL_DB.
+ * When the control server env is unset, Full mode still runs; Incremental and
+ * CDC modes return a precise 503 naming the missing env var + bicep module
+ * (no-vaporware.md).
  *
- * Grounded in learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal.
+ * Grounded in:
+ *   learn.microsoft.com/fabric/data-factory/cdc-copy-job
+ *   learn.microsoft.com/azure/data-factory/connector-sql-server#native-change-data-capture
+ *   learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -47,10 +60,11 @@ interface SideSpec {
 interface CopySpec {
   source: SideSpec;
   sink: SideSpec;
-  mode?: 'Full' | 'Incremental';
+  mode?: 'Full' | 'Incremental' | 'CDC';
   writeMode?: 'Append' | 'Overwrite' | 'Merge';
   watermarkCol?: string;
   sourceName?: string;
+  cdcCaptureInstance?: string;
   mergeKeys?: string;
   mappings?: Array<{ source: string; sink: string }>;
 }
@@ -268,6 +282,108 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
   };
 }
 
+/**
+ * Default SQL Server CDC capture-instance name for a (schema-qualified) table.
+ * sys.sp_cdc_enable_table defaults @capture_instance to '<schema>_<table>'.
+ */
+function defaultCaptureInstance(sourceTable: string): string {
+  const { schema, table } = splitTable(sourceTable);
+  return `${schema}_${table}`;
+}
+
+/**
+ * Native-CDC pipeline. Reads NET changes from cdc.fn_cdc_get_net_changes_<inst>
+ * between the last processed LSN (checkpoint in dbo.copy_watermark) and the
+ * source's current max LSN, then upserts them into the destination so it tracks
+ * the source's current state (Fabric CDC SCD Type 1 / Merge).
+ *
+ * LSNs are binary(10); we round-trip them as hex strings (master.dbo.fn_varbintohexstr
+ * → CONVERT(binary(10), ..., 1)) so they fit the nvarchar last_value column and the
+ * existing usp_write_watermark proc — no schema change to the control table.
+ */
+function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: string): AdfPipeline {
+  const sourceTable = spec.source.sourceTable!;
+  const sourceName = spec.sourceName || sourceTable;
+  const captureInstance = spec.cdcCaptureInstance || defaultCaptureInstance(sourceTable);
+  const tx = translator(spec.mappings);
+  // Old LSN: stored as a hex string ('0x....'); converted back to binary(10) for the function.
+  const oldLsnHex = "@{activity('LookupOldLsn').output.resultSets[0].rows[0].last_lsn_hex}";
+  const maxLsnHex = "@{activity('LookupMaxLsn').output.resultSets[0].rows[0].max_lsn_hex}";
+  // CDC net-changes read. The "from" LSN is the next LSN after the last processed
+  // one (sys.fn_cdc_increment_lsn) so we never re-read the last batch; on the
+  // first run the checkpoint is NULL → fall back to the table's min LSN.
+  const netChangesQuery =
+    `DECLARE @from_lsn binary(10) = CONVERT(binary(10), '${oldLsnHex}', 1); ` +
+    `DECLARE @to_lsn binary(10) = CONVERT(binary(10), '${maxLsnHex}', 1); ` +
+    `IF @from_lsn IS NULL SET @from_lsn = sys.fn_cdc_get_min_lsn('${captureInstance}'); ` +
+    `ELSE SET @from_lsn = sys.fn_cdc_increment_lsn(@from_lsn); ` +
+    `SELECT * FROM cdc.fn_cdc_get_net_changes_${captureInstance}(@from_lsn, @to_lsn, 'all');`;
+  return {
+    name: `loom-copy-${itemId}`,
+    properties: {
+      description: `Loom copy-job ${itemId} (CDC · capture ${captureInstance})`,
+      activities: [
+        {
+          name: 'LookupOldLsn',
+          type: 'Script',
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{
+              type: 'Query',
+              text:
+                `SELECT last_value AS last_lsn_hex ` +
+                `FROM dbo.copy_watermark WHERE source = '${sourceName}' AND table_name = '${sourceTable}'`,
+            }],
+          },
+        },
+        {
+          name: 'LookupMaxLsn',
+          type: 'Script',
+          linkedServiceName: { referenceName: spec.source.linkedService, type: 'LinkedServiceReference' },
+          typeProperties: {
+            scripts: [{
+              type: 'Query',
+              // Current max LSN, rendered as a 0x… hex string for round-tripping.
+              text: `SELECT master.dbo.fn_varbintohexstr(sys.fn_cdc_get_max_lsn()) AS max_lsn_hex`,
+            }],
+          },
+        },
+        {
+          name: 'CdcCopyActivity',
+          type: 'Copy',
+          dependsOn: [
+            { activity: 'LookupOldLsn', dependencyConditions: ['Succeeded'] },
+            { activity: 'LookupMaxLsn', dependencyConditions: ['Succeeded'] },
+          ],
+          inputs: [{ referenceName: srcDs, type: 'DatasetReference' }],
+          outputs: [{ referenceName: snkDs, type: 'DatasetReference' }],
+          typeProperties: {
+            source: { type: spec.source.type, sqlReaderQuery: netChangesQuery },
+            sink: sinkProps(spec),
+            ...(tx ? { translator: tx } : {}),
+            enableStaging: false,
+          },
+        },
+        {
+          name: 'UpdateWatermark',
+          type: 'SqlServerStoredProcedure',
+          dependsOn: [{ activity: 'CdcCopyActivity', dependencyConditions: ['Succeeded'] }],
+          linkedServiceName: { referenceName: CONTROL_LS, type: 'LinkedServiceReference' },
+          typeProperties: {
+            storedProcedureName: 'dbo.usp_write_watermark',
+            storedProcedureParameters: {
+              source: { value: sourceName, type: 'String' },
+              table_name: { value: sourceTable, type: 'String' },
+              last_value: { value: maxLsnHex, type: 'String' },
+            },
+          },
+        },
+      ],
+      annotations: ['loom', 'copy-job', itemId, 'cdc'],
+    },
+  };
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
@@ -287,7 +403,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!spec.sink.table) {
       return jerr('a destination table / path is required', 400);
     }
-    const mode = spec.mode === 'Incremental' ? 'Incremental' : 'Full';
+    const mode = spec.mode === 'Incremental' ? 'Incremental' : spec.mode === 'CDC' ? 'CDC' : 'Full';
+    const usesControlTable = mode === 'Incremental' || mode === 'CDC';
 
     const controlServer = process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER;
     if (mode === 'Incremental') {
@@ -300,14 +417,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!isSqlSource(spec.source.type)) {
         return jerr('incremental copy requires a SQL-family source (the watermark is read with MAX(<column>) against the source table)', 400);
       }
-      if (!controlServer) {
-        return jerr(
-          'LOOM_COPYJOB_CONTROL_SQL_SERVER is not configured, so the watermark control table cannot be reached. ' +
-          'Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and set LOOM_COPYJOB_CONTROL_SQL_SERVER ' +
-          '(+ LOOM_COPYJOB_CONTROL_SQL_DB) on the console app. Full-mode copy works without this.',
-          503,
-        );
+    }
+    if (mode === 'CDC') {
+      if (!spec.source.sourceTable) {
+        return jerr('a source table is required for CDC copy', 400);
       }
+      if (!isSqlSource(spec.source.type)) {
+        return jerr('CDC copy requires a SQL-family source (Azure SQL, SQL Server, or SQL Managed Instance) with native change data capture enabled on the source database and table', 400);
+      }
+      if (spec.writeMode !== 'Merge' || !(spec.mergeKeys || '').trim()) {
+        return jerr('CDC copy applies net inserts/updates/deletes by key — set the update method to Merge and provide merge key column(s)', 400);
+      }
+    }
+    if (usesControlTable && !controlServer) {
+      return jerr(
+        'LOOM_COPYJOB_CONTROL_SQL_SERVER is not configured, so the ' +
+        (mode === 'CDC' ? 'LSN checkpoint' : 'watermark') + ' control table cannot be reached. ' +
+        'Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep and set LOOM_COPYJOB_CONTROL_SQL_SERVER ' +
+        '(+ LOOM_COPYJOB_CONTROL_SQL_DB) on the console app. Full-mode copy works without this.',
+        503,
+      );
     }
 
     // Datasets — real ADF child resources referenced by the Copy activity.
@@ -316,15 +445,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await upsertDataset(srcDs, buildDataset(srcDs, spec.source.type, spec.source.linkedService, spec.source.sourceTable));
     await upsertDataset(snkDs, buildDataset(snkDs, spec.sink.type, spec.sink.linkedService, spec.sink.table));
 
-    if (mode === 'Incremental') {
-      // Make sure the watermark control table + stored procedure exist (real DDL).
+    if (usesControlTable) {
+      // Make sure the watermark / LSN control table + stored procedure exist (real DDL).
       await ensureControlTable(controlServer!, process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control');
       // Control linked service → Azure SQL watermark DB via the factory's MI.
       const controlLs: AdfLinkedService = {
         name: CONTROL_LS,
         properties: {
           type: 'AzureSqlDatabase',
-          description: 'Loom copy-job watermark control DB (dbo.copy_watermark).',
+          description: 'Loom copy-job watermark / CDC LSN checkpoint control DB (dbo.copy_watermark).',
           typeProperties: {
             server: controlServer,
             database: process.env.LOOM_COPYJOB_CONTROL_SQL_DB || 'loom-control',
@@ -338,7 +467,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const pipelineName = `loom-copy-${id}`;
     const pipeline = mode === 'Incremental'
       ? incrementalPipeline(id, spec, srcDs, snkDs)
-      : fullPipeline(id, spec, srcDs, snkDs);
+      : mode === 'CDC'
+        ? cdcPipeline(id, spec, srcDs, snkDs)
+        : fullPipeline(id, spec, srcDs, snkDs);
     await upsertPipeline(pipelineName, pipeline);
 
     const run = await runPipeline(pipelineName);

@@ -3,20 +3,28 @@
 /**
  * CopyJobWizard — the Loom one-for-one of Microsoft Fabric's "Copy job" guided
  * wizard (ui-parity.md). Fabric's Copy job walks the author through
- * Source → Destination → Copy mode (Full / Incremental) → Update method →
- * column Mapping → Review, then materialises an incremental-copy pipeline with
- * a control-table watermark. Loom builds the SAME guided flow with typed
- * controls (no raw JSON, loom_no_freeform_config) and emits a structured
+ * Source → Destination → Copy mode (Full / Incremental / CDC) → Update method →
+ * column Mapping → Review, then materialises a copy pipeline with the
+ * appropriate change-tracking backend. Loom builds the SAME guided flow with
+ * typed controls (no raw JSON, loom_no_freeform_config) and emits a structured
  * `CopyJobSpec` the BFF turns into a real ADF pipeline.
  *
  * Backend (no-vaporware / no-fabric-dependency): the spec is materialised into
- * an Azure Data Factory pipeline — a single Copy activity for Full mode, or the
- * canonical 4-activity Lookup→Lookup→Copy→StoredProcedure incremental pattern
- * for Incremental mode. The watermark lives in dbo.copy_watermark in Azure SQL.
- * No Microsoft Fabric capacity/workspace is required.
+ * an Azure Data Factory pipeline —
+ *   • Full        → a single Copy activity.
+ *   • Incremental → the 4-activity Lookup→Lookup→Copy→StoredProcedure
+ *                   custom-watermark pattern (MAX(<col>) high-water mark).
+ *   • CDC         → native SQL Server change tracking: each run reads net
+ *                   inserts/updates/deletes via cdc.fn_cdc_get_net_changes_*
+ *                   between the last processed LSN and the current max LSN, then
+ *                   upserts. The last LSN lives in dbo.copy_watermark.
+ * Both incremental backends use the same Azure SQL control table; no Microsoft
+ * Fabric capacity/workspace is required.
  *
  * Grounded in:
- *   learn.microsoft.com/fabric/data-factory/what-is-copy-job
+ *   learn.microsoft.com/fabric/data-factory/cdc-copy-job
+ *   learn.microsoft.com/fabric/data-factory/cdc-copy-job-azure-sql-database
+ *   learn.microsoft.com/azure/data-factory/connector-sql-server#native-change-data-capture
  *   learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-portal
  */
 
@@ -42,7 +50,7 @@ export const COPY_SINK_TYPES = [
 ];
 const SQL_SOURCE_TYPES = new Set(['AzureSqlSource', 'SqlServerSource', 'SqlMISource', 'AzureSqlDWSource']);
 
-export type CopyMode = 'Full' | 'Incremental';
+export type CopyMode = 'Full' | 'Incremental' | 'CDC';
 export type WriteMode = 'Append' | 'Overwrite' | 'Merge';
 
 export interface CopyJobSpec {
@@ -52,8 +60,15 @@ export interface CopyJobSpec {
   writeMode: WriteMode;
   /** Incremental only — the monotonically-increasing watermark column. */
   watermarkCol?: string;
-  /** Incremental only — logical source name; PK in dbo.copy_watermark. */
+  /** Incremental + CDC — logical source name; PK in dbo.copy_watermark. */
   sourceName?: string;
+  /**
+   * CDC only — the SQL Server capture instance to read net changes from
+   * (cdc.fn_cdc_get_net_changes_<captureInstance>). Defaults to the default
+   * capture instance name `<schema>_<table>` (per `sys.sp_cdc_enable_table`)
+   * when blank.
+   */
+  cdcCaptureInstance?: string;
   /** Merge only — comma-separated key columns for upsert. */
   mergeKeys?: string;
   mappings: Array<{ source: string; sink: string }>;
@@ -79,6 +94,7 @@ const STEPS = ['Source', 'Destination', 'Mode', 'Update', 'Mapping', 'Review'] a
 const MODES: { kind: CopyMode; title: string; desc: string }[] = [
   { kind: 'Full', title: 'Full copy', desc: 'Copy the entire source every run. Simplest — no watermark.' },
   { kind: 'Incremental', title: 'Incremental copy', desc: 'Copy only rows changed since the last run, tracked by a watermark column in a control table.' },
+  { kind: 'CDC', title: 'Change data capture (CDC)', desc: 'Read native SQL change tracking (inserts, updates, deletes) since the last run — no watermark column needed. SQL-family sources only.' },
 ];
 
 const WRITE_MODES: { kind: WriteMode; title: string; desc: string }[] = [
@@ -135,6 +151,7 @@ export function CopyJobWizard({
   const [writeMode, setWriteMode] = useState<WriteMode>('Append');
   const [watermarkCol, setWatermarkCol] = useState('');
   const [sourceName, setSourceName] = useState('');
+  const [cdcCaptureInstance, setCdcCaptureInstance] = useState('');
   const [mergeKeys, setMergeKeys] = useState('');
   const [mappingsText, setMappingsText] = useState('[]');
 
@@ -154,11 +171,19 @@ export function CopyJobWizard({
     setWriteMode(s.writeMode || 'Append');
     setWatermarkCol(s.watermarkCol || '');
     setSourceName(s.sourceName || '');
+    setCdcCaptureInstance(s.cdcCaptureInstance || '');
     setMergeKeys(s.mergeKeys || '');
     setMappingsText(JSON.stringify(s.mappings || [], null, 2));
   }, [open, initialSpec]);
 
   const isSqlSource = SQL_SOURCE_TYPES.has(srcType);
+
+  // CDC applies net changes (inserts/updates/deletes) into the destination —
+  // that is an upsert keyed by the table's PK, so CDC pins the write method to
+  // Merge (matching Fabric's CDC SCD-Type-1 default).
+  useEffect(() => {
+    if (mode === 'CDC' && writeMode !== 'Merge') setWriteMode('Merge');
+  }, [mode, writeMode]);
 
   const spec = useMemo<CopyJobSpec>(() => {
     let mappings: Array<{ source: string; sink: string }> = [];
@@ -172,23 +197,30 @@ export function CopyJobWizard({
       mode,
       writeMode,
       ...(mode === 'Incremental' ? { watermarkCol: watermarkCol || undefined, sourceName: (sourceName || srcTable) || undefined } : {}),
+      ...(mode === 'CDC' ? { sourceName: (sourceName || srcTable) || undefined, cdcCaptureInstance: cdcCaptureInstance || undefined } : {}),
       ...(writeMode === 'Merge' ? { mergeKeys: mergeKeys || undefined } : {}),
       mappings,
     };
-  }, [srcLs, srcType, srcTable, srcQuery, snkLs, snkType, snkTable, mode, writeMode, watermarkCol, sourceName, mergeKeys, mappingsText]);
+  }, [srcLs, srcType, srcTable, srcQuery, snkLs, snkType, snkTable, mode, writeMode, watermarkCol, sourceName, cdcCaptureInstance, mergeKeys, mappingsText]);
 
   const stepValid = useMemo(() => {
     switch (step) {
       case 0: return !!srcLs && !!srcType && (!isSqlSource || !!srcTable);
       case 1: return !!snkLs && !!snkType && !!snkTable;
-      case 2: return mode === 'Full' || (!!watermarkCol && (!!sourceName || !!srcTable));
-      case 3: return writeMode !== 'Merge' || !!mergeKeys.trim();
+      case 2:
+        if (mode === 'Full') return true;
+        if (mode === 'CDC') return isSqlSource && !!srcTable;
+        return !!watermarkCol && (!!sourceName || !!srcTable);
+      // CDC applies net inserts/updates/deletes by key — Merge is required and merge keys are mandatory.
+      case 3: return (writeMode !== 'Merge' && mode !== 'CDC') || !!mergeKeys.trim();
       default: return true;
     }
   }, [step, srcLs, srcType, srcTable, isSqlSource, snkLs, snkType, snkTable, mode, watermarkCol, sourceName, writeMode, mergeKeys]);
 
   const canSave = !busy && !!srcLs && !!snkLs && !!snkTable
-    && (mode === 'Full' || (!!watermarkCol && isSqlSource))
+    && (mode === 'Full' || isSqlSource)
+    && (mode !== 'Incremental' || !!watermarkCol)
+    && (mode !== 'CDC' || (!!srcTable && writeMode === 'Merge' && !!mergeKeys.trim()))
     && (writeMode !== 'Merge' || !!mergeKeys.trim());
 
   const lsOptions = (l: LinkedServiceLite) => (l.properties?.type ? `${l.name} (${l.properties.type})` : l.name);
@@ -301,21 +333,61 @@ export function CopyJobWizard({
                       </div>
                     </>
                   )}
+                  {mode === 'CDC' && (
+                    <>
+                      {!isSqlSource && (
+                        <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
+                          CDC mode reads native SQL Server change tracking and is only supported for Azure SQL,
+                          SQL Server, and SQL Managed Instance sources. Pick a SQL source type on the Source step.
+                        </Text>
+                      )}
+                      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                        Each run reads net inserts, updates, and deletes from the source between the last processed
+                        log-sequence number (LSN) and the current one, then upserts them into the destination. The source
+                        database and table must have CDC enabled (sys.sp_cdc_enable_db / sys.sp_cdc_enable_table with
+                        supports_net_changes=1).
+                      </Text>
+                      <div className={styles.grid2}>
+                        <Field label="Capture instance (optional)"
+                          hint="The CDC capture instance to read. Leave blank to use the default instance name (<schema>_<table>).">
+                          <Input value={cdcCaptureInstance} onChange={(_, d) => setCdcCaptureInstance(d.value)}
+                            placeholder={srcTable ? srcTable.replace('.', '_') : 'dbo_orders'} />
+                        </Field>
+                        <Field label="Source name (control-table key)"
+                          hint="Identifies this job's LSN checkpoint row in dbo.copy_watermark. Defaults to the source table.">
+                          <Input value={sourceName} onChange={(_, d) => setSourceName(d.value)} placeholder={srcTable || 'orders-feed'} />
+                        </Field>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 
               {step === 3 && (
-                <div className={styles.cardRow}>
-                  {WRITE_MODES.map((w) => (
-                    <div key={w.kind} role="button" tabIndex={0}
-                      className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
-                      onClick={() => setWriteMode(w.kind)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setWriteMode(w.kind); }}>
-                      <span className={styles.cardTitle}>{w.title}</span>
-                      <span className={styles.cardDesc}>{w.desc}</span>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  {mode === 'CDC' && (
+                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                      CDC applies the source's net inserts, updates, and deletes by key, so the update method is
+                      fixed to <strong>Merge (upsert)</strong>. Provide the key column(s) used to match rows.
+                    </Text>
+                  )}
+                  <div className={styles.cardRow}>
+                    {WRITE_MODES.map((w) => {
+                      const locked = mode === 'CDC' && w.kind !== 'Merge';
+                      return (
+                        <div key={w.kind} role="button" tabIndex={locked ? -1 : 0}
+                          aria-disabled={locked || undefined}
+                          className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
+                          style={locked ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                          onClick={() => { if (!locked) setWriteMode(w.kind); }}
+                          onKeyDown={(e) => { if (!locked && (e.key === 'Enter' || e.key === ' ')) setWriteMode(w.kind); }}>
+                          <span className={styles.cardTitle}>{w.title}</span>
+                          <span className={styles.cardDesc}>{w.desc}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
               {step === 3 && writeMode === 'Merge' && (
                 <Field label="Merge key column(s)" required
@@ -344,9 +416,11 @@ export function CopyJobWizard({
                   <TableBody>
                     <SummaryRow k="Source" v={`${srcLs || '—'} · ${srcType}${srcTable ? ` · ${srcTable}` : ''}`} />
                     <SummaryRow k="Destination" v={`${snkLs || '—'} · ${snkType} · ${snkTable || '—'}`} />
-                    <SummaryRow k="Copy mode" v={mode} />
+                    <SummaryRow k="Copy mode" v={mode === 'CDC' ? 'Change data capture (CDC)' : mode} />
                     {mode === 'Incremental' && <SummaryRow k="Watermark column" v={watermarkCol || '—'} />}
                     {mode === 'Incremental' && <SummaryRow k="Control-table key" v={sourceName || srcTable || '—'} />}
+                    {mode === 'CDC' && <SummaryRow k="Capture instance" v={cdcCaptureInstance || `${(srcTable || '').replace('.', '_') || 'default'} (default)`} />}
+                    {mode === 'CDC' && <SummaryRow k="LSN checkpoint key" v={sourceName || srcTable || '—'} />}
                     <SummaryRow k="Update method" v={writeMode} />
                     {writeMode === 'Merge' && <SummaryRow k="Merge keys" v={mergeKeys || '—'} />}
                     <SummaryRow k="Column mappings" v={`${spec.mappings.length} mapped${spec.mappings.length === 0 ? ' (all by name)' : ''}`} />
@@ -360,7 +434,9 @@ export function CopyJobWizard({
                   <Badge appearance="tint" color="informative">ADF pipeline</Badge>{' '}
                   Saving materialises an Azure Data Factory pipeline. {mode === 'Incremental'
                     ? 'Incremental mode generates Lookup → Lookup → Copy → StoredProcedure activities and persists the watermark in dbo.copy_watermark.'
-                    : 'Full mode generates a single Copy activity.'}
+                    : mode === 'CDC'
+                      ? 'CDC mode generates Lookup(last LSN) → Lookup(max LSN) → Copy(net changes via cdc.fn_cdc_get_net_changes_*) → StoredProcedure activities and persists the last processed LSN in dbo.copy_watermark.'
+                      : 'Full mode generates a single Copy activity.'}
                 </Text>
               )}
             </div>
