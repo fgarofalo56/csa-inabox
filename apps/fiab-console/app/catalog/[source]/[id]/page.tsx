@@ -6,6 +6,7 @@ import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { LineageGraph } from '@/lib/components/catalog/lineage-graph';
 import { LineagePanel } from '@/lib/components/catalog/lineage-panel';
 import { CrossSourceActions } from '@/lib/components/catalog/cross-source-actions';
+import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import {
   Spinner, Badge, MessageBar, MessageBarBody, Button, Subtitle2, Caption1,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -162,6 +163,18 @@ export default function AssetDetailPage() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            </Card>
+          )}
+
+          {source === 'onelake' && /semanticmodel|dataset/i.test(String(detail.detail?.type || '')) && (
+            <Card style={{ gridColumn: '1 / -1' }}>
+              <CardHeader
+                header={<Subtitle2>AI auto-description</Subtitle2>}
+                description={<Caption1>Bulk-generate descriptions for all tables, columns, and measures</Caption1>}
+              />
+              <div style={{ padding: 12 }}>
+                <BulkDescribeAction modelId={id} workspaceId={workspaceId} />
               </div>
             </Card>
           )}

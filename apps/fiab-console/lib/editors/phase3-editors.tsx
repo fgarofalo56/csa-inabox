@@ -72,6 +72,7 @@ import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
+import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
@@ -13093,6 +13094,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <pre className={s.assistResult}>{daxCopilotResult}</pre>
                       </div>
                     )}
+
+                    {/* Bulk AI auto-description — generate descriptions for ALL
+                        tables/columns/measures in one pass (Fabric Build 2026 #36).
+                        Azure-native (AOAI); persists to the Loom-native model. */}
+                    <Subtitle2 style={{ marginTop: 20 }}>AI auto-description (bulk)</Subtitle2>
+                    <div style={{ marginTop: 8 }}>
+                      <BulkDescribeAction modelId={id} />
+                    </div>
 
                     <Subtitle2 style={{ marginTop: 16 }}>Existing measures</Subtitle2>
                     {(detail?.tables || []).flatMap((t) => (t.measures || []).map((m) => (
