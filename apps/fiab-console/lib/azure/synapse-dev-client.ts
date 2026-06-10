@@ -851,6 +851,51 @@ export async function runSparkSqlAndWait(poolName: string, sql: string): Promise
  * those fields for compute-target discovery. Returns [] if the workspace
  * env var is missing; surfaces ARM errors verbatim.
  */
+/**
+ * List the Synapse Data Explorer (Kusto) pools on the deployment-default
+ * workspace from ARM (Microsoft.Synapse/workspaces/{ws}/kustoPools). These are
+ * the workspace-scoped Kusto pools the KQL-script editor's "Connect to"
+ * dropdown surfaces. The kustoPools resource uses its own preview api-version
+ * (2021-06-01-preview), not the workspace ARM_API. Returns [] (not an error)
+ * when the workspace isn't configured so the BFF can render a clean empty
+ * dropdown + honest "create a Kusto pool" hint rather than 500.
+ *
+ * Learn: https://learn.microsoft.com/rest/api/synapse/kusto-pools/list-by-workspace
+ */
+export async function listKustoPools(): Promise<Array<{ name: string; state?: string; provisioningState?: string; sku?: { name?: string } }>> {
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) return [];
+  const r = await callArm(`${armBase()}/kustoPools?api-version=2021-06-01-preview`);
+  // A workspace without the Data Explorer feature returns 404/empty — treat as none.
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: Array<{ name: string; properties?: { state?: string; provisioningState?: string }; sku?: { name?: string } }> }>(r, 'listKustoPools');
+  return (body.value || []).map((p) => ({
+    name: p.name,
+    state: p.properties?.state,
+    provisioningState: p.properties?.provisioningState,
+    sku: p.sku,
+  }));
+}
+
+/**
+ * List the databases inside a Synapse Kusto pool from ARM
+ * (.../kustoPools/{pool}/databases). Backs the KQL-script editor's "Use
+ * database" dropdown. Returns the readable database name (the ARM resource name
+ * is `{pool}/{database}`; we strip the pool prefix).
+ *
+ * Learn: https://learn.microsoft.com/rest/api/synapse/databases/list-by-kusto-pool
+ */
+export async function listKustoPoolDatabases(poolName: string): Promise<string[]> {
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE || !poolName) return [];
+  const r = await callArm(`${armBase()}/kustoPools/${encodeURIComponent(poolName)}/databases?api-version=2021-06-01-preview`);
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: Array<{ name: string }> }>(r, `listKustoPoolDatabases(${poolName})`);
+  return (body.value || []).map((d) => {
+    const n = d.name || '';
+    const slash = n.indexOf('/');
+    return slash >= 0 ? n.slice(slash + 1) : n;
+  });
+}
+
 export async function listDedicatedSqlPools(): Promise<Array<{ name: string; status?: string; sku?: { name?: string } }>> {
   if (!process.env.LOOM_SYNAPSE_WORKSPACE) return [];
   const r = await callArm(`${armBase()}/sqlPools?api-version=${ARM_API}`);
