@@ -37,7 +37,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
+const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing', 'sharepoint'];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
 
 function isGate(x: unknown): x is EngineGate {
@@ -111,9 +111,14 @@ export async function POST(req: NextRequest) {
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
 
-  const isExternal = targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' || targetType === 'delta_sharing';
+  const isExternal =
+    targetType === 's3' ||
+    targetType === 'gcs' ||
+    targetType === 'dataverse' ||
+    targetType === 'delta_sharing' ||
+    targetType === 'sharepoint';
 
-  // --- External cloud sources (S3/GCS/Dataverse): pre-flight honest-gate. ---
+  // --- External cloud sources (S3/GCS/Dataverse/SharePoint): pre-flight gate. ---
   // Gate ONLY when the credentialRef is absent or the vault isn't configured;
   // otherwise proceed to bindExternalSource() for the real read-through binding.
   const extGate = externalSourceGate(targetType, !!credentialRef?.keyVaultSecret);
@@ -127,14 +132,15 @@ export async function POST(req: NextRequest) {
   let binding: ExternalBinding | undefined;
 
   if (isExternal) {
-    // --- S3 / GCS / Dataverse: resolve KV secret + create the real binding. ---
+    // --- S3 / GCS / Dataverse: KV secret. SharePoint: Graph on the UAMI. ---
     try {
       const result = await bindExternalSource({
         lakehouseId,
         name,
-        targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing',
+        targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint',
         targetUri,
-        credentialRef: credentialRef!,
+        // SharePoint reads through Microsoft Graph on the UAMI — no KV secret.
+        credentialRef: targetType === 'sharepoint' ? credentialRef : credentialRef!,
       });
       if (isGate(result)) {
         // Engine for this source isn't configured — persist pending, 503 honestly.
@@ -159,8 +165,9 @@ export async function POST(req: NextRequest) {
         status: 'error', statusDetail: msg, createdBy,
       });
       const code =
-        /^kv_/.test(e?.code || '') ? (e.code as string) : 'external_bind_error';
-      return NextResponse.json({ ok: false, code, error: msg, hint: msg, data: errRow }, { status: 502 });
+        /^(kv_|sharepoint_)/.test(e?.code || '') ? (e.code as string) : 'external_bind_error';
+      const status = typeof e?.status === 'number' ? e.status : 502;
+      return NextResponse.json({ ok: false, code, error: msg, hint: msg, data: errRow }, { status });
     }
   } else {
     // --- ADLS Gen2 / internal Loom lakehouse: real UAMI resolve + reachability test. ---

@@ -517,6 +517,70 @@ If the volume is absent, a Tables Delta Sharing shortcut honest-gates
 (`delta_sharing_needs_uc_volume`) with the exact `CREATE VOLUME` remediation; a
 Files Delta Sharing shortcut works without Databricks entirely.
 
+## SharePoint / OneDrive shortcuts (Microsoft Graph) {#sharepoint-shortcuts}
+
+A **SharePoint / OneDrive** lakehouse shortcut (Lakehouse editor → Shortcuts →
+New shortcut → *SharePoint / OneDrive*) virtualizes a SharePoint **document
+library** (or a folder/file inside it) into the lakehouse as a zero-copy **Files**
+shortcut. Reads run through **Microsoft Graph** on the **Console UAMI** — this is
+an Azure/M365-native source with **no Microsoft Fabric / Power BI dependency**
+(per `no-fabric-dependency.md`); it works with `LOOM_DEFAULT_FABRIC_WORKSPACE`
+unset. The wizard browses one Graph level at a time — **site → document library
+(drive) → folder/file** — exactly like Fabric's OneLake SharePoint shortcut.
+
+A one-time admin step is required because Graph app-only calls need an
+admin-consented application permission:
+
+### Step 1 — Grant the Graph app-role to the Console UAMI
+
+```bash
+az login   # as a user/SP with Application.ReadWrite.All on Microsoft Graph
+CONSOLE_UAMI_PRINCIPAL=<console UAMI object id> \
+  ./scripts/csa-loom/grant-sharepoint-graph-approle.sh
+```
+
+This grants **`Sites.Read.All`** (application app-role
+`332a536c-c7ef-4017-ab91-336970924f0d`) — which covers site search, listing a
+site's document libraries, and reading driveItems. It is available in **all
+national clouds** (Global, GCC L4, GCC-High L5/DoD, 21Vianet); the script derives
+the sovereign Graph host from `AZURE_CLOUD` (override with `GRAPH_HOST` for
+DoD/IL5).
+
+### Step 2 — Tenant admin consent
+
+A Tenant Administrator opens **Entra ID → Enterprise applications → Console UAMI
+→ Permissions** and clicks **Grant admin consent**. Until consent is issued,
+Graph returns `403` and the SharePoint source renders an honest-gate MessageBar
+naming exactly this grant.
+
+### Step 3 — Flip the feature flag
+
+Set on the Console Container App:
+
+```
+LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true
+```
+
+(or set `loomSharePointShortcutsEnabled=true` in the bicepparam and redeploy
+admin-plane). When unset (default), the SharePoint source + browse honest-gate
+(`sharepoint_not_configured`) with the exact remediation; all other shortcut
+sources are unaffected.
+
+> **Tables vs Files.** SharePoint document libraries are file stores (xlsx, csv,
+> pdf, …), not Delta/Parquet tabular sources, so a **Files** shortcut is the
+> native fit (mirrors Fabric, where SharePoint shortcuts appear under Files). A
+> **Tables** SharePoint shortcut honest-gates (`sharepoint_no_tables_engine`)
+> with a Load-to-table next step — create a Files shortcut, then materialize a
+> specific CSV/Parquet/Excel file as a Delta table.
+
+### Bicep sync
+
+`loomSharePointShortcutsEnabled` (admin-plane `main.bicep`) injects
+`LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true` into the loom-console Container App env.
+The Graph `Sites.Read.All` AppRole is a tenant-level Entra grant (not an ARM
+role), so it is applied by `scripts/csa-loom/grant-sharepoint-graph-approle.sh`,
+not from bicep — same pattern as the Identity Picker / MIP / DLP Graph grants.
+
 ## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
 
 The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a

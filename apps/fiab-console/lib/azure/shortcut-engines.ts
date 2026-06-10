@@ -34,6 +34,11 @@ import {
   deleteUcExternalLocation,
   deleteUcStorageCredential,
 } from './shortcut-credentials';
+import {
+  parseSharePointUri,
+  testSharePointTarget,
+  sharePointConfigGate,
+} from './sharepoint-graph-client';
 import type {
   ShortcutTargetType,
   ShortcutKind,
@@ -183,6 +188,24 @@ export async function createTablesShortcut(args: {
     lakehouseId?: string;
   };
 }): Promise<TablesRegistration | EngineGate> {
+  // --- SharePoint / OneDrive: no Tables engine. ---
+  // SharePoint document libraries are file stores (xlsx/csv/pdf/…), not Delta or
+  // Parquet tabular data sources, so there is no external table to register over
+  // them. This mirrors Fabric, where a OneLake SharePoint shortcut surfaces under
+  // Files, not Tables. Honest-gate so the row persists 'pending' with a clear
+  // next step (create a Files shortcut, then Load-to-table) rather than failing.
+  if (/^sharepoint:\/\//i.test(args.abfssUri)) {
+    return {
+      gated: true,
+      code: 'sharepoint_no_tables_engine',
+      hint:
+        'SharePoint / OneDrive document libraries are file stores, not Delta/Parquet tables, so a Tables ' +
+        'shortcut cannot register an external table over them. Create a Files shortcut to surface the ' +
+        'library under Files, then use Load-to-table to materialize a specific CSV/Parquet/Excel file as ' +
+        'a Delta table (mirrors Fabric, where SharePoint shortcuts appear under Files).',
+    };
+  }
+
   // --- Delta Sharing Tables: register a UC table with the delta_sharing provider. ---
   // This uses the Spark `delta_sharing` data source, which requires the
   // Databricks engine. The credential profile is written to a UC Volume so the
@@ -410,6 +433,15 @@ export async function refreshDeltaSharingCredential(
 export function externalSourceGate(targetType: ShortcutTargetType, hasCredentialRef: boolean): EngineGate | null {
   if (targetType === 'adls' || targetType === 'internal') return null;
 
+  // SharePoint / OneDrive reads through Microsoft Graph on the Console UAMI —
+  // NO Key Vault credential. It gates only on the deployment enablement flag +
+  // the Graph app-role (surfaced by sharePointConfigGate, validated for real at
+  // bindExternalSource time when the first Graph call runs).
+  if (targetType === 'sharepoint') {
+    const sp = sharePointConfigGate();
+    return sp ? { gated: true, code: sp.code, hint: sp.hint } : null;
+  }
+
   if (!hasCredentialRef) {
     const secret =
       targetType === 's3' ? 'an AWS IAM role ARN (UC engine) or access key/secret (Synapse engine)' :
@@ -522,12 +554,35 @@ export interface ExternalBinding {
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
-  targetType: 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
+  targetType: 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
   targetUri: string;
-  credentialRef: ShortcutCredentialRef;
+  /** Required for KV-backed sources; absent for SharePoint (Graph on the UAMI). */
+  credentialRef?: ShortcutCredentialRef;
 }): Promise<ExternalBinding | EngineGate> {
   const { lakehouseId, name, targetType, targetUri, credentialRef } = args;
-  const secretName = credentialRef.keyVaultSecret;
+
+  // --- SharePoint / OneDrive: Microsoft Graph on the Console UAMI, NO secret. ---
+  // The deployment-enablement + Graph app-role gate runs first; then a real
+  // Graph reachability call against the target drive/item proves the row is live
+  // before it is persisted 'active'. Files shortcuts read the document library;
+  // Tables shortcuts honest-gate (SharePoint libraries are not Delta/Parquet
+  // tabular stores — register a Files shortcut and load to a table instead).
+  if (targetType === 'sharepoint') {
+    const spGate = sharePointConfigGate();
+    if (spGate) return { gated: true, code: spGate.code, hint: spGate.hint };
+    const t = parseSharePointUri(targetUri);
+    if (!t) {
+      throw Object.assign(
+        new Error(`SharePoint targetUri must be sharepoint://<siteId>/<driveId>/<itemId?>; got: ${targetUri}`),
+        { code: 'bad_target' },
+      );
+    }
+    // Real Graph read — throws ShortcutSourceError (mapped by the route) on 401/403/404.
+    await testSharePointTarget(t);
+    return { readUri: targetUri };
+  }
+
+  const secretName = credentialRef?.keyVaultSecret;
   if (!secretName) {
     return { gated: true, code: 'needs_credential', hint: `${labelFor(targetType)} requires credentialRef.keyVaultSecret.` };
   }
@@ -741,6 +796,7 @@ export function labelFor(t: ShortcutTargetType): string {
     case 'gcs': return 'Google Cloud Storage';
     case 'dataverse': return 'Dataverse';
     case 'delta_sharing': return 'Delta Sharing';
+    case 'sharepoint': return 'SharePoint / OneDrive';
     default: return t;
   }
 }

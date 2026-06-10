@@ -1,7 +1,7 @@
 # lakehouse-shortcuts-external — parity with Fabric OneLake external shortcuts
 
 Source UI: Fabric OneLake **New shortcut → External sources** (Amazon S3,
-Google Cloud Storage, ADLS Gen2, Dataverse) +
+Google Cloud Storage, ADLS Gen2, Dataverse, **Microsoft 365 / SharePoint**) +
 https://learn.microsoft.com/fabric/onelake/onelake-shortcuts
 
 Azure-native, NO Fabric dependency: the shortcut registry is Cosmos; the
@@ -21,6 +21,7 @@ item doc, the response body, or logs).
 | 6 | **Test / validate** connectivity (live OK / actionable error) | all |
 | 7 | List / Delete shortcuts; Tables shortcuts register a queryable table | all |
 | 8 | Sovereign-cloud correctness (GovCloud / GCC-High) | all |
+| 9 | **SharePoint / OneDrive** source: browse site → document library → folder/file via Microsoft Graph; Files shortcut (no Fabric/Power BI) | SharePoint |
 
 ## Loom coverage
 
@@ -33,7 +34,8 @@ item doc, the response body, or logs).
 | 5 | ✅ built | wizard steps 2–3 (name moved up for external; section + sub-folder + format) |
 | 6 | ✅ built | `POST /api/lakehouse/shortcuts/test` (existing) — `testEngineObject` SELECT TOP 1 / `resolveAndTestAdls` listPaths |
 | 7 | ✅ built | `GET/POST/DELETE /api/lakehouse/shortcuts` (existing) + `createTablesShortcut` |
-| 8 | ✅ built / ⚠️ gate | S3 GovCloud regions in the region picker; GCS honest-gates outside Commercial (`gcs_not_available_in_cloud`); ADLS inherits sovereign DFS suffix |
+| 8 | ✅ built / ⚠️ gate | S3 GovCloud regions in the region picker; GCS honest-gates outside Commercial (`gcs_not_available_in_cloud`); ADLS inherits sovereign DFS suffix; SharePoint Graph base/scope from `cloud-endpoints` (graph.microsoft.us in Gov) |
+| 9 | ✅ built / ⚠️ gate | `sharepoint-graph-client.ts` (`browseSharePoint` sites→drives→items, `testSharePointTarget`); wizard SharePoint source + `RemoteBrowseTree sourceType="sharepoint"`; UAMI Graph `Sites.Read.All` (no KV secret); honest-gate `sharepoint_not_configured` until `LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true` + consent; Tables honest-gate `sharepoint_no_tables_engine` (Files is the native fit, mirrors Fabric) |
 
 Zero ❌ — every inventory row is built or honest-gated.
 
@@ -53,6 +55,10 @@ Zero ❌ — every inventory row is built or honest-gated.
   - Dataverse → `listDataverseEntities` → lists the Synapse-Link export folders
     in ADLS (Azure Synapse Link for Dataverse → ADLS Gen2 is the Azure-native
     Dataverse backend).
+  - SharePoint → `browseSharePoint` (`sharepoint-graph-client.ts`) — one Graph
+    level per call on the Console UAMI: `GET /sites?search=<q>` →
+    `GET /sites/{siteId}/drives` → `GET /drives/{driveId}/root|items/{id}/children`.
+    No KV secret; the targetUri is `sharepoint://<siteId>/<driveId>/<itemId?>`.
 - **Create** — `POST /api/lakehouse/shortcuts` → `bindExternalSource`
   (UC storage credential + external location, or Synapse DATABASE SCOPED
   CREDENTIAL + EXTERNAL DATA SOURCE) + `createTablesShortcut`.

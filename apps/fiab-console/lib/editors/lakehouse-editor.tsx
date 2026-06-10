@@ -592,6 +592,10 @@ export function LakehouseEditor({ item, id }: Props) {
   // Schema shortcut entry (F9) — when registering a Tables shortcut on a
   // schema-enabled lakehouse, target a named schema (dropdown, never freeform).
   const [scTargetSchema, setScTargetSchema] = useState<string>('dbo');
+  // SharePoint / OneDrive source — free-text site-search filter for the browse
+  // tree's root (sites) level. The selected target (siteId/driveId/itemId) lands
+  // in extCreds.selectedPath, mirroring the other browse-tree sources.
+  const [scSpSearch, setScSpSearch] = useState<string>('');
 
   // ---- Schemas tab (F9 — multi-schema namespace, Azure-native, NO Fabric) ----
   // A schema is a named namespace; tables live under Tables/<schema>/<table>/ and
@@ -738,6 +742,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setScInternalContainer(''); setScInternalPath(''); setScKvSecret('');
     setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
     setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
+    setScSpSearch('');
     setExtCreds({ region: 'us-east-1' });
   }, []);
 
@@ -779,6 +784,11 @@ export function LakehouseEditor({ item, id }: Props) {
       credentialRef = scKvSecret.trim() ? { kind: 'sas', keyVaultSecret: scKvSecret.trim() } : undefined;
     } else if (scType === 'delta_sharing') {
       credentialRef = scKvSecret.trim() ? { kind: 'deltaSharing', keyVaultSecret: scKvSecret.trim() } : undefined;
+    } else if (scType === 'sharepoint') {
+      // SharePoint / OneDrive: the browse selection is the full
+      // siteId/driveId/itemId triplet. Reads run through Microsoft Graph on the
+      // Console UAMI — no Key Vault credential travels with the row.
+      targetUri = `sharepoint://${(extCreds.selectedPath || '').replace(/^\/+/, '')}`;
     }
     // F9 — on a schema-enabled lakehouse a Tables shortcut lands inside its
     // target schema folder (Tables/<schema>/<name>), mirroring Fabric's schema
@@ -3563,7 +3573,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 <DialogContent>
                   {scStep === 1 && (
                     <>
-                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
+                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2, internal Loom lakehouse, and SharePoint / OneDrive work on the Console UAMI (SharePoint via Microsoft Graph); external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
                         {SHORTCUT_SOURCE_CARDS.map((src) => (
                           <Button
@@ -3722,6 +3732,38 @@ export function LakehouseEditor({ item, id }: Props) {
                             <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)}
                               placeholder="delta-sharing-agency-a-cred" />
                           </Field>
+                        </>
+                      )}
+                      {scType === 'sharepoint' && (
+                        <>
+                          <MessageBar intent="info">
+                            <MessageBarBody>
+                              <MessageBarTitle>SharePoint / OneDrive (Microsoft Graph)</MessageBarTitle>
+                              Browse runs on the Console UAMI via Microsoft Graph (application permission{' '}
+                              <code>Sites.Read.All</code>, admin-consented) — no Key Vault credential. Pick a{' '}
+                              <strong>site</strong> → <strong>document library</strong> → folder or file. A{' '}
+                              <em>Files</em> shortcut surfaces the library under Files (zero-copy); SharePoint
+                              libraries are not Delta tables, so a <em>Tables</em> shortcut honest-gates with a
+                              Load-to-table next step (mirrors Fabric). If the tree shows a 403, run{' '}
+                              <code>grant-sharepoint-graph-approle.sh</code> and have a Tenant Admin grant consent.
+                            </MessageBarBody>
+                          </MessageBar>
+                          <Field label="Find a site" hint="Filter SharePoint sites by name; leave blank to list your frequented sites.">
+                            <Input value={scSpSearch} onChange={(_, d) => setScSpSearch(d.value)} placeholder="Contoso Finance" />
+                          </Field>
+                          <Field label="Browse SharePoint" hint="Click a site, then a document library, then a folder or file to set the shortcut target.">
+                            <RemoteBrowseTree
+                              sourceType="sharepoint"
+                              search={scSpSearch}
+                              onSelect={(path) => setExtCreds((c) => ({ ...c, selectedPath: path }))}
+                              selectedPath={extCreds.selectedPath}
+                            />
+                          </Field>
+                          {extCreds.selectedPath && (
+                            <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                              sharepoint://{extCreds.selectedPath}
+                            </Caption1>
+                          )}
                         </>
                       )}
                     </div>

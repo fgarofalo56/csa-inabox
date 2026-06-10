@@ -666,6 +666,9 @@ param loomPowerBiAdminLabels bool = false
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to have User.Read.All + Group.Read.All + Application.Read.All admin-consented (scripts/csa-loom/grant-identity-graph-approles.sh). When false, /api/governance/identities/search returns 503 with the exact remediation and the picker renders an honest-gate MessageBar. Enabling this ALSO unlocks per-toggle security-group scoping ("Apply to": Entire org / Specific groups / Except groups) on /admin/tenant-settings (F2) — the same Group.Read.All grant covers the group search + bulk getByIds display-name resolution; no extra param/env/role is needed. When false, F2 numeric params still save; the scope picker shows the same honest gate.')
 param loomIdentityPickerEnabled bool = false
 
+@description('Enable SharePoint / OneDrive Lakehouse shortcuts (lakehouse editor → Shortcuts → New → SharePoint / OneDrive). When true, sets LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the Console so the shortcut wizard can browse + read SharePoint document libraries via Microsoft Graph on the Console UAMI (zero-copy Files shortcuts). Requires the Console UAMI to have the Sites.Read.All Graph application permission with admin consent (scripts/csa-loom/grant-sharepoint-graph-approle.sh). Azure-native + M365 only — NO Microsoft Fabric / Power BI dependency (per no-fabric-dependency.md). When false (default), the SharePoint source + browse honest-gate with the exact remediation; all other shortcut sources are unaffected.')
+param loomSharePointShortcutsEnabled bool = false
+
 @description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt.')
 param loomWorkspaceM365LinkEnabled bool = false
 
@@ -2075,6 +2078,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // returns 503 with the exact remediation (no mock principals).
           loomIdentityPickerEnabled ? [
             { name: 'LOOM_IDENTITY_PICKER_ENABLED', value: 'true' }
+          ] : [],
+          // SharePoint / OneDrive Lakehouse shortcuts — browse + read SharePoint
+          // document libraries via Microsoft Graph on the Console UAMI (Files
+          // shortcuts, zero-copy). Gated on the Console UAMI's Graph
+          // Sites.Read.All grant (scripts/csa-loom/grant-sharepoint-graph-approle.sh).
+          // When false the shortcut wizard's SharePoint source + browse return
+          // 503 with the exact remediation (no Fabric / Power BI dependency).
+          loomSharePointShortcutsEnabled ? [
+            { name: 'LOOM_SHAREPOINT_SHORTCUTS_ENABLED', value: 'true' }
           ] : [],
           // Workspace ↔ Microsoft 365 group linking (workspace settings → "Teams
           // and SharePoint" tab). When enabled the Console can CREATE an M365

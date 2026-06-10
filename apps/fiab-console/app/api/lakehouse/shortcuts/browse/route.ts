@@ -36,11 +36,12 @@ import {
   type BrowseResult,
   type GcsServiceAccount,
 } from '@/lib/azure/shortcut-client';
+import { browseSharePoint, sharePointConfigGate } from '@/lib/azure/sharepoint-graph-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SOURCE_TYPES = ['s3', 'gcs', 'adls', 'dataverse'] as const;
+const SOURCE_TYPES = ['s3', 'gcs', 'adls', 'dataverse', 'sharepoint'] as const;
 type SourceType = (typeof SOURCE_TYPES)[number];
 
 function sanitize(e: any): string {
@@ -56,6 +57,15 @@ export async function GET(req: NextRequest) {
   const prefix = (sp.get('prefix') || '').trim();
   if (!SOURCE_TYPES.includes(sourceType)) {
     return NextResponse.json({ ok: false, error: `sourceType must be one of ${SOURCE_TYPES.join(', ')}` }, { status: 400 });
+  }
+
+  // SharePoint / OneDrive browses through Microsoft Graph on the Console UAMI —
+  // no Key Vault. Gate on the deployment-enablement flag + Graph app-role hint.
+  if (sourceType === 'sharepoint') {
+    const spGate = sharePointConfigGate();
+    if (spGate) {
+      return NextResponse.json({ ok: false, code: spGate.code, error: spGate.hint, hint: spGate.hint }, { status: 503 });
+    }
   }
 
   // Credentialed sources require a configured Key Vault + a secret name.
@@ -80,6 +90,11 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'account and container are required for ADLS browse' }, { status: 400 });
       }
       result = await browseAdls({ account, container, prefix });
+    } else if (sourceType === 'sharepoint') {
+      // SharePoint/OneDrive: one Graph level — sites → drives → driveItems.
+      // `prefix` is the siteId/driveId/itemId triplet; `search` filters sites at root.
+      const search = (sp.get('search') || '').trim();
+      result = await browseSharePoint({ prefix, search });
     } else {
       const kvSecret = (sp.get('kvSecret') || '').trim();
       if (!kvSecret) {

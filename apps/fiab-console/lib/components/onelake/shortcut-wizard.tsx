@@ -760,6 +760,7 @@ export const SHORTCUT_SOURCE_CARDS: ShortcutSourceCard[] = [
   { type: 'gcs', label: 'Google Cloud Storage', blurb: 'Bucket via a service-account JSON', uamiReady: false },
   { type: 'dataverse', label: 'Dataverse', blurb: 'Tables via the Synapse-Link ADLS export', uamiReady: false },
   { type: 'delta_sharing', label: 'Delta Sharing', blurb: 'Cross-tenant share via a credential file', uamiReady: false },
+  { type: 'sharepoint', label: 'SharePoint / OneDrive', blurb: 'Document library or folder via Microsoft Graph', uamiReady: true },
 ];
 
 /** Inline brand logo for a shortcut source type. Pure SVG, theme-agnostic fills. */
@@ -806,6 +807,16 @@ export function ShortcutSourceLogo({ type, size = 28 }: { type: ShortcutTargetTy
           <path d="M11 22l5-8 5 8h-10z" fill="#fff" opacity="0.9" />
         </svg>
       );
+    case 'sharepoint':
+      return (
+        <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="SharePoint / OneDrive">
+          <circle cx="12" cy="9" r="6" fill="#036C70" />
+          <circle cx="20" cy="15" r="6.5" fill="#1A9BA1" />
+          <circle cx="13" cy="22" r="5.5" fill="#37C6D0" />
+          <path d="M11 8h7a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 18 20h-7a1.5 1.5 0 0 1-1.5-1.5v-9A1.5 1.5 0 0 1 11 8z" fill="#fff" opacity="0.18" />
+          <text x="14.5" y="18.5" textAnchor="middle" fontSize="9" fontFamily="Segoe UI, Arial, sans-serif" fontWeight="700" fill="#fff">S</text>
+        </svg>
+      );
     case 'internal':
     default:
       return (
@@ -822,6 +833,13 @@ export function ShortcutSourceLogo({ type, size = 28 }: { type: ShortcutTargetTy
 // ---------------------------------------------------------------------------
 
 export type CredSourceType = 's3' | 'gcs' | 'adls' | 'dataverse';
+
+/**
+ * Sources the RemoteBrowseTree can list. SharePoint/OneDrive browses through
+ * Microsoft Graph on the Console UAMI (no Key Vault credential), so it is a
+ * browse-only source — it has no ExternalCredsForm.
+ */
+export type BrowseSourceType = CredSourceType | 'sharepoint';
 
 export interface ExternalCredsState {
   /** S3/GCS bucket. */
@@ -1035,7 +1053,7 @@ interface RemoteEntryUi {
 }
 
 interface RemoteBrowseTreeProps {
-  sourceType: CredSourceType;
+  sourceType: BrowseSourceType;
   /** S3/GCS bucket. */
   bucket?: string;
   /** AWS region (S3). */
@@ -1045,6 +1063,8 @@ interface RemoteBrowseTreeProps {
   container?: string;
   /** KV secret name (s3/gcs/dataverse). */
   kvSecret?: string;
+  /** SharePoint: free-text site-search filter applied at the root (sites) level. */
+  search?: string;
   /** Called when the user clicks a folder or file in the tree. */
   onSelect: (path: string, isDirectory: boolean) => void;
   selectedPath?: string;
@@ -1064,7 +1084,7 @@ function fmtBytes(n?: number): string {
  * expand; clicking any node selects it as the shortcut target sub-path.
  */
 export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
-  const { sourceType, bucket, region, account, container, kvSecret, onSelect, selectedPath } = props;
+  const { sourceType, bucket, region, account, container, kvSecret, search, onSelect, selectedPath } = props;
   const [childrenByPrefix, setChildrenByPrefix] = useState<Record<string, RemoteEntryUi[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1073,6 +1093,8 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
   const ready =
     sourceType === 'adls'
       ? !!account && !!container
+      : sourceType === 'sharepoint'
+      ? true // Graph on the UAMI — no inputs required to list sites.
       : sourceType === 'dataverse'
       ? !!kvSecret
       : !!bucket && !!kvSecret;
@@ -1087,6 +1109,8 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
       if (account) qs.set('account', account);
       if (container) qs.set('container', container);
       if (kvSecret) qs.set('kvSecret', kvSecret);
+      // SharePoint site-search only applies at the root (sites) level.
+      if (sourceType === 'sharepoint' && search && !prefix) qs.set('search', search);
       const r = await fetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
@@ -1096,14 +1120,14 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
     } finally {
       setLoading((s) => { const n = new Set(s); n.delete(prefix); return n; });
     }
-  }, [sourceType, bucket, region, account, container, kvSecret]);
+  }, [sourceType, bucket, region, account, container, kvSecret, search]);
 
   // Root load when the inputs become ready (and reset when they change).
   useEffect(() => {
     setChildrenByPrefix({}); setErrors({}); setOpenItems(new Set());
     if (ready) fetchLevel('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sourceType, bucket, region, account, container, kvSecret]);
+  }, [ready, sourceType, bucket, region, account, container, kvSecret, search]);
 
   const renderLevel = (prefix: string): React.ReactNode => {
     if (errors[prefix]) {
