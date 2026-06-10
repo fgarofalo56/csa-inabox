@@ -112,3 +112,38 @@ honest infra/preview gates with the full UI still rendered (per
 - Live probe (minted-session browser walk against ADX) unavailable in the
   worktree; the run/param-values routes call the same `executeQuery` path the
   KQL Database / Queryset editors use live in the deployed Loom.
+
+## AI tile generator (NL → KQL) — Copilot "Add a tile"
+
+Source UI: https://learn.microsoft.com/fabric/fundamentals/copilot-real-time-intelligence
+           (Fabric Real-Time Intelligence Copilot — "auto-generate a tile from a question")
+
+Fabric's RTI Copilot lets a user describe a visualization in natural language;
+Copilot reads the Eventhouse schema, generates the KQL + picks a visual, and
+inserts a tile. Loom builds this **Azure-native** on Azure OpenAI + Azure Data
+Explorer — no Fabric / Power BI REST on the path.
+
+| Capability | Loom coverage | Backend |
+| --- | --- | --- |
+| "Add tile with Copilot" entry point (ribbon + toolbar) | built ✅ | opens the AI dialog in `KqlDashboardEditor` |
+| Natural-language prompt → KQL + viz + title | built ✅ | `POST /api/items/kql-dashboard/[id]/generate-tile` → `aoaiCompleteJson` (AOAI chat, `response_format: json_object`) |
+| Schema grounding (real tables/columns) | built ✅ | `getDatabaseSchemaJson` summarized to `Table(col:type, …)`; falls back to `listTables` |
+| KQL validated against the cluster before insert | built ✅ | `executeQuery` with `_startTime`/`_endTime` bound to the global time range |
+| Auto visual-type selection | built ✅ | model returns one of `VALID_VIZ`; sanitized to `table` on miss |
+| Tile inserted + opened for review | built ✅ | appended to the grid, tile-edit flyout opens, result inlined |
+| Example prompts / data-source pick | built ✅ | dialog suggestion chips + data-source `<Select>` |
+| AOAI not deployed | honest-gate ⚠️ | `503` with the exact admin setting / env var (`NoAoaiDeploymentError`) |
+| ADX not deployed | honest-gate ⚠️ | `503` naming `LOOM_KUSTO_CLUSTER_URI` + the bicep module |
+| Validation failure | built ✅ | tile still added; `validationError` shown so the operator fixes the KQL |
+
+Editor: `apps/fiab-console/lib/editors/phase3-editors.tsx` → `KqlDashboardEditor`
+(generateTile handler + "Add tile with Copilot" dialog).
+Route:  `apps/fiab-console/app/api/items/kql-dashboard/[id]/generate-tile/route.ts`
+Helper: `aoaiCompleteJson` in `apps/fiab-console/lib/azure/copilot-orchestrator.ts`
+Tests:  `app/api/items/kql-dashboard/__tests__/generate-tile.test.ts`
+(auth/ADX-gate/AOAI-gate/happy-path/validation-failure/mgmt-rejection/schema-fallback).
+
+Infra: reuses the already-deployed ADX cluster (`LOOM_KUSTO_CLUSTER_URI`) and
+Azure OpenAI (`LOOM_AOAI_ENDPOINT` / `LOOM_AOAI_DEPLOYMENT`, or the tenant
+admin-selected Foundry Copilot config) — no new bicep resource, env var, role,
+or Cosmos container.

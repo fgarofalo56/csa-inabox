@@ -1154,6 +1154,72 @@ async function aoaiCompleteText(
   return String(j?.choices?.[0]?.message?.content ?? '');
 }
 
+/**
+ * Single-shot AOAI completion that returns a parsed JSON object.
+ *
+ * Used by purpose-built generators that need a STRUCTURED result rather than a
+ * chat stream — e.g. the Real-Time Dashboard "AI tile" generator turns a
+ * natural-language ask into `{ title, kql, viz }`. Resolves the AOAI target via
+ * the same precedence the orchestrator uses (tenant cfg → env → Foundry
+ * discovery), so a missing deployment throws `NoAoaiDeploymentError` and the
+ * caller can surface the honest 503 gate.
+ *
+ * Requests `response_format: { type: 'json_object' }` so the model returns a
+ * single JSON object; falls back to extracting the first `{...}` block if a
+ * deployment / api-version doesn't honor json_object mode. Retries once without
+ * temperature for reasoning-model deployments (same logic as aoaiCompleteText).
+ */
+export async function aoaiCompleteJson<T = Record<string, unknown>>(
+  messages: { role: 'system' | 'user'; content: string }[],
+  cfg?: TenantCopilotConfig | null,
+  maxTokens = 2048,
+): Promise<T> {
+  const target = await resolveAoaiTarget(cfg ?? null);
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+  const token = await aoaiToken();
+  const send = (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(
+        withTemperature
+          ? { messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }
+          : { messages, max_tokens: maxTokens, response_format: { type: 'json_object' } },
+      ),
+    });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) res = await send(false);
+    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const j = await res.json();
+  const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
+  return parseJsonObject<T>(raw);
+}
+
+/** Parse an LLM JSON reply, tolerating ```json fences and surrounding prose. */
+function parseJsonObject<T>(raw: string): T {
+  const cleaned = raw
+    .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const first = cleaned.indexOf('{');
+    const last = cleaned.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      return JSON.parse(cleaned.slice(first, last + 1)) as T;
+    }
+    throw new Error(`Model did not return valid JSON: ${cleaned.slice(0, 200)}`);
+  }
+}
+
 /** Strip stray ```lang fences a model may add despite ONLY-SQL instructions. */
 function stripSqlFences(raw: string): string {
   return raw
