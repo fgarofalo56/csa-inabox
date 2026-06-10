@@ -53,7 +53,7 @@ interface CatalogItem {
   domainId?: string;
   isDiscoverable?: boolean;
 }
-interface WorkspaceNode { id: string; name: string; domain?: string; }
+interface WorkspaceNode { id: string; name: string; domain?: string; owner?: string; }
 interface DomainOption { id: string; name: string; }
 interface SearchGate { missingEnvVar: string; bicepModule: string; followUp?: string; }
 interface PurviewGate { missingEnvVar: string; bicepModule: string; followUp?: string; }
@@ -360,6 +360,7 @@ export function OneLakeCatalogPane() {
                       <TreeItemLayout
                         iconBefore={<Database20Regular style={{ color: w.id === selectedWs ? ACCENT.blue : tokens.colorNeutralForeground3 }} />}
                         className={w.id === selectedWs ? s.treeItemSelected : undefined}
+                        aside={w.owner ? <Caption1 className={s.muted} title={`Owner: ${w.owner}`}>{w.owner}</Caption1> : undefined}
                       >
                         {w.name}
                       </TreeItemLayout>
