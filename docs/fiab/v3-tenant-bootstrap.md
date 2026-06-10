@@ -1258,4 +1258,30 @@ without it. The Cosmos `workspace-spark-config` container is created lazily by
 In **GCC-High / DoD** Azure Databricks is not offered; the surface renders an honest
 MessageBar (`not_available_in_cloud`) directing operators to the Synapse Spark pool path.
 
+## Materialized lake views — ADF-scheduled refresh callback {#materialized-lake-view-refresh}
+
+Materialized lake views (`materialized-lake-view` item type) need **no new tenant
+configuration**. They reuse the existing landing-zone backends:
+
+- **Refresh compute** — Synapse Spark batch via `LOOM_SYNAPSE_WORKSPACE` +
+  `LOOM_SYNAPSE_SPARK_POOL` (the Console UAMI must hold the **Synapse
+  Administrator** role to submit Livy batches — already granted for notebooks /
+  Spark job definitions).
+- **Delta storage** — the DLZ ADLS Gen2 medallion containers
+  (`LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL`), Storage Blob Data Contributor.
+- **Serverless preview** — the `LOOM_SYNAPSE_WORKSPACE` `-ondemand` endpoint.
+- **Lineage** — Loom's own Cosmos `thread-edges` container (created lazily by
+  `cosmos-client.ts`; no ARM pre-step).
+
+The only **optional** new setting is `LOOM_CONSOLE_BASE_URL` (bicep param
+`loomConsoleBaseUrl`). It is baked into the "Refresh materialized lake view" ADF
+pipeline's Web-activity callback so a *scheduled* ADF run can reach the MLV
+refresh endpoint behind Front Door. Leave it empty and editor-driven refreshes
+still work (the refresh route derives the origin from the request); set it to
+the vanity / Front Door console URL to enable ADF-scheduled refreshes. The ADF
+factory itself is gated by the existing `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` /
+`LOOM_ADF_NAME` vars + the Data Factory Contributor role.
+
+No Microsoft Fabric / OneLake tenant is required for any part of this.
+
 

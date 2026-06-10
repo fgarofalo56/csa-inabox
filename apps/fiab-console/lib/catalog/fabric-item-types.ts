@@ -134,6 +134,31 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/lakehouse-overview"
     } },
+  { slug: 'materialized-lake-view', displayName: 'Materialized lake view', restType: 'MaterializedLakeView', category: 'Data Engineering',
+    preview: true,
+    description: 'A persisted, auto-refreshed Delta view defined in Spark SQL or PySpark over your lakehouse.',
+    learnContent: {
+      "overview": "A materialized lake view (MLV) is a persisted, automatically refreshed view defined in Spark SQL or PySpark. It expresses multi-stage medallion (bronze → silver → gold) transformations declaratively rather than as custom Spark jobs, persisting the result as a managed Delta table that downstream consumers query directly. In Loom the MLV rides on Azure-native ADLS Gen2 + Delta (no Microsoft Fabric required): the definition is materialized by a Synapse Spark batch, refreshes run via an ADF 'Refresh materialized lake view' pipeline activity, and Loom tracks cross-workspace dependency lineage in its own Cosmos store.",
+      "steps": [
+        {
+          "title": "Author the definition (SQL or PySpark)",
+          "body": "Write a CREATE MATERIALIZED LAKE VIEW … AS SELECT … in the SQL tab, or a @fmlv-style PySpark function returning a DataFrame in the PySpark tab. Pick the target medallion container + schema + view name."
+        },
+        {
+          "title": "Add data-quality constraints",
+          "body": "Declare CHECK constraints with an on-violation action (FAIL stops the refresh; DROP silently removes bad rows) so quality is enforced uniformly on every refresh."
+        },
+        {
+          "title": "Materialize + refresh",
+          "body": "Refresh runs a Synapse Spark batch that executes the definition and writes the result as a managed Delta table; an ADF 'Refresh materialized lake view' pipeline orchestrates scheduled refreshes."
+        },
+        {
+          "title": "Track lineage",
+          "body": "Loom auto-derives source-table → MLV and MLV → MLV dependencies from the definition and persists them as cross-workspace lineage edges, so refreshes can be ordered and impact analysis is one click away."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/materialized-lake-views/overview-materialized-lake-view"
+    } },
   { slug: 'notebook', displayName: 'Notebook', restType: 'Notebook', category: 'Data Engineering',
     description: 'Interactive Spark / Python authoring with cells and outputs.',
     learnContent: {

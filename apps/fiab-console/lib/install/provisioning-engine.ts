@@ -45,6 +45,7 @@ import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
 import { databricksJobProvisioner } from './provisioners/databricks-job';
 import { synapseSqlPoolProvisioner } from './provisioners/synapse-serverless-sql-pool';
 import { workspaceMonitorProvisioner } from './provisioners/workspace-monitor';
+import { materializedLakeViewProvisioner } from './provisioners/materialized-lake-view';
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
@@ -79,6 +80,7 @@ export const PROVISIONERS: Record<string, Provisioner> = {
   'adf-pipeline': adfPipelineProvisioner, // PUT ADF pipeline (ARM) + createRun + poll status (real ARM)
   'databricks-job': databricksJobProvisioner, // create/reset multi-task job w/ shared cluster + run-now + poll (real Jobs 2.1)
   'synapse-serverless-sql-pool': synapseSqlPoolProvisioner, // lakehouse SQL analytics endpoint: external data source over the lake abfss root + SELECT 1 (real TDS)
+  'materialized-lake-view': materializedLakeViewProvisioner, // materialize a Delta MLV via a Synapse Spark batch + record Cosmos lineage (Azure-native, no Fabric)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
