@@ -121,6 +121,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   // Data Science
   'ml-model':              (p) => <BrainCircuit20Regular style={{ color: p.color }} />,
   'ml-experiment':         (p) => <BeakerEdit20Regular style={{ color: p.color }} />,
+  'automl':                (p) => <Sparkle20Regular style={{ color: p.color }} />,
 
   // Fabric IQ
   'ontology':              (p) => <TextBulletListTree20Regular style={{ color: p.color }} />,

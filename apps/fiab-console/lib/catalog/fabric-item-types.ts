@@ -763,6 +763,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-mlflow"
     } },
+  { slug: 'automl', displayName: 'AutoML', restType: 'AutoMLJob', category: 'Data Science',
+    description: 'Low-code Automated ML wizard — pick a task, dataset, and compute; AutoML finds the best model.',
+    learnContent: {
+      "overview": "AutoML is a low-code wizard for Automated machine learning. In Loom it runs real Azure Machine Learning AutoML jobs (Microsoft.MachineLearningServices/workspaces/<ws>/jobs, jobType:'AutoML') — no Fabric dependency. Pick a task (classification, regression, or forecasting), point at a dataset and target column, choose a compute cluster, and AutoML trains and ranks candidate models, then you monitor the run live.",
+      "steps": [
+        {
+          "title": "Pick a task type",
+          "body": "Choose Classification (binary or multi-class), Regression, or Forecasting. AutoML applies the right family of algorithms for the task."
+        },
+        {
+          "title": "Choose dataset + target",
+          "body": "Select a datastore and the MLTable folder that holds your tabular data, then name the target (label) column AutoML should learn to predict."
+        },
+        {
+          "title": "Select compute",
+          "body": "Pick an AmlCompute cluster from the workspace to run the model sweep on."
+        },
+        {
+          "title": "Set limits and submit",
+          "body": "Choose the primary metric and limits (timeout, max trials, concurrency), then submit a real AutoML job and watch it on the Runs tab."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-automated-ml"
+    } },
 
   // Fabric IQ (preview)
   { slug: 'ontology', displayName: 'Ontology', restType: 'Ontology', category: 'Fabric IQ', preview: true,
