@@ -6252,6 +6252,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [paramsOpen, setParamsOpen] = useState(false);
   const [baseQueriesOpen, setBaseQueriesOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // AI tile generator (NL → KQL) — Fabric RTI "Copilot add a tile" parity.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const [aiDataSourceId, setAiDataSourceId] = useState('');
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
   // Real KQL databases on the shared Loom ADX cluster — populates the data
@@ -6363,6 +6370,55 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     });
     setDirty(true);
   }, []);
+
+  // AI tile generator: POST the NL prompt → server grounds on the live ADX
+  // schema, asks AOAI for {title, kql, viz}, validates by executing the KQL,
+  // and returns a ready tile (with its first-page result inlined). We append it
+  // to the grid and open its editor so the operator can review/tweak. This is
+  // the Fabric Real-Time Dashboard "Copilot — add a tile from a question" flow,
+  // Azure-native (ADX + AOAI), no Fabric/Power BI on the path.
+  const generateTile = useCallback(async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt) { setAiErr('Describe the tile you want (e.g. "errors per service over time").'); return; }
+    setAiBusy(true); setAiErr(null); setAiNote(null);
+    try {
+      const r = await fetch(`/api/items/kql-dashboard/${id}/generate-tile`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt, dataSourceId: aiDataSourceId || undefined, timeRange }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) { setAiErr(j.error || `generation failed (HTTP ${r.status})`); return; }
+      const g = j.tile || {};
+      const newTile: DashTile = {
+        title: g.title || prompt.slice(0, 60),
+        kql: g.kql || '',
+        viz: (g.viz || 'table') as TileViz,
+        dataSourceId: g.dataSourceId || undefined,
+        database: g.database || undefined,
+        w: g.w || 4,
+        h: g.h || 2,
+        result: g.result,
+        error: j.validated ? undefined : (j.validationError || undefined),
+      };
+      let insertedIdx = 0;
+      setTiles((prev) => { insertedIdx = prev.length; return [...prev, newTile]; });
+      setDirty(true);
+      setTileFlyoutIdx(insertedIdx);
+      if (!j.schemaGrounded) {
+        setAiNote('Generated without a live schema (the database returned no tables). Review the column names in the tile editor.');
+      } else if (!j.validated) {
+        setAiNote(`Tile added, but its KQL did not validate against ${j.resolvedDatabase}: ${j.validationError || 'unknown error'}. Edit it in the tile editor.`);
+      }
+      setAiOpen(false);
+      setAiPrompt('');
+    } catch (e: any) {
+      setAiErr(e?.message || String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiPrompt, aiDataSourceId, id, timeRange]);
 
   const deleteTile = useCallback((idx: number) => {
     if (typeof window !== 'undefined' && !window.confirm('Delete this tile? This cannot be undone until you reload without saving.')) return;
@@ -6546,6 +6602,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
         { label: 'Add tile', onClick: addTile },
+        { label: 'Add tile with Copilot', onClick: () => { setAiErr(null); setAiNote(null); setAiOpen(true); } },
         { label: 'Data sources', onClick: () => setSourcesOpen(true) },
         { label: 'Parameters', onClick: () => setParamsOpen(true) },
         { label: 'Base queries', onClick: () => setBaseQueriesOpen(true) },
@@ -6572,6 +6629,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         <Caption1>db: <strong>{defaultDb}</strong> · {tiles.length} tiles · {dataSources.length} sources · {params.length} params</Caption1>
         {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
+        <Button size="small" appearance="primary" icon={<Sparkle20Regular />} onClick={() => { setAiErr(null); setAiNote(null); setAiOpen(true); }}>Add tile with Copilot</Button>
         <Button size="small" appearance="outline" icon={<Database20Regular />} onClick={() => setSourcesOpen(true)}>Data sources</Button>
         <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setParamsOpen(true)}>Parameters</Button>
         <Button size="small" appearance="outline" onClick={() => setBaseQueriesOpen(true)}>Base queries</Button>
@@ -6659,6 +6717,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
       {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
       {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
+      {aiNote && (
+        <MessageBar intent="warning" onClick={() => setAiNote(null)}>
+          <MessageBarBody><MessageBarTitle>Copilot tile</MessageBarTitle>{aiNote}</MessageBarBody>
+        </MessageBar>
+      )}
       {state && !state.ok && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -6924,6 +6987,67 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             </DialogContent>
             <DialogActions>
               <Button appearance="primary" onClick={() => setBaseQueriesOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* AI tile generator dialog (NL → KQL) — Fabric RTI "Copilot add a tile" parity. */}
+      <Dialog open={aiOpen} onOpenChange={(_: unknown, d: any) => { if (!aiBusy) setAiOpen(d.open); }}>
+        <DialogSurface style={{ maxWidth: 640 }}>
+          <DialogBody>
+            <DialogTitle>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Sparkle20Regular /> Add a tile with Copilot
+              </span>
+            </DialogTitle>
+            <DialogContent>
+              <Caption1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+                Describe the visualization you want in plain language. Copilot reads the live
+                schema of <strong>{defaultDb}</strong>, writes the KQL, picks a chart type, and
+                validates the query against Azure Data Explorer before adding the tile.
+              </Caption1>
+              <Field label="What should this tile show?">
+                <Textarea
+                  value={aiPrompt}
+                  onChange={(_: unknown, d: any) => setAiPrompt(d.value)}
+                  placeholder="e.g. Count of failed requests per service over time as a line chart"
+                  rows={3}
+                  disabled={aiBusy}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !aiBusy) { e.preventDefault(); generateTile(); }
+                  }}
+                />
+              </Field>
+              {dataSources.length > 0 && (
+                <Field label="Data source (optional)" style={{ marginTop: 10 }}>
+                  <Select value={aiDataSourceId} onChange={(_: unknown, d: any) => setAiDataSourceId(d.value)} disabled={aiBusy}>
+                    <option value="">Dashboard default ({defaultDb})</option>
+                    {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name} · {ds.database}</option>)}
+                  </Select>
+                </Field>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, width: '100%' }}>Try:</Caption1>
+                {[
+                  'Total events in the last 24 hours',
+                  'Top 10 error messages by count as a bar chart',
+                  'Requests per minute over time',
+                ].map((ex) => (
+                  <Button key={ex} size="small" appearance="subtle" disabled={aiBusy} onClick={() => setAiPrompt(ex)}>{ex}</Button>
+                ))}
+              </div>
+              {aiErr && (
+                <MessageBar intent="error" style={{ marginTop: 12 }}>
+                  <MessageBarBody><MessageBarTitle>Could not generate the tile</MessageBarTitle>{aiErr}</MessageBarBody>
+                </MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAiOpen(false)} disabled={aiBusy}>Cancel</Button>
+              <Button appearance="primary" icon={aiBusy ? <Spinner size="tiny" /> : <Sparkle20Regular />} onClick={generateTile} disabled={aiBusy || !aiPrompt.trim()}>
+                {aiBusy ? 'Generating…' : 'Generate tile'}
+              </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
