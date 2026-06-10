@@ -387,6 +387,281 @@ export async function countParquetFiles(
   return { count, bytes, capped };
 }
 
+// ============================================================
+// OneLake item-size reporting — per-item storage usage.
+//
+// Parity with Fabric's "OneLake — Workspace storage" report (storage
+// consumed per item, including system files + soft-deleted retention).
+// Fabric exposes per-item OneLake bytes; the Azure-native equivalent is a
+// recursive aggregation of the ADLS Gen2 blob sizes under each item's
+// prefix in the DLZ medallion containers.
+//
+//   - LIVE bytes/files: walk the DataLake `listPaths({ recursive:true })`
+//     under each container's top-level prefixes. EVERYTHING is counted —
+//     including system files (`_delta_log/`, `_SUCCESS`, `_committed_*`,
+//     `_metadata`) that ordinary listings hide. Fabric bills these too.
+//   - SOFT-DELETED bytes/files: list the Blob surface with
+//     `includeDeleted:true` (HNS blob soft-delete is on via storage.bicep)
+//     so retained-but-deleted data still shows in the report (it still
+//     consumes capacity until the retention window elapses).
+//
+// Required role: Storage Blob Data Reader on the DLZ account (already held
+// by the Console UAMI). A 403 surfaces as an honest gate at the route.
+// Azure-native by default — no Fabric / OneLake REST host is ever touched.
+// ============================================================
+
+/** Per-prefix storage usage row (one row per top-level directory in a container). */
+export interface PrefixUsage {
+  /** Container (medallion zone) this prefix lives in. */
+  container: string;
+  /** Top-level prefix within the container (e.g. `lakehouses/sales` or `mirrors`). */
+  prefix: string;
+  /** Live (non-deleted) bytes under this prefix, INCLUDING system files. */
+  liveBytes: number;
+  /** Live file count under this prefix, INCLUDING system files. */
+  liveFiles: number;
+  /** Bytes attributable to system files (`_delta_log`, `_SUCCESS`, etc.) — subset of liveBytes. */
+  systemBytes: number;
+  /** System file count — subset of liveFiles. */
+  systemFiles: number;
+  /** Soft-deleted bytes still retained under this prefix (HNS blob soft-delete). */
+  deletedBytes: number;
+  /** Soft-deleted file count still retained. */
+  deletedFiles: number;
+}
+
+/** Aggregated container-level usage with its per-prefix breakdown. */
+export interface ContainerUsage {
+  container: string;
+  liveBytes: number;
+  liveFiles: number;
+  deletedBytes: number;
+  deletedFiles: number;
+  /** True if the recursive walk hit `cap` and stopped early (totals are a lower bound). */
+  capped: boolean;
+  prefixes: PrefixUsage[];
+}
+
+/** Filenames / directory segments that ADLS/Delta treats as system metadata, not user data. */
+function isSystemPath(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower.includes('/_delta_log/') ||
+    lower.endsWith('/_delta_log') ||
+    lower.endsWith('/_success') ||
+    lower.endsWith('/_metadata') ||
+    lower.includes('/_committed_') ||
+    lower.includes('/_started_') ||
+    lower.includes('/_temporary/') ||
+    /\/_change_data\//.test(lower)
+  );
+}
+
+/** Extract the top-level prefix (first path segment) of a container-relative blob name. */
+function topPrefix(name: string): string {
+  const clean = name.replace(/^\/+/, '');
+  const slash = clean.indexOf('/');
+  return slash === -1 ? clean : clean.slice(0, slash);
+}
+
+/**
+ * Aggregate ADLS Gen2 storage usage for ONE container, broken down by its
+ * top-level prefixes. Includes system files (counted + flagged) and retained
+ * soft-deleted blobs. `cap` bounds the live walk so a pathological container
+ * can't hang the request; when hit, `capped` is true and totals are a lower
+ * bound. Throws (with statusCode) on auth errors so the route can gate.
+ */
+export async function aggregateContainerUsage(
+  container: string,
+  account?: string,
+  cap = 250_000,
+): Promise<ContainerUsage> {
+  const fs = getFileSystem(container, account);
+
+  // ── LIVE walk (DataLake recursive list — exposes system files) ──
+  const live = new Map<string, { bytes: number; files: number; sysBytes: number; sysFiles: number }>();
+  let liveBytes = 0;
+  let liveFiles = 0;
+  let walked = 0;
+  let capped = false;
+  const iter = fs.listPaths({ recursive: true });
+  for await (const p of iter) {
+    if (p.isDirectory) continue;
+    const name = p.name ?? '';
+    if (!name) continue;
+    const size = typeof p.contentLength === 'number' ? p.contentLength : Number(p.contentLength ?? 0);
+    const pref = topPrefix(name);
+    const sys = isSystemPath(name);
+    const row = live.get(pref) ?? { bytes: 0, files: 0, sysBytes: 0, sysFiles: 0 };
+    row.bytes += size;
+    row.files += 1;
+    if (sys) { row.sysBytes += size; row.sysFiles += 1; }
+    live.set(pref, row);
+    liveBytes += size;
+    liveFiles += 1;
+    walked += 1;
+    if (walked >= cap) { capped = true; break; }
+  }
+
+  // ── SOFT-DELETED walk (Blob surface, includeDeleted) ──
+  // HNS blob soft-delete keeps deleted blobs (and their bytes) until the
+  // retention window elapses. The DataLake list does NOT return them, so we
+  // enumerate the Blob surface with includeDeleted and keep only deleted=true.
+  const deleted = new Map<string, { bytes: number; files: number }>();
+  let deletedBytes = 0;
+  let deletedFiles = 0;
+  try {
+    const blobContainer = getBlobServiceClient(account).getContainerClient(container);
+    let dwalk = 0;
+    for await (const b of blobContainer.listBlobsFlat({ includeDeleted: true })) {
+      if (!b.deleted) continue;
+      const size = typeof b.properties?.contentLength === 'number' ? b.properties.contentLength : 0;
+      const pref = topPrefix(b.name);
+      const row = deleted.get(pref) ?? { bytes: 0, files: 0 };
+      row.bytes += size;
+      row.files += 1;
+      deleted.set(pref, row);
+      deletedBytes += size;
+      deletedFiles += 1;
+      dwalk += 1;
+      if (dwalk >= cap) { capped = true; break; }
+    }
+  } catch {
+    // Soft-delete listing is best-effort: when the account has no
+    // deleteRetentionPolicy the Blob surface returns nothing useful. Never
+    // sink the whole report over the deleted-bytes overlay.
+  }
+
+  // ── Merge per-prefix ──
+  const prefixNames = new Set<string>([...live.keys(), ...deleted.keys()]);
+  const prefixes: PrefixUsage[] = [...prefixNames].map((prefix) => {
+    const l = live.get(prefix) ?? { bytes: 0, files: 0, sysBytes: 0, sysFiles: 0 };
+    const d = deleted.get(prefix) ?? { bytes: 0, files: 0 };
+    return {
+      container,
+      prefix,
+      liveBytes: l.bytes,
+      liveFiles: l.files,
+      systemBytes: l.sysBytes,
+      systemFiles: l.sysFiles,
+      deletedBytes: d.bytes,
+      deletedFiles: d.files,
+    };
+  });
+  prefixes.sort((a, b) => (b.liveBytes + b.deletedBytes) - (a.liveBytes + a.deletedBytes));
+
+  return { container, liveBytes, liveFiles, deletedBytes, deletedFiles, capped, prefixes };
+}
+
+/**
+ * Aggregate storage usage across every CONFIGURED DLZ container. Returns one
+ * ContainerUsage per container that exists; containers the UAMI can't read are
+ * skipped (their error is surfaced as `errors[]`, not thrown) so a single bad
+ * container never sinks the whole workspace report.
+ */
+export async function aggregateAllContainersUsage(
+  account?: string,
+  cap = 250_000,
+): Promise<{ containers: ContainerUsage[]; errors: Array<{ container: string; error: string }> }> {
+  const containers: ContainerUsage[] = [];
+  const errors: Array<{ container: string; error: string }> = [];
+  const configured = (await listContainers()).map((c) => c.name);
+  await Promise.all(
+    configured.map(async (name) => {
+      try {
+        containers.push(await aggregateContainerUsage(name, account, cap));
+      } catch (e: any) {
+        errors.push({ container: name, error: e?.message || String(e) });
+      }
+    }),
+  );
+  containers.sort((a, b) => (b.liveBytes + b.deletedBytes) - (a.liveBytes + a.deletedBytes));
+  return { containers, errors };
+}
+
+/** Per-item storage usage under one specific {container, prefix}. */
+export interface PrefixSizeResult {
+  /** Live (non-deleted) bytes under the prefix, INCLUDING system files. */
+  liveBytes: number;
+  /** Live file count, INCLUDING system files. */
+  liveFiles: number;
+  /** System-file bytes (subset of liveBytes). */
+  systemBytes: number;
+  /** System file count (subset of liveFiles). */
+  systemFiles: number;
+  /** Soft-deleted bytes still retained under the prefix. */
+  deletedBytes: number;
+  /** Soft-deleted file count still retained. */
+  deletedFiles: number;
+  /** True when the walk hit `cap` (totals are a lower bound). */
+  capped: boolean;
+  /** True when at least one live file exists under the prefix (the item is materialised). */
+  exists: boolean;
+}
+
+/**
+ * Aggregate storage usage under ONE specific {container, prefix} — the
+ * per-item primitive behind the OneLake item-size report. Counts ALL live
+ * files (system files included + flagged), then overlays soft-deleted blobs
+ * (those whose name begins with the prefix) from the Blob includeDeleted list.
+ * Throws (with statusCode) on auth errors so the route can gate honestly.
+ */
+export async function aggregatePrefixSize(
+  container: string,
+  prefix: string,
+  account?: string,
+  cap = 250_000,
+): Promise<PrefixSizeResult> {
+  const fs = getFileSystem(container, account);
+  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  let liveBytes = 0;
+  let liveFiles = 0;
+  let systemBytes = 0;
+  let systemFiles = 0;
+  let capped = false;
+  const iter = fs.listPaths({ path: cleanPrefix || undefined, recursive: true });
+  for await (const p of iter) {
+    if (p.isDirectory) continue;
+    const name = p.name ?? '';
+    if (!name) continue;
+    const size = typeof p.contentLength === 'number' ? p.contentLength : Number(p.contentLength ?? 0);
+    liveBytes += size;
+    liveFiles += 1;
+    if (isSystemPath(name)) { systemBytes += size; systemFiles += 1; }
+    if (liveFiles >= cap) { capped = true; break; }
+  }
+
+  // Soft-deleted overlay — Blob includeDeleted, filtered to this prefix.
+  let deletedBytes = 0;
+  let deletedFiles = 0;
+  try {
+    const blobContainer = getBlobServiceClient(account).getContainerClient(container);
+    const matchPrefix = cleanPrefix ? `${cleanPrefix}/` : '';
+    let dwalk = 0;
+    for await (const b of blobContainer.listBlobsFlat({ includeDeleted: true, prefix: matchPrefix || undefined })) {
+      if (!b.deleted) continue;
+      const size = typeof b.properties?.contentLength === 'number' ? b.properties.contentLength : 0;
+      deletedBytes += size;
+      deletedFiles += 1;
+      dwalk += 1;
+      if (dwalk >= cap) { capped = true; break; }
+    }
+  } catch {
+    // best-effort soft-delete overlay (see aggregateContainerUsage)
+  }
+
+  return {
+    liveBytes,
+    liveFiles,
+    systemBytes,
+    systemFiles,
+    deletedBytes,
+    deletedFiles,
+    capped,
+    exists: liveFiles > 0 || deletedFiles > 0,
+  };
+}
+
 export interface PathMetadata {
   exists: boolean;
   size: number;
