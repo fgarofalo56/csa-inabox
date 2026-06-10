@@ -34,6 +34,7 @@ import {
   deleteUcExternalLocation,
   deleteUcStorageCredential,
 } from './shortcut-credentials';
+import { graphDriveConfigGate, headDriveItem, parseSharepointUri } from './graph-drive-client';
 import type {
   ShortcutTargetType,
   ShortcutKind,
@@ -179,10 +180,30 @@ export async function createTablesShortcut(args: {
     objectKey?: string;
     /** Delta Sharing credential + parsed share coordinates (delta_sharing source). */
     deltaSharing?: ExternalBinding['deltaSharing'];
+    /** SharePoint/OneDrive drive coordinates (Graph data plane — Files-only). */
+    sharepoint?: ExternalBinding['sharepoint'];
     /** Lakehouse id — needed to derive the Delta Sharing credential file path. */
     lakehouseId?: string;
   };
 }): Promise<TablesRegistration | EngineGate> {
+  // --- SharePoint / OneDrive Tables: honest-gate. ---
+  // SharePoint/OneDrive content is read through Microsoft Graph, which is a
+  // document/file API — there is no abfss path or external-table engine binding
+  // for it, so a *Tables* shortcut can't register a real external table. A Files
+  // shortcut surfaces the documents zero-copy (Graph read-through). This matches
+  // Fabric, where OneDrive/SharePoint shortcuts land under Files, not Tables.
+  if (args.external?.sharepoint) {
+    return {
+      gated: true,
+      code: 'sharepoint_files_only',
+      hint:
+        'SharePoint / OneDrive shortcuts are read through Microsoft Graph (a file API), so they ' +
+        'surface as a Files shortcut — there is no external-table engine binding for Graph drive ' +
+        'items. Create this as a Files shortcut. (To query SharePoint list/library data as a table, ' +
+        'export it to ADLS/Delta first, then create a Tables shortcut over that.)',
+    };
+  }
+
   // --- Delta Sharing Tables: register a UC table with the delta_sharing provider. ---
   // This uses the Spark `delta_sharing` data source, which requires the
   // Databricks engine. The credential profile is written to a UC Volume so the
@@ -408,7 +429,10 @@ export async function refreshDeltaSharingCredential(
  * ADLS/internal always returns null (the UAMI path needs no extra credential).
  */
 export function externalSourceGate(targetType: ShortcutTargetType, hasCredentialRef: boolean): EngineGate | null {
-  if (targetType === 'adls' || targetType === 'internal') return null;
+  // ADLS/internal resolve on the UAMI; SharePoint/OneDrive resolve on the UAMI
+  // via Microsoft Graph (no per-shortcut Key Vault credential) — the feature flag
+  // + Graph app-role grant are validated in bindExternalSource() instead.
+  if (targetType === 'adls' || targetType === 'internal' || targetType === 'sharepoint') return null;
 
   if (!hasCredentialRef) {
     const secret =
@@ -517,17 +541,43 @@ export interface ExternalBinding {
     schema: string;
     table: string;
   };
+  /** SharePoint/OneDrive drive id + drive-relative path (Graph data plane). */
+  sharepoint?: { driveId: string; path: string };
 }
 
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
-  targetType: 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
+  targetType: 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
   targetUri: string;
-  credentialRef: ShortcutCredentialRef;
+  /** Optional — SharePoint/OneDrive resolves on the UAMI via Graph (no KV secret). */
+  credentialRef?: ShortcutCredentialRef;
 }): Promise<ExternalBinding | EngineGate> {
   const { lakehouseId, name, targetType, targetUri, credentialRef } = args;
-  const secretName = credentialRef.keyVaultSecret;
+
+  // --- SharePoint / OneDrive: resolve the drive item on the UAMI via Graph. ---
+  // No per-shortcut Key Vault credential — Microsoft Graph is the data plane, on
+  // the Console UAMI's Sites.Read.All / Files.Read.All app-roles. We prove the
+  // targeted driveItem is readable now so the row only lands 'active' when real.
+  // (Azure-native parity with Fabric OneDrive/SharePoint shortcuts; NO Fabric.)
+  if (targetType === 'sharepoint') {
+    const parsed = parseSharepointUri(targetUri);
+    if (!parsed) {
+      throw Object.assign(
+        new Error(`SharePoint targetUri must be sharepoint://<driveId>/<path>; got: ${targetUri}`),
+        { code: 'bad_target' },
+      );
+    }
+    const gate = graphDriveConfigGate();
+    if (gate) {
+      return { gated: true, code: gate.code, hint: gate.hint.followUp };
+    }
+    // Real reachability probe — read the drive item (HEAD-equivalent).
+    await headDriveItem(parsed.driveId, parsed.path);
+    return { readUri: targetUri, sharepoint: { driveId: parsed.driveId, path: parsed.path } };
+  }
+
+  const secretName = credentialRef?.keyVaultSecret;
   if (!secretName) {
     return { gated: true, code: 'needs_credential', hint: `${labelFor(targetType)} requires credentialRef.keyVaultSecret.` };
   }
@@ -741,6 +791,7 @@ export function labelFor(t: ShortcutTargetType): string {
     case 'gcs': return 'Google Cloud Storage';
     case 'dataverse': return 'Dataverse';
     case 'delta_sharing': return 'Delta Sharing';
+    case 'sharepoint': return 'SharePoint / OneDrive';
     default: return t;
   }
 }

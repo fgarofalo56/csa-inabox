@@ -38,6 +38,12 @@ param skipRoleGrants bool = false
 @description('When true, also document the Group.ReadWrite.All AppRole required for the workspace settings "Teams and SharePoint" tab to CREATE a Microsoft 365 group for a workspace (set LOOM_WORKSPACE_M365_LINK=true on the console). Read-only group search needs only Group.Read.All; group creation needs this additional consent, so it is opt-in to avoid a surprise consent prompt on existing deployments.')
 param workspaceM365LinkEnabled bool = false
 
+@description('When true, document the Microsoft Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs for OneLake shortcuts to SharePoint document libraries / OneDrive folders (set LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the console). Granted out-of-band by scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent.')
+param sharepointShortcutsEnabled bool = false
+
+@description('Whether the identity picker itself is enabled — when false (SharePoint shortcuts enabled alone), the user/group/SPN read AppRoles are not documented as required.')
+param identityPickerEnabled bool = true
+
 var graphBase = boundary == 'GCC-High'
   ? 'https://graph.microsoft.us'
   : boundary == 'IL5'
@@ -59,8 +65,16 @@ var baseAppRoles = [
 var m365WriteAppRole = [
   { name: 'Group.ReadWrite.All', appRoleId: '62a82d76-70ea-41e2-9197-370581804d09', reason: 'Create a Microsoft 365 group for a workspace (settings → Teams and SharePoint).' }
 ]
+// Sites.Read.All + Files.Read.All — required ONLY when SharePoint/OneDrive
+// OneLake shortcuts are enabled. Lets the Console UAMI enumerate SharePoint
+// sites + document libraries (drives) and read OneDrive/SharePoint drive items.
+var sharepointAppRoles = [
+  { name: 'Sites.Read.All', appRoleId: '332a536c-c7ef-4017-ab91-336970924f0d', reason: 'Enumerate SharePoint sites + their document libraries for OneLake shortcuts.' }
+  { name: 'Files.Read.All', appRoleId: '01d4889c-1287-42c6-ac1f-5d1e02578ef6', reason: 'List + read OneDrive / SharePoint drive items a shortcut points at.' }
+]
 
-output requiredAppRoles array = workspaceM365LinkEnabled ? concat(baseAppRoles, m365WriteAppRole) : baseAppRoles
+var identityRoles = identityPickerEnabled ? (workspaceM365LinkEnabled ? concat(baseAppRoles, m365WriteAppRole) : baseAppRoles) : []
+output requiredAppRoles array = sharepointShortcutsEnabled ? concat(identityRoles, sharepointAppRoles) : identityRoles
 
 output graphBase string = graphBase
 output graphScope string = '${graphBase}/.default'

@@ -111,7 +111,9 @@ export async function POST(req: NextRequest) {
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
 
-  const isExternal = targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' || targetType === 'delta_sharing';
+  const isExternal =
+    targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' ||
+    targetType === 'delta_sharing' || targetType === 'sharepoint';
 
   // --- External cloud sources (S3/GCS/Dataverse): pre-flight honest-gate. ---
   // Gate ONLY when the credentialRef is absent or the vault isn't configured;
@@ -132,9 +134,9 @@ export async function POST(req: NextRequest) {
       const result = await bindExternalSource({
         lakehouseId,
         name,
-        targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing',
+        targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint',
         targetUri,
-        credentialRef: credentialRef!,
+        credentialRef,
       });
       if (isGate(result)) {
         // Engine for this source isn't configured — persist pending, 503 honestly.
@@ -198,10 +200,14 @@ export async function POST(req: NextRequest) {
         synapseDataSource?: string;
         objectKey?: string;
         deltaSharing?: ExternalBinding['deltaSharing'];
+        sharepoint?: ExternalBinding['sharepoint'];
         lakehouseId?: string;
       }
     | undefined;
-  if (binding && (targetType === 's3' || targetType === 'gcs')) {
+  if (binding && targetType === 'sharepoint') {
+    // Files-only — createTablesShortcut honest-gates on external.sharepoint.
+    externalForTable = { objectUri: binding.readUri, sharepoint: binding.sharepoint };
+  } else if (binding && (targetType === 's3' || targetType === 'gcs')) {
     const m = binding.readUri.match(/^(?:s3a?|gs):\/\/[^/]+\/?(.*)$/i);
     externalForTable = {
       objectUri: binding.readUri,

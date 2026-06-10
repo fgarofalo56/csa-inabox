@@ -17,7 +17,7 @@
 
 import { lakehouseShortcutsContainer } from './cosmos-client';
 
-export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
+export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
 export type ShortcutKind = 'files' | 'tables';
 export type ShortcutEngine = 'databricks' | 'synapse' | 'none';
 export type ShortcutStatus = 'active' | 'pending' | 'error';
