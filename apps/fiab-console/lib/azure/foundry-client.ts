@@ -1039,6 +1039,7 @@ export interface TraceRow {
   timestamp: string;
   name?: string;
   operationName?: string;
+  operationId?: string;
   duration?: number;
   success?: boolean;
   resultCode?: string;
@@ -1057,7 +1058,7 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
   const hours = Math.max(1, Math.min(24 * 7, opts.hours || 24));
   let query = `union traces, dependencies, customEvents | where timestamp > ago(${hours}h)`;
   if (opts.operation) query += ` | where operation_Name == "${opts.operation.replace(/"/g, '\\"')}"`;
-  query += ` | order by timestamp desc | take 200 | project timestamp, name, operation_Name, duration, success, resultCode, message, customDimensions`;
+  query += ` | order by timestamp desc | take 200 | project timestamp, name, operation_Name, operation_Id, duration, success, resultCode, message, customDimensions`;
   // App Insights query via Log Analytics-backed API. /query supports KQL.
   // Using 2015-05-01 (stable GA) on the application/components resource.
   const path = `${appiId}/api/query`;
@@ -1078,6 +1079,7 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
       timestamp: o.timestamp,
       name: o.name,
       operationName: o.operation_Name,
+      operationId: o.operation_Id,
       duration: o.duration,
       success: o.success,
       resultCode: o.resultCode,
@@ -1085,6 +1087,88 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
       customDimensions: o.customDimensions,
     } as TraceRow;
   });
+}
+
+// ---- Trace detail: the full span tree for one operation_Id (trace) ----
+//
+// Foundry/OpenTelemetry GenAI spans land in App Insights as `dependencies`
+// (outbound calls — model invocations, tool calls) and `requests` (server
+// entry spans), correlated by `operation_Id`. We union both, project the OTel
+// span id + parent id from customDimensions, and return them ordered so the UI
+// can reconstruct the parent→child tree client-side.
+export interface AppInsightsSpan {
+  id: string;
+  parentId?: string;
+  name?: string;
+  kind?: string;          // request | dependency
+  timestamp?: string;
+  duration?: number;
+  success?: boolean;
+  resultCode?: string;
+  /** Selected GenAI semantic-convention dimensions (model, tokens, etc.). */
+  genAiSystem?: string;
+  genAiModel?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  customDimensions?: Record<string, unknown>;
+}
+
+export async function queryTraceDetail(traceId: string): Promise<{ spans: AppInsightsSpan[] }> {
+  const ws = await getWorkspaceInfo();
+  const appiId = ws?.applicationInsights;
+  if (!appiId) {
+    throw new NotDeployedError('Application Insights',
+      'The Foundry hub has no applicationInsights resource bound. Bind one in the hub workspace properties.');
+  }
+  const safeId = traceId.replace(/[^A-Za-z0-9_\-.]/g, '');
+  if (!safeId) throw new FoundryError(400, null, 'A valid traceId (operation_Id) is required.');
+  // union dependencies + requests, tag the source table, keep OTel correlation.
+  const query =
+    `union (dependencies | extend _kind='dependency'), (requests | extend _kind='request') ` +
+    `| where operation_Id == "${safeId}" ` +
+    `| order by timestamp asc ` +
+    `| take 500 ` +
+    `| project id, _kind, name, duration, success, resultCode, timestamp, ` +
+    `parentId=tostring(operation_ParentId), customDimensions`;
+  const path = `${appiId}/api/query`;
+  const res = await armFetch(path, { apiVersion: '2015-05-01', method: 'POST', body: JSON.stringify({ query }) });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `App Insights trace-detail query failed (${res.status}): ${t.slice(0, 240)} | endpoint=${path}`);
+  }
+  const j: any = await res.json();
+  const table = j?.tables?.[0];
+  if (!table) return { spans: [] };
+  const cols: string[] = (table.columns || []).map((c: any) => c.name);
+  const rows: any[][] = table.rows || [];
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const spans = rows.map((r) => {
+    const o: any = {};
+    cols.forEach((c, i) => { o[c] = r[i]; });
+    let cd: Record<string, unknown> = {};
+    if (o.customDimensions) {
+      try { cd = typeof o.customDimensions === 'string' ? JSON.parse(o.customDimensions) : o.customDimensions; } catch { cd = {}; }
+    }
+    return {
+      id: String(o.id ?? ''),
+      parentId: o.parentId ? String(o.parentId) : undefined,
+      name: o.name,
+      kind: o._kind,
+      timestamp: o.timestamp,
+      duration: o.duration,
+      success: o.success,
+      resultCode: o.resultCode,
+      genAiSystem: (cd['gen_ai.system'] as string) || undefined,
+      genAiModel: (cd['gen_ai.request.model'] as string) || (cd['gen_ai.response.model'] as string) || undefined,
+      inputTokens: num(cd['gen_ai.usage.input_tokens'] ?? cd['gen_ai.usage.prompt_tokens']),
+      outputTokens: num(cd['gen_ai.usage.output_tokens'] ?? cd['gen_ai.usage.completion_tokens']),
+      customDimensions: cd,
+    } as AppInsightsSpan;
+  });
+  return { spans };
 }
 
 // ---------------- AI Search ----------------

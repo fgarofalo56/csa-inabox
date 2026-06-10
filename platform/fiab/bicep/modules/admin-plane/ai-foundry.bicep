@@ -278,6 +278,27 @@ resource aiServicesOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
+// Grant the Console UAMI Cognitive Services OpenAI Contributor so the BFF can
+// create / cancel fine-tuning jobs and start evaluation runs against the AOAI
+// account. Fine-tuning (POST {endpoint}/openai/v1/fine_tuning/jobs) and Evals
+// run-create require write access on the OpenAI data-plane that the User role
+// (inference-only) does not grant. This role is listed in ROLE_NAMES in
+// foundry-cs-client.ts and is the one the Fine-tuning + Evals "start run" tabs
+// depend on. Least-privilege: granted in addition to (not instead of) the
+// Contributor + OpenAI User grants above.
+resource aiServicesOpenAIContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: aiServices
+  name: guid(aiServices.id, consolePrincipalId, 'a001fd3d-188f-4b5d-821b-7da978bf7442')
+  properties: {
+    // Cognitive Services OpenAI Contributor — create deployments + fine-tuning + evals runs
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'a001fd3d-188f-4b5d-821b-7da978bf7442')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output hubId string = foundryHub.id
 output hubName string = foundryHub.name
 output hubKind string = workspaceKind

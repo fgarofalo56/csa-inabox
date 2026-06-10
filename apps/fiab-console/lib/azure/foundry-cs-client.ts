@@ -645,6 +645,357 @@ export async function listEvalRuns(evalId: string, selector?: AccountSelector): 
   return { account: acct, runs: (j?.data || []).map(mapEvalRun) };
 }
 
+// ---- Evals: file upload (purpose=evals) + start run + delete + output items ----
+//
+// Files for evals are uploaded to the SAME OpenAI v1 data-plane host as evals
+// themselves: POST {endpoint}/openai/v1/files (multipart/form-data) with
+// purpose=evals. A run is then started against the uploaded file_id:
+//   POST {endpoint}/openai/v1/evals/{eval-id}/runs
+// Per-row results come from:
+//   GET  {endpoint}/openai/v1/evals/{eval-id}/runs/{run-id}/output_items
+// Ref: https://learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest
+
+export interface UploadedFile { id: string; filename?: string; bytes?: number; status?: string; purpose?: string; createdAt?: number }
+
+function mapFile(f: any): UploadedFile {
+  return { id: f?.id, filename: f?.filename, bytes: f?.bytes, status: f?.status, purpose: f?.purpose, createdAt: f?.created_at };
+}
+
+/**
+ * Multipart upload to the OpenAI v1 /files endpoint. Used for BOTH evals
+ * (purpose=evals) and fine-tuning (purpose=fine-tune) datasets. Node 18+ ships
+ * a global FormData/Blob, which the BFF runtime ('nodejs') provides.
+ */
+async function uploadOpenAIFile(acct: CsAccount, fileName: string, content: string, purpose: 'evals' | 'fine-tune'): Promise<UploadedFile> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const form = new FormData();
+  form.append('purpose', purpose);
+  form.append('file', new Blob([content], { type: 'application/jsonl' }), fileName || 'dataset.jsonl');
+  const url = `${endpoint}/openai/v1/files?api-version=${AOAI_EVALS_API}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    // NB: do NOT set content-type — fetch sets the multipart boundary itself.
+    headers: { authorization: `Bearer ${tok}`, 'aoai-evals': 'preview' },
+    body: form,
+  });
+  const j = await readEvalsJson<any>(res);
+  return mapFile(j);
+}
+
+export async function uploadEvalsFile(fileName: string, jsonlContent: string, selector?: AccountSelector): Promise<{ account: CsAccount; file: UploadedFile }> {
+  const acct = await resolveAccount(false, selector);
+  return { account: acct, file: await uploadOpenAIFile(acct, fileName, jsonlContent, 'evals') };
+}
+
+export interface CreateEvalRunInput {
+  name?: string;
+  /** The uploaded JSONL file id (purpose=evals). */
+  fileId: string;
+  /** Deployment / model name that produces the sampled output to grade. */
+  model: string;
+  /**
+   * input_messages template — the prompt sent to the model per data row. When
+   * omitted a single user-turn echoing {{item.input}} is used.
+   */
+  inputMessages?: unknown[];
+}
+
+/**
+ * Start an evaluation run against a pre-uploaded JSONL file. Uses the
+ * `completions` data source: the run samples `model` per row, then applies the
+ * eval's testing_criteria. Returns the created run summary.
+ */
+export async function createEvalRun(evalId: string, input: CreateEvalRunInput, selector?: AccountSelector): Promise<EvalRunSummary> {
+  const acct = await resolveAccount(false, selector);
+  const template = (Array.isArray(input.inputMessages) && input.inputMessages.length)
+    ? input.inputMessages
+    : [{ role: 'user', content: '{{item.input}}' }];
+  const body: any = {
+    ...(input.name ? { name: input.name } : {}),
+    data_source: {
+      type: 'completions',
+      source: { type: 'file_id', id: input.fileId },
+      input_messages: { type: 'template', template },
+      model: input.model,
+    },
+  };
+  const j = await readEvalsJson<any>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs`, { method: 'POST', body: JSON.stringify(body) }));
+  return mapEvalRun(j);
+}
+
+export async function deleteEval(evalId: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
+  const res = await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) {
+    const t = await res.text();
+    throw new CsError(res.status, t, `Delete eval failed: ${t.slice(0, 240)}`);
+  }
+}
+
+export async function deleteEvalRun(evalId: string, runId: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
+  const res = await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) {
+    const t = await res.text();
+    throw new CsError(res.status, t, `Delete eval run failed: ${t.slice(0, 240)}`);
+  }
+}
+
+export interface EvalOutputItem {
+  id: string;
+  status?: string;
+  model?: string;
+  datasourceItemIndex?: number;
+  /** Per-criterion grading results keyed by criterion name. */
+  results: { name?: string; passed?: boolean; score?: number }[];
+  /** Sampled model output text for the row (best-effort). */
+  sampleOutput?: string;
+}
+
+function mapOutputItem(o: any): EvalOutputItem {
+  const rawResults: any[] = Array.isArray(o?.results) ? o.results : [];
+  const results = rawResults.map((r) => ({
+    name: r?.name || r?.testing_criteria || r?.type,
+    passed: typeof r?.passed === 'boolean' ? r.passed : (r?.score !== undefined ? Number(r.score) >= 0.5 : undefined),
+    score: typeof r?.score === 'number' ? r.score : undefined,
+  }));
+  const sampleOutput = o?.sample?.output?.[0]?.content ?? o?.sample?.output_text;
+  return {
+    id: o?.id,
+    status: o?.status,
+    model: o?.sample?.model || o?.model,
+    datasourceItemIndex: o?.datasource_item_id ?? o?.datasource_item_index,
+    results,
+    sampleOutput: typeof sampleOutput === 'string' ? sampleOutput : undefined,
+  };
+}
+
+export async function getEvalRunOutputItems(evalId: string, runId: string, selector?: AccountSelector): Promise<{ account: CsAccount; items: EvalOutputItem[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs/${encodeURIComponent(runId)}/output_items?limit=100`));
+  return { account: acct, items: (j?.data || []).map(mapOutputItem) };
+}
+
+// ---------------- Fine-tuning (AOAI fine_tuning data-plane) ----------------
+//
+// Same OpenAI v1 host + Cognitive-Services token as chat/evals:
+//   files    = GET/POST {endpoint}/openai/v1/files            (purpose=fine-tune)
+//   jobs     = GET/POST {endpoint}/openai/v1/fine_tuning/jobs
+//   job      = GET       {endpoint}/openai/v1/fine_tuning/jobs/{id}
+//   cancel   = POST      {endpoint}/openai/v1/fine_tuning/jobs/{id}/cancel
+//   events   = GET       {endpoint}/openai/v1/fine_tuning/jobs/{id}/events
+// Role: Cognitive Services OpenAI Contributor (a001fd3d). Standard / Regional-
+// Standard SKUs only (Global training jobs are not supported via REST).
+// Ref: https://learn.microsoft.com/azure/ai-foundry/openai/how-to/fine-tuning
+
+const AOAI_FT_API = process.env.LOOM_AOAI_FT_API_VERSION || '2025-04-01-preview';
+
+export type FineTuningFile = UploadedFile;
+
+export interface FineTuningJob {
+  id: string;
+  status?: string;
+  model?: string;
+  fineTunedModel?: string | null;
+  trainingFile?: string;
+  validationFile?: string | null;
+  createdAt?: number;
+  finishedAt?: number | null;
+  hyperparameters?: { n_epochs?: number | string; batch_size?: number | string; learning_rate_multiplier?: number | string };
+  trainedTokens?: number | null;
+  error?: { message?: string; code?: string } | null;
+}
+
+export interface FineTuningEvent {
+  id?: string;
+  createdAt?: number;
+  level?: string;
+  message?: string;
+  /** step + metrics (training_loss / valid_loss) when the event carries them. */
+  step?: number;
+  trainingLoss?: number;
+  validationLoss?: number;
+  fullValidationLoss?: number;
+}
+
+function mapFtJob(j: any): FineTuningJob {
+  const hp = j?.hyperparameters || {};
+  return {
+    id: j?.id,
+    status: j?.status,
+    model: j?.model,
+    fineTunedModel: j?.fine_tuned_model ?? null,
+    trainingFile: j?.training_file,
+    validationFile: j?.validation_file ?? null,
+    createdAt: j?.created_at,
+    finishedAt: j?.finished_at ?? null,
+    hyperparameters: {
+      n_epochs: hp.n_epochs,
+      batch_size: hp.batch_size,
+      learning_rate_multiplier: hp.learning_rate_multiplier,
+    },
+    trainedTokens: j?.trained_tokens ?? null,
+    error: j?.error && (j.error.message || j.error.code) ? { message: j.error.message, code: j.error.code } : null,
+  };
+}
+
+function mapFtEvent(e: any): FineTuningEvent {
+  const d = e?.data || {};
+  return {
+    id: e?.id,
+    createdAt: e?.created_at,
+    level: e?.level,
+    message: e?.message,
+    step: typeof d.step === 'number' ? d.step : undefined,
+    trainingLoss: typeof d.train_loss === 'number' ? d.train_loss : (typeof d.training_loss === 'number' ? d.training_loss : undefined),
+    validationLoss: typeof d.valid_loss === 'number' ? d.valid_loss : (typeof d.validation_loss === 'number' ? d.validation_loss : undefined),
+    fullValidationLoss: typeof d.full_valid_loss === 'number' ? d.full_valid_loss : undefined,
+  };
+}
+
+async function ftFetch(acct: CsAccount, path: string, init: RequestInit = {}): Promise<Response> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_FT_API}`;
+  return fetch(url, {
+    ...init,
+    headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+  });
+}
+
+export async function listFineTuningFiles(selector?: AccountSelector): Promise<{ account: CsAccount; files: FineTuningFile[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await ftFetch(acct, `/files?purpose=fine-tune`));
+  return { account: acct, files: (j?.data || []).map(mapFile) };
+}
+
+export async function uploadFineTuningFile(fileName: string, content: string, selector?: AccountSelector): Promise<{ account: CsAccount; file: FineTuningFile }> {
+  const acct = await resolveAccount(false, selector);
+  return { account: acct, file: await uploadOpenAIFile(acct, fileName, content, 'fine-tune') };
+}
+
+export async function listFineTuningJobs(selector?: AccountSelector): Promise<{ account: CsAccount; jobs: FineTuningJob[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await ftFetch(acct, `/fine_tuning/jobs?limit=50`));
+  return { account: acct, jobs: (j?.data || []).map(mapFtJob) };
+}
+
+export interface CreateFineTuningJobInput {
+  model: string;
+  trainingFileId: string;
+  validationFileId?: string;
+  suffix?: string;
+  hyperparameters?: { n_epochs?: number | 'auto'; batch_size?: number | 'auto'; learning_rate_multiplier?: number | 'auto' };
+  seed?: number;
+}
+
+export async function createFineTuningJob(input: CreateFineTuningJobInput, selector?: AccountSelector): Promise<FineTuningJob> {
+  const acct = await resolveAccount(false, selector);
+  const body: any = { model: input.model, training_file: input.trainingFileId };
+  if (input.validationFileId) body.validation_file = input.validationFileId;
+  if (input.suffix) body.suffix = input.suffix;
+  if (typeof input.seed === 'number') body.seed = input.seed;
+  if (input.hyperparameters) {
+    const hp: any = {};
+    if (input.hyperparameters.n_epochs !== undefined && input.hyperparameters.n_epochs !== ('' as any)) hp.n_epochs = input.hyperparameters.n_epochs;
+    if (input.hyperparameters.batch_size !== undefined && input.hyperparameters.batch_size !== ('' as any)) hp.batch_size = input.hyperparameters.batch_size;
+    if (input.hyperparameters.learning_rate_multiplier !== undefined && input.hyperparameters.learning_rate_multiplier !== ('' as any)) hp.learning_rate_multiplier = input.hyperparameters.learning_rate_multiplier;
+    if (Object.keys(hp).length) body.hyperparameters = hp;
+  }
+  const j = await readEvalsJson<any>(await ftFetch(acct, `/fine_tuning/jobs`, { method: 'POST', body: JSON.stringify(body) }));
+  return mapFtJob(j);
+}
+
+export async function getFineTuningJob(jobId: string, selector?: AccountSelector): Promise<FineTuningJob> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await ftFetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}`));
+  return mapFtJob(j);
+}
+
+export async function cancelFineTuningJob(jobId: string, selector?: AccountSelector): Promise<FineTuningJob> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await ftFetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }));
+  return mapFtJob(j);
+}
+
+export async function listFineTuningEvents(jobId: string, selector?: AccountSelector): Promise<{ account: CsAccount; events: FineTuningEvent[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await ftFetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/events?limit=200`));
+  return { account: acct, events: (j?.data || []).map(mapFtEvent) };
+}
+
+// ---------------- Images + Audio playgrounds (data-plane) ----------------
+//
+// Images:  POST {endpoint}/openai/deployments/{d}/images/generations
+// Audio:   POST {endpoint}/openai/deployments/{d}/audio/transcriptions (multipart)
+// Same Cognitive-Services data-plane token as chatCompletion. dall-e-3 retired
+// 2026-03-04 — use gpt-image-1 series for generation.
+
+const AOAI_IMAGE_API = process.env.LOOM_AOAI_IMAGE_API_VERSION || '2024-10-21';
+const AOAI_AUDIO_API = process.env.LOOM_AOAI_AUDIO_API_VERSION || '2024-02-01';
+
+export interface ImageGenResult { url?: string; b64_json?: string; revised_prompt?: string }
+
+export async function generateImage(
+  deploymentName: string,
+  prompt: string,
+  params: { n?: number; size?: string; quality?: string; style?: string } = {},
+  selector?: AccountSelector,
+): Promise<{ images: ImageGenResult[] }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/images/generations?api-version=${AOAI_IMAGE_API}`;
+  const body: any = { prompt };
+  if (params.n) body.n = params.n;
+  if (params.size) body.size = params.size;
+  if (params.quality) body.quality = params.quality;
+  if (params.style) body.style = params.style;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `Image generation failed (${res.status})`);
+    throw new CsError(res.status, parsed, msg);
+  }
+  const data: any[] = Array.isArray(parsed?.data) ? parsed.data : [];
+  return { images: data.map((d) => ({ url: d.url, b64_json: d.b64_json, revised_prompt: d.revised_prompt })) };
+}
+
+export async function transcribeAudio(
+  deploymentName: string,
+  audio: Blob,
+  fileName: string,
+  selector?: AccountSelector,
+): Promise<{ text: string }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/audio/transcriptions?api-version=${AOAI_AUDIO_API}`;
+  const form = new FormData();
+  form.append('file', audio, fileName || 'audio.wav');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}` },
+    body: form,
+  });
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `Audio transcription failed (${res.status})`);
+    throw new CsError(res.status, parsed, msg);
+  }
+  return { text: parsed?.text ?? (typeof parsed === 'string' ? parsed : '') };
+}
+
 // ---------------- Quota / usages (per region) ----------------
 
 export interface UsageRow {
