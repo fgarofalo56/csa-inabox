@@ -85,6 +85,13 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
   },
   meta: { color: tokens.colorNeutralForeground3 },
+  // History tab header strip: caption on the left, refresh on the right.
+  historyBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalXS,
+  },
 });
 
 interface QueryResult {
@@ -290,13 +297,18 @@ export function WarehousePane() {
         <div className={styles.actions}>
           <Button
             appearance="secondary"
-            icon={<Flowchart24Regular />}
+            icon={planning ? <Spinner size="tiny" /> : <Flowchart24Regular />}
             onClick={explain}
             disabled={planning || running}
           >
             {planning ? 'Explaining…' : 'Explain plan'}
           </Button>
-          <Button appearance="primary" icon={<Play24Filled />} onClick={run} disabled={running}>
+          <Button
+            appearance="primary"
+            icon={running ? <Spinner size="tiny" /> : <Play24Filled />}
+            onClick={run}
+            disabled={running || planning}
+          >
             {running ? 'Running…' : 'Run query'}
           </Button>
         </div>
@@ -332,9 +344,11 @@ export function WarehousePane() {
               </MessageBar>
             )}
             {!running && !error && !result && (
-              <Caption1 className={styles.meta}>
-                Write T-SQL above and select Run query to execute it against the Synapse Dedicated SQL pool.
-              </Caption1>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  Write T-SQL above and select Run query to execute it against the Synapse Dedicated SQL pool.
+                </MessageBarBody>
+              </MessageBar>
             )}
             {result && (
               <>
@@ -420,10 +434,16 @@ export function WarehousePane() {
         {/* HISTORY */}
         {activeTab === 'history' && (
           <>
-            <div className={styles.header}>
+            <div className={styles.historyBar}>
               <Caption1 className={styles.meta}>Recent requests from sys.dm_pdw_exec_requests (last hour).</Caption1>
               <div className={styles.spacer} />
-              <Button size="small" appearance="secondary" onClick={loadHistory} disabled={historyLoading}>
+              <Button
+                size="small"
+                appearance="secondary"
+                icon={historyLoading ? <Spinner size="tiny" /> : undefined}
+                onClick={loadHistory}
+                disabled={historyLoading}
+              >
                 {historyLoading ? 'Refreshing…' : 'Refresh'}
               </Button>
             </div>
