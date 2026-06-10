@@ -2222,33 +2222,58 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          <Dialog open={newDashOpen} onOpenChange={(_: unknown, d: any) => setNewDashOpen(d.open)}>
+          <Dialog open={newDashOpen} onOpenChange={(_: unknown, d: any) => { if (!newDashBusy) setNewDashOpen(d.open); }}>
             <DialogSurface>
               <DialogBody>
-                <DialogTitle>New Real-Time Dashboard</DialogTitle>
+                <DialogTitle>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <DataBarVertical20Regular />
+                    New Real-Time Dashboard
+                  </span>
+                </DialogTitle>
                 <DialogContent>
-                  <Caption1>
-                    Creates a KQL dashboard in this workspace, pre-wired to the
-                    {selectedDb ? ` “${selectedDb}”` : state?.defaultDatabase ? ` “${state.defaultDatabase}”` : ' default'} KQL
-                    database as its data source. You can add tiles and change the
-                    data source after creation.
-                  </Caption1>
-                  <Input
-                    placeholder={`${item.displayName ?? 'Eventhouse'} — Dashboard`}
-                    value={newDashName}
-                    onChange={(_: unknown, d: any) => setNewDashName(d.value)}
-                    style={{ marginTop: 12, width: '100%' }}
-                  />
-                  {newDashErr && (
-                    <MessageBar intent="error" style={{ marginTop: 12 }}>
-                      <MessageBarBody>{newDashErr}</MessageBarBody>
-                    </MessageBar>
-                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Creates a KQL dashboard in this workspace, pre-wired to the{' '}
+                      <strong>{selectedDb || state?.defaultDatabase || 'default'}</strong> KQL
+                      database as its data source. You can add tiles and change the data
+                      source after creation.
+                    </Caption1>
+                    <Field
+                      label="Dashboard name"
+                      hint="Leave blank to use the suggested name."
+                    >
+                      <Input
+                        autoFocus
+                        placeholder={`${item.displayName ?? 'Eventhouse'} — Dashboard`}
+                        value={newDashName}
+                        disabled={newDashBusy}
+                        onChange={(_: unknown, d: any) => setNewDashName(d.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !newDashBusy) { e.preventDefault(); void createDashboard(); }
+                        }}
+                        style={{ width: '100%' }}
+                      />
+                    </Field>
+                    {newDashErr && (
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          <MessageBarTitle>Couldn’t create dashboard</MessageBarTitle>
+                          {newDashErr}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </div>
                 </DialogContent>
                 <DialogActions>
-                  <Button appearance="secondary" onClick={() => setNewDashOpen(false)}>Cancel</Button>
-                  <Button appearance="primary" onClick={createDashboard} disabled={newDashBusy}>
-                    {newDashBusy ? 'Creating…' : 'Create'}
+                  <Button appearance="secondary" onClick={() => setNewDashOpen(false)} disabled={newDashBusy}>Cancel</Button>
+                  <Button
+                    appearance="primary"
+                    icon={newDashBusy ? <Spinner size="tiny" /> : <Add20Regular />}
+                    onClick={createDashboard}
+                    disabled={newDashBusy}
+                  >
+                    {newDashBusy ? 'Creating…' : 'Create dashboard'}
                   </Button>
                 </DialogActions>
               </DialogBody>
