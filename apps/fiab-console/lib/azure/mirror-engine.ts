@@ -65,6 +65,12 @@ export interface MirrorSource {
   database: string;
   /** Explicit table subset; when empty the engine enumerates source tables. */
   tables?: MirrorTableSpec[];
+  /**
+   * Snowflake-only (Fabric Build 2026 parity): also enumerate + replicate
+   * Snowflake-managed Apache Iceberg tables, not just standard tables. Ignored
+   * for non-Snowflake sources.
+   */
+  includeIcebergTables?: boolean;
 }
 
 export interface MirrorTableResult {

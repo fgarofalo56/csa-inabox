@@ -31,6 +31,7 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  Layer20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 
@@ -71,6 +72,18 @@ const useStyles = makeStyles({
   connRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   summary: { display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
   sumKey: { color: tokens.colorNeutralForeground3 },
+  icebergCard: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM,
+    marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: `4px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  icebergIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  icebergBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
 });
 
 function toB64(s: string): string {
@@ -85,7 +98,7 @@ export interface MirrorSourceWizardProps {
   /** Present when editing — the mirror being edited (enables credential-aware table load). */
   mirrorId?: string;
   /** Prefill for the edit flow. */
-  initialSrc?: { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string };
+  initialSrc?: { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean };
   onClose: () => void;
   onCreated: (mirrorId: string, displayName: string) => void;
   onUpdated: (mirrorId: string) => void;
@@ -102,6 +115,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [createDb, setCreateDb] = useState('');
   const [createName, setCreateName] = useState('');
   const [connId, setConnId] = useState('');
+  // Snowflake-only: also mirror Snowflake-managed Iceberg tables (Fabric Build
+  // 2026 parity). When on, the engine enumerates + replicates Iceberg tables
+  // alongside standard tables; the Azure-native path reads the Iceberg metadata
+  // from the source and lands the data as Bronze Delta.
+  const [includeIceberg, setIncludeIceberg] = useState(false);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   const [connBuilderOpen, setConnBuilderOpen] = useState(false);
   const [availTables, setAvailTables] = useState<MirrorTableSpec[] | null>(null);
@@ -133,9 +151,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       setConnId(initialSrc.connectionId || '');
       setCreateName(initialSrc.displayName || '');
       setSelTables(new Set((initialSrc.tables || []).map(tkey)));
+      setIncludeIceberg(!!initialSrc.includeIcebergTables);
     } else {
       setCreateSrc('AzureSqlDatabase'); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateName('');
       setSelTables(new Set());
+      setIncludeIceberg(false);
     }
     setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null);
   }, [open, editing, initialSrc, loadConnections]);
@@ -192,9 +212,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
     try {
+      // Iceberg-table inclusion is Snowflake-only (Fabric Build 2026 parity).
+      const wantIceberg = createSrc === 'Snowflake' && includeIceberg;
       const mirroringDef = {
         properties: {
-          source: { type: createSrc, typeProperties: { server: createServer, database: createDb } },
+          source: {
+            type: createSrc,
+            typeProperties: {
+              server: createServer, database: createDb,
+              ...(wantIceberg ? { includeIcebergTables: true } : {}),
+            },
+          },
           target: { type: 'MountedRelationalDatabase', typeProperties: { format: 'Delta' } },
         },
       };
@@ -206,6 +234,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         server: createServer.trim(), database: createDb.trim(),
         connectionId: connId || undefined,
         tables: (availTables || []).filter((t) => selTables.has(tkey(t))),
+        includeIcebergTables: wantIceberg,
       };
       const r = editing && mirrorId
         ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
@@ -223,7 +252,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         onCreated(newId || '', createName.trim());
       }
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, createServer, createDb, connId, editing, mirrorId, availTables, selTables, onCreated, onUpdated]);
+  }, [workspaceId, createName, createSrc, createServer, createDb, connId, includeIceberg, editing, mirrorId, availTables, selTables, onCreated, onUpdated]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -240,7 +269,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   {MIRROR_SOURCES.map((src) => (
                     <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
                       style={{ borderLeftColor: src.accent }}
-                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); }} role="button" tabIndex={0}>
+                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); if (src.id !== 'Snowflake') setIncludeIceberg(false); }} role="button" tabIndex={0}>
                       <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
                       <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
                     </div>
@@ -303,6 +332,22 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Optional — leave all unchecked to mirror <strong>every</strong> table the engine discovers. Or load + pick a subset.
                 </Caption1>
+                {createSrc === 'Snowflake' && (
+                  <div className={s.icebergCard}>
+                    <span className={s.icebergIcon}><Layer20Regular /></span>
+                    <div className={s.icebergBody}>
+                      <Checkbox
+                        checked={includeIceberg}
+                        onChange={(_, d) => setIncludeIceberg(!!d.checked)}
+                        label="Include Iceberg tables"
+                      />
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Also mirror Snowflake-managed Apache Iceberg tables, not just standard tables. The engine reads each
+                        Iceberg table&apos;s metadata from Snowflake and lands it as Bronze Delta.
+                      </Caption1>
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
                     {tablesLoading ? 'Loading…' : 'Load tables'}
@@ -351,6 +396,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <span className={s.sumKey}>Server</span><span><code>{createServer || '—'}</code></span>
                   <span className={s.sumKey}>Database</span><span><code>{createDb || '—'}</code></span>
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
+                  {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>
                 {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}

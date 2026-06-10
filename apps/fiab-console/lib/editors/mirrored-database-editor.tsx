@@ -115,7 +115,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [wizardInitial, setWizardInitial] = useState<
-    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string } | undefined
+    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean } | undefined
   >(undefined);
 
   const loadList = useCallback(async (wsId: string) => {
@@ -237,6 +237,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       database: sc.database || '',
       connectionId: sc.connectionId || '',
       tables: Array.isArray(sc.tables) ? sc.tables : [],
+      includeIcebergTables: !!sc.includeIcebergTables,
       displayName: detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '',
     });
     setWizardOpen(true);
@@ -535,6 +536,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
               {Array.isArray(detail.source.tables) && detail.source.tables.length ? ` · ${detail.source.tables.length} table(s) selected` : ''}
+              {detail.source.sourceType === 'Snowflake' && detail.source.includeIcebergTables ? ' · Iceberg tables included' : ''}
             </Caption1>
           )}
 

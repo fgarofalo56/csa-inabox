@@ -71,6 +71,8 @@ export async function POST(req: NextRequest) {
         database: body?.database || srcProps.database || '',
         connectionId: body?.connectionId || undefined,
         tables: Array.isArray(body?.tables) ? body.tables : [],
+        // Snowflake-only: also mirror Snowflake-managed Iceberg tables.
+        includeIcebergTables: !!body?.includeIcebergTables,
         mirroringStatus: 'NotStarted',
       },
       createdBy: s.claims.upn || s.claims.email || s.claims.oid,

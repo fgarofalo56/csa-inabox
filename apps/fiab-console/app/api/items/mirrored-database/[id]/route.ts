@@ -65,7 +65,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       definition: liveDefinition,
       status: { mirroringStatus: st.mirroringStatus || 'NotStarted', error: st.lastRun?.error },
       // Source config so the editor can pre-fill the Edit form + Test connection.
-      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [] },
+      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [], includeIcebergTables: !!st.includeIcebergTables },
       lastRun: st.lastRun || null,
       tables,
     });
@@ -123,6 +123,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       database: body?.database ?? state.database,
       connectionId: body?.connectionId !== undefined ? body.connectionId : state.connectionId,
       tables,
+      includeIcebergTables: body?.includeIcebergTables !== undefined ? !!body.includeIcebergTables : state.includeIcebergTables,
     };
     const next: WorkspaceItem = {
       ...existing,
@@ -135,7 +136,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     return NextResponse.json({
       ok: true,
       mirroredDatabase: { id: next.id, displayName: next.displayName, description: next.description },
-      source: { sourceType: nextState.sourceType, server: nextState.server, database: nextState.database, connectionId: nextState.connectionId, tables: nextState.tables },
+      source: { sourceType: nextState.sourceType, server: nextState.server, database: nextState.database, connectionId: nextState.connectionId, tables: nextState.tables, includeIcebergTables: !!nextState.includeIcebergTables },
     });
   } catch (e: any) {
     if (e?.code === 404) return err('mirrored database not found', 404);

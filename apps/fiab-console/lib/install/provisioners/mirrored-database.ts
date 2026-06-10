@@ -271,6 +271,7 @@ function buildMirroringDefinition(content: any, connectionId: string): { parts: 
     const { schema, table } = splitTable(t);
     return { source: { typeProperties: { schemaName: schema, tableName: table } } };
   });
+  const isSnowflake = fabricSourceType(src.kind) === 'Snowflake';
   const mirroring = {
     properties: {
       source: {
@@ -278,6 +279,8 @@ function buildMirroringDefinition(content: any, connectionId: string): { parts: 
         typeProperties: {
           connection: connectionId,
           ...(src.database && fabricSourceType(src.kind) !== 'AzureSqlDatabase' ? { database: src.database } : {}),
+          // Snowflake-only (Fabric Build 2026): include Snowflake-managed Iceberg tables.
+          ...(isSnowflake && src.includeIcebergTables ? { includeIcebergTables: true } : {}),
         },
       },
       target: { type: 'MountedRelationalDatabase', typeProperties: { defaultSchema: 'dbo', format: 'Delta' } },
