@@ -21,6 +21,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 
 | Fabric capability | Loom coverage | Backend (real REST) |
 | --- | --- | --- |
+| **Discovered Azure sources** — every real Event Hubs namespace / Event Hub entity / IoT Hub / ADX cluster across subscriptions (Azure-native, no Fabric) | ✅ built — "Discovered Azure sources" table on the live page; per-row **Subscribe** (pre-fills the Connect-source dialog with the source) + **Create activator** (real activator item) | `GET /api/rti-hub` (Azure Resource Graph + ARM) → `LoomDataTable`; Subscribe → `POST /api/realtime-hub/connect-source`; Create activator → `POST /api/items/activator`. Honest `MessageBar` infra-gate naming `LOOM_SUBSCRIPTION_ID` when discovery isn't configured. |
 | **All data streams** — tenant-wide list of every eventstream output (stream) + KQL table (table) you can access | ✅ built — streams table aggregated across **all** Fabric workspaces | `GET /workspaces` → per-ws `GET /workspaces/{ws}/eventstreams` + `GET /workspaces/{ws}/kqlDatabases` (404 → `eventhouses` fallback) via `/api/realtime-hub/streams` |
 | Columns: Data, Source item, Workspace, (Item owner, Endorsement, Sensitivity) | ✅ built — Data / Type / Source item / Workspace columns | same route (owner/endorsement/sensitivity not in the slim list payload — see Gaps) |
 | Filters: Data type (stream/table), Workspace, search | ✅ built — type Dropdown + workspace Dropdown + free-text search | client-side over the real list |
