@@ -350,21 +350,32 @@ export function OneLakeCatalogPane() {
                 </Caption1>
               ) : (
                 <Tree aria-label="Workspaces tree">
-                  {workspaces.map((w) => (
-                    <TreeItem
-                      key={w.id}
-                      itemType="leaf"
-                      value={w.id}
-                      onClick={() => setSelectedWs(w.id === selectedWs ? null : w.id)}
-                    >
-                      <TreeItemLayout
-                        iconBefore={<Database20Regular style={{ color: w.id === selectedWs ? ACCENT.blue : tokens.colorNeutralForeground3 }} />}
-                        className={w.id === selectedWs ? s.treeItemSelected : undefined}
+                  {workspaces.map((w) => {
+                    const isSel = w.id === selectedWs;
+                    const toggle = () => setSelectedWs(isSel ? null : w.id);
+                    return (
+                      <TreeItem
+                        key={w.id}
+                        itemType="leaf"
+                        value={w.id}
+                        aria-selected={isSel}
+                        onClick={toggle}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggle();
+                          }
+                        }}
                       >
-                        {w.name}
-                      </TreeItemLayout>
-                    </TreeItem>
-                  ))}
+                        <TreeItemLayout
+                          iconBefore={<Database20Regular style={{ color: isSel ? ACCENT.blue : tokens.colorNeutralForeground3 }} />}
+                          className={isSel ? s.treeItemSelected : undefined}
+                        >
+                          {w.name}
+                        </TreeItemLayout>
+                      </TreeItem>
+                    );
+                  })}
                 </Tree>
               )}
               {selectedWs && (
@@ -417,13 +428,17 @@ export function OneLakeCatalogPane() {
               </Toolbar>
 
               {selectedWs && (
-                <Badge
-                  appearance="tint" color="brand"
-                  style={{ marginBottom: tokens.spacingVerticalM, cursor: 'pointer' }}
-                  onClick={() => setSelectedWs(null)}
-                >
-                  Workspace: {selectedWsName} ✕
-                </Badge>
+                <div style={{ marginBottom: tokens.spacingVerticalM }}>
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<DismissCircle16Regular />}
+                    iconPosition="after"
+                    onClick={() => setSelectedWs(null)}
+                  >
+                    Workspace: {selectedWsName}
+                  </Button>
+                </div>
               )}
 
               {view === 'list' ? (
