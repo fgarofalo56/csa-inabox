@@ -139,6 +139,25 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
   },
+  // Search & vector section header: icon baseline-aligned with the title + count.
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalM,
+    marginBottom: tokens.spacingVerticalXS,
+    color: tokens.colorNeutralForeground1,
+  },
+  // Executed DDL echoed back in a success bar — monospace, wraps, doesn't overflow.
+  sqlEcho: {
+    display: 'block',
+    marginTop: tokens.spacingVerticalXXS,
+    fontFamily: 'Consolas, "Cascadia Code", monospace',
+    fontSize: '12px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    color: tokens.colorNeutralForeground2,
+  },
 });
 
 interface QueryResponse {
@@ -704,7 +723,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setVecOk(`Vector index created. Executed: ${j.sql}`);
+      setVecOk(j.sql || 'Vector index created.');
       setVecName('');
       await load();
     } catch (e: any) { setVecError(e?.message || String(e)); }
@@ -729,7 +748,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setCatOk(`Full-text catalog created. Executed: ${j.sql}`);
+      setCatOk(j.sql || 'Full-text catalog created.');
       setCatName('');
       await load();
     } catch (e: any) { setCatError(e?.message || String(e)); }
@@ -776,7 +795,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setFtsOk(`Full-text index created. Executed: ${j.sql}`);
+      setFtsOk(j.sql || 'Full-text index created.');
       setFtsCols([]); setFtsKeyIndex('');
       await load();
     } catch (e: any) { setFtsError(e?.message || String(e)); }
@@ -825,7 +844,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       )}
 
       {/* Vector indexes */}
-      <Subtitle2 style={{ marginTop: 8 }}><BrainCircuit20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Vector indexes ({inv?.vectorIndexes.length ?? 0})</Subtitle2>
+      <div className={s.sectionHead}><BrainCircuit20Regular /><Subtitle2>Vector indexes ({inv?.vectorIndexes.length ?? 0})</Subtitle2></div>
       <div className={s.tableWrap}>
         <Table aria-label="Vector indexes" size="small">
           <TableHeader><TableRow>
@@ -850,7 +869,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       </div>
 
       {/* FTS catalogs */}
-      <Subtitle2 style={{ marginTop: 12 }}><Search20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Full-text catalogs ({inv?.fullTextCatalogs.length ?? 0})</Subtitle2>
+      <div className={s.sectionHead}><Search20Regular /><Subtitle2>Full-text catalogs ({inv?.fullTextCatalogs.length ?? 0})</Subtitle2></div>
       <div className={s.tableWrap}>
         <Table aria-label="Full-text catalogs" size="small">
           <TableHeader><TableRow>
@@ -872,7 +891,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
       </div>
 
       {/* FTS indexes */}
-      <Subtitle2 style={{ marginTop: 12 }}><TextField20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Full-text indexes ({inv?.fullTextIndexes.length ?? 0})</Subtitle2>
+      <div className={s.sectionHead}><TextField20Regular /><Subtitle2>Full-text indexes ({inv?.fullTextIndexes.length ?? 0})</Subtitle2></div>
       <div className={s.tableWrap}>
         <Table aria-label="Full-text indexes" size="small">
           <TableHeader><TableRow>
@@ -928,7 +947,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
                 </Dropdown>
               </Field>
               {vecError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{vecError}</MessageBarBody></MessageBar>}
-              {vecOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{vecOk}</MessageBarBody></MessageBar>}
+              {vecOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Vector index created</MessageBarTitle><code className={s.sqlEcho}>{vecOk}</code></MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setVecOpen(false)} disabled={vecBusy}>Close</Button>
@@ -958,7 +977,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
                 </Dropdown>
               </Field>
               {catError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{catError}</MessageBarBody></MessageBar>}
-              {catOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{catOk}</MessageBarBody></MessageBar>}
+              {catOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Full-text catalog created</MessageBarTitle><code className={s.sqlEcho}>{catOk}</code></MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCatOpen(false)} disabled={catBusy}>Close</Button>
@@ -1019,7 +1038,7 @@ function SearchVectorTab({ id, server, database }: { id: string; server: string;
                 </Dropdown>
               </Field>
               {ftsError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{ftsError}</MessageBarBody></MessageBar>}
-              {ftsOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Created</MessageBarTitle>{ftsOk}</MessageBarBody></MessageBar>}
+              {ftsOk && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Full-text index created</MessageBarTitle><code className={s.sqlEcho}>{ftsOk}</code></MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setFtsOpen(false)} disabled={ftsBusy}>Close</Button>
