@@ -157,3 +157,98 @@ export async function updateSearchService(opts: {
   }
   return shape(await r.json());
 }
+
+// ---------------------------------------------------------------------------
+// Debug sessions  (Microsoft.Search/searchServices/{name}/debugSessions)
+//
+// A debug session is an ARM child resource that captures a single-document
+// enrichment trace so an indexer + skillset pipeline can be inspected. Session
+// state is persisted to a blob container (ms-az-cognitive-search-debugsession)
+// on a storage account — the search service's system-assigned managed identity
+// needs Storage Blob Data Contributor on that account (granted in ai-search.bicep).
+//
+// The portal renders a proprietary visual skill graph over the stored state;
+// Loom manages the session lifecycle (create / list / delete) + last execution
+// status (data-plane GET /indexers/{name}/status) and deep-links to the portal
+// to view the trace graph. Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/search/cognitive-search-debug-session
+//   https://learn.microsoft.com/azure/search/cognitive-search-how-to-debug-skillset
+// ---------------------------------------------------------------------------
+
+export interface DebugSession {
+  name: string;
+  indexerName?: string;
+  status?: string;
+  provisioningState?: string;
+  lastExecutionTime?: string;
+}
+
+function shapeDebugSession(raw: any): DebugSession {
+  const p = raw?.properties || {};
+  return {
+    name: raw?.name,
+    indexerName: p.indexerName,
+    status: p.status,
+    provisioningState: p.provisioningState,
+    lastExecutionTime: p.lastExecutionTime,
+  };
+}
+
+/** GET …/debugSessions — list debug sessions on the search service. */
+export async function listDebugSessions(cfg?: SearchServiceConfig): Promise<DebugSession[]> {
+  const c = cfg || readSearchConfig();
+  const r = await callArm(`${serviceUrl(c)}/debugSessions?api-version=${SEARCH_API}`);
+  if (r.status === 404) return [];
+  if (!r.ok) throw new SearchArmError(r.status, await r.text(), `listDebugSessions failed ${r.status}`);
+  const j = await r.json().catch(() => ({}));
+  return (j?.value || []).map(shapeDebugSession);
+}
+
+/**
+ * PUT …/debugSessions/{name} — create-or-update a debug session.
+ * `indexerName` selects the indexer pipeline to trace; `storageConnectionString`
+ * is the account that holds the session state container. In a PE-locked
+ * deployment the session also needs `"executionEnvironment":"private"` on the
+ * indexer and a shared private link from the search service to storage.
+ */
+export async function createDebugSession(
+  opts: { sessionName: string; indexerName: string; storageConnectionString: string },
+  cfg?: SearchServiceConfig,
+): Promise<DebugSession> {
+  const c = cfg || readSearchConfig();
+  if (!opts?.sessionName) throw new SearchArmError(400, opts, 'createDebugSession requires sessionName');
+  if (!opts?.indexerName) throw new SearchArmError(400, opts, 'createDebugSession requires indexerName');
+  if (!opts?.storageConnectionString) throw new SearchArmError(400, opts, 'createDebugSession requires storageConnectionString');
+  const body = {
+    properties: {
+      indexerName: opts.indexerName,
+      storageAccountConnectionString: opts.storageConnectionString,
+    },
+  };
+  const r = await callArm(
+    `${serviceUrl(c)}/debugSessions/${encodeURIComponent(opts.sessionName)}?api-version=${SEARCH_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 201 && r.status !== 202) {
+    throw new SearchArmError(r.status, await r.text(), `createDebugSession failed ${r.status}`);
+  }
+  const j = await r.json().catch(() => ({ name: opts.sessionName, properties: { indexerName: opts.indexerName, provisioningState: 'Creating' } }));
+  return shapeDebugSession(j);
+}
+
+/** DELETE …/debugSessions/{name}. */
+export async function deleteDebugSession(sessionName: string, cfg?: SearchServiceConfig): Promise<void> {
+  const c = cfg || readSearchConfig();
+  const r = await callArm(
+    `${serviceUrl(c)}/debugSessions/${encodeURIComponent(sessionName)}?api-version=${SEARCH_API}`,
+    { method: 'DELETE' },
+  );
+  if (r.status === 404 || r.status === 204 || r.ok) return;
+  throw new SearchArmError(r.status, await r.text(), `deleteDebugSession failed ${r.status}`);
+}
+
+/** A portal deep-link to the debug-sessions blade for the configured service. */
+export function debugSessionsPortalUrl(cfg?: SearchServiceConfig): string {
+  const c = cfg || readSearchConfig();
+  return `https://portal.azure.com/#resource/subscriptions/${c.subscriptionId}/resourceGroups/${c.resourceGroup}/providers/Microsoft.Search/searchServices/${c.serviceName}/debugSessions`;
+}

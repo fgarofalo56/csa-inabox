@@ -20,10 +20,12 @@
  *   - Synonym maps  → /api/ai-search/synonymmaps   (list / create / delete)
  *   - Aliases       → /api/ai-search/aliases       (list / create / delete)
  *
- * Things the portal exposes but we don't yet author here (semantic
- * configuration designer, vector-profile authoring, debug sessions, the visual
- * Import-data wizard) render as honest ⚠️ "coming" rows naming what's missing —
- * never a fake list. No mocks.
+ * Debug sessions (ARM management-plane) are wired here too: list / create /
+ * delete + a portal deep-link to the visual skill-graph trace (portal-only
+ * rendering). The semantic-configuration + vector-profile designers live in the
+ * index Schema tab (foundry-sub-editors). The one remaining portal flow not yet
+ * authored — the coordinated Import-data wizard — renders as an honest ⚠️
+ * "coming" row naming what's missing. No mocks.
  *
  * The service is the env-pinned default. When unconfigured the routes 503 and
  * the whole tree shows a single honest infra-gate MessageBar.
@@ -43,6 +45,7 @@ import {
   Search20Regular, Warning20Regular, Play16Regular, ArrowCounterclockwise16Regular,
   DocumentBulletList20Regular, DataUsage20Regular, Database20Regular,
   BrainCircuit20Regular, TextBulletListSquare20Regular, BranchFork20Regular,
+  Bug20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -62,6 +65,7 @@ const R = {
   skillsets: '/api/ai-search/skillsets',
   synonymmaps: '/api/ai-search/synonymmaps',
   aliases: '/api/ai-search/aliases',
+  debugSessions: '/api/ai-search/debug-sessions',
 };
 
 async function readJson(res: Response): Promise<any> {
@@ -75,8 +79,9 @@ interface DataSourceRow { name: string; type?: string; container?: string }
 interface SkillsetRow { name: string; skillCount: number }
 interface SynonymMapRow { name: string; ruleCount: number; format?: string }
 interface AliasRow { name: string; indexes: string[] }
+interface DebugSessionRow { name: string; indexerName?: string; status?: string; provisioningState?: string }
 
-type CreateGroup = 'index' | 'indexer' | 'datasource' | 'skillset' | 'synonymmap' | 'alias';
+type CreateGroup = 'index' | 'indexer' | 'datasource' | 'skillset' | 'synonymmap' | 'alias' | 'debugsession';
 
 function statusColor(status?: string) {
   if (status === 'success') return 'success' as const;
@@ -115,6 +120,13 @@ export function AiSearchServiceTree({
   const [synonymMaps, setSynonymMaps] = useState<SynonymMapRow[]>([]);
   const [aliases, setAliases] = useState<AliasRow[]>([]);
 
+  // Debug sessions (ARM management-plane). Gated separately: they need the ARM
+  // env (LOOM_AI_SEARCH_SUB/RG/SERVICE), distinct from the data-plane gate.
+  const [debugSessions, setDebugSessions] = useState<DebugSessionRow[]>([]);
+  const [debugGate, setDebugGate] = useState<{ missing: string[]; storageConfigured?: boolean } | null>(null);
+  const [debugPortalUrl, setDebugPortalUrl] = useState<string | null>(null);
+  const [debugStorageConn, setDebugStorageConn] = useState('');
+
   // Per-indexer last status (lazy, on demand).
   const [indexerStatus, setIndexerStatus] = useState<Record<string, string>>({});
 
@@ -138,6 +150,8 @@ export function AiSearchServiceTree({
   const [cSynonyms, setCSynonyms] = useState('');
   // alias
   const [cAliasIndex, setCAliasIndex] = useState('');
+  // debug session
+  const [cDebugIndexer, setCDebugIndexer] = useState('');
 
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) { setGate({ missing: body.missing }); return true; }
@@ -163,10 +177,32 @@ export function AiSearchServiceTree({
       if (sk.ok) setSkillsets(sk.skillsets || []);
       if (sm.ok) setSynonymMaps(sm.synonymMaps || []);
       if (al.ok) setAliases(al.aliases || []);
+      // Debug sessions live on the ARM plane — load separately so their own
+      // (ARM) gate doesn't block the data-plane tree.
+      await loadDebugSessions();
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadDebugSessions = useCallback(async () => {
+    try {
+      const res = await fetch(R.debugSessions);
+      const body = await readJson(res);
+      if (body?.code === 'not_configured') {
+        setDebugGate({ missing: body.missing || [] });
+        setDebugSessions([]); setDebugPortalUrl(null);
+        return;
+      }
+      setDebugGate(null);
+      setDebugSessions(body.ok ? (body.sessions || []) : []);
+      setDebugPortalUrl(body.portalUrl || null);
+      setDebugGate(body.ok ? { missing: [], storageConfigured: !!body.storageConfigured } : null);
+    } catch {
+      // Surface as an empty list with no gate; the main error bar covers hard failures.
+      setDebugSessions([]);
     }
   }, []);
 
@@ -179,7 +215,7 @@ export function AiSearchServiceTree({
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCDataSource(''); setCTargetIndex(''); setCSkillset('');
     setCDsType('azureblob'); setCDsConn(''); setCDsContainer(''); setCDsQuery('');
-    setCSkillsetJson(''); setCSynonyms(''); setCAliasIndex('');
+    setCSkillsetJson(''); setCSynonyms(''); setCAliasIndex(''); setCDebugIndexer('');
   }, []);
 
   const submitCreate = useCallback(async () => {
@@ -207,19 +243,35 @@ export function AiSearchServiceTree({
       } else if (createGroup === 'alias') {
         if (!cName.trim() || !cAliasIndex) { setCreateError('Name and target index are required.'); setBusy(false); return; }
         route = R.aliases; payload = { name: cName.trim(), index: cAliasIndex };
+      } else if (createGroup === 'debugsession') {
+        if (!cName.trim() || !cDebugIndexer) { setCreateError('Session name and indexer are required.'); setBusy(false); return; }
+        route = R.debugSessions;
+        payload = { name: cName.trim(), indexerName: cDebugIndexer, ...(debugStorageConn.trim() ? { storageConnStr: debugStorageConn.trim() } : {}) };
       }
       const res = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const body = await readJson(res);
-      if (applyGate(body)) { setBusy(false); return; }
+      // Debug sessions gate on ARM env, not the data-plane gate — surface as inline error.
+      if (createGroup !== 'debugsession' && applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setCreateError(body.error || 'create failed'); setBusy(false); return; }
       setCreateGroup(null);
-      await loadAll();
+      if (createGroup === 'debugsession') { await loadDebugSessions(); } else { await loadAll(); }
     } catch (e: any) {
       setCreateError(e?.message || String(e));
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetJson, cSynonyms, cAliasIndex, loadAll]);
+  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetJson, cSynonyms, cAliasIndex, cDebugIndexer, debugStorageConn, loadAll, loadDebugSessions]);
+
+  const delDebugSession = useCallback(async (name: string) => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`${R.debugSessions}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const body = await readJson(res);
+      if (!body.ok) { setError(body.error || 'delete failed'); setBusy(false); return; }
+      await loadDebugSessions();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [loadDebugSessions]);
 
   const del = useCallback(async (route: string, name: string) => {
     setBusy(true); setError(null);
@@ -263,6 +315,8 @@ export function AiSearchServiceTree({
   const indexNames = useMemo(() => indexes.map((i) => i.name), [indexes]);
   const dataSourceNames = useMemo(() => dataSources.map((d) => d.name), [dataSources]);
   const skillsetNames = useMemo(() => skillsets.map((sk) => sk.name), [skillsets]);
+  const indexerNames = useMemo(() => indexers.map((ix) => ix.name), [indexers]);
+  const fDebugSessions = useMemo(() => debugSessions.filter((x) => match(x.name)), [debugSessions, f]);
 
   // ---------------------------------------------------------------
   // Render helpers
@@ -321,6 +375,7 @@ export function AiSearchServiceTree({
                 <MenuItem icon={<BrainCircuit20Regular />} onClick={() => openCreate('skillset')}>Skillset</MenuItem>
                 <MenuItem icon={<TextBulletListSquare20Regular />} onClick={() => openCreate('synonymmap')}>Synonym map</MenuItem>
                 <MenuItem icon={<BranchFork20Regular />} onClick={() => openCreate('alias')}>Alias</MenuItem>
+                <MenuItem icon={<Bug20Regular />} onClick={() => openCreate('debugsession')} disabled={!!debugGate?.missing?.length}>Debug session</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -481,15 +536,60 @@ export function AiSearchServiceTree({
             </Tree>
           </TreeItem>
 
-          {/* Honest gate rows — the portal exposes these designers; not yet authored in Loom. */}
+          {/* Debug sessions (ARM management-plane). Create/list/delete + portal
+              deep-link to the visual skill-graph trace (portal-only rendering). */}
+          <TreeItem itemType="branch" value="g-debug-sessions">
+            {groupHeader('Debug sessions', <Bug20Regular />, debugSessions.length, (!debugGate?.missing?.length ? () => openCreate('debugsession') : undefined), 'New debug session')}
+            <Tree>
+              {debugGate?.missing?.length ? (
+                <TreeItem itemType="leaf" value="dbg-gate">
+                  <Tooltip content={`Set ${debugGate.missing.join(', ')} on the Console Container App to enable debug sessions (ARM management plane). Bicep: platform/fiab/bicep/modules/admin-plane/ai-search.bicep`} relationship="description">
+                    <TreeItemLayout iconBefore={<Warning20Regular />}>
+                      <span style={{ color: tokens.colorNeutralForeground3 }}>ARM not configured — set {debugGate.missing.join(', ')}</span>{' '}
+                      <Badge size="small" appearance="tint" color="warning">config</Badge>
+                    </TreeItemLayout>
+                  </Tooltip>
+                </TreeItem>
+              ) : (
+                <>
+                  {fDebugSessions.length === 0 && <TreeItem itemType="leaf" value="dbg-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No debug sessions'}</Caption1></TreeItemLayout></TreeItem>}
+                  {fDebugSessions.map((dbg) => (
+                    <TreeItem key={dbg.name} itemType="leaf" value={`dbg-${dbg.name}`}>
+                      <TreeItemLayout iconBefore={<Bug20Regular />}>
+                        <span className={s.leafRow}>
+                          <span>{dbg.name}</span>
+                          <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                            {dbg.indexerName && <Caption1>↳ {dbg.indexerName}</Caption1>}
+                            {(dbg.status || dbg.provisioningState) && <Badge size="small" appearance="filled" color={statusColor(dbg.status)}>{dbg.status || dbg.provisioningState}</Badge>}
+                            {debugPortalUrl && <Tooltip content="Open session trace in portal (visual skill graph is portal-only)" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => window.open(`${debugPortalUrl}/${encodeURIComponent(dbg.name)}`, '_blank', 'noopener')} aria-label={`Open ${dbg.name} in portal`} /></Tooltip>}
+                            <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => delDebugSession(dbg.name)} aria-label={`Delete ${dbg.name}`} /></Tooltip>
+                          </span>
+                        </span>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                  {debugPortalUrl && (
+                    <TreeItem itemType="leaf" value="dbg-portal">
+                      <TreeItemLayout iconBefore={<Open16Regular />}>
+                        <span role="button" tabIndex={0} style={{ cursor: 'pointer', color: tokens.colorBrandForeground1 }}
+                          onClick={() => window.open(debugPortalUrl, '_blank', 'noopener')}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.open(debugPortalUrl, '_blank', 'noopener'); } }}>
+                          Open debug-sessions blade in portal
+                        </span>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                </>
+              )}
+            </Tree>
+          </TreeItem>
+
+          {/* Honest gate row — the one remaining portal flow not yet authored in Loom. */}
           <TreeItem itemType="branch" value="g-not-wired">
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Semantic configuration designer', 'Authored inside an index definition (semantic.configurations[]). Editable today via the index Schema JSON; a dedicated visual designer is not built yet.'],
-                ['Vector profile authoring', 'Vector search profiles/algorithms (HNSW/exhaustiveKnn) live in the index definition (vectorSearch). Editable via Schema JSON; a guided vector wizard is not built yet.'],
-                ['Debug sessions', '/searchServices/debugSessions — visual skillset enrichment debugger; not wired yet.'],
-                ['Import data wizard', 'Portal "Import data" / "Import and vectorize data" wizard that creates datasource+skillset+index+indexer in one flow; build the pieces individually above for now.'],
+                ['Import data wizard', 'Portal "Import data" / "Import and vectorize data" wizard that creates datasource+skillset+index+indexer in one coordinated flow. Create the pieces individually using ＋ New for each object type above; the coordinated wizard is not yet built.'],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
                   <Tooltip content={why} relationship="description">
@@ -515,6 +615,7 @@ export function AiSearchServiceTree({
                 : createGroup === 'datasource' ? 'data source'
                 : createGroup === 'skillset' ? 'skillset'
                 : createGroup === 'synonymmap' ? 'synonym map'
+                : createGroup === 'debugsession' ? 'debug session'
                 : 'alias'}
             </DialogTitle>
             <DialogContent>
@@ -629,6 +730,32 @@ export function AiSearchServiceTree({
                     An alias maps a stable name to exactly one index (<code>PUT /aliases/{'{name}'}</code>), so you can
                     re-point queries to a rebuilt index with zero client changes.
                   </Caption1>
+                </>
+              )}
+
+              {createGroup === 'debugsession' && (
+                <>
+                  <Field label="Indexer to trace" required style={{ marginTop: 8 }}>
+                    <Dropdown value={cDebugIndexer} selectedOptions={cDebugIndexer ? [cDebugIndexer] : []} placeholder={indexerNames.length ? 'Select an indexer' : 'No indexers — create one first'} onOptionSelect={(_, d) => setCDebugIndexer(d.optionValue || '')}>
+                      {indexerNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Storage connection string (session state)" style={{ marginTop: 8 }}>
+                    <Input value={debugStorageConn} onChange={(_, d) => setDebugStorageConn(d.value)} placeholder="DefaultEndpointsProtocol=… (or leave blank to use LOOM_AI_SEARCH_DEBUG_STORAGE_CONN)" />
+                  </Field>
+                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                    A debug session captures a single-document enrichment trace for the chosen indexer + skillset, written to
+                    the <code>ms-az-cognitive-search-debugsession</code> container on the storage account. The search service&apos;s
+                    managed identity needs <strong>Storage Blob Data Contributor</strong> on that account
+                    (bicep: <code>ai-search.bicep debugSessionStorageId</code>). In a private-endpoint-locked deployment the session
+                    also requires a shared private link from the search service to storage and <code>executionEnvironment:&quot;private&quot;</code>
+                    on the indexer. The visual skill-graph trace is rendered in the Azure portal — open the session there to inspect it.
+                  </Caption1>
+                  {debugGate && !debugGate.storageConfigured && !debugStorageConn.trim() && (
+                    <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>
+                      No <code>LOOM_AI_SEARCH_DEBUG_STORAGE_CONN</code> is set — supply a storage connection string above, or set the env var on the Console Container App.
+                    </MessageBarBody></MessageBar>
+                  )}
                 </>
               )}
 

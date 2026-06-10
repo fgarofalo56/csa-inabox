@@ -278,3 +278,238 @@ export function facetableFieldNames(index: any): string[] {
     .map((f: any) => f?.name)
     .filter((n: any): n is string => typeof n === 'string' && !!n);
 }
+
+// ----------------------------------------------------------------------------
+// Indexer schedule designer
+//
+// An indexer schedule is `{ interval, startTime }` on the indexer definition
+// (PUT /indexers/{name}). `interval` is an XSD dayTimeDuration subset:
+// `P[nD][T[nH][nM]]` — minimum 5 minutes (PT5M), maximum 24 hours (P1D / PT24H).
+// Removing a schedule = omit it; pausing = `disabled: true` on the indexer.
+// Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/search/search-howto-schedule-indexers
+//   https://learn.microsoft.com/rest/api/searchservice/indexers/create-or-update
+// ----------------------------------------------------------------------------
+
+/** One indexer schedule (the recurrence applied to PUT /indexers/{name}). */
+export interface IndexerSchedule {
+  /** XSD dayTimeDuration, e.g. `PT2H`, `PT30M`, `P1D`. */
+  interval: string;
+  /** Optional UTC ISO-8601 datetime to anchor the first run. */
+  startTime?: string;
+}
+
+/** Schedule recurrence presets the designer offers (Custom = author the interval). */
+export const SCHEDULE_PRESETS: { label: string; interval: string }[] = [
+  { label: 'Every 5 minutes', interval: 'PT5M' },
+  { label: 'Every 15 minutes', interval: 'PT15M' },
+  { label: 'Every 30 minutes', interval: 'PT30M' },
+  { label: 'Hourly', interval: 'PT1H' },
+  { label: 'Every 2 hours', interval: 'PT2H' },
+  { label: 'Every 6 hours', interval: 'PT6H' },
+  { label: 'Every 12 hours', interval: 'PT12H' },
+  { label: 'Daily', interval: 'P1D' },
+  { label: 'Custom', interval: '' },
+];
+
+/**
+ * Validate an indexer schedule interval against the Azure AI Search rules:
+ * the XSD dayTimeDuration subset `P[nD][T[nH][nM]]`, minimum 5 minutes,
+ * maximum 24 hours. Returns null when valid, or a human-readable error.
+ * Pure + exported for unit testing.
+ */
+export function validateScheduleInterval(interval: string): string | null {
+  const v = (interval || '').trim().toUpperCase();
+  if (!v) return 'Interval is required (e.g. PT2H, PT30M, P1D).';
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(v);
+  if (!m || (!m[1] && !m[2] && !m[3])) {
+    return 'Interval must be an ISO-8601 duration like PT5M, PT2H, or P1D.';
+  }
+  const days = m[1] ? parseInt(m[1], 10) : 0;
+  const hours = m[2] ? parseInt(m[2], 10) : 0;
+  const minutes = m[3] ? parseInt(m[3], 10) : 0;
+  const totalMinutes = days * 24 * 60 + hours * 60 + minutes;
+  if (totalMinutes < 5) return 'Minimum schedule interval is 5 minutes (PT5M).';
+  if (totalMinutes > 24 * 60) return 'Maximum schedule interval is 24 hours (P1D / PT24H).';
+  return null;
+}
+
+/** Human-readable label for an interval (maps known presets, else echoes the interval). */
+export function describeScheduleInterval(interval?: string): string {
+  if (!interval) return '—';
+  const preset = SCHEDULE_PRESETS.find((p) => p.interval && p.interval === interval.trim().toUpperCase());
+  return preset ? preset.label : interval;
+}
+
+// ----------------------------------------------------------------------------
+// Semantic configuration designer
+//
+// Lives inside the index definition at `index.semantic.configurations[]`. A
+// configuration prioritizes a title field, content fields, and keyword fields
+// for semantic ranking. The service must have `semanticSearch` set to
+// `free`/`standard` (the Loom service is `standard`). Saved via PUT /indexes.
+// Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/search/semantic-how-to-configure
+// ----------------------------------------------------------------------------
+
+/** A single prioritized field reference inside a semantic configuration. */
+export interface SemanticFieldRef { fieldName: string; }
+
+/** One semantic configuration (index.semantic.configurations[]). */
+export interface SemanticConfig {
+  name: string;
+  prioritizedFields: {
+    titleField?: SemanticFieldRef;
+    prioritizedContentFields?: SemanticFieldRef[];
+    prioritizedKeywordsFields?: SemanticFieldRef[];
+  };
+}
+
+/** Build the `index.semantic` section from a designer's configs. */
+export function buildSemanticSection(configs: SemanticConfig[]): any {
+  return {
+    configurations: (configs || []).map((c) => {
+      const pf: any = {};
+      if (c.prioritizedFields?.titleField?.fieldName) {
+        pf.titleField = { fieldName: c.prioritizedFields.titleField.fieldName };
+      }
+      const content = (c.prioritizedFields?.prioritizedContentFields || [])
+        .filter((f) => f?.fieldName)
+        .map((f) => ({ fieldName: f.fieldName }));
+      if (content.length) pf.prioritizedContentFields = content;
+      const keywords = (c.prioritizedFields?.prioritizedKeywordsFields || [])
+        .filter((f) => f?.fieldName)
+        .map((f) => ({ fieldName: f.fieldName }));
+      if (keywords.length) pf.prioritizedKeywordsFields = keywords;
+      return { name: c.name, prioritizedFields: pf };
+    }),
+  };
+}
+
+/** Parse the `index.semantic.configurations[]` into editable designer configs. */
+export function parseSemanticSection(index: any): SemanticConfig[] {
+  const cfgs = index?.semantic?.configurations;
+  if (!Array.isArray(cfgs)) return [];
+  return cfgs.map((c: any) => ({
+    name: c?.name ?? '',
+    prioritizedFields: {
+      titleField: c?.prioritizedFields?.titleField?.fieldName
+        ? { fieldName: c.prioritizedFields.titleField.fieldName }
+        : undefined,
+      prioritizedContentFields: Array.isArray(c?.prioritizedFields?.prioritizedContentFields)
+        ? c.prioritizedFields.prioritizedContentFields
+            .filter((f: any) => f?.fieldName)
+            .map((f: any) => ({ fieldName: f.fieldName }))
+        : [],
+      prioritizedKeywordsFields: Array.isArray(c?.prioritizedFields?.prioritizedKeywordsFields)
+        ? c.prioritizedFields.prioritizedKeywordsFields
+            .filter((f: any) => f?.fieldName)
+            .map((f: any) => ({ fieldName: f.fieldName }))
+        : [],
+    },
+  }));
+}
+
+/** Searchable string fields are the only valid semantic-config targets. */
+export function semanticEligibleFieldNames(index: any): string[] {
+  const fields = index?.fields;
+  if (!Array.isArray(fields)) return [];
+  return fields
+    .filter((f: any) => f?.searchable && /Edm\.String/.test(f?.type || '') && !isVectorFieldType(f?.type || ''))
+    .map((f: any) => f?.name)
+    .filter((n: any): n is string => typeof n === 'string' && !!n);
+}
+
+// ----------------------------------------------------------------------------
+// Vector search designer
+//
+// Lives inside `index.vectorSearch.algorithms[]` + `index.vectorSearch.profiles[]`.
+// An algorithm is `hnsw` (graph) or `exhaustiveKnn` (brute force); a profile
+// binds a name to an algorithm (and optionally a vectorizer). Saved via PUT
+// /indexes. Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/search/vector-search-how-to-create-index
+//   https://learn.microsoft.com/azure/search/vector-search-ranking
+// ----------------------------------------------------------------------------
+
+export type VectorMetric = 'cosine' | 'dotProduct' | 'euclidean' | 'hamming';
+export const VECTOR_METRICS: VectorMetric[] = ['cosine', 'dotProduct', 'euclidean', 'hamming'];
+
+/** One vector-search algorithm configuration. */
+export interface VectorAlgorithm {
+  name: string;
+  kind: 'hnsw' | 'exhaustiveKnn';
+  hnswParameters?: { m?: number; efConstruction?: number; efSearch?: number; metric?: VectorMetric };
+  exhaustiveKnnParameters?: { metric?: VectorMetric };
+}
+
+/** One vector-search profile (binds a profile name to an algorithm). */
+export interface VectorProfile { name: string; algorithm: string; vectorizer?: string; }
+
+/** Default HNSW parameters (the Azure defaults: m=4, efConstruction=400, efSearch=500, cosine). */
+export function defaultHnswParameters(): NonNullable<VectorAlgorithm['hnswParameters']> {
+  return { m: 4, efConstruction: 400, efSearch: 500, metric: 'cosine' };
+}
+
+/** Build the `index.vectorSearch` section from a designer's algorithms + profiles. */
+export function buildVectorSearchSection(algorithms: VectorAlgorithm[], profiles: VectorProfile[]): any {
+  const algos = (algorithms || []).map((a) => {
+    const out: any = { name: a.name, kind: a.kind };
+    if (a.kind === 'hnsw') {
+      const p = a.hnswParameters || defaultHnswParameters();
+      out.hnswParameters = {
+        m: typeof p.m === 'number' ? p.m : 4,
+        efConstruction: typeof p.efConstruction === 'number' ? p.efConstruction : 400,
+        efSearch: typeof p.efSearch === 'number' ? p.efSearch : 500,
+        metric: p.metric || 'cosine',
+      };
+    } else {
+      const p = a.exhaustiveKnnParameters || {};
+      out.exhaustiveKnnParameters = { metric: p.metric || 'cosine' };
+    }
+    return out;
+  });
+  const profs = (profiles || [])
+    .filter((p) => p?.name && p?.algorithm)
+    .map((p) => {
+      const out: any = { name: p.name, algorithm: p.algorithm };
+      if (p.vectorizer) out.vectorizer = p.vectorizer;
+      return out;
+    });
+  return { algorithms: algos, profiles: profs };
+}
+
+/** Parse `index.vectorSearch` into editable algorithms + profiles. */
+export function parseVectorSearchSection(index: any): { algorithms: VectorAlgorithm[]; profiles: VectorProfile[] } {
+  const vs = index?.vectorSearch || {};
+  const algorithms: VectorAlgorithm[] = Array.isArray(vs.algorithms)
+    ? vs.algorithms.map((a: any) => {
+        const kind: VectorAlgorithm['kind'] = a?.kind === 'exhaustiveKnn' ? 'exhaustiveKnn' : 'hnsw';
+        if (kind === 'hnsw') {
+          const p = a?.hnswParameters || {};
+          return {
+            name: a?.name ?? '',
+            kind,
+            hnswParameters: {
+              m: typeof p.m === 'number' ? p.m : 4,
+              efConstruction: typeof p.efConstruction === 'number' ? p.efConstruction : 400,
+              efSearch: typeof p.efSearch === 'number' ? p.efSearch : 500,
+              metric: (p.metric as VectorMetric) || 'cosine',
+            },
+          };
+        }
+        const p = a?.exhaustiveKnnParameters || {};
+        return { name: a?.name ?? '', kind, exhaustiveKnnParameters: { metric: (p.metric as VectorMetric) || 'cosine' } };
+      })
+    : [];
+  const profiles: VectorProfile[] = Array.isArray(vs.profiles)
+    ? vs.profiles.map((p: any) => ({ name: p?.name ?? '', algorithm: p?.algorithm ?? '', vectorizer: p?.vectorizer }))
+    : [];
+  return { algorithms, profiles };
+}
+
+/** True when an index has at least one vector field (the gate for the vector designer). */
+export function indexHasVectorField(index: any): boolean {
+  const fields = index?.fields;
+  if (!Array.isArray(fields)) return false;
+  return fields.some((f: any) => isVectorFieldType(f?.type || ''));
+}

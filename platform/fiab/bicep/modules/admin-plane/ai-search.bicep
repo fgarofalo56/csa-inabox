@@ -65,6 +65,14 @@ param consolePrincipalId string = ''
 @description('Location of the deployment script (kept distinct so the script can run in a region with ACI quota).')
 param scriptLocation string = location
 
+@description('''Resource ID of the storage account that holds debug-session
+state (container ms-az-cognitive-search-debugsession). When set, the search
+service's system-assigned managed identity is granted Storage Blob Data
+Contributor on it, which is required for indexer/skillset debug sessions to
+persist their enrichment trace. Leave empty to skip (debug sessions then require
+the operator to grant this role + supply a connection string manually).''')
+param debugSessionStorageId string = ''
+
 var searchName = take('search-loom-${uniqueString(resourceGroup().id)}', 60)
 
 resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
@@ -118,6 +126,27 @@ resource consoleIndexDataRole 'Microsoft.Authorization/roleAssignments@2022-04-0
       'Microsoft.Authorization/roleDefinitions',
       '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
     principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Storage account that holds debug-session state (referenced when provided).
+// `last(split(id,'/'))` is the account name; the role assignment is scoped to it.
+resource debugStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(debugSessionStorageId)) {
+  name: last(split(debugSessionStorageId, '/'))
+}
+
+// Storage Blob Data Contributor → search service system-assigned MSI.
+// Required for debug sessions to write the enrichment trace to the
+// ms-az-cognitive-search-debugsession container. Role id ba92f5b4-2d11-453d-a403-e96b0029c9fe.
+resource debugSessionStorageRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(debugSessionStorageId)) {
+  scope: debugStorage
+  name: guid(search.id, debugSessionStorageId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    principalId: search.identity.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -233,3 +262,6 @@ Write-Output "loom-governance-items index ensured"
 output searchId string = search.id
 output searchName string = search.name
 output searchEndpoint string = 'https://${search.name}.search.windows.net'
+// System-assigned MSI principal ID — grant Storage Blob Data Contributor on the
+// debug-session storage account (done above when debugSessionStorageId is set).
+output searchPrincipalId string = search.identity.principalId
