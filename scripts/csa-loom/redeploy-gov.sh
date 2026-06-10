@@ -156,9 +156,17 @@ fi
 # Phase 4 — smoke test against the live Gov endpoints.
 # ---------------------------------------------------------------------------
 echo -e "${BLUE}[4/4] Smoke test${NC}"
-if [[ -z "$CONSOLE_URL" ]]; then
-  echo -e "${YELLOW}No consoleUrl output — apps did not deploy on this compute path.${NC}"
-  echo -e "${YELLOW}See docs/fiab/runbooks/il5-gcch-fullstack-verification.md (AKS app-deployment gap).${NC}"
+# On the AKS compute path main.bicep emits a non-resolvable placeholder
+# (https://loom-console.<loc>.csa-loom.internal) rather than an empty string,
+# because there is no in-repo AKS workload deployment for the Loom apps (see
+# runbook gap #2). Treat both an empty value AND the .internal sentinel as "no
+# reachable app endpoint" and exit cleanly instead of curling an unresolvable
+# host (which would surface as spurious Test 1-8 failures, curl exit 6/000).
+if [[ -z "$CONSOLE_URL" || "$CONSOLE_URL" == *.csa-loom.internal ]]; then
+  echo -e "${YELLOW}No reachable Console endpoint (consoleUrl='${CONSOLE_URL:-empty}').${NC}"
+  echo -e "${YELLOW}On the AKS compute path the Loom apps have no in-repo workload deployment,${NC}"
+  echo -e "${YELLOW}so the platform deploys but no app host is exposed.${NC}"
+  echo -e "${YELLOW}See docs/fiab/runbooks/il5-gcch-fullstack-verification.md (gap #2).${NC}"
   exit 2
 fi
 CONSOLE_URL="$CONSOLE_URL" BOUNDARY="$BOUNDARY_LABEL" MAF_ENDPOINT="$MAF_ENDPOINT" \

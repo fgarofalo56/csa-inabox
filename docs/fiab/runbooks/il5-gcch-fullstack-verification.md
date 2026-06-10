@@ -18,7 +18,7 @@ ARM-emission tests) and runs in CI on every PR.
 |-------|----------------------|-------------------|
 | Template compiles | `main.bicep` + both gov `.bicepparam` build clean | `az bicep build` / `az deployment sub what-if` (CI + this runbook) |
 | MAF tier wiring | `loom-copilot-maf` emits Gov AOAI-direct env | `test_bicep_modules.py::test_maf_bicep_wires_gov_aoai_direct` |
-| `copilotMafEnabled` threaded | flag reaches the admin-plane from the gov params | `test_bicep_modules.py::test_main_bicep_threads_copilot_maf_enabled` + `build-params` resolves `true` |
+| `copilotMafEnabled` threaded | flag reaches the admin-plane from main.bicep as a real bool param | `test_bicep_modules.py::test_main_bicep_threads_copilot_maf_enabled` (gov params set it `false` today — see gap #1) |
 | Teardown → redeploy | clean-sub idempotent redeploy | `scripts/csa-loom/redeploy-gov.sh --boundary <il5\|gcc-high>` |
 | Live full-stack | Console/MCP/orchestrator/MAF reachable on Gov hosts | `.github/scripts/fiab-smoke-test.sh` (Tests 1-8) |
 | Sovereign endpoints | every host resolves to `*.usgovcloudapi.net` / `*.azure.us` | §4 endpoint matrix |
@@ -132,37 +132,44 @@ Run after a `full` redeploy and capture each as a receipt line:
 The following are tracked, load-bearing facts discovered during verification.
 They are disclosed here per `no-vaporware.md` rather than papered over.
 
-1. **Compute-platform vs. MAF tier (resolved-as-no-op on AKS).** Both gov
-   params set `containerPlatform = 'aks'` (Container Apps was chosen against at
-   IL4+ for compliance). The Loom apps — including the MAF Container App — only
-   deploy via `app-deployments.bicep` / `maf.bicep`, which are gated on
-   `containerPlatform == 'containerApps'`. `copilotMafEnabled` is now correctly
-   threaded and set `true`, but `copilotMafActive` still requires `containerApps`,
-   so on the AKS path MAF is a deliberate no-op and the Console
-   `copilot-orchestrator.ts` falls through to Gov AOAI-direct (line ~1511:
-   `if (isGovCloud() && mafEndpoint)` → else fallback). No broken deploy, no
-   silent claim.
+1. **Compute-platform vs. MAF tier (MAF cannot run at IL4/IL5).** Both gov
+   params set `containerPlatform = 'aks'`. The Loom apps — including the MAF
+   `loom-copilot-maf` Container App — deploy only via `app-deployments.bicep` /
+   `maf.bicep`, which are gated on `containerPlatform == 'containerApps'`. Azure
+   Container Apps is **not** authorized at IL4/IL5 (gap #3), so MAF can never
+   activate on a compliant gov compute path today. `copilotMafEnabled` is
+   therefore set **`false`** on both gov params (honest, not a silent no-op):
+   the Console `copilot-orchestrator.ts` uses Gov AOAI-direct, which is the
+   real, working backend at these boundaries (line ~1511:
+   `if (isGovCloud() && mafEndpoint)` → else Gov AOAI-direct fallback). The flag
+   stays threaded through `main.bicep` (regression-tested) so the tier activates
+   automatically the moment an AKS-workload deployment for the apps exists.
 
-2. **AKS app-deployment path is not in-repo (blocks live full-stack on AKS).**
+2. **AKS app-deployment path is not in-repo (blocks live full-stack on gov).**
    There is no Helm chart / k8s manifest for the Loom *apps* on AKS (only the
    OSS-alternatives charts under `csa_platform/oss_alternatives/helm/`). With
    `containerPlatform='aks'`, `az deployment sub create` provisions the platform
-   (network, identity, storage, Cosmos, ADX, catalog, AKS cluster, …) but emits
-   no `consoleUrl`, so `fiab-smoke-test.sh` Tests 1-8 cannot pass. **A green
-   live full-stack gov run today therefore requires one of:** (a) confirm Azure
-   Container Apps is authorized in the target Gov region and flip
-   `containerPlatform='containerApps'` (then apps + MAF deploy via the existing
-   bicep, no new code), or (b) build an AKS workload deployment for the Loom
-   apps (Helm/manifest + workload-identity + ingress). This is the single
-   remaining blocker to the live acceptance receipt and is larger than the
-   wiring fixes in this change.
+   (network, identity, storage, Cosmos, ADX, catalog, AKS cluster, …) but the
+   `consoleUrl` output is only a **non-resolvable placeholder**
+   (`https://loom-console.<location>.csa-loom.internal`), not a reachable host —
+   so `fiab-smoke-test.sh` Tests 1-8 cannot pass. `redeploy-gov.sh` Phase 4
+   detects this `.internal` sentinel and exits cleanly (`exit 2`) rather than
+   curling an unresolvable host. **Because Container Apps is not IL4/IL5-
+   authorized (gap #3), the only path to a green live full-stack gov run is to
+   build an AKS workload deployment for the Loom apps** (Helm/manifest +
+   workload-identity + ingress, wiring `consoleUrl` and the MAF endpoint). This
+   is the single remaining blocker to the live acceptance receipt and is larger
+   than the wiring/honesty fixes in this change.
 
-3. **Container Apps Gov availability is unconfirmed.** Microsoft Learn does not
-   list Azure Container Apps in the IL5 GA roadmap as of this writing; the param
-   comment "Container Apps not at IL4+" reflects that. Do not flip option (a)
-   above without re-checking
+3. **Container Apps is confirmed NOT authorized at IL4/IL5.** Per the Microsoft
+   Learn [Azure Government services by audit scope](https://learn.microsoft.com/azure/azure-government/compliance/azure-services-in-fedramp-auditscope#azure-government-services-by-audit-scope)
+   table (last updated Feb 2026), **Azure Container Apps** carries **FedRAMP
+   High ✅ and DoD IL2 ✅ only** — DoD IL4, IL5, and IL6 are blank (not in audit
+   scope). The param comment "Container Apps not at IL4+" is therefore correct,
+   and flipping `containerPlatform='containerApps'` for IL5/GCC-High is a
+   compliance violation, not an option. Re-check the live
    [Products available by region](https://azure.microsoft.com/global-infrastructure/services/?products=all&regions=usgov-virginia)
-   for the exact target region + impact level.
+   only if/when the audit-scope table changes.
 
 4. **Pre-existing template syntax error fixed.** `admin-plane/main.bicep` had
    two stray closing braces after the `aas` module (lines ~1102-1103) that made
@@ -177,8 +184,8 @@ They are disclosed here per `no-vaporware.md` rather than papered over.
 Boundary:        IL5 | GCC-High
 Deploy name:     csa-loom-<boundary>-redeploy-<ts>
 provisioningState: <Succeeded>
-consoleUrl:      <https://...usgovcloudapi.net>   (or: AKS path — no app endpoint, see gap #2)
-copilotMafEndpoint: <https://...> | (inactive — Gov AOAI-direct fallback)
+consoleUrl:      <https://...usgovcloudapi.net>   (AKS path today: non-resolvable .internal placeholder — no app endpoint, see gap #2)
+copilotMafEndpoint: <https://...> | (inactive — Container Apps not IL4/IL5-authorized; Gov AOAI-direct fallback, gap #1/#3)
 Smoke result:    Passed N / Failed M   (paste fiab-smoke-test.sh summary)
 Endpoint matrix: armBase/kvSuffix/cogScope/getGraphHost = <Gov hosts, §4>
 Honest gates:    Front Door / AI Foundry / AI Search / Content Safety / Fabric-family rendered warning MessageBars

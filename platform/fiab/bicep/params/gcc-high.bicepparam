@@ -37,13 +37,20 @@ param catalogPrimary = 'purview'          // UC managed not yet in Gov
 // AI orchestration (Gov)
 param agentOrchestrator = 'maf'           // Microsoft Agent Framework + AOAI direct
 param foundryPortalEnabled = false        // Foundry portal NOT at IL4
-// MAF orchestration tier (loom-copilot-maf) — Gov AOAI-direct copilot backend.
-// GCC-High is a supported MAF boundary. The admin-plane only activates it when
-// containerPlatform==containerApps + deployAppsEnabled; on the AKS compute path
-// below it is a safe no-op and the Console copilot-orchestrator falls back to
-// Gov AOAI-direct (no broken deploy, no silent claim).
-// See docs/fiab/runbooks/il5-gcch-fullstack-verification.md.
-param copilotMafEnabled = true
+// MAF orchestration tier (loom-copilot-maf) — the Gov AOAI-direct copilot
+// backend. It deploys as an Azure Container App. Per the Microsoft Learn Azure
+// Government services-by-audit-scope table (last updated Feb 2026), Azure
+// Container Apps is authorized only at FedRAMP High / DoD IL2 — NOT at DoD IL4.
+// GCC-High maps to IL4, so it runs on the AKS compute path (containerPlatform
+// below), where the MAF Container App cannot deploy. This flag is set FALSE
+// accordingly: the Console copilot-orchestrator uses Gov AOAI-direct, which is
+// the real, working backend. Setting it true here would advertise a tier that
+// can never activate on this compute platform (a silent no-op), so it is
+// honestly false. The flag is still threaded through main.bicep
+// (test_main_bicep_threads_copilot_maf_enabled) so the tier activates
+// automatically once an AKS-workload deployment for the apps exists.
+// See docs/fiab/runbooks/il5-gcch-fullstack-verification.md (gap #2/#3).
+param copilotMafEnabled = false
 
 // Capacity sizing
 param capacitySku = 'F8'
