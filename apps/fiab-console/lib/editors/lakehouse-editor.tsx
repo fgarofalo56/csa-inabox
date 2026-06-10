@@ -41,6 +41,7 @@ import {
   Wrench20Regular,
   History20Regular,
   CloudArrowUp20Regular,
+  Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
@@ -4485,7 +4486,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     })()}
                   </Field>
                   {icebergEndpoint && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderRadius: 6, background: tokens.colorNeutralBackground3 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
                       <Caption1 style={{ fontWeight: 600 }}>Iceberg endpoint (metadata path readers point at)</Caption1>
                       {([
                         ['ADLS path (abfss)', icebergEndpoint.abfss],
@@ -4496,13 +4497,16 @@ export function LakehouseEditor({ item, id }: Props) {
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <code style={{ fontSize: 11, wordBreak: 'break-all', flex: 1 }}>{val}</code>
-                            <Button
-                              size="small"
-                              appearance="subtle"
-                              onClick={() => { try { void navigator.clipboard?.writeText(val); setActionStatus('Copied to clipboard'); } catch { /* clipboard unavailable */ } }}
-                            >
-                              Copy
-                            </Button>
+                            <Tooltip content={`Copy ${label}`} relationship="label">
+                              <Button
+                                size="small"
+                                appearance="subtle"
+                                icon={<Copy20Regular />}
+                                onClick={() => { try { void navigator.clipboard?.writeText(val); setActionStatus('Copied to clipboard'); } catch { /* clipboard unavailable */ } }}
+                              >
+                                Copy
+                              </Button>
+                            </Tooltip>
                           </div>
                         </div>
                       ))}
