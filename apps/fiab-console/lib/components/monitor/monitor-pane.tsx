@@ -119,6 +119,7 @@ const useStyles = makeStyles({
   gap: { marginBottom: '12px' },
   skelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '14px' },
   skelCard: { height: '92px', borderRadius: '10px' },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
 });
 
 function healthBadge(state: string) {
@@ -1227,7 +1228,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
     {
       key: 'actions', label: 'Actions', width: 180, sortable: false, filterable: false,
       render: (r) => (
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div className={styles.rowActions}>
           <Tooltip content="Edit rule" relationship="label">
             <Button size="small" appearance="subtle" icon={<Edit20Regular />} aria-label={`Edit ${r.name}`} onClick={() => openEdit(r)} />
           </Tooltip>

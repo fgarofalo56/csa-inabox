@@ -61,9 +61,15 @@ const DEFAULT_KQL =
   '| summarize count()';
 
 const useStyles = makeStyles({
-  editorPane: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '320px' },
+  editorPane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '320px' },
   hint: { color: tokens.colorNeutralForeground3 },
-  agRow: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  agRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, alignItems: 'flex-start' },
+  titleRow: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+  },
+  titleText: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '480px',
+  },
 });
 
 export interface MonitorAlertEditorProps {
@@ -178,8 +184,11 @@ export function MonitorAlertEditor({ open, onOpenChange, rule, onSaved }: Monito
       <DialogSurface style={{ maxWidth: '820px', width: '95vw' }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <Alert20Regular /> {isEdit ? `Edit alert rule — ${rule?.name}` : 'New alert rule'}
+            <span className={s.titleRow}>
+              <Alert20Regular />
+              <span className={s.titleText} title={isEdit ? rule?.name : undefined}>
+                {isEdit ? `Edit alert rule — ${rule?.name}` : 'New alert rule'}
+              </span>
               <Badge appearance="outline" color="brand">Azure Monitor (scheduled query rule)</Badge>
             </span>
           </DialogTitle>
@@ -258,7 +267,12 @@ export function MonitorAlertEditor({ open, onOpenChange, rule, onSaved }: Monito
                 <div className={s.agRow}>
                   <Field label="Action group" hint="Real Microsoft.Insights/actionGroups — delivers email / SMS / webhook / Logic App when the rule fires">
                     <Dropdown
-                      value={actionGroups.find((a) => a.id === actionGroupId)?.name || (actionGroupId || 'None — record to Azure Monitor only')}
+                      value={
+                        actionGroups.find((a) => a.id === actionGroupId)?.name
+                        || (actionGroupId
+                          ? (actionGroupId.split('/').pop() || actionGroupId)
+                          : 'None — record to Azure Monitor only')
+                      }
                       selectedOptions={actionGroupId ? [actionGroupId] : ['']}
                       onOptionSelect={(_, d) => setActionGroupId(d.optionValue || '')}
                     >
