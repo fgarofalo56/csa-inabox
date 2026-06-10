@@ -1425,6 +1425,16 @@ function EventhouseOverviewPanel({
 export function EventhouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
+  // Workspace item record — used by "New dashboard" to resolve workspaceId so
+  // the new kql-dashboard lands in the same workspace as this eventhouse. Reads
+  // from the React Query cache page.tsx already seeded (same ['item','eventhouse',id]
+  // key), so it does NOT fire an extra network request in normal use.
+  const { data: itemRecord } = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'eventhouse', id],
+    queryFn: () => getItem('eventhouse', id),
+    enabled: !!(id && id !== 'new'),
+    staleTime: 60_000,
+  });
   const [state, setState] = useState<EventhouseState | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -1497,6 +1507,11 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [autoscaleMax, setAutoscaleMax] = useState<number>(10);
   const [autoscaleBusy, setAutoscaleBusy] = useState(false);
   const [autoscaleResult, setAutoscaleResult] = useState<{ ok: boolean; msg: string; provisioningState?: string } | null>(null);
+  // "New dashboard" dialog state — Fabric Eventhouse ribbon parity.
+  const [newDashOpen, setNewDashOpen] = useState(false);
+  const [newDashName, setNewDashName] = useState('');
+  const [newDashBusy, setNewDashBusy] = useState(false);
+  const [newDashErr, setNewDashErr] = useState<string | null>(null);
 
   // Overview tab — live system dashboard over the ADX cluster.
   const [activeTab, setActiveTab] = useState<EhTab>('overview');
@@ -1578,6 +1593,71 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     const qs = new URLSearchParams({ eventhouseId: id, database: dbName });
     router.push(`/items/kql-database/new?${qs.toString()}`);
   }, [id, router]);
+
+  /**
+   * Create a kql-dashboard item in the same workspace as this eventhouse,
+   * seed a starter tile + a data source bound to the current (or default)
+   * KQL database, then navigate to the new dashboard. Mirrors Fabric's
+   * Eventhouse "New dashboard" ribbon action (prompt for name → create
+   * dashboard pre-wired to a KQL database data source → land on canvas).
+   *
+   * Azure-native: Cosmos item creation via POST /api/workspaces/<wsId>/items,
+   * then PUT /api/items/kql-dashboard/<id> to seed the data source + tile.
+   * Tiles execute against the shared ADX cluster. No Fabric REST involved,
+   * works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
+   */
+  const createDashboard = useCallback(async () => {
+    const wsId = itemRecord?.workspaceId;
+    const dbName = selectedDb || state?.defaultDatabase || '';
+    const displayName =
+      newDashName.trim() || `${item.displayName ?? 'Eventhouse'} — Dashboard`;
+    if (!wsId) {
+      // No workspace context yet (item not loaded). Fall back to empty new-item flow.
+      setNewDashOpen(false);
+      router.push('/items/kql-dashboard/new');
+      return;
+    }
+    setNewDashBusy(true);
+    setNewDashErr(null);
+    try {
+      // Step 1: create the Cosmos record (POST /api/workspaces/<wsId>/items).
+      const created = await createItem(wsId, { itemType: 'kql-dashboard', displayName });
+      // Step 2: seed a data source bound to the current DB + a starter tile
+      //         (PUT /api/items/kql-dashboard/<id>). The starter tile runs a
+      //         real `print` against the ADX database so the dashboard opens
+      //         non-empty and every control is immediately editable.
+      if (dbName) {
+        const dsId = crypto.randomUUID();
+        const seedRes = await fetch(`/api/items/kql-dashboard/${created.id}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            tiles: [{
+              title: 'Getting started',
+              kql: `print Note="Dashboard wired to the '${dbName}' KQL database. Edit this tile to query your tables."`,
+              viz: 'table',
+              dataSourceId: dsId,
+            }],
+            dataSources: [{ id: dsId, name: dbName, database: dbName }],
+            parameters: [],
+            baseQueries: [],
+            timeRange: 'last-24h',
+          }),
+        });
+        if (!seedRes.ok) {
+          const j = await seedRes.json().catch(() => ({}));
+          throw new Error(j?.error || `seed failed (HTTP ${seedRes.status})`);
+        }
+      }
+      // Step 3: navigate. Receipt = user lands in the live KqlDashboardEditor.
+      setNewDashOpen(false);
+      router.push(`/items/kql-dashboard/${created.id}`);
+    } catch (e: any) {
+      setNewDashErr(e?.message || String(e));
+    } finally {
+      setNewDashBusy(false);
+    }
+  }, [itemRecord, state?.defaultDatabase, selectedDb, newDashName, item.displayName, router]);
 
   // Open the focused KQL editor for a database in a NEW browser tab — mirrors
   // Fabric's per-object "Open in new tab" affordance.
@@ -2057,7 +2137,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'New KQL database', onClick: () => setDialogOpen(true) },
         { label: 'KQL database shortcut', disabled: true,
           title: 'ReadOnlyFollowing (shortcut) databases require a Fabric-managed eventhouse; the standalone ADX cluster hosts ReadWrite databases only' },
-        { label: 'New dashboard', disabled: true, title: 'KQL dashboard creation not yet wired — use the KQL Dashboard editor' },
+        { label: 'New dashboard',
+          onClick: () => { setNewDashName(''); setNewDashErr(null); setNewDashOpen(true); },
+          title: 'Create a Real-Time Dashboard pre-wired to this eventhouse’s KQL database' },
       ]},
       { label: 'Query', actions: [
         { label: 'Query with code', onClick: hasDbs && selectedDb ? () => openKqlEditor(selectedDb) : undefined,
@@ -2136,6 +2218,63 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                   <Button appearance="secondary" onClick={() => setDialogOpen(false)}>Cancel</Button>
                   <Button appearance="primary" onClick={createDb} disabled={creating || !newName.trim()}>
                     {creating ? 'Creating…' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+          <Dialog open={newDashOpen} onOpenChange={(_: unknown, d: any) => { if (!newDashBusy) setNewDashOpen(d.open); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <DataBarVertical20Regular />
+                    New Real-Time Dashboard
+                  </span>
+                </DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Creates a KQL dashboard in this workspace, pre-wired to the{' '}
+                      <strong>{selectedDb || state?.defaultDatabase || 'default'}</strong> KQL
+                      database as its data source. You can add tiles and change the data
+                      source after creation.
+                    </Caption1>
+                    <Field
+                      label="Dashboard name"
+                      hint="Leave blank to use the suggested name."
+                    >
+                      <Input
+                        autoFocus
+                        placeholder={`${item.displayName ?? 'Eventhouse'} — Dashboard`}
+                        value={newDashName}
+                        disabled={newDashBusy}
+                        onChange={(_: unknown, d: any) => setNewDashName(d.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !newDashBusy) { e.preventDefault(); void createDashboard(); }
+                        }}
+                        style={{ width: '100%' }}
+                      />
+                    </Field>
+                    {newDashErr && (
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          <MessageBarTitle>Couldn’t create dashboard</MessageBarTitle>
+                          {newDashErr}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNewDashOpen(false)} disabled={newDashBusy}>Cancel</Button>
+                  <Button
+                    appearance="primary"
+                    icon={newDashBusy ? <Spinner size="tiny" /> : <Add20Regular />}
+                    onClick={createDashboard}
+                    disabled={newDashBusy}
+                  >
+                    {newDashBusy ? 'Creating…' : 'Create dashboard'}
                   </Button>
                 </DialogActions>
               </DialogBody>

@@ -34,6 +34,7 @@ per-database **Get data**, **data policies**, and lifecycle controls.
 | 11 | Query insights | Duration percentiles, cache-hit %, top queries by CPU/memory |
 | 12 | Stop / Start cluster | Suspend / resume the compute |
 | 13 | Cluster permissions | AllDatabasesAdmin / AllDatabasesViewer role assignments |
+| 14 | New dashboard | Create a Real-Time Dashboard pre-wired to the eventhouse's default KQL database as a data source, then land on the dashboard canvas |
 
 ## Loom coverage
 
@@ -52,6 +53,7 @@ per-database **Get data**, **data policies**, and lifecycle controls.
 | 11 Query insights pane | ⚠️ tracked | follow-up — `.show queries` + `.show cache` aggregation panel; Azure-native ADX, no Fabric dependency |
 | 12 Stop / Start cluster | ⚠️ tracked | follow-up — surface the existing `kusto-arm-client.ts` cluster suspend/resume (already used by the admin-scaling surface) inside the Eventhouse editor |
 | 13 Cluster permissions (AllDatabasesAdmin/Viewer) | ⚠️ tracked | follow-up — ARM `clusterPrincipalAssignments` read/write; the bootstrap grants the Loom UAMI today (`az kusto cluster-principal-assignment create`) |
+| 14 New dashboard | ✅ built | Ribbon **Home → New → New dashboard** opens a name dialog, then creates a `kql-dashboard` Cosmos item in the same workspace (`POST /api/workspaces/[id]/items`), seeds a data source bound to the current/default KQL database + a starter tile (`PUT /api/items/kql-dashboard/[id]`), and routes to `KqlDashboardEditor`. No Fabric workspace required |
 | Cluster URI unconfigured | ✅ honest-gate | routes 503 `not_configured` → editor shows one MessageBar naming `LOOM_KUSTO_CLUSTER_URI` + the AllDatabasesAdmin role; the full editor still renders |
 
 Every inventory row is built ✅ or an honest ⚠️ gate / tracked follow-up — none unbuilt. Every executable control hits real ADX (control commands via
@@ -69,6 +71,7 @@ present — never a fake list (per `no-vaporware.md` + `ui-parity.md`).
 | Event Hub data connection | ARM `PUT .../dataConnections/{n}` (gated on `LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID`) |
 | Data policies | `POST /api/items/eventhouse/[id]/policies` → `.alter database policy caching` / `… retention` |
 | Open database editor | client `router.push(/items/kql-database/new?eventhouseId=…&database=…)` |
+| New dashboard | `POST /api/workspaces/[id]/items` (create `kql-dashboard`) + `PUT /api/items/kql-dashboard/[id]` (seed data source + starter tile) → `router.push(/items/kql-dashboard/[id])`; tiles run on the shared ADX cluster |
 
 Azure-native default: every executable control uses the ADX cluster
 (`LOOM_KUSTO_CLUSTER_URI`) + ARM (`Microsoft.Kusto`); nothing on this path calls
@@ -112,4 +115,4 @@ the sovereign default.
 - Live probe (minted-session browser walk against the ADX cluster) runs the
   same `executeMgmtCommand` / ARM path the deployed Loom uses.
 
-_Last updated: 2026-06-07._
+_Last updated: 2026-06-10 (row 14 New dashboard wired)._
