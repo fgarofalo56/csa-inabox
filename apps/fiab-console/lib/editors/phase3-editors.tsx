@@ -46,6 +46,7 @@ import {
   Sparkle16Regular, Info16Regular, Wrench16Regular,
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
   DataBarVertical20Regular,
+  DatabaseArrowUp20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
   ArrowDownload20Regular,
@@ -77,6 +78,7 @@ import type {
   RdlField, RdlDataSourceType, RdlExportFormat,
 } from '@/lib/azure/paginated-report-client';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
+import { MigrationAssistantTab } from './components/migration-assistant-tab';
 import { NewItemCreateGate } from './new-item-gate';
 import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
 import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
@@ -8749,7 +8751,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
   // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'migrate'>('query');
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -8987,6 +8989,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
           + `LEFT JOIN sys.database_principals r ON r.principal_id = m.role_principal_id\n`
           + `WHERE p.type IN ('S','U','G','X','R') ORDER BY p.type_desc, p.name;`,
         ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        // SQL DB migration assistant — DACPAC import + dedicated-pool
+        // compatibility scan (Azure-native, no Fabric). Opens the Migrate tab.
+        { label: 'Migration assistant', icon: <DatabaseArrowUp20Regular />, onClick: () => setEditorTab('migrate'), title: 'Import a SQL Server / Azure SQL .dacpac with a dedicated-pool compatibility scan' },
         // Source control lives at the workspace level in Fabric — open the
         // workspace Git settings (honest navigation, not a stub).
         { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
@@ -9201,11 +9206,17 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'migrate')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
+            <Tab value="migrate" icon={<DatabaseArrowUp20Regular />}>Migrate</Tab>
           </TabList>
+          {editorTab === 'migrate' && (
+            isNew
+              ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>The migration assistant activates once the warehouse item is saved.</MessageBarBody></MessageBar>
+              : <MigrationAssistantTab id={id} />
+          )}
           {editorTab === 'monitoring' && (
             isNew
               ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
