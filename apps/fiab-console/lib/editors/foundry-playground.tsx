@@ -723,8 +723,11 @@ const useMediaStyles = makeStyles({
   root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
   twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' },
   panel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16 },
+  // Result panel keeps a stable height so the empty / loading placeholder reads
+  // as an intentional, centered drop-zone rather than a collapsed card.
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 320 },
   resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  img: { width: '100%', borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
   empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: 24 },
 });
 
@@ -855,9 +858,9 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
             </div>
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
-          <Card className={s.panel}>
+          <Card className={s.resultPanel}>
             <Subtitle2>Result</Subtitle2>
-            {busy ? <Spinner size="small" label="Generating image…" labelPosition="after" /> : images.length === 0 ? (
+            {busy ? <div className={s.empty}><Spinner size="small" label="Generating image…" labelPosition="after" /></div> : images.length === 0 ? (
               <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: 8 }}>Generated images appear here.</Body1></div>
             ) : (
               <div className={s.resultGrid}>
@@ -959,9 +962,9 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
             <Button appearance="primary" icon={<MicRecord24Regular />} disabled={busy || !deployment || !file} onClick={transcribe}>{busy ? 'Transcribing…' : 'Transcribe'}</Button>
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
-          <Card className={s.panel}>
+          <Card className={s.resultPanel}>
             <Subtitle2>Transcript</Subtitle2>
-            {busy ? <Spinner size="small" label="Transcribing…" labelPosition="after" /> : (
+            {busy ? <div className={s.empty}><Spinner size="small" label="Transcribing…" labelPosition="after" /></div> : (
               <Textarea value={text} readOnly resize="vertical" rows={12} placeholder="The transcript appears here after you upload an audio file and click Transcribe." />
             )}
           </Card>
