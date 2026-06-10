@@ -93,6 +93,7 @@ import {
   useWarehouseCopilot,
   WarehouseCopilotActions,
   WarehouseCopilotPanels,
+  WarehouseSettingsDialog,
 } from './warehouse-editor';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
@@ -8863,6 +8864,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // backing Synapse Dedicated SQL pool — Azure-native, no Fabric dependency.
   const [secOpen, setSecOpen] = useState(false);
 
+  // Warehouse settings dialog — GPU-accelerated query acceleration toggle with
+  // an honest backend-capability gate (Synapse default = no GPU; Fabric opt-in).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // Statistics manager (CREATE / UPDATE / DROP STATISTICS) for a selected table.
   const [statsOpen, setStatsOpen] = useState(false);
   const [statsTarget, setStatsTarget] = useState<{ schema: string; table: string } | null>(null);
@@ -9008,6 +9013,12 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         // Column-level GRANT, Row-Level Security and Dynamic Data Masking over
         // the backing Synapse Dedicated SQL pool (Azure-native — no Fabric).
         { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
+      ]},
+      { label: 'Settings', actions: [
+        // Warehouse settings — GPU-accelerated query acceleration toggle. Honest
+        // gate: the Azure-native Synapse pool has no GPU; the Fabric backend is
+        // opt-in. The setting persists to Cosmos either way (real PUT).
+        { label: 'Query acceleration', onClick: () => setSettingsOpen(true), title: 'GPU-accelerated query acceleration — available on the opt-in Fabric backend' },
       ]},
     ]},
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize]);
@@ -9405,6 +9416,10 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Warehouse settings — GPU-accelerated query acceleration toggle with
+              an honest backend-capability gate (Synapse default = no GPU). */}
+          <WarehouseSettingsDialog id={id} open={settingsOpen} onOpenChange={setSettingsOpen} />
         </div>
       }
     />

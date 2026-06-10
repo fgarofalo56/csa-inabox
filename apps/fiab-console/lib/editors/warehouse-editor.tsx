@@ -27,7 +27,7 @@
  * pool. Every control is wired to a real backend call (no-vaporware.md).
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Input,
@@ -35,12 +35,23 @@ import {
   Tooltip,
   MessageBar,
   MessageBarBody,
+  MessageBarTitle,
   MessageBarActions,
   Menu,
   MenuTrigger,
   MenuPopover,
   MenuList,
   MenuItem,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Switch,
+  Badge,
+  Caption1,
+  Field,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -413,5 +424,182 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
         </MessageBar>
       )}
     </>
+  );
+}
+
+// ============================================================
+// Warehouse Settings — query acceleration (GPU) honest-gate
+// ============================================================
+
+/** Backend capability matrix shape returned by GET /settings. */
+interface WarehouseCapabilities {
+  backend: 'synapse' | 'fabric';
+  backendLabel: string;
+  engine: string;
+  queryAccelerationAvailable: boolean;
+  queryAccelerationGate?: string;
+}
+
+interface WarehouseSettingsResponse {
+  ok: boolean;
+  error?: string;
+  settings: { queryAcceleration?: boolean };
+  capabilities: WarehouseCapabilities;
+  effective: { queryAcceleration: boolean };
+}
+
+/**
+ * Warehouse Settings dialog — Fabric Warehouse "Settings" parity, focused on
+ * the GPU-accelerated **query acceleration** toggle (Fabric Build 2026 #7).
+ *
+ * Honest-gate (no-vaporware.md / no-fabric-dependency.md): the Azure-native
+ * DEFAULT backend (Synapse Dedicated SQL pool) has NO GPU, so the toggle is
+ * disabled with a precise MessageBar naming the exact env vars to set to opt
+ * into the Fabric backend. The user's intent is still PERSISTED to the item's
+ * Cosmos state via PUT /settings (saved now, effective once Fabric is bound) —
+ * a real backend call, no mock. When the Fabric backend is opted into
+ * (LOOM_WAREHOUSE_BACKEND=fabric + bound workspace) the toggle is live and
+ * applies the acceleration setting.
+ */
+export function WarehouseSettingsDialog({
+  id,
+  open,
+  onOpenChange,
+}: {
+  id: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [data, setData] = useState<WarehouseSettingsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [desired, setDesired] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/settings`);
+      const j = (await r.json()) as WarehouseSettingsResponse;
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setData(j);
+      setDesired(j.settings.queryAcceleration === true);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queryAcceleration: desired }),
+      });
+      const j = (await r.json()) as WarehouseSettingsResponse;
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setData(j);
+      onOpenChange(false);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [id, desired, onOpenChange]);
+
+  const caps = data?.capabilities;
+  const available = caps?.queryAccelerationAvailable === true;
+  const effective = data?.effective.queryAcceleration === true;
+  const isNew = id === 'new';
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: 620 }}>
+        <DialogBody>
+          <DialogTitle>Warehouse settings — query acceleration</DialogTitle>
+          <DialogContent>
+            {loading && <Spinner size="tiny" label="Loading settings…" labelPosition="after" />}
+            {caps && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Badge appearance="outline" color={caps.backend === 'fabric' ? 'brand' : 'informative'}>
+                    Backend: {caps.backendLabel}
+                  </Badge>
+                  {effective && <Badge appearance="filled" color="success">Acceleration active</Badge>}
+                </div>
+                <Caption1>{caps.engine}</Caption1>
+
+                <Field
+                  label="GPU-accelerated query acceleration"
+                  hint={
+                    available
+                      ? 'Route eligible scans through the Fabric distributed query-execution engine with GPU acceleration.'
+                      : 'Saved now; takes effect automatically once the Fabric backend is bound.'
+                  }
+                >
+                  <Switch
+                    checked={desired}
+                    disabled={isNew || saving}
+                    onChange={(_, d) => setDesired(d.checked)}
+                    label={desired ? 'On' : 'Off'}
+                  />
+                </Field>
+
+                {!available && caps.queryAccelerationGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>GPU acceleration is not available on this backend</MessageBarTitle>
+                      {caps.queryAccelerationGate}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {available && desired && (
+                  <MessageBar intent="success">
+                    <MessageBarBody>
+                      <MessageBarTitle>Fabric backend bound</MessageBarTitle>
+                      Query acceleration will be applied to eligible queries on this warehouse.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {isNew && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>Save the warehouse first to persist its settings.</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            )}
+            {error && (
+              <MessageBar intent="error" style={{ marginTop: 12 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Could not load / save settings</MessageBarTitle>
+                  {error}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button
+              appearance="primary"
+              onClick={save}
+              disabled={isNew || saving || loading || !data}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
