@@ -63,6 +63,7 @@ import {
   type SchemaGraphNode, type SchemaGraphEdge, type SchemaNodeKind,
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
+import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { PbiModelViewPanel } from './components/pbi-model-view-panel';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
@@ -509,10 +510,19 @@ function TileVisual({
       return <PieChart columns={columns} rows={rows} onValueClick={chartClick} />;
     case 'map':
       return <MapVisual columns={columns} rows={rows} />;
-    case 'bar':
-    case 'column':
     case 'line':
     case 'timechart':
+      // Rich RTI time-series visual: legend search, pin & overlay, multi-panel,
+      // Y-axis scaling, and a zoom range slider over the real ADX series. Drill-
+      // through (single-value click) is not meaningful on a multi-series line,
+      // so the timeSeries control surface is preferred when available; when
+      // drill-through is wired the simpler clickable ResultChart is kept.
+      if (!dtActive) {
+        return <TimeSeriesChart columns={columns} rows={rows} columnTypes={result.columnTypes} />;
+      }
+      return <ResultChart columns={columns} rows={rows} kind={viz} onValueClick={chartClick} />;
+    case 'bar':
+    case 'column':
       return <ResultChart columns={columns} rows={rows} kind={viz} onValueClick={chartClick} />;
     case 'table':
     default: {

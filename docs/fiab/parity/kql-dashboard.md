@@ -20,6 +20,7 @@ global **time range**, with **auto-refresh** and **save**.
 | Tile editing window | Clicking a tile's Edit opens a dedicated tile-editing panel (title, visual, source, geometry, KQL, Run) |
 | Base queries | Top-level `baseQueries[]` of shared KQL snippets referenced by tiles (queryRef); inlined at run |
 | Tile visual types | render-operator visuals: table, timechart (line), barchart, columnchart, piechart, **stat/card**, anomaly, scatter/**map**, area |
+| Time-series visual controls | The timechart/line visual exposes: **legend search** (filter the series list), **pin & overlay** (emphasise selected series while dimming the rest), **multi-panel** (split into one small-multiple panel per series), **Y-axis scaling** (linear/log + auto/manual min-max), and a **zoom range slider** (clamp the X window without re-querying) — Build 2026 #17 |
 | Resize / lay out tiles | Drag-resize on the canvas grid |
 | Data sources | Add one or more KQL DBs; tiles + params select a source |
 | Parameters — free text | Operator types a value, substituted via its variable name |
@@ -44,6 +45,7 @@ global **time range**, with **auto-refresh** and **save**.
 | Tile editing window | ✅ built | a single `Dialog` (`tileFlyoutIdx`) edits the selected tile — title, visual, data source, width/height, KQL, Run + live result preview; Apply/Delete in the footer |
 | Base queries | ✅ built | Base queries dialog manages shared KQL snippets; tiles reference them as `$baseQuery('name')`, inlined as a parenthesised sub-query by `substituteBaseQueries` before param/time substitution; persisted in the model |
 | Tile visual types (table, timechart, line, bar, column, pie, stat, map) | ✅ built | `TileVisual` + `ResultChart`/`StatCard`/`PieChart`/`MapVisual` (dependency-free SVG) |
+| Time-series controls (legend search, pin & overlay, multi-panel, Y-axis scaling, zoom slider) | ✅ built (NEW) | `TimeSeriesChart` (`lib/components/adx/time-series-chart.tsx`) over the real ADX result grid; `buildTimeSeries` (`time-series-model.ts`) shapes `summarize <agg> by bin(t,…), <series>` into typed multi-series. Routes line/timechart tiles (no drill-through) through the rich visual; drill-through tiles keep the clickable `ResultChart`. Azure-native — reads ADX rows, works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset |
 | Resize / lay out tiles | ✅ built | 12-col CSS grid; per-tile width (1–12) + height (1–8) controls; spans persist |
 | Data sources | ✅ built | Data sources dialog binds tiles/params to KQL databases; `tile.dataSourceId` → DB |
 | Parameter — free text | ✅ built | typed literal substitution (string quoted, numeric bare, datetime wrapped) |
@@ -77,6 +79,7 @@ honest infra/preview gates with the full UI still rendered (per
 | Tile → database binding | `resolveTileDatabase(tile, dataSources, fallback)` (explicit DB → bound source → dashboard default `loomdb-default`) |
 | Query-based param values | `POST /api/items/kql-dashboard/[id]/param-values` → `executeQuery` (distinct first column) |
 | Saved-dashboard view | `GET /api/items/kql-dashboard/[id]?run=1&time=…&param.<v>=…` → executes each tile inline |
+| Time-series controls | Pure client-side over the tile's real `{ columns, columnTypes, rows }` from `POST /run` — `buildTimeSeries` + the `TimeSeriesChart` controls (legend search / pin / multi-panel / Y-scale / zoom) re-shape and re-window the same ADX rows with no extra query |
 | Save model | `PUT /api/items/kql-dashboard/[id]` → `saveItemState` (Cosmos `items` state) |
 | Create on /new | `POST /api/cosmos-items/kql-dashboard` (Cosmos) via `NewItemCreateGate` |
 
@@ -101,6 +104,7 @@ honest infra/preview gates with the full UI still rendered (per
 - Backend Vitest contract tests:
   - `lib/azure/__tests__/kql-dashboard-model.test.ts` (24) — substitution, base-query inlining, literal rendering, db resolution, sanitize (incl. baseQueries).
   - `app/api/items/kql-dashboard/__tests__/routes.test.ts` (17) — auth gates, time/param/base-query substitution into executed KQL, tile→DB binding, baseQueries PUT round-trip, transient `/new` run, per-tile error isolation, query-based param values, content/structured errors.
+  - `lib/components/adx/__tests__/time-series-model.test.ts` (NEW) — datetime parsing, single/multi-series shaping, ascending-x sort, category-X fallback, series cap, multi-measure naming, legend search, zoom-window clamp, linear/log Y scaling, X-tick formatting.
 - DOM render tests (`lib/editors/__tests__/kql-dashboard.test.tsx`) cover the
   tile edit flyout + base-queries dialog; they run under jsdom once the repo-wide
   vitest setup (`@testing-library/jest-dom`) resolves in the install — the model +
