@@ -177,6 +177,45 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
     const patch = (saveItemState as any).mock.calls[0][1];
     expect(patch.tiles[0].drillthrough).toBeUndefined();
   });
+
+  // EventhouseEditor "New dashboard" ribbon (Fabric Eventhouse parity): after the
+  // dashboard Cosmos item is created, the editor seeds a data source bound to the
+  // eventhouse's current/default KQL database plus a starter tile referencing that
+  // source. This pins the exact seed payload that wiring sends.
+  it('seeds the eventhouse "New dashboard" data source + starter tile', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    (loadKustoItem as any).mockResolvedValue({ id: 'dash-1', workspaceId: 'w', itemType: 'kql-dashboard', displayName: 'D', state: {} });
+    (saveItemState as any).mockImplementation(async (_item: any, patch: any) => ({ state: patch }));
+    const dsId = 'ds-eh-1';
+    const dbName = 'telemetrydb';
+    const body = {
+      tiles: [{
+        title: 'Getting started',
+        kql: `print Note="Dashboard wired to the '${dbName}' KQL database. Edit this tile to query your tables."`,
+        viz: 'table',
+        dataSourceId: dsId,
+      }],
+      dataSources: [{ id: dsId, name: dbName, database: dbName }],
+      parameters: [],
+      baseQueries: [],
+      timeRange: 'last-24h',
+    };
+    const res = await PUT(jsonReq(body), ctx);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const patch = (saveItemState as any).mock.calls[0][1];
+    // Data source resolves to the eventhouse database.
+    expect(patch.dataSources).toHaveLength(1);
+    expect(patch.dataSources[0]).toMatchObject({ id: dsId, name: dbName, database: dbName });
+    // Starter tile is bound to that data source and survives sanitization.
+    expect(patch.tiles).toHaveLength(1);
+    expect(patch.tiles[0].dataSourceId).toBe(dsId);
+    expect(patch.tiles[0].viz).toBe('table');
+    expect(patch.tiles[0].kql).toContain(dbName);
+    expect(patch.timeRange).toBe('last-24h');
+    // Echoed back so the editor can confirm the persisted seed.
+    expect(j.dataSources[0].database).toBe(dbName);
+  });
 });
 
 describe('POST /api/items/kql-dashboard/[id]/run', () => {
