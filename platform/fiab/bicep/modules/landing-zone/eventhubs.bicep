@@ -52,6 +52,39 @@ param skipRoleGrants bool = false
 @description('Compliance tags')
 param complianceTags object
 
+// ---------------------------------------------------------------------
+// Capture configuration support (Loom console "Configure capture" panel).
+// Capture archives an event hub's stream to Blob/ADLS Gen2 as Avro. Capture is
+// configured PER HUB at runtime via the console (PUT captureDescription on the
+// event-hub ARM resource), NOT at namespace deploy time. These params only
+// pre-fill the console form and document the storage RBAC requirement.
+//
+// NOTE: For Capture WRITES to succeed, the Console UAMI (consolePrincipalId)
+// needs 'Storage Blob Data Contributor' on the target storage account. The ARM
+// PUT of captureDescription succeeds without it, but Capture archive writes
+// then 403 at runtime. Grant that role in the storage account's bicep module
+// (the capture storage account is intentionally not provisioned here so any
+// existing ADLS/Blob account can be used as the destination).
+// ---------------------------------------------------------------------
+@description('Optional storage account ARM resource ID to PRE-FILL the console Capture form (LOOM_EVENTHUB_CAPTURE_STORAGE_ID). Capture is configured per-hub at runtime; empty leaves the form blank. The Console UAMI needs Storage Blob Data Contributor on this account for Capture writes.')
+param captureStorageAccountId string = ''
+
+@description('Optional blob container / ADLS filesystem name to pre-fill the console Capture form (LOOM_EVENTHUB_CAPTURE_CONTAINER). Only meaningful when captureStorageAccountId is set.')
+param captureBlobContainerName string = 'captures'
+
+// ---------------------------------------------------------------------
+// Geo-DR pairing support (Loom console "Geo-recovery" panel). A pairing can be
+// created at deploy time here, OR at runtime via the console
+// (PUT .../disasterRecoveryConfigs/{alias}). The secondary namespace must
+// already exist in another region (Standard tier or higher). Empty params skip
+// deploy-time pairing — the console can still pair at runtime.
+// ---------------------------------------------------------------------
+@description('Secondary Event Hubs namespace ARM resource ID for deploy-time Geo-DR pairing. Empty = no pairing at deploy time (configure via the console).')
+param geoDrSecondaryNamespaceId string = ''
+
+@description('Geo-DR alias name. Only used when geoDrSecondaryNamespaceId is set.')
+param geoDrAliasName string = ''
+
 resource ns 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
   name: 'evhns-loom-${domainName}-${location}'
   location: location
@@ -144,6 +177,16 @@ resource loomSchemaGroup 'Microsoft.EventHub/namespaces/schemagroups@2024-05-01-
     schemaType: 'Avro'
     groupProperties: {}
     schemaCompatibility: schemaGroupCompatibility
+  }
+}
+
+// Deploy-time Geo-DR pairing (optional). The console can also pair/break/fail
+// over at runtime via PUT/DELETE/failover on disasterRecoveryConfigs/{alias}.
+resource geoDrConfig 'Microsoft.EventHub/namespaces/disasterRecoveryConfigs@2024-05-01-preview' = if (!empty(geoDrSecondaryNamespaceId) && !empty(geoDrAliasName)) {
+  parent: ns
+  name: geoDrAliasName
+  properties: {
+    partnerNamespace: geoDrSecondaryNamespaceId
   }
 }
 
@@ -297,3 +340,10 @@ output loomSchemaGroupName string = empty(schemaGroupName) ? '' : loomSchemaGrou
 output namespaceFqdn string = '${ns.name}.servicebus.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'usgovcloudapi.net' : 'windows.net'}'
 output telemetryHubName string = telemetryHub.name
 output telemetryConsumerGroupName string = telemetryConsumerGroup.name
+// Capture form pre-fill (consumed as LOOM_EVENTHUB_CAPTURE_STORAGE_ID /
+// LOOM_EVENTHUB_CAPTURE_CONTAINER in the console app env). Capture itself is
+// configured per-hub at runtime via the console; these only seed the form.
+output captureStorageAccountId string = captureStorageAccountId
+output captureBlobContainerName string = captureBlobContainerName
+// Deploy-time Geo-DR alias (empty when no pairing was configured at deploy).
+output geoDrAliasName string = (empty(geoDrSecondaryNamespaceId) || empty(geoDrAliasName)) ? '' : geoDrConfig.name

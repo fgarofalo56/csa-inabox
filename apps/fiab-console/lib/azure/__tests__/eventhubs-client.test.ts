@@ -23,7 +23,13 @@ vi.mock('@azure/identity', () => {
   };
 });
 
-import { createEventHubAuthRule, listEventHubKeys } from '../eventhubs-client';
+import {
+  createEventHubAuthRule, listEventHubKeys,
+  updateEventHubCapture, createDisasterRecoveryConfig,
+  deleteDisasterRecoveryConfig, initiateGeoDrFailover,
+  regenerateEventHubAuthRuleKeys, listNamespacePrivateEndpointConnections,
+  approvePrivateEndpointConnection,
+} from '../eventhubs-client';
 
 const realFetch = global.fetch;
 interface Call { url: string; init?: any }
@@ -108,5 +114,165 @@ describe('listEventHubKeys — disableLocalAuth aware', () => {
     const keys = await listEventHubKeys('orders-hub', 'loom-sender');
     expect(keys.localAuthDisabled).toBe(false);
     expect(keys.primaryConnectionString).toContain('Endpoint=sb://');
+  });
+});
+
+// ===================================================================
+// Capture / Geo-DR / SAS rotation / Private endpoints (Event Hubs feature set).
+// Asserts the EXACT ARM REST (URL + api-version + method + body) per
+// .claude/rules/no-vaporware.md. Grounding:
+//   https://learn.microsoft.com/azure/event-hubs/event-hubs-capture-overview
+//   https://learn.microsoft.com/rest/api/eventhub/disaster-recovery-configs/create-or-update
+//   https://learn.microsoft.com/rest/api/eventhub/event-hubs/regenerate-keys
+//   https://learn.microsoft.com/rest/api/eventhub/private-endpoint-connections
+// ===================================================================
+
+describe('updateEventHubCapture', () => {
+  it('PUTs captureDescription enabled=true with Avro + clamped windows + BlockBlob destination', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ name: 'orders-hub', properties: { captureDescription: { enabled: true } } }), calls);
+
+    await updateEventHubCapture('orders-hub', {
+      enabled: true,
+      storageAccountResourceId: '/subscriptions/sub-123/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct',
+      blobContainer: 'captures',
+      intervalInSeconds: 5000, // out of range -> clamps to 900
+      sizeLimitInBytes: 1, // out of range -> clamps to 10485760
+      destination: 'BlockBlob',
+    });
+
+    expect(calls).toHaveLength(1);
+    const { url, init } = calls[0];
+    expect(url).toBe(`${NS_BASE}/eventhubs/orders-hub?api-version=2024-01-01`);
+    expect(init.method).toBe('PUT');
+    const body = JSON.parse(init.body);
+    const cd = body.properties.captureDescription;
+    expect(cd.enabled).toBe(true);
+    expect(cd.encoding).toBe('Avro');
+    expect(cd.intervalInSeconds).toBe(900);
+    expect(cd.sizeLimitInBytes).toBe(10485760);
+    expect(cd.destination.name).toBe('EventHubArchive.AzureBlockBlob');
+    expect(cd.destination.properties.storageAccountResourceId).toContain('storageAccounts/acct');
+    expect(cd.destination.properties.archiveNameFormat).toContain('Namespace');
+  });
+
+  it('PUTs captureDescription enabled=false to disable capture (no destination)', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ name: 'orders-hub', properties: {} }), calls);
+
+    await updateEventHubCapture('orders-hub', { enabled: false });
+
+    const body = JSON.parse(calls[0].init.body);
+    expect(body.properties.captureDescription).toEqual({ enabled: false });
+  });
+
+  it('throws when enabling without a storage account', async () => {
+    mockFetch(() => ({}));
+    await expect(updateEventHubCapture('orders-hub', { enabled: true, blobContainer: 'c' })).rejects.toThrow(/storageAccountResourceId/);
+  });
+});
+
+describe('createDisasterRecoveryConfig', () => {
+  it('PUTs disasterRecoveryConfigs/{alias} with partnerNamespace ARM id', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ name: 'loom-alias', properties: { role: 'Primary', partnerNamespace: '/sub-2/secondary', provisioningState: 'Accepted' } }), calls);
+
+    const cfg = await createDisasterRecoveryConfig('loom-alias', '/subscriptions/sub-2/providers/Microsoft.EventHub/namespaces/secondary');
+
+    expect(calls[0].url).toBe(`${NS_BASE}/disasterRecoveryConfigs/loom-alias?api-version=2024-01-01`);
+    expect(calls[0].init.method).toBe('PUT');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ properties: { partnerNamespace: '/subscriptions/sub-2/providers/Microsoft.EventHub/namespaces/secondary' } });
+    expect(cfg.role).toBe('Primary');
+    expect(cfg.name).toBe('loom-alias');
+  });
+});
+
+describe('deleteDisasterRecoveryConfig', () => {
+  it('DELETEs the alias (accepts 200/204)', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ _status: 200, _body: {} }), calls);
+    await deleteDisasterRecoveryConfig('loom-alias');
+    expect(calls[0].url).toBe(`${NS_BASE}/disasterRecoveryConfigs/loom-alias?api-version=2024-01-01`);
+    expect(calls[0].init.method).toBe('DELETE');
+  });
+});
+
+describe('initiateGeoDrFailover', () => {
+  it('POSTs to the failover endpoint with empty body and accepts 202', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ _status: 202, _body: {} }), calls);
+    await initiateGeoDrFailover('loom-alias');
+    expect(calls[0].url).toBe(`${NS_BASE}/disasterRecoveryConfigs/loom-alias/failover?api-version=2024-01-01`);
+    expect(calls[0].init.method).toBe('POST');
+    expect(calls[0].init.body).toBe('{}');
+  });
+});
+
+describe('regenerateEventHubAuthRuleKeys', () => {
+  it('POSTs regenerateKeys with keyType and suppresses connection strings when local auth disabled', async () => {
+    const calls: Call[] = [];
+    mockFetch((url) => {
+      if (url.includes('/regenerateKeys')) {
+        return { keyName: 'loom-sender', primaryKey: 'NEWPK', primaryConnectionString: 'Endpoint=sb://x/;SharedAccessKey=NEWPK' };
+      }
+      return { properties: { disableLocalAuth: true } };
+    }, calls);
+
+    const keys = await regenerateEventHubAuthRuleKeys('orders-hub', 'loom-sender', 'PrimaryKey');
+
+    const regen = calls.find((c) => c.url.includes('/regenerateKeys'));
+    expect(regen).toBeTruthy();
+    expect(regen!.url).toBe(`${NS_BASE}/eventhubs/orders-hub/authorizationRules/loom-sender/regenerateKeys?api-version=2024-01-01`);
+    expect(regen!.init.method).toBe('POST');
+    expect(JSON.parse(regen!.init.body)).toEqual({ keyType: 'PrimaryKey' });
+    expect(keys.localAuthDisabled).toBe(true);
+    expect(keys.primaryKey).toBeUndefined();
+    expect(keys.primaryConnectionString).toBeUndefined();
+  });
+
+  it('returns the fresh key when local auth is enabled', async () => {
+    mockFetch((url) => {
+      if (url.includes('/regenerateKeys')) return { keyName: 'loom-sender', primaryKey: 'NEWPK', primaryConnectionString: 'Endpoint=sb://x/;SharedAccessKey=NEWPK' };
+      return { properties: { disableLocalAuth: false } };
+    });
+    const keys = await regenerateEventHubAuthRuleKeys('orders-hub', 'loom-sender', 'SecondaryKey');
+    expect(keys.localAuthDisabled).toBe(false);
+    expect(keys.primaryKey).toBe('NEWPK');
+  });
+});
+
+describe('private endpoint connections', () => {
+  it('lists and shapes namespace privateEndpointConnections', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ value: [{
+      name: 'pe-conn-1',
+      properties: {
+        privateEndpoint: { id: '/subscriptions/sub-123/providers/Microsoft.Network/privateEndpoints/pe-1' },
+        privateLinkServiceConnectionState: { status: 'Pending', description: 'awaiting' },
+        provisioningState: 'Succeeded',
+      },
+    }] }), calls);
+
+    const conns = await listNamespacePrivateEndpointConnections();
+
+    expect(calls[0].url).toBe(`${NS_BASE}/privateEndpointConnections?api-version=2024-01-01`);
+    expect(conns).toHaveLength(1);
+    expect(conns[0].name).toBe('pe-conn-1');
+    expect(conns[0].connectionStatus).toBe('Pending');
+    expect(conns[0].provisioningState).toBe('Succeeded');
+  });
+
+  it('PUTs Approved status when approving a connection', async () => {
+    const calls: Call[] = [];
+    mockFetch(() => ({ name: 'pe-conn-1', properties: { privateLinkServiceConnectionState: { status: 'Approved' }, provisioningState: 'Updating' } }), calls);
+
+    const conn = await approvePrivateEndpointConnection('pe-conn-1', 'ok');
+
+    expect(calls[0].url).toBe(`${NS_BASE}/privateEndpointConnections/pe-conn-1?api-version=2024-01-01`);
+    expect(calls[0].init.method).toBe('PUT');
+    const body = JSON.parse(calls[0].init.body);
+    expect(body.properties.privateLinkServiceConnectionState.status).toBe('Approved');
+    expect(body.properties.privateLinkServiceConnectionState.description).toBe('ok');
+    expect(conn.connectionStatus).toBe('Approved');
   });
 });

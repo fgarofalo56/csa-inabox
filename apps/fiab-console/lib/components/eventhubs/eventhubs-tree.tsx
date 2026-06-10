@@ -42,9 +42,11 @@ import {
   Add20Regular, ArrowSync16Regular, Delete16Regular,
   Stream20Regular, PeopleTeam20Regular, DocumentBulletList20Regular,
   Key20Regular, Globe20Regular, ShieldKeyhole20Regular,
-  Search20Regular, Warning20Regular,
+  Search20Regular,
   DataUsage20Regular, Send20Regular, Eye20Regular,
+  Archive20Regular, LinkSquare20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
+import { EventHubsNamespaceEditor } from './eventhubs-namespace-editor';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 260 },
@@ -75,6 +77,7 @@ const AUTH_ROUTE = '/api/eventhubs/authrules';
 const NET_ROUTE = '/api/eventhubs/network';
 const GEODR_ROUTE = '/api/eventhubs/geodr';
 const DATA_ROUTE = '/api/eventhubs/data-explorer';
+const PE_ROUTE = '/api/eventhubs/private-endpoints';
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -87,8 +90,17 @@ interface SgRow { name: string; schemaType?: string; schemaCompatibility?: strin
 interface AuthRow { name: string; rights: string[]; scope: string }
 interface NetSummary { defaultAction?: string; publicNetworkAccess?: string; ipRuleCount: number; vnetRuleCount: number }
 interface GeoRow { name: string; role?: string; partnerNamespace?: string; provisioningState?: string }
+interface PeRow { name: string; privateEndpointId?: string; connectionStatus: string; provisioningState?: string }
 
 type CreateGroup = 'hub' | 'cg' | 'sg';
+type EditorTab = 'capture' | 'geodr' | 'sas' | 'privateendpoints';
+
+function peStatusColor(s?: string) {
+  if (s === 'Approved') return 'success' as const;
+  if (s === 'Pending') return 'warning' as const;
+  if (s === 'Rejected' || s === 'Disconnected') return 'severe' as const;
+  return 'informative' as const;
+}
 
 function hubStatusColor(s?: string) {
   if (s === 'Active') return 'success' as const;
@@ -368,6 +380,11 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
   const [authRules, setAuthRules] = useState<AuthRow[]>([]);
   const [network, setNetwork] = useState<NetSummary | null>(null);
   const [geodr, setGeodr] = useState<GeoRow[]>([]);
+  const [peConnections, setPeConnections] = useState<PeRow[]>([]);
+
+  // Namespace editor (Capture / Geo-DR / SAS keys / Private endpoints) overlay.
+  const [editor, setEditor] = useState<{ hub: string; tab: EditorTab } | null>(null);
+  const openEditor = useCallback((hub: string, tab: EditorTab) => setEditor({ hub, tab }), []);
 
   // Consumer groups are per-hub and lazily loaded when a hub is expanded.
   const [cgByHub, setCgByHub] = useState<Record<string, CgRow[]>>({});
@@ -394,20 +411,22 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [hr, sr, ar, nr, gr] = await Promise.all([
+      const [hr, sr, ar, nr, gr, pr] = await Promise.all([
         fetch(HUBS_ROUTE).then(readJson),
         fetch(SG_ROUTE).then(readJson),
         fetch(AUTH_ROUTE).then(readJson),
         fetch(NET_ROUTE).then(readJson),
         fetch(GEODR_ROUTE).then(readJson),
+        fetch(PE_ROUTE).then(readJson),
       ]);
-      for (const b of [hr, sr, ar, nr, gr]) { if (applyGate(b)) { setLoading(false); return; } }
+      for (const b of [hr, sr, ar, nr, gr, pr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (hr.ok) setHubs(hr.hubs || []); else setError(hr.error || 'failed to list event hubs');
       if (sr.ok) setSchemaGroups(sr.schemaGroups || []);
       if (ar.ok) setAuthRules(ar.rules || []);
       if (nr.ok) setNetwork(nr.network || null);
       if (gr.ok) setGeodr(gr.configs || []);
+      if (pr.ok) setPeConnections(pr.connections || []);
       // Drop stale consumer-group caches for hubs that no longer exist.
       setCgByHub((prev) => {
         const live = new Set((hr.hubs || []).map((h: HubRow) => h.name));
@@ -618,6 +637,12 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                         <Tooltip content="Data Explorer (send / view events)" relationship="label">
                           <Button size="small" appearance="subtle" icon={<DataUsage20Regular />} onClick={() => setDataExplorerHub(h.name)} aria-label={`Data Explorer for ${h.name}`} />
                         </Tooltip>
+                        <Tooltip content="Configure capture" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Archive20Regular />} onClick={() => openEditor(h.name, 'capture')} aria-label={`Configure capture for ${h.name}`} />
+                        </Tooltip>
+                        <Tooltip content="SAS keys (reveal / rotate)" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Key20Regular />} onClick={() => openEditor(h.name, 'sas')} aria-label={`SAS keys for ${h.name}`} />
+                        </Tooltip>
                         <Tooltip content="New consumer group" relationship="label">
                           <Button size="small" appearance="subtle" icon={<Add20Regular />} disabled={busy} onClick={() => openCreate('cg', h.name)} aria-label={`New consumer group on ${h.name}`} />
                         </Tooltip>
@@ -688,9 +713,18 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
             </Tree>
           </TreeItem>
 
-          {/* Authorization rules (read-only SAS policies) */}
+          {/* Authorization rules (SAS policies) — reveal + rotate keys via the editor */}
           <TreeItem itemType="branch" value="g-auth">
-            {groupHeader('Authorization rules', <Key20Regular />, authRules.length, undefined)}
+            <TreeItemLayout iconBefore={<Key20Regular />}>
+              <span className={s.groupLayout}>
+                <span>Authorization rules ({authRules.length})</span>
+                <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+                  <Tooltip content="Manage SAS keys (reveal / rotate)" relationship="label">
+                    <Button size="small" appearance="subtle" icon={<Settings20Regular />} onClick={() => openEditor('', 'sas')} aria-label="Manage SAS keys" />
+                  </Tooltip>
+                </span>
+              </span>
+            </TreeItemLayout>
             <Tree>
               {fAuthRules.length === 0 && <TreeItem itemType="leaf" value="auth-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No namespace SAS policies'}</Caption1></TreeItemLayout></TreeItem>}
               {fAuthRules.map((a) => (
@@ -698,8 +732,11 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                   <TreeItemLayout iconBefore={<Key20Regular />}>
                     <span className={s.leafRow}>
                       <span>{a.name}</span>
-                      <span className={s.leafActions}>
+                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         {a.rights.map((r) => <Badge key={r} size="small" appearance="outline">{r}</Badge>)}
+                        <Tooltip content="Reveal / rotate keys" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Key20Regular />} onClick={() => openEditor('', 'sas')} aria-label={`Manage keys for ${a.name}`} />
+                        </Tooltip>
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -728,9 +765,9 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
             </Tree>
           </TreeItem>
 
-          {/* Geo-recovery (read-only Geo-DR configs) */}
+          {/* Geo-recovery — list + create/break/failover via the editor */}
           <TreeItem itemType="branch" value="g-geodr">
-            {groupHeader('Geo-recovery', <Globe20Regular />, geodr.length, undefined)}
+            {groupHeader('Geo-recovery', <Globe20Regular />, geodr.length, () => openEditor('', 'geodr'), 'Manage Geo-DR (pair / break / failover)')}
             <Tree>
               {fGeodr.length === 0 && <TreeItem itemType="leaf" value="geo-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Geo-DR alias'}</Caption1></TreeItemLayout></TreeItem>}
               {fGeodr.map((g) => (
@@ -749,23 +786,31 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
             </Tree>
           </TreeItem>
 
-          {/* Honest gate rows — the portal exposes these; we don't author them yet. */}
-          <TreeItem itemType="branch" value="g-not-wired">
-            <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
-            <Tree>
-              {[
-                ['Capture configuration', 'PUT …/eventhubs/{eh} captureDescription — archive to Blob/ADLS; authoring not wired yet (list shows a "capture" badge when enabled).'],
-                ['Geo-DR pairing (create/break/failover)', 'PUT/DELETE …/disasterRecoveryConfigs/{alias} + …/failover — pairing actions not wired yet (configs listed read-only above).'],
-                ['SAS key authoring & rotation', 'PUT …/authorizationRules/{rule} + POST …/regenerateKeys/listKeys — policy create + key rotation not wired yet (rules listed read-only above).'],
-                ['Private endpoints', 'Microsoft.Network/privateEndpoints + namespace privateEndpointConnections — not wired yet (firewall summary shown under Networking).'],
-              ].map(([label, why]) => (
-                <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
-                  <Tooltip content={why} relationship="description">
-                    <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">coming</Badge>
-                    </TreeItemLayout>
+          {/* Private endpoint connections — approve/reject via the editor */}
+          <TreeItem itemType="branch" value="g-pe">
+            <TreeItemLayout iconBefore={<LinkSquare20Regular />}>
+              <span className={s.groupLayout}>
+                <span>Private endpoints ({peConnections.length})</span>
+                <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+                  <Tooltip content="Manage private endpoint connections (approve / reject)" relationship="label">
+                    <Button size="small" appearance="subtle" icon={<Settings20Regular />} onClick={() => openEditor('', 'privateendpoints')} aria-label="Manage private endpoints" />
                   </Tooltip>
+                </span>
+              </span>
+            </TreeItemLayout>
+            <Tree>
+              {peConnections.length === 0 && <TreeItem itemType="leaf" value="pe-empty"><TreeItemLayout><Caption1>No private endpoint connections</Caption1></TreeItemLayout></TreeItem>}
+              {peConnections.filter((c) => match(c.name)).map((c) => (
+                <TreeItem key={c.name} itemType="leaf" value={`pe-${c.name}`}>
+                  <TreeItemLayout iconBefore={<LinkSquare20Regular />}>
+                    <span className={s.leafRow}>
+                      <span>{c.name}</span>
+                      <span className={s.leafActions}>
+                        <Badge size="small" appearance="filled" color={peStatusColor(c.connectionStatus)}>{c.connectionStatus}</Badge>
+                        {c.provisioningState && <Caption1>{c.provisioningState}</Caption1>}
+                      </span>
+                    </span>
+                  </TreeItemLayout>
                 </TreeItem>
               ))}
             </Tree>
@@ -852,6 +897,17 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
           open={dataExplorerHub !== null}
           hub={dataExplorerHub}
           onClose={() => setDataExplorerHub(null)}
+        />
+      )}
+
+      {/* Namespace editor — Capture / Geo-DR / SAS keys / Private endpoints. */}
+      {editor && (
+        <EventHubsNamespaceEditor
+          open={editor !== null}
+          hub={editor.hub}
+          initialTab={editor.tab}
+          onClose={() => setEditor(null)}
+          onSaved={loadAll}
         />
       )}
     </div>

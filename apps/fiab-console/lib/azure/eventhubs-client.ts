@@ -507,6 +507,348 @@ export async function listDisasterRecoveryConfigs(): Promise<DisasterRecoveryCon
   }));
 }
 
+function shapeDrConfig(raw: any): DisasterRecoveryConfig {
+  const p = raw?.properties || {};
+  return {
+    name: raw?.name,
+    role: p.role,
+    partnerNamespace: p.partnerNamespace,
+    provisioningState: p.provisioningState,
+  };
+}
+
+/**
+ * Create (PUT) a Geo-DR alias on the primary namespace, pairing it with a
+ * secondary namespace in another region. Only metadata replicates — event data
+ * does NOT. Clients connect to the alias FQDN. Both namespaces must be Standard
+ * tier or higher in matching/compatible tiers.
+ *
+ *   PUT .../disasterRecoveryConfigs/{alias}  body {properties:{partnerNamespace}}
+ *
+ * Docs: https://learn.microsoft.com/rest/api/eventhub/disaster-recovery-configs/create-or-update
+ */
+export async function createDisasterRecoveryConfig(
+  alias: string,
+  partnerNamespaceId: string,
+): Promise<DisasterRecoveryConfig> {
+  const cfg = readEventHubsConfig();
+  const a = (alias || '').trim();
+  const partner = (partnerNamespaceId || '').trim();
+  if (!a) throw new EventHubsArmError(400, undefined, 'alias is required');
+  if (!partner) throw new EventHubsArmError(400, undefined, 'partnerNamespaceId is required');
+  const r = await callArm(
+    `${nsUrl(cfg)}/disasterRecoveryConfigs/${encodeURIComponent(a)}?api-version=${EH_API}`,
+    { method: 'PUT', body: JSON.stringify({ properties: { partnerNamespace: partner } }) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `createDisasterRecoveryConfig failed ${r.status}`);
+  return shapeDrConfig(await r.json());
+}
+
+/**
+ * Break (DELETE) a Geo-DR pairing alias. The secondary namespace becomes
+ * independent again. Accepts 200 or 204.
+ *
+ *   DELETE .../disasterRecoveryConfigs/{alias}
+ */
+export async function deleteDisasterRecoveryConfig(alias: string): Promise<void> {
+  const cfg = readEventHubsConfig();
+  const a = (alias || '').trim();
+  if (!a) throw new EventHubsArmError(400, undefined, 'alias is required');
+  const r = await callArm(
+    `${nsUrl(cfg)}/disasterRecoveryConfigs/${encodeURIComponent(a)}?api-version=${EH_API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 204) {
+    throw new EventHubsArmError(r.status, await r.text(), `deleteDisasterRecoveryConfig failed ${r.status}`);
+  }
+}
+
+/**
+ * Initiate a Geo-DR failover (POST .../disasterRecoveryConfigs/{alias}/failover).
+ * ONE-WAY, NON-REVERSIBLE: the secondary namespace is promoted to primary, and
+ * the original primary is removed from the pairing. Re-pair afterward to restore
+ * Geo-DR protection. Must be invoked against the SECONDARY namespace's alias.
+ * Accepts 200 or 202.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/eventhub/disaster-recovery-configs/fail-over
+ */
+export async function initiateGeoDrFailover(alias: string): Promise<void> {
+  const cfg = readEventHubsConfig();
+  const a = (alias || '').trim();
+  if (!a) throw new EventHubsArmError(400, undefined, 'alias is required');
+  const r = await callArm(
+    `${nsUrl(cfg)}/disasterRecoveryConfigs/${encodeURIComponent(a)}/failover?api-version=${EH_API}`,
+    { method: 'POST', body: '{}' },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new EventHubsArmError(r.status, await r.text(), `initiateGeoDrFailover failed ${r.status}`);
+  }
+}
+
+// ============================================================
+// Capture configuration (PUT captureDescription on …/eventhubs/{eh}).
+//
+// Capture archives the event hub's stream to Blob Storage or ADLS Gen2 as Avro
+// on a size/time-window basis. Set inline on the event hub resource via the
+// standard event-hub PUT. Avro is the only ARM-supported encoding (Parquet
+// requires Stream Analytics no-code editor, out of scope here).
+//
+// Docs: https://learn.microsoft.com/azure/event-hubs/event-hubs-capture-overview
+//       https://learn.microsoft.com/rest/api/eventhub/event-hubs/create-or-update
+//
+// RBAC: the Console UAMI needs "Storage Blob Data Contributor" on the target
+// storage account for Capture WRITES to succeed (the ARM PUT itself succeeds
+// without it, but Capture then 403s at archive time). Documented in
+// eventhubs.bicep.
+// ============================================================
+export const CAPTURE_DEFAULT_ARCHIVE_NAME_FORMAT =
+  '{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}';
+
+export interface CaptureSpec {
+  enabled: boolean;
+  /** 60–900 seconds (first window edge to win triggers a capture). */
+  intervalInSeconds?: number;
+  /** 10485760 (10 MB) – 524288000 (500 MB). */
+  sizeLimitInBytes?: number;
+  /** Storage account ARM resource id (Blob or ADLS Gen2). */
+  storageAccountResourceId?: string;
+  /** Blob container (or ADLS filesystem) to archive into. */
+  blobContainer?: string;
+  /** Archive name format — must contain all 9 capture tokens. */
+  archiveNameFormat?: string;
+  /** Skip writing empty Avro files when no events arrived in the window. */
+  skipEmptyArchives?: boolean;
+  /** Destination kind. BlockBlob → Blob Storage; DataLake → ADLS Gen2. */
+  destination?: 'BlockBlob' | 'DataLake';
+}
+
+/** Read the current capture configuration off an event hub (null = disabled). */
+export async function getEventHubCapture(eventHub: string): Promise<CaptureSpec | null> {
+  const cfg = readEventHubsConfig();
+  const r = await callArm(
+    `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eventHub)}?api-version=${EH_API}`,
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `getEventHubCapture failed ${r.status}`);
+  const body: any = await r.json();
+  const cd = body?.properties?.captureDescription;
+  if (!cd) return null;
+  const destName: string = cd?.destination?.name || '';
+  const dp = cd?.destination?.properties || {};
+  return {
+    enabled: !!cd.enabled,
+    intervalInSeconds: cd.intervalInSeconds,
+    sizeLimitInBytes: cd.sizeLimitInBytes,
+    skipEmptyArchives: cd.skipEmptyArchives,
+    destination: destName.includes('AzureDataLake') ? 'DataLake' : 'BlockBlob',
+    storageAccountResourceId: dp.storageAccountResourceId,
+    blobContainer: dp.blobContainer,
+    archiveNameFormat: dp.archiveNameFormat,
+  };
+}
+
+/**
+ * Enable/disable/update Capture on an event hub by PUTing captureDescription
+ * inline on the event-hub resource. When disabling, only `{enabled:false}` is
+ * sent. When enabling, the storage account + container are required.
+ *
+ *   PUT .../eventhubs/{eh}  body {properties:{captureDescription:{…}}}
+ */
+export async function updateEventHubCapture(
+  eventHub: string,
+  spec: CaptureSpec,
+): Promise<EventHubEntity> {
+  const cfg = readEventHubsConfig();
+  const eh = (eventHub || '').trim();
+  if (!eh) throw new EventHubsArmError(400, undefined, 'eventHub is required');
+
+  let captureDescription: Record<string, unknown>;
+  if (!spec.enabled) {
+    captureDescription = { enabled: false };
+  } else {
+    const storageAccountResourceId = (spec.storageAccountResourceId || '').trim();
+    const blobContainer = (spec.blobContainer || '').trim();
+    if (!storageAccountResourceId) {
+      throw new EventHubsArmError(400, undefined, 'storageAccountResourceId is required to enable capture');
+    }
+    if (!blobContainer) {
+      throw new EventHubsArmError(400, undefined, 'blobContainer is required to enable capture');
+    }
+    const interval = Math.max(60, Math.min(900, spec.intervalInSeconds ?? 300));
+    const size = Math.max(10485760, Math.min(524288000, spec.sizeLimitInBytes ?? 314572800));
+    const destName = spec.destination === 'DataLake'
+      ? 'EventHubArchive.AzureDataLake'
+      : 'EventHubArchive.AzureBlockBlob';
+    captureDescription = {
+      enabled: true,
+      encoding: 'Avro',
+      intervalInSeconds: interval,
+      sizeLimitInBytes: size,
+      skipEmptyArchives: spec.skipEmptyArchives ?? false,
+      destination: {
+        name: destName,
+        properties: {
+          storageAccountResourceId,
+          blobContainer,
+          archiveNameFormat: (spec.archiveNameFormat || '').trim() || CAPTURE_DEFAULT_ARCHIVE_NAME_FORMAT,
+        },
+      },
+    };
+  }
+
+  const r = await callArm(
+    `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eh)}?api-version=${EH_API}`,
+    { method: 'PUT', body: JSON.stringify({ properties: { captureDescription } }) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `updateEventHubCapture failed ${r.status}`);
+  return shapeEventHub(await r.json());
+}
+
+// ============================================================
+// SAS key rotation (POST …/authorizationRules/{rule}/regenerateKeys).
+//
+// Regenerates the primary or secondary key on a SAS policy at namespace scope
+// or per-event-hub scope. The response carries the full AccessKeys object (both
+// keys + connection strings), so a follow-up listKeys is unnecessary. On a
+// disableLocalAuth: true namespace the connection strings cannot authenticate;
+// they are suppressed (same posture as listEventHubKeys) and localAuthDisabled
+// is flagged so the UI surfaces the honest Entra-only message.
+//
+// Docs: https://learn.microsoft.com/rest/api/eventhub/event-hubs/regenerate-keys
+//       https://learn.microsoft.com/rest/api/eventhub/namespaces/regenerate-keys
+// ============================================================
+export type RegenerateKeyType = 'PrimaryKey' | 'SecondaryKey';
+
+/** Regenerate a per-event-hub SAS rule's primary/secondary key. */
+export async function regenerateEventHubAuthRuleKeys(
+  eventHub: string,
+  ruleName: string,
+  keyType: RegenerateKeyType,
+): Promise<EventHubAccessKeys> {
+  const cfg = readEventHubsConfig();
+  const eh = (eventHub || '').trim();
+  const rule = (ruleName || '').trim();
+  if (!eh) throw new EventHubsArmError(400, undefined, 'eventHub is required');
+  if (!rule) throw new EventHubsArmError(400, undefined, 'ruleName is required');
+  const r = await callArm(
+    `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eh)}/authorizationRules/${encodeURIComponent(rule)}/regenerateKeys?api-version=${EH_API}`,
+    { method: 'POST', body: JSON.stringify({ keyType }) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `regenerateEventHubAuthRuleKeys failed ${r.status}`);
+  const k: any = await r.json();
+  let localAuthDisabled = true;
+  try { localAuthDisabled = (await getNamespaceProperties()).disableLocalAuth; }
+  catch { localAuthDisabled = true; }
+  return {
+    keyName: k?.keyName,
+    primaryKey: localAuthDisabled ? undefined : k?.primaryKey,
+    secondaryKey: localAuthDisabled ? undefined : k?.secondaryKey,
+    primaryConnectionString: localAuthDisabled ? undefined : k?.primaryConnectionString,
+    secondaryConnectionString: localAuthDisabled ? undefined : k?.secondaryConnectionString,
+    localAuthDisabled,
+  };
+}
+
+/** Regenerate a namespace-scope SAS rule's primary/secondary key. */
+export async function regenerateNamespaceAuthRuleKeys(
+  ruleName: string,
+  keyType: RegenerateKeyType,
+): Promise<NamespaceKeys> {
+  const cfg = readEventHubsConfig();
+  const rule = (ruleName || '').trim() || 'RootManageSharedAccessKey';
+  const r = await callArm(
+    `${nsUrl(cfg)}/authorizationRules/${encodeURIComponent(rule)}/regenerateKeys?api-version=${EH_API}`,
+    { method: 'POST', body: JSON.stringify({ keyType }) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `regenerateNamespaceAuthRuleKeys failed ${r.status}`);
+  const j: any = await r.json();
+  return {
+    primaryConnectionString: j?.primaryConnectionString ?? '',
+    secondaryConnectionString: j?.secondaryConnectionString ?? '',
+    primaryKey: j?.primaryKey ?? '',
+    secondaryKey: j?.secondaryKey ?? '',
+    keyName: j?.keyName ?? rule,
+  };
+}
+
+// ============================================================
+// Private endpoint connections on the namespace.
+//
+// Namespace-scoped approve/reject of incoming Private Link connections. The PE
+// itself is provisioned by eventhubs.bicep (groupIds: ['namespace'], DNS zone
+// privatelink.servicebus.windows.net / .usgovcloudapi.net). This surface
+// approves/rejects/removes the connections (e.g. manual or cross-tenant ones).
+//
+//   GET    .../privateEndpointConnections
+//   PUT    .../privateEndpointConnections/{name}  {properties:{privateLinkServiceConnectionState:{status,description}}}
+//   DELETE .../privateEndpointConnections/{name}
+//
+// Docs: https://learn.microsoft.com/rest/api/eventhub/private-endpoint-connections
+// ============================================================
+export interface NamespacePrivateEndpointConnection {
+  name: string;
+  privateEndpointId?: string;
+  /** Pending | Approved | Rejected | Disconnected */
+  connectionStatus: string;
+  provisioningState?: string;
+  description?: string;
+}
+
+function shapePeConnection(raw: any): NamespacePrivateEndpointConnection {
+  const p = raw?.properties || {};
+  const state = p?.privateLinkServiceConnectionState || {};
+  return {
+    name: raw?.name,
+    privateEndpointId: p?.privateEndpoint?.id,
+    connectionStatus: state?.status || 'Unknown',
+    provisioningState: p?.provisioningState,
+    description: state?.description,
+  };
+}
+
+export async function listNamespacePrivateEndpointConnections(): Promise<NamespacePrivateEndpointConnection[]> {
+  const cfg = readEventHubsConfig();
+  const raw = await armList(`${nsUrl(cfg)}/privateEndpointConnections?api-version=${EH_API}`);
+  return raw.map(shapePeConnection);
+}
+
+async function setPeConnectionState(
+  name: string,
+  status: 'Approved' | 'Rejected',
+  description?: string,
+): Promise<NamespacePrivateEndpointConnection> {
+  const cfg = readEventHubsConfig();
+  const n = (name || '').trim();
+  if (!n) throw new EventHubsArmError(400, undefined, 'name is required');
+  const body = {
+    properties: {
+      privateLinkServiceConnectionState: {
+        status,
+        description: (description || '').trim() || `${status} via Loom console`,
+      },
+    },
+  };
+  const r = await callArm(
+    `${nsUrl(cfg)}/privateEndpointConnections/${encodeURIComponent(n)}?api-version=${EH_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `setPeConnectionState(${status}) failed ${r.status}`);
+  return shapePeConnection(await r.json());
+}
+
+export async function approvePrivateEndpointConnection(
+  name: string,
+  description?: string,
+): Promise<NamespacePrivateEndpointConnection> {
+  return setPeConnectionState(name, 'Approved', description);
+}
+
+export async function rejectPrivateEndpointConnection(
+  name: string,
+  description?: string,
+): Promise<NamespacePrivateEndpointConnection> {
+  return setPeConnectionState(name, 'Rejected', description);
+}
+
 // ============================================================
 // Cross-subscription stream discovery via Azure Resource Graph (2022-10-01)
 //

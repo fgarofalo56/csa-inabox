@@ -406,6 +406,12 @@ param loomEventHubRg string = ''
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
 
+@description('Optional storage account ARM resource ID to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_STORAGE_ID). Capture is configured per-hub at runtime; empty leaves the form blank. The Console UAMI needs Storage Blob Data Contributor on this account for Capture writes.')
+param loomEventHubCaptureStorageId string = ''
+
+@description('Optional blob container / ADLS filesystem name to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_CONTAINER). Only meaningful when loomEventHubCaptureStorageId is set.')
+param loomEventHubCaptureContainer string = 'captures'
+
 @description('Event Hubs Schema Registry schema group name for server-side Avro compatibility enforcement of event-schema-set registrations. When set, the console delegates schema registration to EH Schema Registry (data-plane PUT) and the service enforces compatibility on PUT. Leave empty to use the in-process Avro validator (the Azure-native default; no Fabric, no extra infra). Live default: loom-schemas, created by modules/landing-zone/eventhubs.bicep.')
 param loomEhSchemaGroup string = ''
 
@@ -1578,6 +1584,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // Capture form pre-fill (Event Hubs navigator "Configure capture"
+            // panel). Optional — empty leaves the form blank. Capture is
+            // configured per-hub at runtime; these only seed the destination.
+            // The Console UAMI needs Storage Blob Data Contributor on the
+            // target storage account for Capture writes (documented in
+            // modules/landing-zone/eventhubs.bicep).
+            { name: 'LOOM_EVENTHUB_CAPTURE_STORAGE_ID', value: loomEventHubCaptureStorageId }
+            { name: 'LOOM_EVENTHUB_CAPTURE_CONTAINER', value: loomEventHubCaptureContainer }
             // RTI hub catalog (/rti-hub -> GET /api/rti-hub) - additional
             // subscription ids (comma-separated) to include in the Azure
             // Resource Graph stream discovery alongside LOOM_SUBSCRIPTION_ID.
