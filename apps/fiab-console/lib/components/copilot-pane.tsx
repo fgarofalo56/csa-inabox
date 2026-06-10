@@ -12,7 +12,7 @@
  * (GET /api/copilot/sessions) are all wired to real Cosmos-backed BFF routes.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Input, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
@@ -28,6 +28,8 @@ import { CopilotResult } from '@/lib/components/copilot-result';
 import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
+import { getPanePersona } from '@/lib/azure/copilot-personas';
+import { useCopilotContext } from '@/lib/copilot/use-copilot-context';
 import { CopilotDiff, type ProposedChange } from './copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
 
@@ -187,6 +189,14 @@ function parseSse(buffer: string): { events: Array<{ event: string; data: string
 
 export function CopilotPane() {
   const s = useStyles();
+  // Per-pane persona (contextSlug → PersonaEntry). The active editor pane
+  // registers its slug + payload via registerCopilotContext (use-copilot-context);
+  // the pane header reflects the persona title and every orchestrate request
+  // carries contextSlug + contextPayload so the server composes the per-pane
+  // system prompt + scopes the tool catalog.
+  const paneCtx = useCopilotContext();
+  const panePersona = useMemo(() => getPanePersona(paneCtx.slug), [paneCtx.slug]);
+  const slugRef = useRef<string>(paneCtx.slug);
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>(SEED);
   const [draft, setDraft] = useState('');
@@ -254,6 +264,18 @@ export function CopilotPane() {
     };
   }, []);
 
+  // Switching editor panes swaps the persona: reset the thread to the new
+  // persona's greeting and start a fresh session so warehouse history doesn't
+  // bleed into the notebook persona (and vice versa). Skipped mid-stream.
+  useEffect(() => {
+    if (slugRef.current === paneCtx.slug) return;
+    slugRef.current = paneCtx.slug;
+    if (busy) return;
+    sessionRef.current = null;
+    setGateError(null);
+    setMsgs([{ who: 'copilot', text: panePersona.greeting }]);
+  }, [paneCtx.slug, panePersona.greeting, busy]);
+
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs]);
@@ -276,6 +298,8 @@ export function CopilotPane() {
           sessionId: sessionRef.current ?? undefined,
           persona: personaRef.current ?? undefined,
           personaContext: personaContextRef.current ?? undefined,
+          contextSlug: paneCtx.slug,
+          contextPayload: paneCtx.payload,
         }),
       });
 
@@ -477,7 +501,7 @@ export function CopilotPane() {
       <aside className={s.panel} aria-label="Copilot">
         <div className={s.header}>
           <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-          <Subtitle2>Copilot</Subtitle2>
+          <Subtitle2>{panePersona.title}</Subtitle2>
           <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
           <Tooltip content="Chat history" relationship="label">
             <Button
@@ -614,9 +638,9 @@ export function CopilotPane() {
             value={draft}
             onChange={(_, d) => setDraft(d.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !busy) send(); }}
-            placeholder={busy ? 'Working…' : 'Ask Copilot…'}
+            placeholder={busy ? 'Working…' : `Ask ${panePersona.title}…`}
             disabled={busy}
-            aria-label="Message Copilot"
+            aria-label={`Message ${panePersona.title}`}
           />
           <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" />
         </div>
