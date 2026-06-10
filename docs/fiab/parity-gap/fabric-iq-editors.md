@@ -37,12 +37,12 @@
 | Save | Save button | SaveBar | present |
 | Kanban / Board view | Yes | absent | **MAJOR** |
 | Gantt / timeline | Pro | absent | MINOR (Pro tier) |
-| Approvals workflow | Power Automate integration | MessageBar "approval-workflow handoff to power-automate-flow … deferred" | **MAJOR** — advertised, not wired |
-| Notifications | Yes | absent | MINOR |
+| Approvals workflow | Power Automate integration | ✓ **PlanApprovalPanel** → `POST /api/items/plan/[id]/approval` → Azure-native approval Logic App (Office 365 email); decision posted back to `/approval-callback`, stamps `approvalStatus` on the plan. No Fabric / Power Automate. (audit-T13) | **B-present** ✓ |
+| Semantic model writeback (push status into semantic-model measures) | per-Plan custom | ✓ "Push plan metrics" → `POST /api/items/semantic-model/[id]/model { planMetrics }` writes `_PlanTasks` + `_PlanMetrics` (PlanDone%, PlanOverdue, ApprovalStatus) via XMLA; honest gate persists to Cosmos content when XMLA unset. On approval the callback writes back automatically. (audit-T13) | **B-present** ✓ |
+| Notifications | Yes | approval email via the Logic App (other notifications absent) | MINOR |
 | Bulk import / .mpp / Project | Yes | absent | MINOR |
-| Semantic model writeback (push status into semantic-model measures) | per-Plan custom | MessageBar "deferred" | MINOR (Pro feature) |
 
-**Grade**: **C** — progress badges ✓ is a real D→C upgrade since the parity-reality memo. Inline edit works. Cosmos save works. But no board view, no approval workflow handoff, no semantic-model writeback — so still well below B.
+**Grade**: **B** — progress badges ✓, inline edit ✓, Cosmos save ✓, **approval-workflow handoff ✓** (Azure-native approval Logic App + callback) and **semantic-model writeback ✓** (TMSL `_PlanTasks` + `_PlanMetrics` over XMLA, Cosmos-content fallback) are wired end-to-end (audit-T13). Remaining gaps to A: Kanban/board view, Gantt, bulk .mpp import.
 
 ## 3. `ontology`
 
@@ -96,6 +96,6 @@ The "Add entity / Add relationship" ribbon labels in graph-model + ontology are 
 | Editor | Grade | Reason |
 |---|---|---|
 | variable-library | **B** | 9 types ✓ + 4 value sets ✓ + per-type validation ✓ + save ✓; no Git preview, no consumer wiring |
-| plan | **C** | Progress badges ✓ + inline edit ✓; no board view, no approval workflow |
+| plan | **B** | Progress badges ✓ + inline edit ✓ + approval-workflow handoff ✓ (Azure-native Logic App + callback) + semantic-model writeback ✓ (XMLA `_PlanTasks`/`_PlanMetrics`, Cosmos fallback); remaining: board view, Gantt, .mpp import (audit-T13) |
 | ontology | **C** | Materialize fix ✓ end-to-end; `<textarea>` + regex parser (not real OWL) + dead ribbon labels |
 | graph-model | **C** | Materialize ✓; two `<textarea>` for schema, no visual diagram, no validation |

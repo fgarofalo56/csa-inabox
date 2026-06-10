@@ -1621,7 +1621,152 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
 
 // ----- Plan (Cosmos task list) -----
 interface PlanTask { title: string; owner: string; due: string; status: 'todo' | 'doing' | 'done'; dependsOn?: string }
-interface PlanState { tasks: PlanTask[]; [k: string]: unknown }
+type PlanApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
+interface PlanState {
+  tasks: PlanTask[];
+  // audit-T13 — approval workflow + semantic-model writeback link.
+  approvalStatus?: PlanApprovalStatus;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  approvalReason?: string | null;
+  approverEmail?: string;
+  linkedSemanticModelId?: string;
+  [k: string]: unknown;
+}
+
+/**
+ * audit-T13 — Plan approval handoff + semantic-model writeback panel.
+ *
+ * Routes the plan through the Azure-native approval Logic App (Office 365
+ * approval email; no Fabric / Power Automate) and, on approval, pushes the
+ * plan's task status + approval state into a linked semantic model via XMLA.
+ * Real backends only: POST /api/items/plan/[id]/approval and
+ * POST /api/items/semantic-model/[linkedId]/model { planMetrics }. Honest
+ * Fluent gates when the Logic App / XMLA endpoint isn't configured.
+ */
+function PlanApprovalPanel({
+  id, tasks, state, setState, save,
+}: {
+  id: string;
+  tasks: PlanTask[];
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+}) {
+  const status: PlanApprovalStatus = (state.approvalStatus as PlanApprovalStatus) || 'none';
+  const [approver, setApprover] = useState(state.approverEmail || '');
+  const [linkedModel, setLinkedModel] = useState(state.linkedSemanticModelId || '');
+  const [busy, setBusy] = useState<'request' | 'push' | null>(null);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
+
+  const statusColor: Record<PlanApprovalStatus, 'informative' | 'warning' | 'success' | 'danger'> = {
+    none: 'informative', pending: 'warning', approved: 'success', rejected: 'danger',
+  };
+
+  const requestApproval = useCallback(async () => {
+    if (!approver.trim()) { setMsg({ intent: 'error', text: 'Enter an approver email first.' }); return; }
+    if (!id || id === 'new') { setMsg({ intent: 'error', text: 'Save the plan before requesting approval.' }); return; }
+    setBusy('request'); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/approval`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approverEmail: approver.trim(), linkedSemanticModelId: linkedModel.trim() || undefined }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const gate = j?.gate;
+        setMsg({ intent: gate ? 'warning' : 'error', text: gate ? `${gate.reason} ${gate.remediation}` : (j?.error || `HTTP ${r.status}`) });
+        return;
+      }
+      setState((prev) => ({ ...prev, approvalStatus: 'pending', approverEmail: approver.trim(), linkedSemanticModelId: linkedModel.trim() || undefined }));
+      setMsg({ intent: 'success', text: j?.message || 'Approval email sent.' });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(null); }
+  }, [approver, linkedModel, id, setState]);
+
+  const refreshStatus = useCallback(async () => {
+    if (!id || id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/approval?action=status`);
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok) {
+        setState((prev) => ({
+          ...prev,
+          approvalStatus: j.approvalStatus, approvedBy: j.approvedBy, approvedAt: j.approvedAt, approvalReason: j.approvalReason,
+        }));
+      }
+    } catch { /* best-effort */ }
+  }, [id, setState]);
+
+  const pushMetrics = useCallback(async () => {
+    const linkId = linkedModel.trim();
+    if (!linkId) { setMsg({ intent: 'warning', text: 'Link a semantic model item id to push plan metrics into it.' }); return; }
+    setBusy('push'); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(linkId)}/model`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ planMetrics: { tasks, approvalStatus: status } }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.xmlaUnavailable) {
+        setMsg({ intent: 'warning', text: j?.detail || 'XMLA endpoint not configured; metrics saved to model content.' });
+      } else if (!r.ok || j?.ok === false) {
+        setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` });
+      } else {
+        setMsg({ intent: 'success', text: `Plan metrics pushed (${j?.backend || 'loom-native'}). ${(j?.steps || []).join(' ')}` });
+      }
+      // Persist the link on the plan so the callback writeback can find it.
+      if (linkId !== (state.linkedSemanticModelId || '')) {
+        setState((prev) => ({ ...prev, linkedSemanticModelId: linkId }));
+        await save({ ...state, linkedSemanticModelId: linkId });
+      }
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(null); }
+  }, [linkedModel, tasks, status, state, setState, save]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Subtitle2>Approval workflow</Subtitle2>
+        <Badge appearance="filled" color={statusColor[status]}>{status}</Badge>
+        {status === 'approved' && state.approvedBy && <Caption1>by {String(state.approvedBy)}{state.approvedAt ? ` · ${new Date(String(state.approvedAt)).toLocaleString()}` : ''}</Caption1>}
+        {status === 'rejected' && state.approvalReason && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{String(state.approvalReason)}</Caption1>}
+        {status === 'pending' && (
+          <Button size="small" appearance="subtle" onClick={refreshStatus}>Refresh status</Button>
+        )}
+      </div>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Routes this plan through the Azure-native approval Logic App (Office 365 approval email). On approval, plan metrics can be written into a linked semantic model via XMLA — no Microsoft Fabric / Power Automate required.
+      </Caption1>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Approver email" style={{ minWidth: 240 }}>
+          <Input type="email" value={approver} placeholder="approver@contoso.com" onChange={(_, d) => setApprover(d.value)} disabled={status === 'pending'} />
+        </Field>
+        <Button appearance="primary" onClick={requestApproval} disabled={busy !== null || status === 'pending'}>
+          {busy === 'request' ? 'Sending…' : status === 'pending' ? 'Awaiting response…' : status === 'approved' ? 'Re-request approval' : 'Request approval'}
+        </Button>
+      </div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Linked semantic model (item id)" style={{ minWidth: 280 }}
+          hint="Plan metrics (_PlanTasks + _PlanMetrics measures) are written here on approval.">
+          <Input value={linkedModel} placeholder="semantic-model item id" onChange={(_, d) => setLinkedModel(d.value)} />
+        </Field>
+        <Button onClick={pushMetrics} disabled={busy !== null}>
+          {busy === 'push' ? 'Pushing…' : 'Push plan metrics'}
+        </Button>
+      </div>
+      {msg && (
+        <MessageBar intent={msg.intent}>
+          <MessageBarBody>{msg.text}</MessageBarBody>
+        </MessageBar>
+      )}
+    </div>
+  );
+}
 
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1677,7 +1822,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
         <MessageBar intent="info">
           <MessageBarBody>
             <MessageBarTitle>Plan runtime</MessageBarTitle>
-            Plan rows save to Cosmos. v3.27: progress + status badges surface real counts; overdue tasks (due date passed and not done) get a danger badge. Approval-workflow handoff to <code>power-automate-flow</code> + semantic-model writeback are still deferred.
+            Plan rows save to Cosmos. Progress + status badges surface real counts; overdue tasks (due date passed and not done) get a danger badge. Route the plan through the approval workflow below — on approval, plan metrics write back to a linked semantic model via XMLA (Azure-native, no Fabric / Power Automate).
           </MessageBarBody>
         </MessageBar>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1719,6 +1864,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
           </TableBody>
         </Table>
         <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
+        <PlanApprovalPanel id={id} tasks={taskList} state={state} setState={setState} save={save} />
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />

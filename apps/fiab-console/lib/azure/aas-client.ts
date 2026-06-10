@@ -2592,7 +2592,11 @@ export async function evaluateDaxScalar(metric: ConnectedMetric): Promise<number
 import {
   AAS_MAX_ROWS as TILE_AAS_MAX_ROWS,
   type AasXmlaTabularResult,
-  aasXmlaGate,
+  // Aliased to avoid colliding with the local `aasXmlaGate()` (a `: never`
+  // throw-gate used by evaluateDaxScalar). This is the pure, non-throwing
+  // `{ missing, hint } | null` variant from ./aas-xmla, re-exported below as
+  // `aasDashboardTileGate` for the tile-query route's lazy fall-through.
+  aasXmlaGate as aasXmlaPureGate,
   resolveAasXmlaTarget,
   buildAasXmlaUrl as buildTileXmlaUrl,
   buildExecuteEnvelope as buildTileDaxEnvelope,
@@ -2657,7 +2661,7 @@ export async function executeDax(
 // Re-export the pure-helper gate for callers that want a non-throwing variant
 // (tile-query route's lazy fall-through). Name kept stable for compatibility
 // with the dashboard-tiles PR.
-export { aasXmlaGate as aasDashboardTileGate };
+export { aasXmlaPureGate as aasDashboardTileGate };
 
 // ---------------------------------------------------------------------------
 // Paginated-report (RDL) support: run a DAX dataset query against an Azure
@@ -2674,4 +2678,148 @@ export async function executeDaxQuery(
     ?.results?.[0]?.tables?.[0]?.rows ?? []) as Record<string, unknown>[];
   const columns = rows.length ? Object.keys(rows[0]) : [];
   return { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+}
+
+// ---------------------------------------------------------------------------
+// Plan-metrics writeback (audit-T13) — write an approved plan's task status +
+// approval state into the semantic model as a calculated `_PlanTasks` table
+// plus a `_PlanMetrics` measures table, so plan progress is queryable alongside
+// the rest of the model. Pure TMSL builders (vitest-covered) that run through
+// the existing executeTmsl()/executeAasXmla() XMLA path — NO new infrastructure
+// and NO Fabric/Power BI workspace requirement (Azure Analysis Services is a
+// standalone Azure resource; per no-fabric-dependency.md).
+//
+// Refs:
+//   DATATABLE (calculated-table literal):
+//     https://learn.microsoft.com/dax/datatable-function-dax
+//   createOrReplace (TMSL):
+//     https://learn.microsoft.com/analysis-services/tmsl/createorreplace-command-tmsl
+// ---------------------------------------------------------------------------
+
+/** One plan task as written into the model (mirrors the editor's PlanTask). */
+export interface PlanMetricTask {
+  title: string;
+  owner: string;
+  due: string;
+  status: 'todo' | 'doing' | 'done';
+}
+
+/** Approval outcome surfaced as a measure / table column on the model. */
+export type PlanApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
+/** Escape a string for a DAX double-quoted literal (double up internal quotes). */
+function daxStr(s: string): string {
+  return `"${String(s ?? '').replace(/"/g, '""')}"`;
+}
+
+/**
+ * The DAX DATATABLE(...) literal backing the `_PlanTasks` calculated table.
+ * Columns: Title (STRING), Owner (STRING), Due (STRING — kept as text so an
+ * empty due date is representable), Status (STRING). An empty task list still
+ * produces a valid (zero-row) DATATABLE so the createOrReplace never faults.
+ */
+export function buildPlanDataTableDax(tasks: PlanMetricTask[]): string {
+  const rows = (tasks || [])
+    .map((t) => `\t\t{ ${daxStr(t.title)}, ${daxStr(t.owner)}, ${daxStr(t.due)}, ${daxStr(t.status)} }`)
+    .join(',\n');
+  return (
+    'DATATABLE(\n' +
+    '\t"Title", STRING,\n' +
+    '\t"Owner", STRING,\n' +
+    '\t"Due", STRING,\n' +
+    '\t"Status", STRING,\n' +
+    `\t{\n${rows}\n\t}\n` +
+    ')'
+  );
+}
+
+/**
+ * TMSL `createOrReplace` for the `_PlanTasks` calculated table — one calculated
+ * partition whose source expression is the DATATABLE() literal above.
+ */
+export function buildPlanTasksTableTmsl(database: string, tasks: PlanMetricTask[]): string {
+  return JSON.stringify({
+    createOrReplace: {
+      object: { database, table: '_PlanTasks' },
+      table: {
+        name: '_PlanTasks',
+        columns: [
+          { name: 'Title', dataType: 'string', sourceColumn: '[Title]', summarizeBy: 'none' },
+          { name: 'Owner', dataType: 'string', sourceColumn: '[Owner]', summarizeBy: 'none' },
+          { name: 'Due', dataType: 'string', sourceColumn: '[Due]', summarizeBy: 'none' },
+          { name: 'Status', dataType: 'string', sourceColumn: '[Status]', summarizeBy: 'none' },
+        ],
+        partitions: [
+          { name: 'Partition', mode: 'import', source: { type: 'calculated', expression: buildPlanDataTableDax(tasks) } },
+        ],
+        annotations: [{ name: 'PBI_ResultType', value: 'Table' }],
+      },
+    },
+  });
+}
+
+/**
+ * TMSL `createOrReplace` for the `_PlanMetrics` measures table. It is a hidden
+ * single-row calculated table carrying an ApprovalStatus text column plus the
+ * three plan-status measures:
+ *   [PlanDone%]      DIVIDE(done rows, all rows) * 100
+ *   [PlanOverdue]    rows with a past Due and Status <> "done"
+ *   [ApprovalStatus] MAX('_PlanMetrics'[ApprovalStatusValue])
+ */
+export function buildPlanMetricsTableTmsl(database: string, approvalStatus: PlanApprovalStatus): string {
+  return JSON.stringify({
+    createOrReplace: {
+      object: { database, table: '_PlanMetrics' },
+      table: {
+        name: '_PlanMetrics',
+        isHidden: true,
+        columns: [
+          { name: 'ApprovalStatusValue', dataType: 'string', sourceColumn: '[ApprovalStatusValue]', summarizeBy: 'none', isHidden: true },
+        ],
+        partitions: [
+          {
+            name: 'Partition',
+            mode: 'import',
+            source: { type: 'calculated', expression: `{ ( ${daxStr(approvalStatus)} ) }` },
+          },
+        ],
+        measures: [
+          {
+            name: 'PlanDone%',
+            expression:
+              'DIVIDE( COUNTROWS( FILTER( \'_PlanTasks\', \'_PlanTasks\'[Status] = "done" ) ), COUNTROWS( \'_PlanTasks\' ) ) * 100',
+            formatString: '0.0',
+          },
+          {
+            name: 'PlanOverdue',
+            expression:
+              'COUNTROWS( FILTER( \'_PlanTasks\', \'_PlanTasks\'[Due] <> "" && \'_PlanTasks\'[Due] < FORMAT( TODAY(), "yyyy-mm-dd" ) && \'_PlanTasks\'[Status] <> "done" ) )',
+            formatString: '0',
+          },
+          {
+            name: 'ApprovalStatus',
+            expression: 'MAX( \'_PlanMetrics\'[ApprovalStatusValue] )',
+          },
+        ],
+        annotations: [{ name: 'PBI_ResultType', value: 'Table' }],
+      },
+    },
+  });
+}
+
+/**
+ * Both TMSL `createOrReplace` scripts (the `_PlanTasks` backing table first,
+ * then the `_PlanMetrics` measures table) for a plan writeback. Returned in
+ * dependency order so a caller can execute them sequentially against the same
+ * XMLA endpoint.
+ */
+export function buildPlanStatusMeasuresTmsl(
+  database: string,
+  tasks: PlanMetricTask[],
+  approvalStatus: PlanApprovalStatus,
+): { tasksTmsl: string; metricsTmsl: string } {
+  return {
+    tasksTmsl: buildPlanTasksTableTmsl(database, tasks),
+    metricsTmsl: buildPlanMetricsTableTmsl(database, approvalStatus),
+  };
 }
