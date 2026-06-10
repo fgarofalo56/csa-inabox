@@ -33,6 +33,7 @@ import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Input, Field, Dropdown, Option, Textarea, Text, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Checkmark16Filled } from '@fluentui/react-icons';
@@ -127,6 +128,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column', gap: '4px',
   },
   cardActive: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  cardLocked: { opacity: 0.5, cursor: 'not-allowed' },
+  cardTitleRow: { display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'space-between' },
   cardTitle: { fontWeight: 600, fontSize: '13px' },
   cardDesc: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
@@ -304,10 +307,10 @@ export function CopyJobWizard({
                 <>
                   <div className={styles.cardRow}>
                     {MODES.map((m) => (
-                      <div key={m.kind} role="button" tabIndex={0}
+                      <div key={m.kind} role="button" tabIndex={0} aria-pressed={mode === m.kind}
                         className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''}`}
                         onClick={() => setMode(m.kind)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMode(m.kind); }}>
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode(m.kind); } }}>
                         <span className={styles.cardTitle}>{m.title}</span>
                         <span className={styles.cardDesc}>{m.desc}</span>
                       </div>
@@ -316,10 +319,13 @@ export function CopyJobWizard({
                   {mode === 'Incremental' && (
                     <>
                       {!isSqlSource && (
-                        <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
-                          Incremental copy requires a SQL-family source (the watermark is read with
-                          MAX(&lt;column&gt;) against the source table). Pick a SQL source type on the Source step.
-                        </Text>
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>SQL-family source required</MessageBarTitle>
+                            Incremental copy reads the watermark with MAX(&lt;column&gt;) against the source
+                            table, so it needs a SQL source. Pick a SQL source type on the Source step.
+                          </MessageBarBody>
+                        </MessageBar>
                       )}
                       <div className={styles.grid2}>
                         <Field label="Watermark column" required
@@ -336,10 +342,13 @@ export function CopyJobWizard({
                   {mode === 'CDC' && (
                     <>
                       {!isSqlSource && (
-                        <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
-                          CDC mode reads native SQL Server change tracking and is only supported for Azure SQL,
-                          SQL Server, and SQL Managed Instance sources. Pick a SQL source type on the Source step.
-                        </Text>
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>SQL-family source required</MessageBarTitle>
+                            CDC mode reads native SQL Server change tracking and is only supported for Azure SQL,
+                            SQL Server, and SQL Managed Instance sources. Pick a SQL source type on the Source step.
+                          </MessageBarBody>
+                        </MessageBar>
                       )}
                       <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                         Each run reads net inserts, updates, and deletes from the source between the last processed
@@ -374,14 +383,18 @@ export function CopyJobWizard({
                   <div className={styles.cardRow}>
                     {WRITE_MODES.map((w) => {
                       const locked = mode === 'CDC' && w.kind !== 'Merge';
+                      const pinned = mode === 'CDC' && w.kind === 'Merge';
                       return (
                         <div key={w.kind} role="button" tabIndex={locked ? -1 : 0}
                           aria-disabled={locked || undefined}
-                          className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
-                          style={locked ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                          aria-pressed={writeMode === w.kind}
+                          className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''} ${locked ? styles.cardLocked : ''}`}
                           onClick={() => { if (!locked) setWriteMode(w.kind); }}
-                          onKeyDown={(e) => { if (!locked && (e.key === 'Enter' || e.key === ' ')) setWriteMode(w.kind); }}>
-                          <span className={styles.cardTitle}>{w.title}</span>
+                          onKeyDown={(e) => { if (!locked && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setWriteMode(w.kind); } }}>
+                          <span className={styles.cardTitleRow}>
+                            <span className={styles.cardTitle}>{w.title}</span>
+                            {pinned && <Badge appearance="tint" color="success" size="small">Required for CDC</Badge>}
+                          </span>
                           <span className={styles.cardDesc}>{w.desc}</span>
                         </div>
                       );
