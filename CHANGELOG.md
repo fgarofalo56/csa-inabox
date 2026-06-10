@@ -25,6 +25,36 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.34.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.33.0...csa-inabox-v0.34.0) (2026-06-10)
+
+
+### Features
+
+* **csa-loom:** AutoML low-code wizard over Azure ML AutoML (audit-t87) ([#1128](https://github.com/fgarofalo56/csa-inabox/issues/1128)) ([3c45fed](https://github.com/fgarofalo56/csa-inabox/commit/3c45fed5deb4eab8475c342548e448ddfe55f034))
+* **csa-loom:** BigQuery + Oracle mirror source wizard (audit-t80) ([#1109](https://github.com/fgarofalo56/csa-inabox/issues/1109)) ([aa06e66](https://github.com/fgarofalo56/csa-inabox/commit/aa06e663fbec397277d7cffff58ddc49fc4eee71))
+* **csa-loom:** bulk AI auto-description for semantic models (audit-T83) ([#1125](https://github.com/fgarofalo56/csa-inabox/issues/1125)) ([3e9812e](https://github.com/fgarofalo56/csa-inabox/commit/3e9812e0df9dddb4d54381a1c7b7df4257e3dbbf))
+* **csa-loom:** Business Events publishing surface (Activator structured signals) (audit-T72) ([#1101](https://github.com/fgarofalo56/csa-inabox/issues/1101)) ([7216cd4](https://github.com/fgarofalo56/csa-inabox/commit/7216cd4b4ae4f50a14784e0bb2c9ff034a764dfd))
+* **csa-loom:** Copilot edits semantic-model structure (NL pane + checkpoints) (audit-t82) ([#1117](https://github.com/fgarofalo56/csa-inabox/issues/1117)) ([8ea3818](https://github.com/fgarofalo56/csa-inabox/commit/8ea3818fce9599eba28788c145703dbfc472c4fc))
+* **csa-loom:** Copy job native CDC mode for SQL sources (audit-t79) ([#1108](https://github.com/fgarofalo56/csa-inabox/issues/1108)) ([3b9f23f](https://github.com/fgarofalo56/csa-inabox/commit/3b9f23f5cfc4f7e71383743872a6b4913028192e))
+* **csa-loom:** Eventstream code-first T-SQL operator tab (audit-t66) ([#1096](https://github.com/fgarofalo56/csa-inabox/issues/1096)) ([04a7946](https://github.com/fgarofalo56/csa-inabox/commit/04a7946d53e25eccb792e343c02033c9de4330ec))
+* **csa-loom:** eventstream MQTT secure mTLS source with Key Vault cert pickers ([#1123](https://github.com/fgarofalo56/csa-inabox/issues/1123)) ([a8053b1](https://github.com/fgarofalo56/csa-inabox/commit/a8053b1344ed5aedd50f72ae9b23a91d023edcef))
+* **csa-loom:** Eventstream ribbon Add-alert creates linked Activator (audit-t67) ([#1092](https://github.com/fgarofalo56/csa-inabox/issues/1092)) ([9ec45f8](https://github.com/fgarofalo56/csa-inabox/commit/9ec45f87c57054a14f875490ee3d7787c5192864))
+* **csa-loom:** lakehouse "Expose as Iceberg" V2 endpoint via Delta UniForm ([#1095](https://github.com/fgarofalo56/csa-inabox/issues/1095)) ([ea4908a](https://github.com/fgarofalo56/csa-inabox/commit/ea4908ad8e6579774f0ef8135fb29ab4ce0b5314))
+* **csa-loom:** Materialized Lake Views item type (audit-t65) ([#1104](https://github.com/fgarofalo56/csa-inabox/issues/1104)) ([0d0ad44](https://github.com/fgarofalo56/csa-inabox/commit/0d0ad44f33ad1aeff03979c2b63b55008a408426))
+* **csa-loom:** MCP data-movement tools (pipelines/copy-jobs/dataflows) ([#1142](https://github.com/fgarofalo56/csa-inabox/issues/1142)) ([0d13fb8](https://github.com/fgarofalo56/csa-inabox/commit/0d13fb8d1a6ffb02c12cb1a4ea5dc956a86d2a64))
+* **csa-loom:** model-bound Rayfin app builder over semantic models (audit-t84) ([#1129](https://github.com/fgarofalo56/csa-inabox/issues/1129)) ([20e3f00](https://github.com/fgarofalo56/csa-inabox/commit/20e3f008ebfa106e39c3498adb0df34ab83880a0))
+* **csa-loom:** OneLake item-size reporting (audit-T73) ([#1099](https://github.com/fgarofalo56/csa-inabox/issues/1099)) ([e68f473](https://github.com/fgarofalo56/csa-inabox/commit/e68f4739d604663fa954f2894c7cfbd69a4a908a))
+* **csa-loom:** OneLake shortcuts to SharePoint/OneDrive via Microsoft Graph ([#1102](https://github.com/fgarofalo56/csa-inabox/issues/1102)) ([5e97513](https://github.com/fgarofalo56/csa-inabox/commit/5e97513b7d69adbe4574b4221297370de13d4396))
+* **csa-loom:** publish data agent to M365 Copilot via Copilot Studio (audit-t85) ([#1126](https://github.com/fgarofalo56/csa-inabox/issues/1126)) ([33f623d](https://github.com/fgarofalo56/csa-inabox/commit/33f623d8f01e059c75b7f7c74e7852ac88c52244))
+* **csa-loom:** RTI dashboard 5s live-refresh interval + pile-up guard ([#1111](https://github.com/fgarofalo56/csa-inabox/issues/1111)) ([106acc7](https://github.com/fgarofalo56/csa-inabox/commit/106acc7b4fb95c812e0750e52af8409b10af5612))
+* **csa-loom:** RTI dashboard AI tile editor (NL → KQL) (audit-t70) ([#1114](https://github.com/fgarofalo56/csa-inabox/issues/1114)) ([a3ea6fd](https://github.com/fgarofalo56/csa-inabox/commit/a3ea6fd66342b876df5754ec61725b3125c91508))
+* **csa-loom:** RTI dashboard time-series visualization controls (audit-t71) ([#1094](https://github.com/fgarofalo56/csa-inabox/issues/1094)) ([cb55f65](https://github.com/fgarofalo56/csa-inabox/commit/cb55f6545429c066a520abf96a95a08650a7fec9))
+* **csa-loom:** Snowflake "Include Iceberg tables" option in mirror wizard ([#1105](https://github.com/fgarofalo56/csa-inabox/issues/1105)) ([73b2b80](https://github.com/fgarofalo56/csa-inabox/commit/73b2b80fcea8acb7c9db7570f914895cc105d3b9))
+* **csa-loom:** SQL DB full-text + vector index management tabs (audit-t78) ([#1106](https://github.com/fgarofalo56/csa-inabox/issues/1106)) ([a7a4263](https://github.com/fgarofalo56/csa-inabox/commit/a7a42637a6537169cad28fc3561c7c993e1d1e39))
+* **csa-loom:** SQL DB migration assistant (DACPAC import + compatibility scan) ([#1098](https://github.com/fgarofalo56/csa-inabox/issues/1098)) ([9b69371](https://github.com/fgarofalo56/csa-inabox/commit/9b693717a41b3bb3ab4356a731d19bc6067c2279))
+* **csa-loom:** unified Fabric IQ MCP tool surface for external agents (audit-t86) ([#1127](https://github.com/fgarofalo56/csa-inabox/issues/1127)) ([078e2e2](https://github.com/fgarofalo56/csa-inabox/commit/078e2e2bee46c8fa7fab08b5ad2a9aa9ab370247))
+* **csa-loom:** warehouse query-acceleration toggle + honest GPU gate (audit-t76) ([#1091](https://github.com/fgarofalo56/csa-inabox/issues/1091)) ([b0e5ed3](https://github.com/fgarofalo56/csa-inabox/commit/b0e5ed395ef687e6b19287378265c980527eda35))
+
 ## [0.33.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.32.0...csa-inabox-v0.33.0) (2026-06-10)
 
 
