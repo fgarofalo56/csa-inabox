@@ -76,7 +76,7 @@ per-object **open (script/query) / drop** actions:
 | 6 | Schemas | ✅ built (list) | `sys.schemas` (user schemas); CREATE/DROP SCHEMA routed to the Query tab (same as the portal Query editor) |
 | 7 | Columns | ✅ built | per-table, read-only detail |
 | 8 | Indexes | ✅ built | per-table **Indexes** sub-node — `sys.indexes` + `sys.index_columns` (key + INCLUDE columns, type badge, PK/UNIQUE badges, filter); `DROP INDEX` (catalog-verified); `Script as CREATE/DROP INDEX` |
-| 9 | Keys & constraints | ⚠️ honest-gate | "coming" row — author via `ALTER TABLE …` in the Query tab |
+| 9 | Keys & constraints | ✅ built | per-table **Keys & constraints** sub-node — `sys.key_constraints` (PK/UNIQUE) + `sys.foreign_keys`/`sys.foreign_key_columns` (FK) + `sys.check_constraints` (CHECK); inline **designer** (`SqlConstraintBuilder`, 4 tabs) authors `ALTER TABLE … ADD CONSTRAINT`; per-constraint **Script as ADD/DROP**, **Enable/Disable** (FK/CHECK), **Delete**; `not trusted` / `disabled` badges. All catalog-verified (no string injection); the CHECK expression is the only free-text field |
 | 10 | Data editing (edit rows) | ⚠️ honest-gate | "coming" row — use the Query tab for DML (read-only **Data preview** grid is built) |
 | 11 | Query plan | ⚠️ honest-gate | "coming" row — `SET SHOWPLAN_XML` / `SET STATISTICS` from the Query tab |
 | 12 | **Context menus (all node types)** | ✅ built | Fluent `Menu` per node: Select top 1000, Data preview, New query, New query in notebook, Rename, Script as CREATE/ALTER/DROP, Delete, Refresh |
@@ -115,6 +115,10 @@ tooltip, per `ui-parity.md`.
 | Drop procedure | `DELETE /api/sqldb/procedures?objectId=` | `dropObject('procedure')` → `DROP PROCEDURE` |
 | Drop function | `DELETE /api/sqldb/functions?objectId=` | `dropObject('function')` → `DROP FUNCTION` |
 | Drop table type | `DELETE /api/sqldb/table-types?objectId=` | `dropObject('table-type')` → `DROP TYPE` |
+| List constraints | `GET /api/sqldb/constraints?objectId=` | `listConstraints` → `sys.key_constraints` ∪ `sys.foreign_keys`/`sys.foreign_key_columns` ∪ `sys.check_constraints` (parameterized `@p0`) |
+| Add constraint | `POST /api/sqldb/constraints` (tableObjectId, spec) | `addConstraint` → resolve table + columns by id from `sys.tables`/`sys.columns`, then `ALTER TABLE … ADD CONSTRAINT …` (PK/UQ `PRIMARY KEY`/`UNIQUE … (cols)`, FK `FOREIGN KEY … REFERENCES … ON DELETE/UPDATE …` with optional `WITH NOCHECK`, CK `CHECK(expr)`) |
+| Drop constraint | `DELETE /api/sqldb/constraints?objectId=&constraintId=` | `dropConstraint` → resolve name from `sys.objects` by id, then `ALTER TABLE [schema].[table] DROP CONSTRAINT [name]` |
+| Enable/disable constraint | `PATCH /api/sqldb/constraints?objectId=&constraintId=` (enable) | `toggleConstraint` (FK/CHECK) → `ALTER TABLE … WITH CHECK CHECK CONSTRAINT [name]` (enable) / `… NOCHECK CONSTRAINT [name]` (disable) |
 | New (template) | (client) | loads a CREATE template into the editor's Query tab |
 | New query in notebook | (client) | `localStorage` prefill + `router.push('/items/notebook/new?source=sql-db')` |
 
@@ -133,21 +137,51 @@ identifier (`]` doubled). A bad/non-matching id yields a 404, not an operation.
 never be coerced into a cross-schema move. The `group`/`variant` route params are
 whitelisted enums.
 
+**Keys & constraints** authoring is held to the same standard: the table and
+every key column are resolved from `sys.tables` / `sys.columns` by integer
+`object_id` / `column_id` (a column id that does not belong to the table → 400),
+the referenced FK table + columns are resolved on the referenced table's id, and
+the constraint name is validated (1–128 chars, no `.`/`[`/`]`, no leading `#`).
+The **only** verbatim free-text is a CHECK constraint's boolean expression — the
+same arbitrary-T-SQL field SSMS and the portal table designer expose — and it is
+placed only inside the `CHECK(…)` clause (never an identifier position),
+length-clamped to ≤4000 chars. Drop/enable/disable resolve the constraint from
+`sys.objects` by id before emitting bracket-quoted DDL.
+
+### Per-cloud behavior (keys & constraints)
+
+| Constraint | Azure SQL Database (default) | Fabric SQL database | Fabric Warehouse / Synapse dedicated |
+|---|---|---|---|
+| PRIMARY KEY | Fully enforced; CLUSTERED or NONCLUSTERED | Same (same TDS engine) | `NONCLUSTERED NOT ENFORCED` only — separate item type, not this editor |
+| UNIQUE | Fully enforced; NONCLUSTERED | Same | `NONCLUSTERED NOT ENFORCED` only |
+| FOREIGN KEY | Fully enforced; `WITH NOCHECK`; ON DELETE/UPDATE CASCADE/SET NULL/SET DEFAULT | Same | `NOT ENFORCED` only |
+| CHECK | Fully enforced; `WITH NOCHECK` | Same | Not supported |
+
+Loom's target is Azure SQL Database **and** Fabric SQL database, which share the
+same TDS engine and enforce all four types identically — so the designer emits
+standard **enforced** DDL with **no Fabric workspace dependency** (works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset). Fabric Warehouse / Synapse dedicated
+pools (which require `NOT ENFORCED`) are separate item types with their own
+editors and are out of scope for this surface.
+
 ## Files
 
-- `apps/fiab-console/lib/azure/sql-objects-client.ts` — catalog enumeration + `sqlConfigGate()` + `dropObject()` + `listIndexes()`/`dropIndex()` + `renameObject()` + `previewObject()` + `scriptObject()`
+- `apps/fiab-console/lib/azure/sql-objects-client.ts` — catalog enumeration + `sqlConfigGate()` + `dropObject()` + `listIndexes()`/`dropIndex()` + `renameObject()` + `previewObject()` + `scriptObject()` + **`listConstraints()`/`addConstraint()`/`dropConstraint()`/`toggleConstraint()`**
 - `apps/fiab-console/lib/azure/azure-sql-client.ts` — `executeParameterized()` + `executeQuery()` (reuse the existing TDS+AAD pool)
 - `apps/fiab-console/lib/azure/fabric-client.ts` — `getFabricSqlDatabaseConnection()`
 - `apps/fiab-console/app/api/sqldb/_shared.ts` — session guard + item-scoped connection resolution + honest gate
-- `apps/fiab-console/app/api/sqldb/{tables,views,procedures,functions,table-types,schemas,columns,indexes,preview,rename,script}/route.ts`
-- `apps/fiab-console/lib/components/sqldb/sqldb-tree.tsx` — the navigator (context menus, Indexes sub-node, Data preview + Rename dialogs)
+- `apps/fiab-console/app/api/sqldb/{tables,views,procedures,functions,table-types,schemas,columns,indexes,preview,rename,script,constraints}/route.ts`
+- `apps/fiab-console/lib/components/sqldb/sqldb-tree.tsx` — the navigator (context menus, Indexes + Keys & constraints sub-nodes, Data preview + Rename + Constraint-designer dialogs)
+- `apps/fiab-console/lib/components/sqldb/sqldb-table-designer.tsx` — `SqlConstraintsNode`: the per-table Keys & constraints list + per-constraint menu (Script as ADD/DROP, Enable/Disable, Delete)
+- `apps/fiab-console/lib/components/sqldb/sqldb-constraint-builder.tsx` — `SqlConstraintBuilder`: the 4-tab (PK/UQ/FK/CHECK) inline designer dialog
 - `apps/fiab-console/lib/editors/sql-database-editor.tsx` — wires the tree into the Tables tab + the `New query in notebook` deep-link
 - `apps/fiab-console/lib/azure/__tests__/sql-objects-script.test.ts` — unit coverage for indexes/rename/preview/script generation + injection-safety guards
+- `apps/fiab-console/lib/azure/__tests__/sql-constraints.test.ts` — unit coverage for list/add/drop/toggle constraint DDL generation + name + column injection-safety guards
 
 ## Verification
 
-`pnpm build` exit 0 (all 11 `/api/sqldb/*` routes registered) +
-`npx vitest run lib/azure/__tests__/sql-objects-script.test.ts` green. Live
+`pnpm build` exit 0 (all 12 `/api/sqldb/*` routes registered, incl. `constraints`) +
+`npx vitest run lib/azure/__tests__/sql-objects-script.test.ts lib/azure/__tests__/sql-constraints.test.ts` green. Live
 functional verification requires a deployment with a reachable SQL server (UAMI
 as Entra admin) bound to a Fabric SQL database item, or
 `NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER` + `…_DEFAULT_DB` set; without one,
