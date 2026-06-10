@@ -45,6 +45,7 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
     server: String(state?.server || def.server || ''),
     database: String(state?.database || def.database || ''),
     tables,
+    includeIcebergTables: !!(state?.includeIcebergTables ?? def.includeIcebergTables),
   };
 }
 

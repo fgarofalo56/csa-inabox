@@ -23,6 +23,7 @@ Source UI (grounded in Microsoft Learn):
 | Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe) |
 | Enumerate source tables                                      | ✅ built (Load tables) | `/[id]/tables` (credential-aware, KV secretRef) + `/source-tables` (pre-create) |
 | Include/exclude a subset of tables                           | ✅ built (checkbox grid + All/None) | persisted to `state.tables` |
+| **Include Iceberg tables** (Snowflake only, Fabric Build 2026)| ✅ built (Snowflake-only checkbox in step 3) | persisted to `state.includeIcebergTables` + `mirroring.json` source.typeProperties.includeIcebergTables; threaded into the engine `MirrorSource` on Start |
 | Name + review before create                                  | ✅ built (step 4 summary) | POST/PATCH `/api/items/mirrored-database[/id]` |
 | Edit an existing mirror's source/tables                      | ✅ built (Edit → same wizard) | PATCH `/[id]` |
 | Multi-source binding surface                                 | ✅ built (GET/POST `/[id]/sources`) | item state |
