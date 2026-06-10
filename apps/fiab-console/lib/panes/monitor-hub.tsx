@@ -89,6 +89,24 @@ const useStyles = makeStyles({
   statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statAccentBrand: { color: tokens.colorBrandForeground1 },
   statAccentDanger: { color: tokens.colorPaletteRedForeground1 },
+  // Run-health roll-up: a thin stacked bar + legend, same visual language as
+  // the Overview tab's availability roll-up. At-a-glance "how is the estate
+  // running" without scanning every row.
+  healthRollup: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalL,
+  },
+  healthBar: {
+    display: 'flex', height: '10px', borderRadius: tokens.borderRadiusCircular,
+    overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3,
+  },
+  healthLegend: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  legendItem: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2,
+  },
+  swatch: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
+  durationCell: { display: 'block', textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   skel: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
     gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL,
@@ -102,6 +120,14 @@ const DAYS_OPTIONS: { value: string; label: string }[] = [
   { value: '14', label: 'Last 14 days' },
   { value: '30', label: 'Last 30 days' },
 ];
+
+// Run-health roll-up segment colors — green/red/brand match the status badges.
+const RUN_HEALTH_COLORS = {
+  succeeded: tokens.colorPaletteGreenBackground3,
+  failed: tokens.colorPaletteRedBackground3,
+  inProgress: tokens.colorBrandBackground,
+  other: tokens.colorNeutralBackground4,
+} as const;
 
 function statusBadge(status?: string) {
   const s = (status || '').toLowerCase();
@@ -173,18 +199,27 @@ export function MonitorHubPane() {
 
   // KPI roll-up of the run window (over the full result set, not the search
   // filter) — same stat-card language as the other Monitor tabs.
-  const kpis = useMemo(() => {
+  const { kpis, health } = useMemo(() => {
     const succeeded = rows.filter((r) => /succ/i.test(r.status ?? '')).length;
     const failed = rows.filter((r) => /fail/i.test(r.status ?? '')).length;
     const inProgress = rows.filter(
       (r) => /inprogress|queued|inqueue|running/i.test(r.status ?? ''),
     ).length;
-    return [
-      { label: 'Runs', value: rows.length, accent: undefined as string | undefined },
-      { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
-      { label: 'In progress', value: inProgress, accent: inProgress > 0 ? styles.statAccentBrand : undefined },
-      { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
-    ];
+    const total = rows.length;
+    const other = Math.max(0, total - succeeded - failed - inProgress);
+    // Success rate over completed (succeeded + failed) runs — the figure
+    // Fabric's Monitor hub leads with.
+    const completed = succeeded + failed;
+    const successRate = completed > 0 ? Math.round((succeeded / completed) * 100) : null;
+    return {
+      kpis: [
+        { label: 'Runs', value: total, accent: undefined as string | undefined },
+        { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
+        { label: 'In progress', value: inProgress, accent: inProgress > 0 ? styles.statAccentBrand : undefined },
+        { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
+      ],
+      health: { succeeded, failed, inProgress, other, total, successRate },
+    };
   }, [rows, styles]);
 
   const columns: LoomColumn<ActivityRow & { __id: string }>[] = useMemo(() => [
@@ -215,19 +250,23 @@ export function MonitorHubPane() {
     {
       key: 'start', label: 'Started', width: 180, filterType: 'date',
       getValue: (r) => (r.start ? new Date(r.start).getTime() : 0),
-      render: (r) => <Text size={200}>{fmtTime(r.start)}</Text>,
+      render: (r) => (
+        <Text size={200} title={r.start ? new Date(r.start).toLocaleString() : undefined}>
+          {fmtTime(r.start)}
+        </Text>
+      ),
     },
     {
       key: 'durationMs', label: 'Duration', width: 120, filterable: false,
       getValue: (r) => r.durationMs ?? 0,
-      render: (r) => <Text size={200}>{fmtDuration(r.durationMs)}</Text>,
+      render: (r) => <Text size={200} className={styles.durationCell}>{fmtDuration(r.durationMs)}</Text>,
     },
     {
       key: 'submitter', label: 'Submitter', width: 200, filterable: true, filterType: 'text',
       getValue: (r) => r.submitter || '',
       render: (r) => <Text size={200}>{r.submitter || '—'}</Text>,
     },
-  ], []);
+  ], [styles]);
 
   const tableRows = useMemo(
     () => searched.map((r, i) => ({ ...r, __id: `${r.source}:${r.runId ?? r.name}:${i}` })),
@@ -295,14 +334,53 @@ export function MonitorHubPane() {
             {[0, 1, 2, 3].map((i) => <SkeletonItem key={i} className={styles.skelCard} />)}
           </Skeleton>
         ) : (
-          <div className={styles.stats}>
-            {kpis.map((s) => (
-              <div key={s.label} className={styles.stat}>
-                <span className={styles.statLabel}>{s.label}</span>
-                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+          <>
+            <div className={styles.stats}>
+              {kpis.map((s) => (
+                <div key={s.label} className={styles.stat}>
+                  <span className={styles.statLabel}>{s.label}</span>
+                  <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Run-health roll-up — at-a-glance success/failure/in-progress mix. */}
+            {health.total > 0 && (
+              <div className={styles.healthRollup}>
+                <div className={styles.healthBar} role="img" aria-label="Run outcome distribution">
+                  {(['succeeded', 'inProgress', 'failed', 'other'] as const).map((k) => {
+                    const n = health[k];
+                    const pct = (n / health.total) * 100;
+                    return pct > 0 ? (
+                      <div
+                        key={k}
+                        style={{ width: `${pct}%`, backgroundColor: RUN_HEALTH_COLORS[k] }}
+                        title={`${k}: ${n}`}
+                      />
+                    ) : null;
+                  })}
+                </div>
+                <div className={styles.healthLegend}>
+                  {([
+                    ['succeeded', 'Succeeded'] as const,
+                    ['inProgress', 'In progress'] as const,
+                    ['failed', 'Failed'] as const,
+                    ['other', 'Other'] as const,
+                  ]).filter(([k]) => health[k] > 0).map(([k, label]) => (
+                    <span key={k} className={styles.legendItem}>
+                      <span className={styles.swatch} style={{ backgroundColor: RUN_HEALTH_COLORS[k] }} />
+                      {label} ({health[k]})
+                    </span>
+                  ))}
+                  {health.successRate != null && (
+                    <span className={styles.legendItem}>
+                      <strong>{health.successRate}%</strong>&nbsp;success rate
+                    </span>
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )
       )}
 
