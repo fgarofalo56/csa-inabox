@@ -42,8 +42,10 @@ describe('WarehousePane', () => {
     );
     renderPane();
     fireEvent.click(screen.getByRole('button', { name: /run query/i }));
-    await waitFor(() => expect(screen.getByText(/1 rows/)).toBeInTheDocument());
-    expect(screen.getByText(/engine: synapse-dedicated/)).toBeInTheDocument();
+    // rowCount === 1 renders the singular "1 row" badge (not "1 rows").
+    await waitFor(() => expect(screen.getByText(/^1 row$/)).toBeInTheDocument());
+    // Engine is shown verbatim in a Badge ("synapse-dedicated"), not "engine: …".
+    expect(screen.getByText('synapse-dedicated')).toBeInTheDocument();
     expect(screen.getByText('East')).toBeInTheDocument();
   });
 
