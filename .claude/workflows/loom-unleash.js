@@ -47,7 +47,7 @@ const planText = await agent(
   `READ-ONLY. Read these CSA Loom PRP files in ${REPO}: ${files.join(', ')}. Extract implementable tasks into a single JSON array, in order. ` +
   (auditWave ? `IMPORTANT: include ONLY the rows whose "Wave" column equals ${auditWave} (audit-T## gap-matrix rows). ` : `Extract EVERY implementable task (their numbered task lists). `) +
   `Each element exactly: {"id": "<exp-Tn>", "title": "...", "goal": "...the full task intent + acceptance...", "files": "likely files", "verify": "how to prove it"}. For audit rows, use the Goal column as goal and the evidence/file hints as files. Output ONLY the JSON array — no prose, no code fence.`,
-  { agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
+  { model: 'opus', agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
 )
 let tasks = []
 try { tasks = JSON.parse(planText.slice(planText.indexOf('['), planText.lastIndexOf(']') + 1)) } catch (e) { log(`extract parse failed: ${e}`) }
@@ -57,13 +57,13 @@ log(`Extracted ${tasks.length} tasks from ${files.length} source(s)${auditWave ?
 const shipped = []
 for (const t of tasks) {
   log(`Task ${t.id}: ${t.title}`)
-  const research = await agent(researchPrompt(t), { model: 'sonnet', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })
-  const build = await agent(buildPrompt(t, research), { phase: 'Build', label: `build:${t.id}` })
+  const research = await agent(researchPrompt(t), { model: 'opus', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })
+  const build = await agent(buildPrompt(t, research), { model: 'opus', phase: 'Build', label: `build:${t.id}` })
   const pr = (String(build).match(/PR\s*[=#:]?\s*(\d+)/i) || [])[1] || ''
   if (!pr) { shipped.push({ id: t.id, ok: false, note: String(build).slice(0, 200) }); continue }
-  const review = await agent(reviewPrompt(t, pr), { phase: 'Review', label: `review:${t.id}` })
-  if (/^\s*FAIL/i.test(review)) await agent(fixPrompt(t, pr, review), { phase: 'Review', label: `fix:${t.id}` })
-  const polish = await agent(polishPrompt(t, pr), { phase: 'Polish', label: `polish:${t.id}` })
+  const review = await agent(reviewPrompt(t, pr), { model: 'opus', phase: 'Review', label: `review:${t.id}` })
+  if (/^\s*FAIL/i.test(review)) await agent(fixPrompt(t, pr, review), { model: 'opus', phase: 'Review', label: `fix:${t.id}` })
+  const polish = await agent(polishPrompt(t, pr), { model: 'opus', phase: 'Polish', label: `polish:${t.id}` })
   shipped.push({ id: t.id, ok: true, pr, reviewPass: /^\s*PASS/i.test(review), polished: !/NO-?UI/i.test(String(polish)) })
 }
 log(`Wave drain: ${shipped.filter((s) => s.ok).length}/${tasks.length} PRs opened`)
