@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
@@ -28,12 +29,20 @@ import {
 import {
   Add20Regular, Edit20Regular, Delete20Regular, Copy20Regular,
   DatabaseArrowUp20Regular, ArrowReset20Regular, ArrowSync20Regular, History20Regular,
+  Open16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
+import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
+import { PowerAutomateDesignerTab } from '@/lib/power-platform/power-automate-editor';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+
+// Column types the Dataverse "New column" dialog supports — each maps 1:1 to a
+// concrete AttributeMetadata @odata.type in powerplatform-client.addColumn().
+const DV_COLUMN_TYPES = ['String', 'Memo', 'Integer', 'Decimal', 'Money', 'Boolean', 'DateTime'] as const;
+const DV_REQUIRED_LEVELS = ['None', 'Recommended', 'ApplicationRequired'] as const;
 // AI Builder model state/status label mappers extracted for vitest
 // coverage. See `lib/editors/__tests__/family-utils.test.ts`.
 import { aiStateLabel, aiStatusLabel } from './_family-utils';
@@ -527,6 +536,7 @@ function EnvironmentLifecycleBar({
 
 export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const env = useEnvironments();
   // If route-id is a real env name, prefer it.
   useEffect(() => {
@@ -556,17 +566,23 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
         <PowerPlatformTree
           selectedEnvId={env.selected}
           onSelectEnv={(envId) => env.setSelected(envId)}
+          // Navigate INTO the Loom editor for the item (in-app maker authoring)
+          // instead of deep-linking out to make.powerapps.com / make.powerautomate.com.
+          // The target editors read `id` (logical/app/flow id) + `?envId=` and
+          // render the full authoring surface (schema designer + New column,
+          // Studio tab, Designer tab) — see DataverseTableEditor / PowerAppEditor /
+          // PowerAutomateFlowEditor below.
           onOpenTable={(envId, logical) => {
             env.setSelected(envId);
-            window.open(`https://make.powerapps.com/environments/${encodeURIComponent(envId)}/entities/${encodeURIComponent(logical)}`, '_blank', 'noreferrer');
+            router.push(`/items/dataverse-table/${encodeURIComponent(logical)}?envId=${encodeURIComponent(envId)}`);
           }}
-          onOpenApp={(envId) => {
+          onOpenApp={(envId, appId) => {
             env.setSelected(envId);
-            window.open(`https://make.powerapps.com/environments/${encodeURIComponent(envId)}/apps`, '_blank', 'noreferrer');
+            router.push(`/items/power-app/${encodeURIComponent(appId)}?envId=${encodeURIComponent(envId)}`);
           }}
           onOpenFlow={(envId, flowId) => {
             env.setSelected(envId);
-            window.open(`https://make.powerautomate.com/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(flowId)}/details`, '_blank', 'noreferrer');
+            router.push(`/items/power-automate-flow/${encodeURIComponent(flowId)}?envId=${encodeURIComponent(envId)}`);
           }}
           refreshKey={navRefresh}
         />
@@ -637,6 +653,22 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
   const [tab, setTab] = useState<DvTab>('columns');
   const tableEnc = selectedTable ? encodeURIComponent(selectedTable) : '';
 
+  // ----- New column dialog (real Dataverse Web API write) ----------------
+  const [colOpen, setColOpen] = useState(false);
+  const [colBusy, setColBusy] = useState(false);
+  const [colMsg, setColMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [colSchema, setColSchema] = useState('');
+  const [colDisplay, setColDisplay] = useState('');
+  const [colType, setColType] = useState<typeof DV_COLUMN_TYPES[number]>('String');
+  const [colReq, setColReq] = useState<typeof DV_REQUIRED_LEVELS[number]>('None');
+  const [colDesc, setColDesc] = useState('');
+  const [colMaxLen, setColMaxLen] = useState('100');
+  const [colPrecision, setColPrecision] = useState('2');
+  const resetCol = () => {
+    setColSchema(''); setColDisplay(''); setColType('String'); setColReq('None');
+    setColDesc(''); setColMaxLen('100'); setColPrecision('2'); setColMsg(null);
+  };
+
   const [schemaState, reloadSchema] = useApi<{ ok: boolean; table: DvTable; attributes: DvAttr[] }>(
     env.selected && selectedTable ? `/api/items/dataverse-table/${tableEnc}${envQ}` : null,
     [env.selected, selectedTable],
@@ -678,6 +710,37 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     if (tab === 'data') reloadData();
   }, [reloadTables, selectedTable, tab, reloadSchema, reloadKeys, reloadRel, reloadViews, reloadRules, reloadData]);
 
+  const createColumn = useCallback(async () => {
+    if (!env.selected || !selectedTable) return;
+    if (!colSchema.trim() || !colDisplay.trim()) {
+      setColMsg({ kind: 'error', text: 'Schema name and display name are required.' });
+      return;
+    }
+    setColBusy(true); setColMsg(null);
+    try {
+      const payload: Record<string, unknown> = {
+        schemaName: colSchema.trim(),
+        displayName: colDisplay.trim(),
+        attributeType: colType,
+        requiredLevel: colReq,
+        description: colDesc.trim() || undefined,
+      };
+      if (colType === 'String' || colType === 'Memo') payload.maxLength = Number(colMaxLen) || undefined;
+      if (colType === 'Decimal' || colType === 'Money') payload.precision = Number(colPrecision) || undefined;
+      const r = await fetch(
+        `/api/items/dataverse-table/${tableEnc}/columns?envId=${encodeURIComponent(env.selected)}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+      );
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setColMsg({ kind: 'error', text: `Create failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setColMsg({ kind: 'success', text: `Column "${colSchema.trim()}" created.` });
+      setColOpen(false); resetCol();
+      reloadSchema();
+    } catch (e: any) {
+      setColMsg({ kind: 'error', text: `Create failed: ${e?.message || String(e)}` });
+    } finally { setColBusy(false); }
+  }, [env.selected, selectedTable, tableEnc, colSchema, colDisplay, colType, colReq, colDesc, colMaxLen, colPrecision, reloadSchema]);
+
   const makerHref = env.selected
     ? (selectedTable
       ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/entities/${encodeURIComponent(selectedTable)}`
@@ -691,11 +754,12 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>New custom tables are authored in the Maker portal</MessageBarTitle>
-              Creating a brand-new custom table (publisher prefix, ownership type) is done in
-              <code> make.powerapps.com</code> or via solution import. This designer reads + inspects every
-              facet of an existing table — columns, keys, relationships, views, business rules, and live data —
-              against the Dataverse Web API. Pick a table below.
+              <MessageBarTitle>Pick a table to inspect and author</MessageBarTitle>
+              This designer reads + inspects every facet of an existing table — columns, keys, relationships,
+              views, business rules, and live data — against the Dataverse Web API, and lets you
+              <strong> add columns</strong> directly (Columns tab &rarr; New column) which write back through the
+              Web API. Creating a brand-new custom table (publisher prefix, ownership type) is still done in
+              <code> make.powerapps.com</code> or via solution import. Pick a table below.
             </MessageBarBody>
           </MessageBar>
         )}
@@ -704,16 +768,23 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
           {selectedTable && <Caption1>Table: <strong>{selectedTable}</strong></Caption1>}
           {selectedTable && env.selected && (
-            <a
-              href={`https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/entities/${encodeURIComponent(selectedTable)}`}
-              target="_blank" rel="noreferrer"
-            >Open in Maker</a>
+            <Button
+              appearance="transparent"
+              icon={<Open16Regular />}
+              onClick={() => window.open(
+                `https://make.powerapps.com/environments/${encodeURIComponent(env.selected!)}/entities/${encodeURIComponent(selectedTable)}`,
+                '_blank', 'noopener,noreferrer',
+              )}
+            >Open in Maker</Button>
           )}
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.selected && !env.loading && <EmptyText>Select an environment to list its Dataverse tables.</EmptyText>}
         {tablesState.loading && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
         {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} />}
+        {!selectedTable && !tablesState.loading && !tablesState.error && env.selected && tablesState.data && filtered.length === 0 && (
+          <EmptyText>No custom or key system tables in this environment.</EmptyText>
+        )}
         {!selectedTable && filtered.length > 0 && (
           <>
             <Caption1>{filtered.length} table(s) — custom + key system entities</Caption1>
@@ -755,6 +826,18 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
 
             {tab === 'columns' && (
               <>
+                <Toolbar aria-label="Column actions" className={s.cmdBar}>
+                  <ToolbarButton
+                    icon={<Add20Regular />}
+                    disabled={!env.selected || !selectedTable}
+                    onClick={() => { resetCol(); setColOpen(true); }}
+                  >New column</ToolbarButton>
+                </Toolbar>
+                {colMsg && (
+                  <MessageBar intent={colMsg.kind}>
+                    <MessageBarBody>{colMsg.text}</MessageBarBody>
+                  </MessageBar>
+                )}
                 {schemaState.loading && <Spinner size="small" label="Loading columns…" labelPosition="after" />}
                 {schemaState.error && <ErrorBar msg={schemaState.error} hint={schemaState.hint} />}
                 {schemaState.data && (
@@ -972,6 +1055,72 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
             )}
           </>
         )}
+
+        {/* ----- New column dialog (real Dataverse Web API POST /Attributes) ----- */}
+        <Dialog open={colOpen} onOpenChange={(_, d) => setColOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>New column</DialogTitle>
+              <DialogContent>
+                <div className={s.dialogForm}>
+                  <Field
+                    label="Schema name" required
+                    hint="Must include your publisher prefix, e.g. new_Rating"
+                  >
+                    <Input value={colSchema} onChange={(_, d) => setColSchema(d.value)} placeholder="new_Rating" />
+                  </Field>
+                  <Field label="Display name" required>
+                    <Input value={colDisplay} onChange={(_, d) => setColDisplay(d.value)} placeholder="Rating" />
+                  </Field>
+                  <div className={s.row2}>
+                    <Field label="Data type">
+                      <Dropdown
+                        value={colType}
+                        selectedOptions={[colType]}
+                        onOptionSelect={(_, d) => d.optionValue && setColType(d.optionValue as typeof DV_COLUMN_TYPES[number])}
+                      >
+                        {DV_COLUMN_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Required level">
+                      <Dropdown
+                        value={colReq}
+                        selectedOptions={[colReq]}
+                        onOptionSelect={(_, d) => d.optionValue && setColReq(d.optionValue as typeof DV_REQUIRED_LEVELS[number])}
+                      >
+                        {DV_REQUIRED_LEVELS.map((r) => <Option key={r} value={r} text={r}>{r}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                  {(colType === 'String' || colType === 'Memo') && (
+                    <Field label="Max length">
+                      <Input type="number" value={colMaxLen} onChange={(_, d) => setColMaxLen(d.value)} />
+                    </Field>
+                  )}
+                  {(colType === 'Decimal' || colType === 'Money') && (
+                    <Field label="Precision (decimal places)">
+                      <Input type="number" value={colPrecision} onChange={(_, d) => setColPrecision(d.value)} />
+                    </Field>
+                  )}
+                  <Field label="Description">
+                    <Input value={colDesc} onChange={(_, d) => setColDesc(d.value)} placeholder="Optional" />
+                  </Field>
+                  <Caption1>
+                    Creates the column on <strong>{selectedTable}</strong> via the Dataverse Web API
+                    (<code>POST EntityDefinitions/Attributes</code>). The Dataverse service principal must hold a
+                    customizing role (System Administrator / System Customizer) on this environment.
+                  </Caption1>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={colBusy}>Cancel</Button></DialogTrigger>
+                <Button appearance="primary" disabled={colBusy || !colSchema.trim() || !colDisplay.trim()} onClick={() => { void createColumn(); }}>
+                  {colBusy ? 'Creating…' : 'Create column'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
@@ -1004,7 +1153,7 @@ interface PApp {
   sharedUsersCount?: number; sharedGroupsCount?: number;
 }
 
-type PAppTab = 'detail' | 'play';
+type PAppTab = 'detail' | 'play' | 'studio';
 
 export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1168,8 +1317,12 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadAll} disabled={listSt.loading}>Reload</Button>
-          {env.selected && (
-            <a href={makerHref} target="_blank" rel="noreferrer">Open Power Apps maker</a>
+          {env.selected && makerHref && (
+            <Button
+              appearance="transparent"
+              icon={<Open16Regular />}
+              onClick={() => window.open(makerHref, '_blank', 'noopener,noreferrer')}
+            >Open Power Apps maker</Button>
           )}
         </div>
         {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
@@ -1188,6 +1341,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                 <Subtitle2>{app.displayName}</Subtitle2>
                 <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as PAppTab)}>
                   <Tab value="detail">Details</Tab>
+                  <Tab value="studio">Studio</Tab>
                   <Tab value="play">{isModelDriven ? 'Open' : 'Play / embed'}</Tab>
                 </TabList>
 
@@ -1243,9 +1397,17 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <Button appearance="secondary" disabled={actionBusy} onClick={() => { void publish(); }}>
                         {actionBusy ? 'Publishing…' : 'Publish latest revision'}
                       </Button>
-                      <a href={makerAppHref(app.name)} target="_blank" rel="noreferrer">Open in maker</a>
                     </div>
                   </>
+                )}
+
+                {tab === 'studio' && (
+                  <PowerAppsStudioTab
+                    appId={app.name}
+                    envId={env.selected}
+                    appType={app.appType || boundAppType}
+                    displayName={app.displayName}
+                  />
                 )}
 
                 {tab === 'play' && (
@@ -1361,6 +1523,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
     [env.selected],
   );
   const [selected, setSelected] = useState<string | null>(id !== 'new' ? id : null);
+  const [flowTab, setFlowTab] = useState<'designer' | 'runs'>('designer');
   const [detailSt] = useApi<{ ok: boolean; flow: Flow }>(
     env.selected && selected ? `/api/items/power-automate-flow/${encodeURIComponent(selected)}${envQ}` : null,
     [env.selected, selected],
@@ -1401,10 +1564,11 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Flows are authored in the Maker portal</MessageBarTitle>
-              Cloud flows / desktop flows are built in <code>make.powerautomate.com</code>. This editor is a
-              read-only registry view that lists deployed flows in the selected environment and triggers a
-              manual run. Pick a flow on the left.
+              <MessageBarTitle>Pick a flow to author or run</MessageBarTitle>
+              This editor lists deployed cloud flows in the selected environment, triggers manual runs, and
+              reviews run history. Select a flow to open its <strong>Designer</strong> tab — the Power Automate
+              flow designer requires a delegated user token (it can&apos;t be embedded server-side), so the
+              Designer tab opens it in a new tab while keeping flow metadata and runs in Loom. Pick a flow below.
             </MessageBarBody>
           </MessageBar>
         )}
@@ -1456,46 +1620,53 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
         {selected && (
           <>
             <Button appearance="subtle" onClick={() => setSelected(null)}>&larr; Back to flows</Button>
-            {detailSt.data?.flow && (
-              <div className={s.metaGrid}>
-                <span className={s.metaKey}>Display name</span><span><strong>{detailSt.data.flow.displayName}</strong></span>
-                <span className={s.metaKey}>Name</span><span>{detailSt.data.flow.name}</span>
-                <span className={s.metaKey}>State</span><span><Badge appearance="tint" color={detailSt.data.flow.state === 'Started' ? 'success' : 'subtle'}>{detailSt.data.flow.state || '—'}</Badge></span>
-                <span className={s.metaKey}>Trigger</span><span>{detailSt.data.flow.triggerType || '—'}</span>
-                <span className={s.metaKey}>Created</span><span>{detailSt.data.flow.createdTime || '—'}</span>
-                <span className={s.metaKey}>Modified</span><span>{detailSt.data.flow.lastModifiedTime || '—'}</span>
-              </div>
+            <TabList selectedValue={flowTab} onTabSelect={(_, d) => setFlowTab(d.value as 'designer' | 'runs')}>
+              <Tab value="designer">Designer</Tab>
+              <Tab value="runs">Runs</Tab>
+            </TabList>
+
+            {flowTab === 'designer' && (
+              <PowerAutomateDesignerTab
+                envId={env.selected}
+                flowId={selected}
+                flow={detailSt.data?.flow || null}
+              />
             )}
-            <Subtitle2 style={{ marginTop: 12 }}>Recent runs</Subtitle2>
-            {runsSt.loading && <Spinner size="small" label="Loading runs…" labelPosition="after" />}
-            {runsSt.error && <ErrorBar msg={runsSt.error} hint={runsSt.hint} />}
-            {runsSt.data && (
-              <div className={s.tableWrap}>
-                <Table aria-label="Runs" size="small">
-                  <TableHeader><TableRow>
-                    <TableHeaderCell>Run</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Started</TableHeaderCell>
-                    <TableHeaderCell>Ended</TableHeaderCell>
-                    <TableHeaderCell>Error</TableHeaderCell>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {(runsSt.data.runs || []).map((r) => (
-                      <TableRow key={r.name}>
-                        <TableCell className={s.cell}>{r.name}</TableCell>
-                        <TableCell className={s.cell}>
-                          <Badge appearance="tint" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : 'subtle'}>
-                            {r.status || '—'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className={s.cell}>{r.startTime || '—'}</TableCell>
-                        <TableCell className={s.cell}>{r.endTime || '—'}</TableCell>
-                        <TableCell className={s.cell}>{r.errorMessage || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+
+            {flowTab === 'runs' && (
+              <>
+                <Subtitle2 style={{ marginTop: 12 }}>Recent runs</Subtitle2>
+                {runsSt.loading && <Spinner size="small" label="Loading runs…" labelPosition="after" />}
+                {runsSt.error && <ErrorBar msg={runsSt.error} hint={runsSt.hint} />}
+                {runsSt.data && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Runs" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Run</TableHeaderCell>
+                        <TableHeaderCell>Status</TableHeaderCell>
+                        <TableHeaderCell>Started</TableHeaderCell>
+                        <TableHeaderCell>Ended</TableHeaderCell>
+                        <TableHeaderCell>Error</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {(runsSt.data.runs || []).map((r) => (
+                          <TableRow key={r.name}>
+                            <TableCell className={s.cell}>{r.name}</TableCell>
+                            <TableCell className={s.cell}>
+                              <Badge appearance="tint" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : 'subtle'}>
+                                {r.status || '—'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className={s.cell}>{r.startTime || '—'}</TableCell>
+                            <TableCell className={s.cell}>{r.endTime || '—'}</TableCell>
+                            <TableCell className={s.cell}>{r.errorMessage || '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

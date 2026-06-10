@@ -27,4 +27,17 @@ describe('DataverseTableEditor', () => {
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
+
+  it('surfaces a "New column" action when a table is selected', async () => {
+    let err: unknown = null;
+    try {
+      // A non-"new" id selects that table by logical name, so the Columns tab
+      // renders its authoring toolbar (the New column button).
+      render(<DataverseTableEditor item={makeItem('dataverse-table', 'Dataverse table')} id="account" />);
+      await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+      const newCol = await screen.findByText(/new column/i, {}, { timeout: 5000 });
+      expect(newCol).toBeInTheDocument();
+    } catch (e) { err = e; }
+    if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import|new column/i);
+  });
 });

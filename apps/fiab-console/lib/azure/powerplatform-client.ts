@@ -755,6 +755,177 @@ export async function getTableBusinessRules(envId: string, logicalName: string):
   }));
 }
 
+// ------------------------------------------------------------
+// Dataverse table authoring — create a column (real Web API write).
+//
+// Grounded in Microsoft Learn (create-update-column-definitions-using-web-api):
+//   POST <org>/api/data/v9.2/EntityDefinitions(LogicalName='{table}')/Attributes
+//   body = an AttributeMetadata document with the concrete @odata.type:
+//     - String   → Microsoft.Dynamics.CRM.StringAttributeMetadata   (+ MaxLength, FormatName.Value)
+//     - Memo     → Microsoft.Dynamics.CRM.MemoAttributeMetadata     (+ MaxLength)
+//     - Integer  → Microsoft.Dynamics.CRM.IntegerAttributeMetadata  (+ MinValue/MaxValue/Format)
+//     - Decimal  → Microsoft.Dynamics.CRM.DecimalAttributeMetadata  (+ Precision)
+//     - Money    → Microsoft.Dynamics.CRM.MoneyAttributeMetadata    (+ Precision)
+//     - Boolean  → Microsoft.Dynamics.CRM.BooleanAttributeMetadata  (+ OptionSet TrueOption/FalseOption)
+//     - DateTime → Microsoft.Dynamics.CRM.DateTimeAttributeMetadata (+ Format, DateTimeBehavior)
+//   DisplayName / Description are Label objects (LocalizedLabels[] + LanguageCode).
+//   RequiredLevel is an AttributeRequiredLevelManagedProperty.
+//   The platform returns 204 No Content with the new attribute URI in the
+//   OData-EntityId response header — we surface that as metadataId.
+//
+// Uses the dedicated Dataverse SP (LOOM_DATAVERSE_CLIENT_ID) — the SP must be a
+// Dataverse Application User with a role that grants prvCreateAttribute (System
+// Administrator / System Customizer). No new Azure resource; no Fabric path.
+// ------------------------------------------------------------
+
+export type DataverseColumnType =
+  | 'String' | 'Memo' | 'Integer' | 'Decimal' | 'Money' | 'Boolean' | 'DateTime';
+
+export interface AddColumnSpec {
+  /** Schema name including the publisher prefix, e.g. "new_Rating". */
+  schemaName: string;
+  displayName: string;
+  attributeType: DataverseColumnType;
+  /** None | Recommended | ApplicationRequired (default None). */
+  requiredLevel?: 'None' | 'Recommended' | 'ApplicationRequired';
+  description?: string;
+  /** String / Memo only — character cap (default 100 for String, 2000 for Memo). */
+  maxLength?: number;
+  /** Decimal / Money only — number of decimal places (default 2). */
+  precision?: number;
+  /** Integer only — Format: None | Duration | TimeZone | Language (default None). */
+  integerFormat?: 'None' | 'Duration' | 'TimeZone' | 'Language';
+  /** DateTime only — Format: DateOnly | DateAndTime (default DateAndTime). */
+  dateTimeFormat?: 'DateOnly' | 'DateAndTime';
+  /** Base language LCID for labels (default 1033 / en-US). */
+  languageCode?: number;
+}
+
+function label(text: string, lcid: number) {
+  return { '@odata.type': 'Microsoft.Dynamics.CRM.Label', LocalizedLabels: [
+    { '@odata.type': 'Microsoft.Dynamics.CRM.LocalizedLabel', Label: text, LanguageCode: lcid },
+  ] };
+}
+
+function requiredLevelProp(value: string) {
+  return {
+    '@odata.type': 'Microsoft.Dynamics.CRM.AttributeRequiredLevelManagedProperty',
+    Value: value, CanBeChanged: true, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings',
+  };
+}
+
+/** Build the AttributeMetadata document for the requested column type. */
+export function buildAttributeMetadata(spec: AddColumnSpec): Record<string, any> {
+  const lcid = spec.languageCode ?? 1033;
+  const base: Record<string, any> = {
+    SchemaName: spec.schemaName,
+    DisplayName: label(spec.displayName, lcid),
+    RequiredLevel: requiredLevelProp(spec.requiredLevel || 'None'),
+  };
+  if (spec.description) base.Description = label(spec.description, lcid);
+
+  switch (spec.attributeType) {
+    case 'String':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata',
+        MaxLength: spec.maxLength ?? 100,
+        FormatName: { Value: 'Text' },
+      };
+    case 'Memo':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.MemoAttributeMetadata',
+        MaxLength: spec.maxLength ?? 2000,
+        Format: 'TextArea',
+      };
+    case 'Integer':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.IntegerAttributeMetadata',
+        Format: spec.integerFormat || 'None',
+        MinValue: -2147483648, MaxValue: 2147483647,
+      };
+    case 'Decimal':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.DecimalAttributeMetadata',
+        Precision: spec.precision ?? 2,
+        MinValue: -100000000000, MaxValue: 100000000000,
+      };
+    case 'Money':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.MoneyAttributeMetadata',
+        Precision: spec.precision ?? 2, PrecisionSource: 2,
+        MinValue: -922337203685477, MaxValue: 922337203685477,
+      };
+    case 'Boolean':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.BooleanAttributeMetadata',
+        OptionSet: {
+          '@odata.type': 'Microsoft.Dynamics.CRM.BooleanOptionSetMetadata',
+          TrueOption: { Value: 1, Label: label('Yes', lcid) },
+          FalseOption: { Value: 0, Label: label('No', lcid) },
+        },
+        DefaultValue: false,
+      };
+    case 'DateTime':
+      return {
+        ...base, '@odata.type': 'Microsoft.Dynamics.CRM.DateTimeAttributeMetadata',
+        Format: spec.dateTimeFormat || 'DateAndTime',
+        DateTimeBehavior: { Value: 'UserLocal' },
+      };
+    default:
+      throw new PowerPlatformError(`Unsupported column type: ${spec.attributeType}`, 400);
+  }
+}
+
+/**
+ * Create a column on an existing Dataverse table. POSTs the AttributeMetadata
+ * document to the table's Attributes navigation property. Returns the new
+ * attribute URI from the OData-EntityId response header (204 No Content).
+ *
+ * Validation mirrors the Maker portal: a schema name with a publisher prefix
+ * is required (e.g. "new_Rating"); a bare name like "Rating" would be rejected
+ * by the platform with a 400, so we surface a precise hint up front.
+ */
+export async function addColumn(
+  envId: string, logicalName: string, spec: AddColumnSpec,
+): Promise<{ ok: true; metadataId?: string; entityId?: string }> {
+  if (!/^[a-z][a-z0-9]*_[A-Za-z0-9]+$/.test(spec.schemaName)) {
+    throw new PowerPlatformError(
+      `Schema name "${spec.schemaName}" must include a publisher prefix, e.g. "new_Rating".`,
+      400, null, undefined,
+      'Use your environment publisher prefix followed by an underscore and the column name (e.g. new_Rating, contoso_Score).',
+    );
+  }
+  const { url, scope } = await dataverseBase(envId);
+  const body = buildAttributeMetadata(spec);
+  const endpoint = `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Attributes`;
+  // Use the raw fetch path so we can read the OData-EntityId header on the 204.
+  const token = await getToken(scope);
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json',
+      'accept': 'application/json',
+      'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
+    },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let json: any = null; try { json = text ? JSON.parse(text) : null; } catch { /* text */ }
+    const msg = (json?.error?.message || json?.message || text || `POST ${endpoint} failed`).toString();
+    let hint: string | undefined;
+    if (res.status === 401 || res.status === 403) {
+      hint = 'The Dataverse SP (LOOM_DATAVERSE_CLIENT_ID) must be a Dataverse Application User with the System Administrator or System Customizer role on this environment to create columns.';
+    }
+    throw new PowerPlatformError(msg, res.status, json || text, endpoint, hint);
+  }
+  const entityId = res.headers.get('odata-entityid') || res.headers.get('OData-EntityId') || undefined;
+  const metadataId = entityId?.match(/Attributes\(([^)]+)\)/)?.[1];
+  return { ok: true, metadataId, entityId };
+}
+
 /** Top-N data rows for a table (real business data via the entity set). */
 export async function getTableData(
   envId: string,

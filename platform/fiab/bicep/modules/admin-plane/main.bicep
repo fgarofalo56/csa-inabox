@@ -54,6 +54,9 @@ param databricksUnityCatalogEnabled bool = false
 @allowed(['', 'synapse', 'databricks', 'aml-ci'])
 param loomNotebookBackend string = ''
 
+@description('Power Apps canvas web-player base for the in-Loom Play/embed + Studio tabs. Empty = code default https://apps.powerapps.com (Commercial). Sovereign clouds override: GCC/GCC-High = https://apps.gov.powerapps.us; DoD/IL5 = https://apps.appsplatform.us.')
+param powerAppsPlayerBase string = ''
+
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
 
@@ -517,6 +520,12 @@ param loomAzureOpenAiEndpoint string = ''
 
 @description('Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION) used by the Copilot / data-agent orchestrators. Default 2024-10-21; advance to 2025-01-01-preview or later for o-series reasoning models. Cloud-invariant — the data-plane HOST is derived per-boundary from environment() (openai.azure.us vs openai.azure.com).')
 param loomAoaiApiVersion string = '2024-10-21'
+
+@description('Azure OpenAI Evals (preview) API version (LOOM_AOAI_EVALS_API_VERSION) used by the AI Foundry Evaluations surface. Default "preview". Cloud-invariant — the data-plane HOST is derived per-boundary from environment().')
+param loomAoaiEvalsApiVersion string = 'preview'
+
+@description('Azure OpenAI fine-tuning + files (v1) API version (LOOM_AOAI_FT_API_VERSION) used by the AI Foundry Fine-tuning surface + dataset uploads. Default 2024-10-21. Cloud-invariant — only the data-plane host differs per boundary.')
+param loomAoaiFtApiVersion string = '2024-10-21'
 
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
@@ -2181,6 +2190,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
+            // Power Apps canvas web-player base for the in-Loom "Play / embed"
+            // tab + Studio tab (powerplatform-client.powerAppPlayerEmbedUri).
+            // Commercial = apps.powerapps.com (the code default). Sovereign
+            // clouds override: GCC/GCC-H = apps.gov.powerapps.us,
+            // DoD = apps.appsplatform.us. Empty = code falls back to commercial.
+            { name: 'LOOM_POWERAPPS_PLAYER_BASE', value: powerAppsPlayerBase }
             // AI Foundry model-hosting account — used by the hub editor's
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.
@@ -2260,6 +2275,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // models) without a code change. Cloud-invariant — only the data-plane
             // host differs per boundary, derived above from environment().
             { name: 'LOOM_AOAI_API_VERSION',       value: loomAoaiApiVersion }
+            // AOAI Evals (preview) + fine-tuning/files (v1) API versions. The
+            // foundry-cs-client reads LOOM_AOAI_EVALS_API_VERSION (default
+            // 'preview') for the evals data-plane and LOOM_AOAI_FT_API_VERSION
+            // (default 2024-10-21) for fine_tuning/jobs + /files. Cloud-invariant —
+            // only the host differs per boundary.
+            { name: 'LOOM_AOAI_EVALS_API_VERSION', value: loomAoaiEvalsApiVersion }
+            { name: 'LOOM_AOAI_FT_API_VERSION',    value: loomAoaiFtApiVersion }
             // AOAI token audience by cloud (public: cognitiveservices.azure.com,
             // Gov: cognitiveservices.azure.us). Derived from the ARM environment()
             // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
