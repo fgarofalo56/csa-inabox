@@ -115,7 +115,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [wizardInitial, setWizardInitial] = useState<
-    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string } | undefined
+    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; includeIceberg?: boolean; icebergStorageUrl?: string } | undefined
   >(undefined);
 
   const loadList = useCallback(async (wsId: string) => {
@@ -237,6 +237,8 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       database: sc.database || '',
       connectionId: sc.connectionId || '',
       tables: Array.isArray(sc.tables) ? sc.tables : [],
+      includeIceberg: !!sc.includeIceberg,
+      icebergStorageUrl: sc.icebergStorageUrl || '',
       displayName: detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '',
     });
     setWizardOpen(true);
@@ -535,6 +537,15 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
               {Array.isArray(detail.source.tables) && detail.source.tables.length ? ` · ${detail.source.tables.length} table(s) selected` : ''}
+              {detail.source.includeIceberg ? ' · Iceberg tables included' : ''}
+            </Caption1>
+          )}
+          {detail?.source?.includeIceberg && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Iceberg storage: <code>{detail.source.icebergStorageUrl || '—'}</code>
+              {Array.isArray(detail.iceberg) && detail.iceberg.length
+                ? ` · ${detail.iceberg.filter((t: any) => t.status === 'registered').length} Iceberg table(s) registered`
+                : ''}
             </Caption1>
           )}
 

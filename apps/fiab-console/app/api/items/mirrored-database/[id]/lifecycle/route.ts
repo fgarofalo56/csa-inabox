@@ -45,6 +45,8 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
     server: String(state?.server || def.server || ''),
     database: String(state?.database || def.database || ''),
     tables,
+    includeIceberg: !!(state?.includeIceberg ?? def.includeIceberg),
+    icebergStorageUrl: String(state?.icebergStorageUrl || def.icebergStorageUrl || ''),
   };
 }
 
@@ -97,6 +99,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       mirroringStatus,
       lastStateChange: new Date().toISOString(),
       tablesStatus: run.tables,
+      icebergStatus: run.iceberg || [],
       lastRun: { at: new Date().toISOString(), status: run.status, basePath: run.basePath, note: run.note, error: run.error, gate: run.gate, changeFeed: run.changeFeed },
     };
     const next: WorkspaceItem = { ...existing, state: nextState, updatedAt: new Date().toISOString() };
@@ -115,6 +118,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ok: run.ok, action,
       before, after: { mirroringStatus },
       tables: run.tables,
+      iceberg: run.iceberg,
       changeFeed: run.changeFeed,
       basePath: run.basePath,
       adfLastRun: monitor.adfLastRun,

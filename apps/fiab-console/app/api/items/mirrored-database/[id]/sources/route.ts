@@ -48,6 +48,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const database = String(st.database || def.database || '');
     const connectionId: string | undefined = st.connectionId || undefined;
     const tables = Array.isArray(st.tables) ? st.tables : [];
+    const includeIceberg = !!st.includeIceberg;
+    const icebergStorageUrl = String(st.icebergStorageUrl || '');
 
     let hasSecret = false;
     if (connectionId) {
@@ -59,7 +61,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     // One binding today; returned as an array (multi-source extension hook).
     const sources = sourceType || server || database
-      ? [{ sourceType, server, database, connectionId, tables, hasSecret }]
+      ? [{ sourceType, server, database, connectionId, tables, hasSecret, includeIceberg, icebergStorageUrl }]
       : [];
     return NextResponse.json({ ok: true, sources });
   } catch (e: any) {
@@ -78,8 +80,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
   const connectionId = body?.connectionId ? String(body.connectionId) : undefined;
+  const includeIceberg = sourceType === 'Snowflake' && !!body?.includeIceberg;
+  const icebergStorageUrl = includeIceberg ? String(body?.icebergStorageUrl || '').trim() : '';
   if (!knownSource(sourceType)) return err(`sourceType must be a supported mirror source`, 400);
   if (!database) return err('database is required', 400);
+  if (includeIceberg && !icebergStorageUrl) {
+    return err('icebergStorageUrl is required when Include Iceberg tables is on (the Snowflake external-volume ADLS Gen2 path)', 400);
+  }
 
   const tables = Array.isArray(body?.tables)
     ? body.tables.filter((t: any) => t?.schema && t?.table).map((t: any) => ({ schema: String(t.schema), table: String(t.table) }))
@@ -98,6 +105,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       database,
       connectionId: connectionId !== undefined ? connectionId : state.connectionId,
       tables,
+      includeIceberg,
+      icebergStorageUrl,
     };
     const next: WorkspaceItem = { ...existing, state: nextState, updatedAt: new Date().toISOString() };
     await items.item(existing.id, workspaceId).replace(next);
@@ -111,7 +120,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return NextResponse.json({
       ok: true,
-      source: { sourceType, server, database, connectionId: nextState.connectionId, tables, hasSecret },
+      source: { sourceType, server, database, connectionId: nextState.connectionId, tables, hasSecret, includeIceberg, icebergStorageUrl },
     });
   } catch (e: any) {
     if (e?.code === 404) return err('mirrored database not found', 404);

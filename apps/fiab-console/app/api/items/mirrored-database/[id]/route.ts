@@ -65,9 +65,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       definition: liveDefinition,
       status: { mirroringStatus: st.mirroringStatus || 'NotStarted', error: st.lastRun?.error },
       // Source config so the editor can pre-fill the Edit form + Test connection.
-      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [] },
+      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [], includeIceberg: !!st.includeIceberg, icebergStorageUrl: st.icebergStorageUrl || '' },
       lastRun: st.lastRun || null,
       tables,
+      // Snowflake Iceberg tables registered on the last Start (when includeIceberg is on).
+      iceberg: Array.isArray(st.icebergStatus) ? st.icebergStatus : [],
     });
   } catch (e: any) {
     if (e?.code === 404) return err('mirrored database not found', 404);
@@ -123,6 +125,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       database: body?.database ?? state.database,
       connectionId: body?.connectionId !== undefined ? body.connectionId : state.connectionId,
       tables,
+      includeIceberg: body?.includeIceberg !== undefined ? !!body.includeIceberg : state.includeIceberg,
+      icebergStorageUrl: body?.icebergStorageUrl !== undefined ? String(body.icebergStorageUrl) : state.icebergStorageUrl,
     };
     const next: WorkspaceItem = {
       ...existing,

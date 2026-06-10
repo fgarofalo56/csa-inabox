@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
         database: body?.database || srcProps.database || '',
         connectionId: body?.connectionId || undefined,
         tables: Array.isArray(body?.tables) ? body.tables : [],
+        // Snowflake "Include Iceberg tables" + its one external-volume storage path.
+        includeIceberg: !!(body?.includeIceberg ?? srcProps.includeIceberg),
+        icebergStorageUrl: String(body?.icebergStorageUrl || srcProps.icebergStorageUrl || ''),
         mirroringStatus: 'NotStarted',
       },
       createdBy: s.claims.upn || s.claims.email || s.claims.oid,

@@ -24,7 +24,7 @@
  */
 import { executeParameterized, enableMirroring, type MirroringConfig } from './azure-sql-client';
 import { listTables, sqlConfigGate } from './sql-objects-client';
-import { uploadFile, pathToHttpsUrl, getAccountName, listPaths, resolveAbfssRoot, type PathEntry } from './adls-client';
+import { uploadFile, pathToHttpsUrl, pathToHttpsUrlFor, getAccountName, listPaths, resolveAbfssRoot, type PathEntry } from './adls-client';
 import { submitSparkBatchJob, type SparkBatchRequest } from './synapse-dev-client';
 import { listPipelineRuns, adfConfigGate } from './adf-client';
 import { executePostgresQuery, listPostgresTables, postgresQueryGate } from './postgres-flex-client';
@@ -65,6 +65,38 @@ export interface MirrorSource {
   database: string;
   /** Explicit table subset; when empty the engine enumerates source tables. */
   tables?: MirrorTableSpec[];
+  /**
+   * Snowflake only — include the source's Apache Iceberg tables in the mirror.
+   * Snowflake-managed Iceberg tables keep their Parquet + Iceberg V2 metadata in
+   * an external cloud-storage volume (ADLS / S3), not inside the Snowflake FDN
+   * runtime. With this on, Loom registers those Iceberg table folders into ADLS
+   * Bronze as Delta-virtualizable tables (the OneLake Iceberg→Delta behaviour,
+   * done Azure-native — no Fabric). Off (the Fabric default for "all managed
+   * tables only") skips any Iceberg tables. Ignored for non-Snowflake sources.
+   */
+  includeIceberg?: boolean;
+  /**
+   * abfss/https URL of the ADLS Gen2 container/path that holds the Snowflake
+   * Iceberg tables' external volume (one storage connection per Fabric's rule —
+   * every selected Iceberg table must be reachable through this single path).
+   * Required when {@link includeIceberg} is true; each immediate sub-folder is
+   * treated as one Iceberg table.
+   */
+  icebergStorageUrl?: string;
+}
+
+/** Snowflake source ids that support the Iceberg-table option. */
+export const MIRROR_ICEBERG_FAMILY = new Set(['Snowflake']);
+
+export interface IcebergTableResult {
+  /** Table name (the external-volume sub-folder). */
+  table: string;
+  /** abfss/https path of the Iceberg table folder registered into the mirror. */
+  path: string;
+  /** Ready-to-run Synapse Serverless query over the Iceberg-as-Delta table. */
+  openrowset: string;
+  status: 'registered' | 'error';
+  error?: string;
 }
 
 export interface MirrorTableResult {
@@ -120,6 +152,12 @@ export interface MirrorRunResult {
   cdcName?: string;
   changeFeed?: MirroringConfig;
   tables: MirrorTableResult[];
+  /**
+   * Snowflake Iceberg tables registered into the mirror (only present when the
+   * source is Snowflake and `includeIceberg` is on). Each is an external-volume
+   * table folder referenced into ADLS Bronze and exposed as Delta-virtualizable.
+   */
+  iceberg?: IcebergTableResult[];
   /** Bronze landing root for the whole mirror (folder of folders). */
   basePath?: string;
   note: string;
@@ -570,6 +608,78 @@ export async function runMirrorAdfCdc(
   };
 }
 
+// ============================================================
+// Snowflake Iceberg tables — Azure-native (no Microsoft Fabric).
+//
+// Fabric's Snowflake mirroring lets you "include Iceberg tables": Snowflake-
+// managed Iceberg tables keep their Parquet + Iceberg V2 metadata in an external
+// cloud-storage volume (ADLS / S3), NOT inside the Snowflake FDN runtime. Fabric
+// shortcuts that storage into OneLake and converts Iceberg→Delta so the tables
+// are queryable across workloads (one storage connection covers all selected
+// Iceberg tables).
+//
+// The Azure-native parity (this function) reproduces that 1:1 with NO Fabric:
+//   - The user supplies the one external-volume storage path (abfss/https).
+//   - Each immediate sub-folder is treated as one Iceberg table.
+//   - We expose every table folder as a Synapse Serverless OPENROWSET over the
+//     Parquet data files (Iceberg's V2 data layout is Parquet), so it is
+//     immediately queryable — the same Iceberg→Delta-readable outcome OneLake's
+//     virtualization gives, done over Synapse Serverless / a Loom notebook.
+// No Fabric/OneLake host is ever called.
+// ============================================================
+
+/**
+ * Parse an ADLS Gen2 path (abfss:// or https://) into account/container/path.
+ * Returns null when the URL is not a recognizable ADLS Gen2 location.
+ */
+export function parseAdlsUrl(url: string): { account: string; container: string; path: string } | null {
+  const u = (url || '').trim();
+  if (!u) return null;
+  // abfss://CONTAINER@ACCOUNT.dfs.<suffix>/PATH
+  let m = u.match(/^abfss:\/\/([^@]+)@([^.]+)\.[^/]+\/(.*)$/i);
+  if (m) return { container: m[1], account: m[2], path: (m[3] || '').replace(/^\/+|\/+$/g, '') };
+  // https://ACCOUNT.dfs.<suffix>/CONTAINER/PATH  (or .blob)
+  m = u.match(/^https:\/\/([^.]+)\.(?:dfs|blob)\.[^/]+\/([^/]+)\/?(.*)$/i);
+  if (m) return { account: m[1], container: m[2], path: (m[3] || '').replace(/^\/+|\/+$/g, '') };
+  return null;
+}
+
+/**
+ * Register the Snowflake source's Iceberg tables (from one external-volume
+ * storage path) into the mirror. Lists each immediate sub-folder as one Iceberg
+ * table and returns a ready-to-query Synapse Serverless OPENROWSET per table.
+ * Real ADLS Gen2 enumeration (no mocks); honest result when the path can't be
+ * read or holds no table folders.
+ */
+export async function registerIcebergTables(src: MirrorSource): Promise<IcebergTableResult[]> {
+  if (!src.includeIceberg || !MIRROR_ICEBERG_FAMILY.has(src.sourceType)) return [];
+  const loc = parseAdlsUrl(src.icebergStorageUrl || '');
+  if (!loc) {
+    return [{
+      table: '(storage path)', path: src.icebergStorageUrl || '', openrowset: '', status: 'error',
+      error: 'Iceberg storage path must be an ADLS Gen2 abfss:// or https:// URL (the Snowflake external volume).',
+    }];
+  }
+  let entries: PathEntry[];
+  try {
+    entries = await listPaths(loc.container, loc.path, MAX_TABLES, loc.account);
+  } catch (e: any) {
+    return [{
+      table: '(storage path)', path: src.icebergStorageUrl || '', openrowset: '', status: 'error',
+      error: `Could not list the Iceberg storage path: ${e?.message || String(e)}`,
+    }];
+  }
+  const folders = entries.filter((p) => p.isDirectory);
+  return folders.map((p) => {
+    // p.name is the full path within the container — take the leaf folder name.
+    const leaf = p.name.split('/').filter(Boolean).pop() || p.name;
+    const httpsUrl = pathToHttpsUrlFor(loc.account, loc.container, `${p.name.replace(/\/+$/, '')}/`);
+    const openrowset =
+      `SELECT TOP 100 * FROM OPENROWSET(BULK '${httpsUrl}', FORMAT = 'PARQUET') AS rows`;
+    return { table: leaf, path: httpsUrl, openrowset, status: 'registered' as const };
+  });
+}
+
 /**
  * Run an Azure-native mirror Start: change feed + snapshot of the source's
  * tables into Bronze. Returns real per-table metrics for the editor's grid.
@@ -594,6 +704,39 @@ export async function runMirrorSnapshot(
     '. Query it from Synapse Serverless SQL, a Loom notebook, or attach it to a lakehouse via Weave.';
 
   if (!engineCanSnapshot(src.sourceType)) {
+    // Snowflake with "Include Iceberg tables": the source's managed FDN tables
+    // authenticate through Snowflake's own copy runtime (a disclosed follow-up),
+    // but its Iceberg tables live in an external cloud-storage volume we CAN
+    // reference Azure-native. Register those now so the option is functional
+    // end-to-end (no Fabric, no OneLake) instead of a flat gate.
+    if (MIRROR_ICEBERG_FAMILY.has(src.sourceType) && src.includeIceberg) {
+      if (!src.icebergStorageUrl) {
+        return {
+          ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
+          gate: {
+            missing: 'Iceberg storage path',
+            message:
+              'Include Iceberg tables is on but no storage path is set. Edit the mirror and enter the ADLS Gen2 ' +
+              'abfss:// / https:// URL of the Snowflake Iceberg external volume (one storage connection covers all selected Iceberg tables).',
+          },
+          note,
+        };
+      }
+      const iceberg = await registerIcebergTables(src);
+      const anyOk = iceberg.some((t) => t.status === 'registered');
+      return {
+        ok: anyOk,
+        status: anyOk ? 'Running' : 'Error',
+        backend: 'azure-native-cdc',
+        tables: [],
+        iceberg,
+        note:
+          'Azure-native Snowflake Iceberg mirror (no Microsoft Fabric): each Iceberg table folder in the external ' +
+          'volume is registered and exposed as a Synapse Serverless OPENROWSET over its Parquet data — the same ' +
+          'Iceberg→Delta-readable outcome without OneLake. The managed (FDN) tables’ copy runtime is a disclosed follow-up.',
+        error: anyOk ? undefined : (iceberg[0]?.error || 'No Iceberg tables could be registered from the storage path.'),
+      };
+    }
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
       gate: {
@@ -601,7 +744,10 @@ export async function runMirrorSnapshot(
         message:
           `${src.sourceType || 'This source'} authenticates with its own runtime — its Azure-native copy ` +
           '(ADF / Synapse Link) is a disclosed follow-up. Azure SQL DB/MI, SQL Server, PostgreSQL, and ' +
-          'Cosmos DB replicate now via this engine.',
+          'Cosmos DB replicate now via this engine.' +
+          (MIRROR_ICEBERG_FAMILY.has(src.sourceType)
+            ? ' Turn on “Include Iceberg tables” and supply the external-volume storage path to mirror this source’s Iceberg tables now.'
+            : ''),
       },
       note,
     };

@@ -23,12 +23,13 @@ Source UI (grounded in Microsoft Learn):
 | Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe) |
 | Enumerate source tables                                      | ✅ built (Load tables) | `/[id]/tables` (credential-aware, KV secretRef) + `/source-tables` (pre-create) |
 | Include/exclude a subset of tables                           | ✅ built (checkbox grid + All/None) | persisted to `state.tables` |
+| **Snowflake: include Iceberg tables** (vs managed tables only) | ✅ built (Snowflake-only checkbox + one external-volume storage path) | `registerIcebergTables()` lists each external-volume sub-folder via real ADLS Gen2 `listPaths` → Synapse Serverless OPENROWSET per Iceberg table |
 | Name + review before create                                  | ✅ built (step 4 summary) | POST/PATCH `/api/items/mirrored-database[/id]` |
 | Edit an existing mirror's source/tables                      | ✅ built (Edit → same wizard) | PATCH `/[id]` |
 | Multi-source binding surface                                 | ✅ built (GET/POST `/[id]/sources`) | item state |
 | Start replication → initial load + CDC                       | ✅ built (Start) | ADF CDC → Bronze **Delta** (opt-in) or built-in CSV snapshot engine — both Azure-native |
 | Monitor per-table replication (rows/bytes/last sync)         | ✅ built (replication grid) | `state.tablesStatus` |
-| Snowflake / Open-mirroring continuous CDC                    | ⚠️ honest-gate | engine returns a disclosed follow-up gate (`no-vaporware.md`) |
+| Snowflake / Open-mirroring continuous CDC (managed/FDN tables) | ⚠️ honest-gate | engine returns a disclosed follow-up gate for the source's own copy runtime (`no-vaporware.md`); the Iceberg-table path above is fully functional |
 
 ## Backend wiring
 
@@ -40,11 +41,27 @@ Source UI (grounded in Microsoft Learn):
   `LOOM_MIRROR_ADLS_LINKED_SERVICE` are set; otherwise the built-in TDS/PG/Cosmos →
   CSV-in-Bronze engine runs. **No Microsoft Fabric** on either path
   (`no-fabric-dependency.md`).
+- **Snowflake Iceberg tables** (`includeIceberg` + `icebergStorageUrl`): Snowflake-
+  managed Iceberg tables keep their Parquet + Iceberg V2 metadata in an external
+  cloud-storage volume (ADLS Gen2), not inside the Snowflake FDN runtime. With the
+  option on, Start (`runMirrorSnapshot`) calls `registerIcebergTables()` which parses
+  the one external-volume storage path (`parseAdlsUrl`, sovereign-cloud aware),
+  enumerates each Iceberg table folder with the real ADLS Gen2 `listPaths`, and exposes
+  each as a ready-to-run Synapse Serverless `OPENROWSET(... FORMAT='PARQUET')`. This is
+  the same Iceberg→Delta-readable outcome OneLake's metadata virtualization gives,
+  achieved **Azure-native with no Fabric/OneLake** (`no-fabric-dependency.md`). One
+  storage connection covers all selected Iceberg tables, matching Fabric's rule; the
+  wizard requires the path when the option is on and the route validates it server-side.
 - **Bicep:** Console UAMI granted Storage Blob Data Contributor on the lakehouse SA
   (`synapse-storage-rbac.bicep`, default-on for the CSV engine writes); ADF system MI
   already has Storage Blob Data Contributor (`adf.bicep`) for the Delta writes; Key
   Vault Secrets Officer already granted (`keyvault.bicep`). New opt-in env vars wired
-  in `admin-plane/main.bicep`.
+  in `admin-plane/main.bicep`. The Snowflake Iceberg path introduces **no new env var,
+  Cosmos container, or managed resource** — `includeIceberg` / `icebergStorageUrl` ride
+  on the existing mirrored-database item state. When the Iceberg external-volume storage
+  account is **outside** the DLZ, the Console UAMI needs **Storage Blob Data Reader** on
+  that account — an honest per-deployment cross-account RBAC grant (an Azure requirement,
+  not a Fabric one), surfaced as the engine's honest error if the listing is denied.
 
 ## Verification
 

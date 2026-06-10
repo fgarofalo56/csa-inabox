@@ -130,7 +130,17 @@ export interface ActivatorContent {
 
 export interface MirroredDatabaseContent {
   kind: 'mirrored-database';
-  source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[] };
+  source: {
+    kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[];
+    /**
+     * Snowflake only — include the source's Apache Iceberg tables (1:1 with
+     * Fabric's "all managed and Iceberg tables" choice). When true,
+     * `icebergStorageUrl` must be the ADLS Gen2 path of the Iceberg external
+     * volume (one storage connection covers all selected Iceberg tables).
+     */
+    includeIceberg?: boolean;
+    icebergStorageUrl?: string;
+  };
 }
 
 /**
