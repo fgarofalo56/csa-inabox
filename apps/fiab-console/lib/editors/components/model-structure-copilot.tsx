@@ -22,12 +22,62 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Button, Caption1, Checkbox, Divider, Input, Spinner, Subtitle2, Text, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle, tokens,
+  MessageBar, MessageBarBody, MessageBarTitle, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Sparkle20Regular, Rename20Regular, TextDescription20Regular,
   Link20Regular, History20Regular, ArrowUndo16Regular, Save16Regular,
 } from '@fluentui/react-icons';
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalL,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    columnGap: tokens.spacingHorizontalS,
+  },
+  headerIcon: { color: tokens.colorBrandForeground1 },
+  intro: { color: tokens.colorNeutralForeground3 },
+  statLine: { color: tokens.colorNeutralForeground2 },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXS,
+  },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    columnGap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  sectionTitleSpacer: { flexGrow: 1 },
+  applyBtn: { marginTop: tokens.spacingVerticalSNudge, alignSelf: 'flex-start' },
+  emptyNote: { color: tokens.colorNeutralForeground3 },
+  checkpointIntro: {
+    color: tokens.colorNeutralForeground3,
+    display: 'block',
+    marginBottom: tokens.spacingVerticalS,
+  },
+  checkpointForm: {
+    display: 'flex',
+    columnGap: tokens.spacingHorizontalS,
+    alignItems: 'flex-end',
+    marginBottom: tokens.spacingVerticalS,
+    flexWrap: 'wrap',
+  },
+  checkpointInput: { minWidth: '240px' },
+  tableScroll: {
+    overflow: 'auto',
+    maxHeight: '240px',
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: `0 0 0 1px ${tokens.colorNeutralStroke2}`,
+  },
+  reasonBadge: { marginLeft: tokens.spacingHorizontalXS },
+});
 
 interface MeasureLite { name: string; description: string; expression: string }
 interface RelationshipLite {
@@ -75,6 +125,7 @@ async function postAction(datasetId: string, body: Record<string, unknown>): Pro
 }
 
 export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStructureCopilotProps) {
+  const s = useStyles();
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -178,15 +229,15 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Sparkle20Regular style={{ color: tokens.colorBrandForeground1 }} />
+    <div className={s.root}>
+      <div className={s.header}>
+        <Sparkle20Regular className={s.headerIcon} />
         <Subtitle2>Model-structure Copilot</Subtitle2>
         {summary?.xmlaWriteback
           ? <Badge appearance="tint" color="success" size="small">XMLA writeback active</Badge>
           : <Badge appearance="tint" color="informative" size="small">Loom-native (Cosmos)</Badge>}
       </div>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+      <Caption1 className={s.intro}>
         Edit the model structure in natural language — rename measures, generate descriptions, suggest relationships, and
         snapshot/restore the model. Suggestions are PROPOSALS; nothing is written until you select rows and Apply.
         Works against the Loom-native model with no Power BI / Fabric / Analysis Services required; when
@@ -208,15 +259,16 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
 
       {itemFound && (
         <>
-          <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+          <Caption1 className={s.statLine}>
             Model: <b>{measureCount}</b> measure(s), <b>{relCount}</b> relationship(s).
           </Caption1>
 
           {/* ── Rename measures ── */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div className={s.section}>
+            <div className={s.sectionHead}>
               <Rename20Regular />
               <Subtitle2>Rename measures</Subtitle2>
+              <span className={s.sectionTitleSpacer} />
               <Button size="small" appearance="primary" icon={<Sparkle20Regular />} disabled={busy === 'suggest-renames' || !measureCount}
                 onClick={suggestRenames}>{busy === 'suggest-renames' ? 'Thinking…' : 'Suggest renames'}</Button>
             </div>
@@ -240,22 +292,23 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
                     ))}
                   </TableBody>
                 </Table>
-                <Button size="small" appearance="primary" icon={<Save16Regular />} style={{ marginTop: 6 }}
+                <Button size="small" appearance="primary" icon={<Save16Regular />} className={s.applyBtn}
                   disabled={busy === 'apply-renames'} onClick={applyRenames}>
                   {busy === 'apply-renames' ? 'Applying…' : 'Apply selected renames'}
                 </Button>
               </>
             )}
-            {renames && renames.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rename suggestions — the measure names look good.</Caption1>}
+            {renames && renames.length === 0 && <Caption1 className={s.emptyNote}>No rename suggestions — the measure names look good.</Caption1>}
           </div>
 
           <Divider />
 
           {/* ── Describe measures ── */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div className={s.section}>
+            <div className={s.sectionHead}>
               <TextDescription20Regular />
               <Subtitle2>Generate descriptions</Subtitle2>
+              <span className={s.sectionTitleSpacer} />
               <Button size="small" appearance="primary" icon={<Sparkle20Regular />} disabled={busy === 'suggest-descriptions' || !measureCount}
                 onClick={suggestDescs}>{busy === 'suggest-descriptions' ? 'Thinking…' : 'Auto-describe measures'}</Button>
             </div>
@@ -277,22 +330,23 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
                     ))}
                   </TableBody>
                 </Table>
-                <Button size="small" appearance="primary" icon={<Save16Regular />} style={{ marginTop: 6 }}
+                <Button size="small" appearance="primary" icon={<Save16Regular />} className={s.applyBtn}
                   disabled={busy === 'apply-descriptions'} onClick={applyDescs}>
                   {busy === 'apply-descriptions' ? 'Applying…' : 'Apply selected descriptions'}
                 </Button>
               </>
             )}
-            {descs && descs.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No description suggestions.</Caption1>}
+            {descs && descs.length === 0 && <Caption1 className={s.emptyNote}>No description suggestions.</Caption1>}
           </div>
 
           <Divider />
 
           {/* ── Suggest relationships ── */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div className={s.section}>
+            <div className={s.sectionHead}>
               <Link20Regular />
               <Subtitle2>Suggest relationships</Subtitle2>
+              <span className={s.sectionTitleSpacer} />
               <Button size="small" appearance="primary" icon={<Sparkle20Regular />} disabled={busy === 'suggest-relationships'}
                 onClick={suggestRels}>{busy === 'suggest-relationships' ? 'Thinking…' : 'Suggest relationships'}</Button>
             </div>
@@ -318,35 +372,35 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
                     ))}
                   </TableBody>
                 </Table>
-                <Button size="small" appearance="primary" icon={<Save16Regular />} style={{ marginTop: 6 }}
+                <Button size="small" appearance="primary" icon={<Save16Regular />} className={s.applyBtn}
                   disabled={busy === 'apply-relationships'} onClick={applyRels}>
                   {busy === 'apply-relationships' ? 'Applying…' : 'Apply selected relationships'}
                 </Button>
               </>
             )}
-            {rels && rels.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No relationship suggestions for the visible schema.</Caption1>}
+            {rels && rels.length === 0 && <Caption1 className={s.emptyNote}>No relationship suggestions for the visible schema.</Caption1>}
           </div>
 
           <Divider />
 
           {/* ── Checkpoints ── */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div className={s.section}>
+            <div className={s.sectionHead}>
               <History20Regular />
               <Subtitle2>Checkpoints</Subtitle2>
             </div>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 6 }}>
+            <Caption1 className={s.checkpointIntro}>
               Snapshot the model structure (measures + relationships) before a bulk change. Restore any checkpoint to roll
               back — a pre-restore checkpoint is taken automatically so a restore is itself undoable. Up to 20 are kept.
             </Caption1>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+            <div className={s.checkpointForm}>
               <Input size="small" placeholder="Checkpoint label (optional)" value={checkpointLabel}
-                onChange={(_e, d) => setCheckpointLabel(d.value)} style={{ minWidth: 240 }} aria-label="Checkpoint label" />
+                onChange={(_e, d) => setCheckpointLabel(d.value)} className={s.checkpointInput} aria-label="Checkpoint label" />
               <Button size="small" icon={<Save16Regular />} disabled={busy === 'checkpoint'} onClick={takeCheckpoint}>
                 {busy === 'checkpoint' ? 'Capturing…' : 'Take checkpoint'}
               </Button>
             </div>
-            <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+            <div className={s.tableScroll}>
               <Table size="small" aria-label="Model checkpoints">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Label</TableHeaderCell>
@@ -361,7 +415,7 @@ export function ModelStructureCopilot({ datasetId, onModelChanged }: ModelStruct
                   )}
                   {checkpoints.map((c) => (
                     <TableRow key={c.id}>
-                      <TableCell><Text size={200}>{c.label}</Text> {c.reason !== 'manual' && <Badge size="extra-small" appearance="outline">{c.reason}</Badge>}</TableCell>
+                      <TableCell><Text size={200}>{c.label}</Text>{c.reason !== 'manual' && <Badge className={s.reasonBadge} size="extra-small" appearance="outline">{c.reason}</Badge>}</TableCell>
                       <TableCell><Caption1>{new Date(c.createdAt).toLocaleString()}</Caption1></TableCell>
                       <TableCell><Caption1>{c.measureCount}</Caption1></TableCell>
                       <TableCell><Caption1>{c.relationshipCount}</Caption1></TableCell>
