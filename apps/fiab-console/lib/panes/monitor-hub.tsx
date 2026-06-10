@@ -251,7 +251,8 @@ export function MonitorHubPane() {
       <div className={styles.filters}>
         <Input
           className={styles.search}
-          contentBefore={<Search20Regular />}
+          aria-label="Search activities by name or submitter"
+          contentBefore={<Search20Regular aria-hidden />}
           placeholder="Search by name or submitter"
           value={q}
           onChange={(_, d) => setQ(d.value)}
