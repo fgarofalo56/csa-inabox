@@ -77,8 +77,12 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
   },
   sectionTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
+  sectionIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   certRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS },
   certGrow: { flex: 1, minWidth: 0 },
+  certOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0, width: '100%' },
+  certOptionIcon: { flexShrink: 0, color: tokens.colorNeutralForeground3 },
+  certOptionName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
 
 interface Props {
@@ -152,6 +156,21 @@ export function ConnectSourceDialog({
 
   /** Does this connector expose any KV-cert pickers? (drives the lazy fetch). */
   const hasCertFields = !!picked?.fields.some((f) => f.kind === 'cert');
+
+  /**
+   * Expiry status for a Key Vault certificate. Surfaced inline in the picker so
+   * operators don't pick a cert that's already expired or about to lapse —
+   * matching the Azure portal's cert-expiry affordance.
+   */
+  function certExpiryStatus(expires?: string): { label: string; tone: 'expired' | 'soon' | 'ok' } | null {
+    if (!expires) return null;
+    const ts = Date.parse(expires);
+    if (Number.isNaN(ts)) return null;
+    const days = Math.floor((ts - Date.now()) / 86_400_000);
+    if (days < 0) return { label: 'expired', tone: 'expired' };
+    if (days <= 30) return { label: `expires in ${days}d`, tone: 'soon' };
+    return { label: `exp ${expires.slice(0, 10)}`, tone: 'ok' };
+  }
 
   async function loadCerts() {
     setCertsLoading(true); setCertError(null);
@@ -311,9 +330,9 @@ export function ConnectSourceDialog({
                         <div key={`sec-${f.section}`}>
                           <Divider />
                           <div className={styles.sectionHead}>
-                            <Certificate20Regular />
+                            <Certificate20Regular className={styles.sectionIcon} />
                             <span className={styles.sectionTitle}>{f.section}</span>
-                            <Badge appearance="outline" color="warning" size="small">Preview</Badge>
+                            {picked.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
                           </div>
                         </div>,
                       );
@@ -346,30 +365,54 @@ export function ConnectSourceDialog({
                         </Field>,
                       );
                     } else if (f.kind === 'cert') {
+                      const usableCerts = certs.filter((c) => c.enabled);
+                      const chosen = usableCerts.find((c) => c.name === props[f.key]);
+                      const chosenStatus = chosen ? certExpiryStatus(chosen.expires) : null;
+                      const expiryWarn =
+                        chosenStatus?.tone === 'expired'
+                          ? `Selected certificate has expired (${chosen?.expires?.slice(0, 10)}). Rotate it in Key Vault before connecting.`
+                          : chosenStatus?.tone === 'soon'
+                          ? `Selected certificate ${chosenStatus.label} — rotate it soon to avoid an ingestion outage.`
+                          : null;
                       nodes.push(
                         <Field key={f.key} label={f.label} required={f.required} hint={f.help}
-                          validationState={certError ? 'error' : undefined}
-                          validationMessage={certError || undefined}>
+                          validationState={certError ? 'error' : expiryWarn ? 'warning' : undefined}
+                          validationMessage={certError || expiryWarn || undefined}>
                           <div className={styles.certRow}>
                             <div className={styles.certGrow}>
                               <Dropdown
                                 aria-label={f.label}
-                                disabled={!!certGate || certsLoading || certs.length === 0}
+                                disabled={!!certGate || certsLoading || usableCerts.length === 0}
                                 placeholder={
                                   certGate ? 'No cert vault configured'
                                     : certsLoading ? 'Loading certificates…'
-                                    : certs.length === 0 ? 'No certificates in vault'
+                                    : usableCerts.length === 0 ? 'No certificates in vault'
                                     : 'Select a certificate…'
                                 }
                                 selectedOptions={props[f.key] ? [props[f.key]] : []}
                                 value={props[f.key] || ''}
                                 onOptionSelect={(_, d) => setVal(d.optionValue || '')}
                               >
-                                {certs.filter((c) => c.enabled).map((c) => (
-                                  <Option key={c.id} value={c.name} text={c.name}>
-                                    {c.name}{c.expires ? ` (exp ${c.expires.slice(0, 10)})` : ''}
-                                  </Option>
-                                ))}
+                                {usableCerts.map((c) => {
+                                  const st = certExpiryStatus(c.expires);
+                                  return (
+                                    <Option key={c.id} value={c.name} text={c.name}>
+                                      <span className={styles.certOption}>
+                                        <Certificate20Regular className={styles.certOptionIcon} />
+                                        <span className={styles.certOptionName}>{c.name}</span>
+                                        {st && (
+                                          <Badge
+                                            appearance="tint"
+                                            size="small"
+                                            color={st.tone === 'expired' ? 'danger' : st.tone === 'soon' ? 'warning' : 'informative'}
+                                          >
+                                            {st.label}
+                                          </Badge>
+                                        )}
+                                      </span>
+                                    </Option>
+                                  );
+                                })}
                               </Dropdown>
                             </div>
                             <Button appearance="subtle" icon={<ArrowClockwise16Regular />}
