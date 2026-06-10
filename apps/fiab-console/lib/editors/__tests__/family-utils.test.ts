@@ -20,6 +20,8 @@ import {
   splitAdlsPath, joinAdlsPath,
   validateVarValue,
   parseOntologyHierarchy,
+  matchClassesToTables,
+  buildEntityChangeQuery,
   aiStateLabel, aiStatusLabel,
   computeGeoBbox, bboxToZoom,
   parseUdfFunctions,
@@ -190,6 +192,53 @@ describe('parseOntologyHierarchy', () => {
     const parsed = parseOntologyHierarchy(src);
     expect(parsed).toHaveLength(5);
     expect(parsed.find(c => c.name === 'Customer')?.parent).toBe('Party');
+  });
+});
+
+// ============================================================
+// matchClassesToTables / buildEntityChangeQuery  [OntologyEditor binding]
+// ============================================================
+
+describe('matchClassesToTables', () => {
+  const classes = [
+    { name: 'Customer' }, { name: 'Order' }, { name: 'Vendor' },
+  ];
+  it('returns only the classes whose name matches a table (case-insensitive)', () => {
+    const out = matchClassesToTables(classes, ['dbo.customer', 'ORDER']);
+    expect(out.map((c) => c.name).sort()).toEqual(['Customer', 'Order']);
+  });
+  it('strips a schema prefix before matching', () => {
+    const out = matchClassesToTables(classes, ['sales.Vendor']);
+    expect(out.map((c) => c.name)).toEqual(['Vendor']);
+  });
+  it('returns [] when nothing matches', () => {
+    expect(matchClassesToTables(classes, ['unrelated', 'misc.table'])).toEqual([]);
+  });
+  it('tolerates non-array / empty inputs', () => {
+    expect(matchClassesToTables(classes, [])).toEqual([]);
+    expect(matchClassesToTables([], ['Customer'])).toEqual([]);
+    expect(matchClassesToTables(classes, undefined as unknown as string[])).toEqual([]);
+  });
+});
+
+describe('buildEntityChangeQuery', () => {
+  it('produces KQL with the entityType in a where clause + the operation filter', () => {
+    const q = buildEntityChangeQuery('Customer', 'lakehouse', 'item-123', 'MyEvents_CL');
+    expect(q).toContain('MyEvents_CL');
+    expect(q).toContain('where entityType == "Customer"');
+    expect(q).toContain('operation in ("INSERT","UPDATE","DELETE")');
+    expect(q).toContain('// Loom ontology entity-change trigger — lakehouse item-123');
+  });
+  it('defaults the table to AppEvents_CL when none is provided', () => {
+    const prev = process.env.LOOM_ACTIVATOR_DEFAULT_TABLE;
+    delete process.env.LOOM_ACTIVATOR_DEFAULT_TABLE;
+    expect(buildEntityChangeQuery('Order', 'warehouse', 'w1')).toContain('AppEvents_CL');
+    if (prev !== undefined) process.env.LOOM_ACTIVATOR_DEFAULT_TABLE = prev;
+  });
+  it('escapes embedded quotes in the entity type and does not throw on odd input', () => {
+    const q = buildEntityChangeQuery('Wei"rd', 'lakehouse', 'x\n y', 'T');
+    expect(q).toContain('Wei\\"rd');
+    expect(() => buildEntityChangeQuery('', 'lakehouse', '')).not.toThrow();
   });
 });
 

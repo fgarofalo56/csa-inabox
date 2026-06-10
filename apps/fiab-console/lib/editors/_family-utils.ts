@@ -85,6 +85,75 @@ export interface OntologyClass {
 }
 
 /**
+ * A binding from a Lakehouse / Warehouse data item into the ontology. One
+ * binding maps a physical data source to one or more ontology entity types
+ * (classes) — the rows of the source tables become instances of those types.
+ * Persisted on the ontology item's `state.entityBindings[]`.
+ */
+export interface OntologyEntityBinding {
+  /** Azure-native source kind. Both default to Cosmos-listed items. */
+  sourceKind: 'lakehouse' | 'warehouse';
+  /** Cosmos item GUID of the bound lakehouse/warehouse. */
+  sourceItemId: string;
+  /** Display name of the bound item (cached for the UI). */
+  sourceDisplayName: string;
+  /** Ontology class names this source materializes as entity instances. */
+  entityTypes: string[];
+  /** ISO-8601 timestamp the binding was created/updated. */
+  boundAt?: string;
+}
+
+/**
+ * Given a parsed ontology class list and a list of physical table names from a
+ * Lakehouse/Warehouse schema, return the classes whose names match a table name
+ * (case-insensitive, ignoring any `schema.` prefix). Used to pre-select the
+ * entity types when binding a data source so the user doesn't have to map by
+ * hand when the names already line up.
+ */
+export function matchClassesToTables(
+  classes: OntologyClass[],
+  tableNames: string[],
+): OntologyClass[] {
+  const normalised = new Set(
+    (Array.isArray(tableNames) ? tableNames : [])
+      .filter((t): t is string => typeof t === 'string' && t.length > 0)
+      .map((t) => (t.split('.').pop() || t).toLowerCase()),
+  );
+  return (Array.isArray(classes) ? classes : []).filter((c) => normalised.has(c.name.toLowerCase()));
+}
+
+/**
+ * Build the Azure-native (Log Analytics KQL) change-detection query for an
+ * Activator trigger fired on entity changes. The query targets the custom-log
+ * table the Loom activator engine emits entity-change events to
+ * (`LOOM_ACTIVATOR_DEFAULT_TABLE`, default `AppEvents_CL`) and fires when a row
+ * with the matching `entityType` and a write operation (INSERT/UPDATE/DELETE)
+ * appears. The created scheduledQueryRule runs this verbatim — see
+ * activator-monitor.ts buildRuleQuery (a verbatim `query` always wins).
+ *
+ * Pure + side-effect-free except for reading the env default table name, so it
+ * is vitest-coverable. `sourceKind`/`sourceItemId` are recorded in the query
+ * comment for provenance (and to scope future per-source filters) without
+ * changing the firing condition.
+ */
+export function buildEntityChangeQuery(
+  entityType: string,
+  sourceKind: 'lakehouse' | 'warehouse',
+  sourceItemId: string,
+  defaultTable?: string,
+): string {
+  const table = (defaultTable || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents_CL').trim() || 'AppEvents_CL';
+  const et = String(entityType || '').replace(/"/g, '\\"');
+  const src = String(sourceItemId || '').replace(/[\r\n]/g, ' ');
+  return [
+    `// Loom ontology entity-change trigger — ${sourceKind} ${src}`,
+    table,
+    `| where entityType == "${et}"`,
+    `| where operation in ("INSERT","UPDATE","DELETE")`,
+  ].join('\n');
+}
+
+/**
  * Parse the lightweight ontology DSL into a class hierarchy. The DSL format:
  *   ClassName : ParentClass  -- description
  *
