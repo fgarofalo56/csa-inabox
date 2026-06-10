@@ -90,21 +90,17 @@ let _savedQueries: Container | null = null;
 //                        BFF `workspaces` config container.
 //   workspace-folders  — Loom-native folder hierarchy (OneLake folder parity),
 //                        PK /workspaceId so the Explorer tree hits one partition.
-//   task-flows         — task-automation flows owned by a workspace, PK
-//                        /workspaceId for the task-editor list query.
 //   embed-codes        — tenant-scoped embed codes (one per embedded report /
 //                        dashboard), PK /tenantId.
 //   org-visuals        — org-level visual templates (theme / branding / layouts),
 //                        PK /tenantId.
-//   azure-connections  — Azure service connection profiles (ARM subscription /
-//                        resource-group bindings), PK /tenantId. Distinct from
-//                        the secretRef-bearing `connections` container.
+// (`task-flows` and `azure-connections` are declared below — they were added
+//  in parallel branches and carry workspace-scoped PKs; we reuse those single
+//  declarations rather than duplicating them here.)
 let _loomWorkspaces: Container | null = null;
 let _workspaceFolders: Container | null = null;
-let _taskFlows: Container | null = null;
 let _embedCodes: Container | null = null;
 let _orgVisuals: Container | null = null;
-let _azureConnections: Container | null = null;
 let _pbiDashboardOverlays: Container | null = null;
 // Paginated-report (RDL) definitions — the Loom-native authoring document for
 // the paginated-report editor (data sources, datasets, tablixes, parameters).
@@ -461,10 +457,8 @@ async function ensure() {
   // skip bicep. Partition keys MUST match cosmos.bicep exactly.
   _loomWorkspaces    = await mk('loom-workspaces',    '/tenantId');
   _workspaceFolders  = await mk('workspace-folders',  '/workspaceId');
-  _taskFlows         = await mk('task-flows',          '/workspaceId');
   _embedCodes        = await mk('embed-codes',         '/tenantId');
   _orgVisuals        = await mk('org-visuals',         '/tenantId');
-  _azureConnections  = await mk('azure-connections',   '/tenantId');
   // Loom-native overlay for Power BI / AAS dashboards: pinned-DAX tiles, Q&A
   // (Copilot→DAX) tiles, streaming (ADX/KQL) tiles, and the grid layout. Stored
   // separately from the Power BI REST tile list so the PBI ACL never gates the
@@ -561,14 +555,12 @@ export async function taskFlowsContainer(): Promise<Container> { await ensure();
 export async function loomWorkspacesContainer(): Promise<Container>  { await ensure(); return _loomWorkspaces!; }
 /** Workspace-native folder hierarchy (OneLake folder parity), PK /workspaceId. */
 export async function workspaceFoldersContainer(): Promise<Container> { await ensure(); return _workspaceFolders!; }
-/** Task-automation flows owned by a workspace, PK /workspaceId. */
-export async function taskFlowsContainer(): Promise<Container>        { await ensure(); return _taskFlows!; }
 /** Tenant-scoped embed codes (one per embedded report/dashboard), PK /tenantId. */
 export async function embedCodesContainer(): Promise<Container>       { await ensure(); return _embedCodes!; }
 /** Org-level visual templates (theme/branding/layouts), PK /tenantId. */
 export async function orgVisualsContainer(): Promise<Container>       { await ensure(); return _orgVisuals!; }
-/** Azure service connection profiles (ARM subscription/RG bindings), PK /tenantId. */
-export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
+// (taskFlowsContainer + azureConnectionsContainer accessors live above — the
+//  workspace-scoped variants were added in parallel branches and already exist.)
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -703,8 +695,8 @@ const KNOWN_CONTAINER_IDS = [
   'access-request-workflow',
   'saved-queries',
   // Foundation admin containers (shared cloud-endpoints resolver task).
-  'loom-workspaces', 'workspace-folders', 'task-flows',
-  'embed-codes', 'org-visuals', 'azure-connections',
+  'loom-workspaces', 'workspace-folders',
+  'embed-codes', 'org-visuals',
   'pbi-dashboard-overlays',
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
