@@ -914,6 +914,119 @@ export async function listContentSafetyPolicies(): Promise<{ name: string; thres
   ];
 }
 
+// ---------------- Copilot safety pipeline (verdict-shaped wrappers) ----------
+// These power the "content-safety verdict on every persona" pipeline: each
+// copilot orchestrator runs shieldPrompt() + moderateContent() on the user
+// prompt (input) and moderateContent() on the LLM completion (output). When
+// LOOM_CONTENT_SAFETY_ENDPOINT is unset they fail open (blocked:false) so the
+// UI can render an honest "not configured" warning rather than crashing — the
+// orchestrator checks isSafetyConfigured() first to decide whether to gate.
+
+/** Severity threshold that counts as "blocked" — Medium, matching the
+ *  Azure AI Foundry portal's default content filter. */
+const CONTENT_SAFETY_BLOCK_SEVERITY = 4;
+
+export interface ContentSafetyVerdict {
+  blocked: boolean;
+  /** Human-readable moderation reason surfaced in the UI MessageBar. */
+  reason: string;
+  category?: string;
+  severity?: number;
+}
+
+/** True when a Content Safety endpoint is configured via env. The copilot
+ *  orchestrators call this to decide between filtering vs. honest-gating. */
+export function isSafetyConfigured(): boolean {
+  return !!process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
+}
+
+/**
+ * Resolve the Content Safety endpoint. Env-first
+ * (LOOM_CONTENT_SAFETY_ENDPOINT); then best-effort discovery from the Foundry
+ * hub connections list (category contains "ContentSafety"). Returns null when
+ * neither is available so callers honest-gate instead of hard-failing.
+ */
+export async function resolveContentSafetyEndpoint(): Promise<string | null> {
+  const envEp = process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
+  if (envEp) return envEp.replace(/\/$/, '');
+  try {
+    const conns = await listConnections();
+    const cs = conns.find((c) =>
+      (c.category || '').toLowerCase().includes('contentsafety'),
+    );
+    if (cs?.target) return cs.target.replace(/\/$/, '');
+  } catch { /* Foundry discovery is best-effort */ }
+  return null;
+}
+
+/**
+ * Prompt Shields — detect direct jailbreak / prompt-injection in the user
+ * prompt. POST /contentsafety/text:shieldPrompt?api-version=2024-09-01.
+ * Returns { blocked:true } when attackDetected. Fail-open (blocked:false) on a
+ * missing endpoint or a transient Content Safety error so chat is never broken
+ * by a moderation-service blip.
+ */
+export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVerdict> {
+  const ep = await resolveContentSafetyEndpoint();
+  if (!ep) return { blocked: false, reason: '' };
+  let tok: string;
+  try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
+  const res = await fetch(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ userPrompt: userPrompt.slice(0, 10_000), documents: [] }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    console.warn(`[content-safety] shieldPrompt failed ${res.status}: ${t.slice(0, 200)}`);
+    return { blocked: false, reason: '' };
+  }
+  const j: any = await res.json().catch(() => ({}));
+  const attack = j?.userPromptAnalysis?.attackDetected === true;
+  return {
+    blocked: attack,
+    reason: attack ? 'Prompt injection detected by content safety' : '',
+  };
+}
+
+/**
+ * Harm-category moderation for prompt input OR LLM output.
+ * POST /contentsafety/text:analyze?api-version=2024-09-01.
+ * Blocks when any category severity >= CONTENT_SAFETY_BLOCK_SEVERITY.
+ * Fail-open on a missing endpoint / transient error.
+ */
+export async function moderateContent(text: string): Promise<ContentSafetyVerdict> {
+  const ep = await resolveContentSafetyEndpoint();
+  if (!ep) return { blocked: false, reason: '' };
+  if (!text.trim()) return { blocked: false, reason: '' };
+  let tok: string;
+  try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
+  const res = await fetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      text: text.slice(0, 10_000), // API limit: 10 000 chars per call
+      categories: ['Hate', 'SelfHarm', 'Sexual', 'Violence'],
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    console.warn(`[content-safety] moderateContent failed ${res.status}: ${t.slice(0, 200)}`);
+    return { blocked: false, reason: '' };
+  }
+  const j: any = await res.json().catch(() => ({}));
+  const hits: Array<{ category: string; severity: number }> =
+    (j?.categoriesAnalysis || []).filter((c: any) => (c?.severity ?? 0) >= CONTENT_SAFETY_BLOCK_SEVERITY);
+  if (hits.length === 0) return { blocked: false, reason: '' };
+  const worst = hits.sort((a, b) => b.severity - a.severity)[0];
+  return {
+    blocked: true,
+    reason: `Content safety blocked: ${worst.category} (severity ${worst.severity})`,
+    category: worst.category,
+    severity: worst.severity,
+  };
+}
+
 // ---------------- Tracing (App Insights via ARM) ----------------
 
 function appInsightsResourceId(): string {

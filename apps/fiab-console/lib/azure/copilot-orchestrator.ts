@@ -34,7 +34,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 
-import { listConnections } from './foundry-client';
+import { listConnections, isSafetyConfigured, shieldPrompt, moderateContent } from './foundry-client';
 import {
   cogScope,
   getOpenAiSuffix,
@@ -973,7 +973,7 @@ export type OrchestratorStep =
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
-  | { kind: 'error'; error: string }
+  | { kind: 'error'; error: string; code?: string }
   // A tool proposed a code/query/transform change. The pane renders a Monaco
   // DiffEditor (before|after) and applies it ONLY on explicit Keep — never
   // automatically. `target` is a deterministic editor-bridge key
@@ -1474,7 +1474,30 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
 
-  // ── Fabric / Power BI Copilot opt-in branch ───────────────────────────────
+  // --- Content-safety INPUT check: Prompt Shields (jailbreak/injection) +
+  // harm-category moderation on the user prompt. Runs on every persona. When
+  // Content Safety is not configured (LOOM_CONTENT_SAFETY_ENDPOINT unset) the
+  // helpers fail open and isSafetyConfigured() is false, so we skip silently —
+  // the UI surfaces the honest "not configured" warning separately. ---
+  if (isSafetyConfigured()) {
+    const [shieldResult, inputResult] = await Promise.all([
+      shieldPrompt(prompt),
+      moderateContent(prompt),
+    ]);
+    const blocked = shieldResult.blocked ? shieldResult : inputResult.blocked ? inputResult : null;
+    if (blocked) {
+      const errStep: OrchestratorStep = {
+        kind: 'error',
+        error: blocked.reason,
+        code: 'content_safety_input',
+      };
+      await persistStep(sessionId, userOid, errStep);
+      yield errStep;
+      return;
+    }
+  }
+
+  // -- Fabric / Power BI Copilot opt-in branch -----------------------------
   // ONLY entered when LOOM_COPILOT_BACKEND=fabric (or cfg.fabricCopilotBackend)
   // AND a Fabric workspace id resolves AND this is NOT a Gov boundary. The
   // Azure-native AOAI path below is the SILENT DEFAULT — when this block is
@@ -1520,7 +1543,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       });
     }
   }
-  // ── END opt-in branch — Azure-native AOAI loop follows (default path) ──────
+  // -- END opt-in branch — Azure-native AOAI loop follows (default path) ----
 
   // Accumulate token/context usage across every AOAI round-trip in the loop so
   // the final step can report total cost (parity with the data-agent chat).
@@ -1560,6 +1583,21 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
     const toolCalls = msg.tool_calls as ChatMessage['tool_calls'];
     if (!toolCalls || toolCalls.length === 0) {
+      // --- Content-safety OUTPUT check: moderate the LLM completion before
+      // surfacing it. Blocks high-severity harm in generated text. ---
+      if (isSafetyConfigured()) {
+        const outputResult = await moderateContent(msg.content || '');
+        if (outputResult.blocked) {
+          const errStep: OrchestratorStep = {
+            kind: 'error',
+            error: outputResult.reason,
+            code: 'content_safety_output',
+          };
+          await persistStep(sessionId, userOid, errStep);
+          yield errStep;
+          return;
+        }
+      }
       const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
