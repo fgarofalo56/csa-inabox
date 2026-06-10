@@ -1,0 +1,5 @@
+loom-autopilot.heartbeat
+loom-autopilot.lock
+loom-autopilot.json
+scheduled_tasks.json
+scheduled_tasks.lock
