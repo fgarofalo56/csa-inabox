@@ -981,6 +981,11 @@ function SemanticConfigDesigner({
           Add at least one searchable <code>Edm.String</code> field in the Fields designer before authoring a semantic configuration.
         </MessageBarBody></MessageBar>
       )}
+      {eligible.length > 0 && configs.length === 0 && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          No semantic configurations yet. Add one to enable the L2 semantic re-ranker on queries.
+        </Caption1>
+      )}
       {configs.map((c, ci) => (
         <div key={ci} className={s.card} style={{ marginTop: 8 }}>
           <div className={s.toolbar}>
@@ -1091,6 +1096,9 @@ function VectorSearchDesigner({
             <TableHeaderCell>efSearch</TableHeaderCell><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell></TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
+            {algorithms.length === 0 && (
+              <TableRow><TableCell colSpan={7}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No algorithms — add an HNSW or exhaustiveKnn algorithm to define how vectors are compared.</Caption1></TableCell></TableRow>
+            )}
             {algorithms.map((a, i) => {
               const isHnsw = a.kind === 'hnsw';
               const hp = a.hnswParameters || defaultHnswParameters();
@@ -1142,6 +1150,9 @@ function VectorSearchDesigner({
             <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Algorithm</TableHeaderCell><TableHeaderCell></TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
+            {profiles.length === 0 && (
+              <TableRow><TableCell colSpan={3}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{algoNames.length ? 'No profiles — add a profile so a vector field can reference an algorithm.' : 'Add an algorithm first, then create a profile that binds to it.'}</Caption1></TableCell></TableRow>
+            )}
             {profiles.map((p, i) => (
               <TableRow key={i}>
                 <TableCell><Input size="small" value={p.name} aria-label={`profile-${i}-name`} onChange={(_, d) => patchProfile(i, { name: d.value })} className={s.fdInput} /></TableCell>
@@ -1211,13 +1222,15 @@ function IndexerSchedulePanel({
       <Subtitle2 style={{ fontSize: 13 }}>Schedule — {indexer}</Subtitle2>
       <div className={s.optGrid}>
         <span>Recurrence</span>
-        <Dropdown size="small" value={preset || '(no schedule)'} selectedOptions={preset ? [preset] : []} placeholder="(no schedule)" aria-label={`schedule-${indexer}-preset`}
+        <Dropdown size="small" value={preset || '(no schedule)'} selectedOptions={preset ? [preset] : ['']} placeholder="(no schedule)" aria-label={`schedule-${indexer}-preset`}
           onOptionSelect={(_, d) => {
             const label = d.optionValue || '';
             setPreset(label);
             const p = SCHEDULE_PRESETS.find((x) => x.label === label);
             if (p && p.interval) setInterval(p.interval);
+            else if (!label) setInterval('');
           }}>
+          <Option value="" text="(no schedule)">(no schedule)</Option>
           {SCHEDULE_PRESETS.map((p) => (<Option key={p.label} value={p.label}>{p.label}</Option>))}
         </Dropdown>
         {isCustom && (
