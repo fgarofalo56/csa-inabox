@@ -35,7 +35,7 @@ import {
   Tooltip,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, Switch, Checkbox, ProgressBar, SpinButton,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
@@ -153,6 +153,30 @@ const useStyles = makeStyles({
   assistResult: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
     whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+  },
+  // Live auto-refresh status pill — mirrors Fabric Real-Time Dashboard's
+  // "live" affordance so the user can see the continuous cadence is firing.
+  livePill: {
+    display: 'inline-flex', alignItems: 'center', gap: '6px',
+    padding: '2px 8px', borderRadius: '9999px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+  },
+  liveDot: {
+    width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+    backgroundColor: tokens.colorPaletteGreenForeground1,
+  },
+  liveDotActive: {
+    animationName: {
+      '0%':   { opacity: 1,   transform: 'scale(1)' },
+      '50%':  { opacity: 0.35, transform: 'scale(0.7)' },
+      '100%': { opacity: 1,   transform: 'scale(1)' },
+    },
+    animationDuration: '1.4s',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'ease-in-out',
   },
 });
 
@@ -6609,8 +6633,22 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             </option>
           ))}
         </Select>
-        {autoRefreshMs > 0 && lastRefreshedAt && (
-          <Caption1 aria-live="polite">Last refreshed {new Date(lastRefreshedAt).toLocaleTimeString()}</Caption1>
+        {autoRefreshMs > 0 && (
+          <span
+            className={s.livePill}
+            role="status"
+            aria-live="polite"
+            title={`Auto-refreshing every ${refreshLabel(autoRefreshMs).replace(/^Auto-refresh:\s*/i, '')}`}
+          >
+            <span className={mergeClasses(s.liveDot, running && s.liveDotActive)} aria-hidden />
+            <Caption1>
+              {running
+                ? 'Refreshing…'
+                : lastRefreshedAt
+                  ? `Live · updated ${new Date(lastRefreshedAt).toLocaleTimeString()}`
+                  : 'Live · waiting for first refresh…'}
+            </Caption1>
+          </span>
         )}
         <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
