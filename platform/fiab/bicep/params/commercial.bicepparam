@@ -52,6 +52,7 @@ param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
 param loomMipEnabled = false
 param loomDlpEnabled = false
 param loomIdentityPickerEnabled = false
+param loomSharePointShortcutsEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 

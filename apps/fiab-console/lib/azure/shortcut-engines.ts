@@ -34,6 +34,7 @@ import {
   deleteUcExternalLocation,
   deleteUcStorageCredential,
 } from './shortcut-credentials';
+import { testGraphTarget, sharepointShortcutsEnabled, sharepointConfigGateDetail } from './sharepoint-graph-client';
 import type {
   ShortcutTargetType,
   ShortcutKind,
@@ -410,6 +411,12 @@ export async function refreshDeltaSharingCredential(
 export function externalSourceGate(targetType: ShortcutTargetType, hasCredentialRef: boolean): EngineGate | null {
   if (targetType === 'adls' || targetType === 'internal') return null;
 
+  // SharePoint / OneDrive resolve through Microsoft Graph on the Console UAMI's
+  // application token (Sites.Read.All + Files.Read.All) — there is NO Key Vault
+  // credential. The honest deployment gate (LOOM_SHAREPOINT_SHORTCUTS_ENABLED +
+  // AppRole consent) is enforced inside bindGraphSource(); pass through here.
+  if (targetType === 'sharepoint' || targetType === 'onedrive') return null;
+
   if (!hasCredentialRef) {
     const secret =
       targetType === 's3' ? 'an AWS IAM role ARN (UC engine) or access key/secret (Synapse engine)' :
@@ -733,6 +740,45 @@ export async function bindExternalSource(args: {
   };
 }
 
+/**
+ * Bind a SharePoint / OneDrive shortcut. These resolve through Microsoft Graph
+ * on the Console UAMI's application token (Sites.Read.All + Files.Read.All) —
+ * NO Key Vault credential, NO Fabric. A **Files** shortcut is a real, validated
+ * Graph drive pointer: we prove reachability now with a live Graph read so the
+ * row only lands 'active' when the UAMI can actually read the target folder.
+ *
+ * A **Tables** shortcut over a Graph drive is honest-gated: SharePoint/OneDrive
+ * drive content is arbitrary documents, not a SQL-queryable Delta/Parquet lake,
+ * so there is no external table to register. The route persists 'pending' with
+ * this gate and tells the operator to use a Files shortcut (or mirror the data
+ * into ADLS first). Returns:
+ *   - { readUri }   the canonical sharepoint:// / onedrive:// URI (echoed back)
+ *   - EngineGate    when the source isn't wired (LOOM_SHAREPOINT_SHORTCUTS_ENABLED)
+ */
+export async function bindGraphSource(args: {
+  targetType: 'sharepoint' | 'onedrive';
+  targetUri: string;
+  kind: ShortcutKind;
+}): Promise<{ readUri: string } | EngineGate> {
+  if (!sharepointShortcutsEnabled()) {
+    return { gated: true, code: 'sharepoint_not_configured', hint: sharepointConfigGateDetail() };
+  }
+  if (args.kind === 'tables') {
+    return {
+      gated: true,
+      code: 'graph_tables_unsupported',
+      hint:
+        `${labelFor(args.targetType)} drive content is arbitrary documents, not a SQL-queryable ` +
+        'Delta/Parquet lake, so it cannot be registered as an external table. Create a Files ' +
+        'shortcut to virtualize the folder, or mirror the files into an ADLS Gen2 / internal ' +
+        'lakehouse path (a Data pipeline copy) and create a Tables shortcut over that.',
+    };
+  }
+  // Real Graph reachability test on the target folder — throws on 401/403/404.
+  await testGraphTarget(args.targetUri);
+  return { readUri: args.targetUri };
+}
+
 export function labelFor(t: ShortcutTargetType): string {
   switch (t) {
     case 'adls': return 'ADLS Gen2';
@@ -741,6 +787,8 @@ export function labelFor(t: ShortcutTargetType): string {
     case 'gcs': return 'Google Cloud Storage';
     case 'dataverse': return 'Dataverse';
     case 'delta_sharing': return 'Delta Sharing';
+    case 'sharepoint': return 'SharePoint';
+    case 'onedrive': return 'OneDrive';
     default: return t;
   }
 }

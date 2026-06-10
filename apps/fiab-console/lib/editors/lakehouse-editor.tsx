@@ -51,6 +51,7 @@ import { LoadToTableWizard } from './components/load-to-table-wizard';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import {
   SHORTCUT_SOURCE_CARDS, ShortcutSourceLogo, ExternalCredsForm, RemoteBrowseTree,
+  SharePointPicker, OneDrivePicker,
   type ExternalCredsState, type CredSourceType,
 } from '@/lib/components/onelake/shortcut-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -551,7 +552,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // (Synapse Serverless preferred, Databricks UC otherwise). S3/GCS/Dataverse
   // render the create form and honest-gate on submit. Registry is the Cosmos
   // `lakehouse-shortcuts` container. See docs/fiab/design/lakehouse-shortcuts.md.
-  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing';
+  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint' | 'onedrive';
   type ShortcutKind = 'files' | 'tables';
   interface ShortcutRow {
     id: string; lakehouseId: string; name: string; kind: ShortcutKind;
@@ -583,6 +584,14 @@ export function LakehouseEditor({ item, id }: Props) {
   // The credential value is written to Key Vault by the BFF; only the secret
   // NAME (extCreds.secretName) is ever held here or persisted on the row.
   const [extCreds, setExtCreds] = useState<ExternalCredsState>({ region: 'us-east-1' });
+  // SharePoint / OneDrive (Microsoft Graph drives) — picked site/drive/user +
+  // selected folder path. No Key Vault credential (Console UAMI app token).
+  const [spSiteId, setSpSiteId] = useState('');
+  const [spSiteName, setSpSiteName] = useState('');
+  const [spDriveId, setSpDriveId] = useState('');
+  const [spDriveName, setSpDriveName] = useState('');
+  const [spUserId, setSpUserId] = useState('');
+  const [spPath, setSpPath] = useState('');
   const [scName, setScName] = useState('');
   const [scKind, setScKind] = useState<ShortcutKind>('files');
   const [scParentPath, setScParentPath] = useState('');
@@ -739,6 +748,8 @@ export function LakehouseEditor({ item, id }: Props) {
     setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
     setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
     setExtCreds({ region: 'us-east-1' });
+    setSpSiteId(''); setSpSiteName(''); setSpDriveId(''); setSpDriveName('');
+    setSpUserId(''); setSpPath('');
   }, []);
 
   const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
@@ -779,6 +790,14 @@ export function LakehouseEditor({ item, id }: Props) {
       credentialRef = scKvSecret.trim() ? { kind: 'sas', keyVaultSecret: scKvSecret.trim() } : undefined;
     } else if (scType === 'delta_sharing') {
       credentialRef = scKvSecret.trim() ? { kind: 'deltaSharing', keyVaultSecret: scKvSecret.trim() } : undefined;
+    } else if (scType === 'sharepoint') {
+      // sharepoint://<siteId>/<driveId>/<folderPath> — Graph drive, UAMI app token.
+      const p = spPath.trim().replace(/^\/+|\/+$/g, '');
+      targetUri = `sharepoint://${encodeURIComponent(spSiteId.trim())}/${encodeURIComponent(spDriveId.trim())}${p ? `/${p}` : ''}`;
+    } else if (scType === 'onedrive') {
+      // onedrive://<userId>/<folderPath> — the user's default drive, UAMI app token.
+      const p = spPath.trim().replace(/^\/+|\/+$/g, '');
+      targetUri = `onedrive://${encodeURIComponent(spUserId.trim())}${p ? `/${p}` : ''}`;
     }
     // F9 — on a schema-enabled lakehouse a Tables shortcut lands inside its
     // target schema folder (Tables/<schema>/<name>), mirroring Fabric's schema
@@ -802,7 +821,7 @@ export function LakehouseEditor({ item, id }: Props) {
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, extCreds, loadShortcuts]);
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, extCreds, spSiteId, spDriveId, spUserId, spPath, loadShortcuts]);
 
   // Register a PLANNED bundle shortcut into the live registry (one click) — the
   // bundle only carries metadata, so this materializes it against the real
@@ -3563,13 +3582,13 @@ export function LakehouseEditor({ item, id }: Props) {
                 <DialogContent>
                   {scStep === 1 && (
                     <>
-                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
+                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault; SharePoint &amp; OneDrive resolve through Microsoft Graph on the Console UAMI.</Caption1>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
                         {SHORTCUT_SOURCE_CARDS.map((src) => (
                           <Button
                             key={src.type}
                             appearance={scType === src.type ? 'primary' : 'outline'}
-                            onClick={() => setScType(src.type)}
+                            onClick={() => { setScType(src.type); if (src.type === 'sharepoint' || src.type === 'onedrive') setScKind('files'); }}
                             style={{ justifyContent: 'flex-start', height: 'auto', padding: '10px 12px', textAlign: 'left' }}
                           >
                             <span style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
@@ -3724,19 +3743,66 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Field>
                         </>
                       )}
+                      {scType === 'sharepoint' && (
+                        <>
+                          <Field label="Shortcut name" required hint="The leaf shown under Files in this lakehouse.">
+                            <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder="contoso_finance_docs" />
+                          </Field>
+                          <SharePointPicker
+                            siteId={spSiteId}
+                            siteName={spSiteName}
+                            driveId={spDriveId}
+                            driveName={spDriveName}
+                            selectedPath={spPath}
+                            onSiteChange={(id, nm) => { setSpSiteId(id); setSpSiteName(nm); }}
+                            onDriveChange={(id, nm) => { setSpDriveId(id); setSpDriveName(nm); }}
+                            onPathChange={setSpPath}
+                          />
+                          <MessageBar intent="info">
+                            <MessageBarBody>
+                              SharePoint shortcuts are <strong>Files-only</strong> zero-copy pointers resolved through
+                              Microsoft Graph on the Console UAMI (Sites.Read.All + Files.Read.All) — no Fabric, no
+                              Power BI. To query SharePoint content as a table, mirror it into ADLS first, then make a
+                              Tables shortcut over that path.
+                            </MessageBarBody>
+                          </MessageBar>
+                        </>
+                      )}
+                      {scType === 'onedrive' && (
+                        <>
+                          <Field label="Shortcut name" required hint="The leaf shown under Files in this lakehouse.">
+                            <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder="alex_onedrive_reports" />
+                          </Field>
+                          <OneDrivePicker
+                            userId={spUserId}
+                            selectedPath={spPath}
+                            onUserChange={setSpUserId}
+                            onPathChange={setSpPath}
+                          />
+                          <MessageBar intent="info">
+                            <MessageBarBody>
+                              OneDrive shortcuts are <strong>Files-only</strong> zero-copy pointers resolved through
+                              Microsoft Graph on the Console UAMI (Files.Read.All) — no Fabric. The target is the chosen
+                              user&apos;s default OneDrive for Business drive.
+                            </MessageBarBody>
+                          </MessageBar>
+                        </>
+                      )}
                     </div>
                   )}
 
                   {scStep === 3 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <Field label="Section" required>
+                      <Field label="Section" required
+                        hint={scType === 'sharepoint' || scType === 'onedrive' ? 'SharePoint / OneDrive shortcuts are Files-only — Graph drive content is not a SQL-queryable lake.' : undefined}>
                         <Dropdown
                           selectedOptions={[scKind]}
                           value={scKind === 'tables' ? 'Tables' : 'Files'}
+                          disabled={scType === 'sharepoint' || scType === 'onedrive'}
                           onOptionSelect={(_, d) => setScKind((d.optionValue as ShortcutKind) || 'files')}
                         >
                           <Option value="files">Files</Option>
-                          <Option value="tables">Tables</Option>
+                          {scType !== 'sharepoint' && scType !== 'onedrive' && <Option value="tables">Tables</Option>}
                         </Dropdown>
                       </Field>
                       <Field label="Sub-folder" hint="Folder under the section, blank for top-level.">
@@ -3773,7 +3839,12 @@ export function LakehouseEditor({ item, id }: Props) {
                       <MessageBar intent="info">
                         <MessageBarBody>
                           Will create <strong>{scKind === 'tables' ? 'Tables' : 'Files'}/{[scParentPath.trim(), scName.trim()].filter(Boolean).join('/')}</strong>
-                          {' '}pointing at <code>{scType === 'internal' ? `internal://${scInternalContainer}${scInternalPath ? `/${scInternalPath.replace(/^\/+/, '')}` : ''}` : (scTargetUri || '(set the target)')}</code>.
+                          {' '}pointing at <code>{
+                            scType === 'internal' ? `internal://${scInternalContainer}${scInternalPath ? `/${scInternalPath.replace(/^\/+/, '')}` : ''}`
+                            : scType === 'sharepoint' ? `sharepoint://${spSiteName || spSiteId}/${spDriveName || spDriveId}${spPath ? `/${spPath.replace(/^\/+/, '')}` : ''}`
+                            : scType === 'onedrive' ? `onedrive://${spUserId}${spPath ? `/${spPath.replace(/^\/+/, '')}` : ''}`
+                            : (scTargetUri || '(set the target)')
+                          }</code>.
                           {scKind === 'tables' && ' A real external table is registered and queryable from the SQL tab.'}
                         </MessageBarBody>
                       </MessageBar>
@@ -3788,7 +3859,15 @@ export function LakehouseEditor({ item, id }: Props) {
                   {scStep > 1 && <Button appearance="outline" onClick={() => setScStep((scStep - 1) as 1 | 2 | 3)} disabled={scSubmitting}>Back</Button>}
                   {scStep < 3 && <Button appearance="primary" onClick={() => setScStep((scStep + 1) as 1 | 2 | 3)}>Next</Button>}
                   {scStep === 3 && (
-                    <Button appearance="primary" onClick={submitShortcut} disabled={scSubmitting || !scName.trim()}>
+                    <Button
+                      appearance="primary"
+                      onClick={submitShortcut}
+                      disabled={
+                        scSubmitting || !scName.trim() ||
+                        (scType === 'sharepoint' && (!spSiteId || !spDriveId)) ||
+                        (scType === 'onedrive' && !spUserId.trim())
+                      }
+                    >
                       {scSubmitting ? 'Creating…' : 'Create'}
                     </Button>
                   )}

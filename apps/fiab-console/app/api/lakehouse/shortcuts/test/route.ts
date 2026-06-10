@@ -16,6 +16,7 @@ import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { testGraphTarget } from '@/lib/azure/sharepoint-graph-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,6 +98,22 @@ export async function POST(req: NextRequest) {
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'delta_sharing_unreachable', data: updated }, { status: 502 });
+    }
+  }
+
+  // SharePoint / OneDrive: re-validate the Graph drive folder is reachable on the
+  // Console UAMI app token (Sites.Read.All + Files.Read.All). A 401/403 => the
+  // AppRole grants/consent were revoked; a 404 => the folder moved/was deleted.
+  if (sc.targetType === 'sharepoint' || sc.targetType === 'onedrive') {
+    try {
+      await testGraphTarget(sc.targetUri);
+      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      return NextResponse.json({ ok: true, data: updated });
+    } catch (e: any) {
+      const msg = sanitize(e);
+      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      const status = typeof e?.status === 'number' ? e.status : 502;
+      return NextResponse.json({ ok: false, error: msg, code: e?.code || 'sharepoint_unreachable', data: updated }, { status });
     }
   }
 

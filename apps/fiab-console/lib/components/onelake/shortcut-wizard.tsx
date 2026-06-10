@@ -760,6 +760,8 @@ export const SHORTCUT_SOURCE_CARDS: ShortcutSourceCard[] = [
   { type: 'gcs', label: 'Google Cloud Storage', blurb: 'Bucket via a service-account JSON', uamiReady: false },
   { type: 'dataverse', label: 'Dataverse', blurb: 'Tables via the Synapse-Link ADLS export', uamiReady: false },
   { type: 'delta_sharing', label: 'Delta Sharing', blurb: 'Cross-tenant share via a credential file', uamiReady: false },
+  { type: 'sharepoint', label: 'SharePoint', blurb: 'A document library folder via Microsoft Graph (Files only)', uamiReady: true },
+  { type: 'onedrive', label: 'OneDrive', blurb: 'A user OneDrive folder via Microsoft Graph (Files only)', uamiReady: true },
 ];
 
 /** Inline brand logo for a shortcut source type. Pure SVG, theme-agnostic fills. */
@@ -804,6 +806,26 @@ export function ShortcutSourceLogo({ type, size = 28 }: { type: ShortcutTargetTy
         <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="Delta Sharing">
           <path d="M6 22l10-16 10 16H6z" fill="#FF3621" />
           <path d="M11 22l5-8 5 8h-10z" fill="#fff" opacity="0.9" />
+        </svg>
+      );
+    case 'sharepoint':
+      return (
+        <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="SharePoint">
+          <circle cx="13" cy="9" r="6.5" fill="#036C70" />
+          <circle cx="20" cy="15" r="6" fill="#1A9BA1" />
+          <circle cx="15" cy="22" r="5.5" fill="#37C6D0" />
+          <path d="M10 11h8v10a1 1 0 0 1-1 1h-7V11z" fill="#000" opacity="0.1" />
+          <rect x="4" y="11" width="11" height="11" rx="1" fill="#03787C" />
+          <path d="M9.6 14.4c-1.3 0-2.2.6-2.2 1.6 0 .8.5 1.2 1.6 1.5.8.2 1 .4 1 .7 0 .3-.3.5-.8.5-.6 0-1.1-.2-1.6-.6v1.3c.4.2 1 .4 1.6.4 1.4 0 2.3-.6 2.3-1.7 0-.8-.5-1.2-1.6-1.5-.8-.2-1-.4-1-.6 0-.3.3-.4.7-.4.5 0 1 .2 1.4.5v-1.2c-.4-.2-.9-.3-1.4-.3z" fill="#fff" />
+        </svg>
+      );
+    case 'onedrive':
+      return (
+        <svg width={s} height={s} viewBox="0 0 32 32" role="img" aria-label="OneDrive">
+          <path d="M12.5 9a6 6 0 0 1 11.2 2.4A4.8 4.8 0 0 1 26 21H10a5.5 5.5 0 0 1-1.2-10.9A6 6 0 0 1 12.5 9z" fill="#0364B8" />
+          <path d="M12.5 9a6 6 0 0 1 11.2 2.4A4.8 4.8 0 0 1 26 21H14l-3.3-8.5A6 6 0 0 1 12.5 9z" fill="#0078D4" />
+          <path d="M8.8 10.1A6 6 0 0 1 16 10a6 6 0 0 0-3.5-1 6 6 0 0 0-3.7 1.1z" fill="#1490DF" />
+          <path d="M9 13.5a5.5 5.5 0 0 0-.2 7.5h6.7l1.2-7.5H9z" fill="#28A8EA" />
         </svg>
       );
     case 'internal':
@@ -1185,6 +1207,295 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
           setOpenItems(new Set(data.openItems as Set<string>));
           const v = data.value as string;
           if (data.open && v && childrenByPrefix[v] === undefined && !loading.has(v)) fetchLevel(v);
+        }}
+      >
+        {renderLevel('')}
+      </Tree>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SharePointPicker — site → document library → folder picker over Microsoft
+// Graph (Azure-native parity with Fabric OneLake's "SharePoint" shortcut
+// source). NO Fabric dependency; resolves on the Console UAMI app token via
+// /api/lakehouse/shortcuts/sharepoint. Every control hits real Graph; the only
+// non-functional state is the honest 503 gate naming LOOM_SHAREPOINT_SHORTCUTS_ENABLED.
+// ---------------------------------------------------------------------------
+
+interface SiteHitUi { id: string; displayName: string; webUrl?: string }
+interface DriveHitUi { id: string; name: string; driveType?: string }
+
+export interface SharePointPickerProps {
+  siteId: string;
+  siteName: string;
+  driveId: string;
+  driveName: string;
+  selectedPath: string;
+  onSiteChange: (id: string, name: string) => void;
+  onDriveChange: (id: string, name: string) => void;
+  onPathChange: (path: string) => void;
+}
+
+/** SharePoint Online site/library/folder picker for the shortcut wizard. */
+export function SharePointPicker(props: SharePointPickerProps) {
+  const { siteId, siteName, driveId, driveName, selectedPath } = props;
+  const [query, setQuery] = useState('');
+  const [sites, setSites] = useState<SiteHitUi[] | null>(null);
+  const [drives, setDrives] = useState<DriveHitUi[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [gate, setGate] = useState<string | null>(null);
+
+  const runSearch = useCallback(async (q: string) => {
+    setSearching(true); setError(null); setGate(null);
+    const { status, body } = await jfetch(`/api/lakehouse/shortcuts/sharepoint?action=sites&q=${encodeURIComponent(q)}`);
+    setSearching(false);
+    if (body?.ok) setSites(body.data?.sites || []);
+    else if (status === 503) { setGate(body?.hint || body?.error || 'SharePoint shortcuts are not configured.'); setSites([]); }
+    else { setError(body?.error || `Site search failed (HTTP ${status}).`); setSites([]); }
+  }, []);
+
+  const loadDrives = useCallback(async (id: string) => {
+    setError(null); setGate(null); setDrives(null);
+    const { status, body } = await jfetch(`/api/lakehouse/shortcuts/sharepoint?action=drives&siteId=${encodeURIComponent(id)}`);
+    if (body?.ok) setDrives(body.data?.drives || []);
+    else if (status === 503) setGate(body?.hint || body?.error || 'SharePoint shortcuts are not configured.');
+    else { setError(body?.error || `Could not list document libraries (HTTP ${status}).`); setDrives([]); }
+  }, []);
+
+  // The browse tree fetches drive items level-by-level from the same BFF.
+  const fetchItems = useCallback(async (prefix: string) => {
+    const qs = new URLSearchParams({ action: 'items', siteId, driveId, prefix });
+    const { body } = await jfetch(`/api/lakehouse/shortcuts/sharepoint?${qs.toString()}`);
+    if (!body?.ok) throw new Error(body?.hint || body?.error || 'browse failed');
+    return (body.data?.entries || []) as RemoteEntryUi[];
+  }, [siteId, driveId]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody><MessageBarTitle>SharePoint shortcuts not configured</MessageBarTitle>{gate}</MessageBarBody>
+        </MessageBar>
+      )}
+      <Field label="Find a SharePoint site" hint="Searches sites the Console UAMI can read (Sites.Read.All).">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Input
+            value={query}
+            onChange={(_, d) => setQuery(d.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') runSearch(query); }}
+            placeholder="Contoso Finance"
+            style={{ flex: 1 }}
+          />
+          <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : undefined} onClick={() => runSearch(query)} disabled={searching}>
+            Search
+          </Button>
+        </div>
+      </Field>
+      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {sites && sites.length > 0 && (
+        <Field label="Site">
+          <Dropdown
+            placeholder="Select a site"
+            value={siteName}
+            selectedOptions={siteId ? [siteId] : []}
+            onOptionSelect={(_, d) => {
+              const hit = sites.find((s) => s.id === d.optionValue);
+              props.onSiteChange(d.optionValue || '', hit?.displayName || '');
+              props.onDriveChange('', '');
+              props.onPathChange('');
+              if (d.optionValue) loadDrives(d.optionValue);
+            }}
+          >
+            {sites.map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
+          </Dropdown>
+        </Field>
+      )}
+      {sites && sites.length === 0 && !gate && !error && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sites matched. Try a different search term.</Caption1>
+      )}
+      {siteId && drives && (
+        <Field label="Document library (drive)">
+          <Dropdown
+            placeholder={drives.length ? 'Select a library' : 'No libraries on this site'}
+            value={driveName}
+            selectedOptions={driveId ? [driveId] : []}
+            onOptionSelect={(_, d) => {
+              const hit = drives.find((dr) => dr.id === d.optionValue);
+              props.onDriveChange(d.optionValue || '', hit?.name || '');
+              props.onPathChange('');
+            }}
+          >
+            {drives.map((dr) => <Option key={dr.id} value={dr.id} text={dr.name}>{dr.name}</Option>)}
+          </Dropdown>
+        </Field>
+      )}
+      {siteId && driveId && (
+        <Field label="Folder" hint="Click a folder to set the shortcut target (the whole folder is virtualized).">
+          <GraphBrowseTree fetchLevel={fetchItems} onSelect={(p) => props.onPathChange(p)} selectedPath={selectedPath} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+export interface OneDrivePickerProps {
+  userId: string;
+  selectedPath: string;
+  onUserChange: (userId: string) => void;
+  onPathChange: (path: string) => void;
+}
+
+/** OneDrive for Business user/folder picker for the shortcut wizard. */
+export function OneDrivePicker(props: OneDrivePickerProps) {
+  const { userId, selectedPath } = props;
+  const [draft, setDraft] = useState(userId);
+  const [bound, setBound] = useState<string>('');
+  const [gate, setGate] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchItems = useCallback(async (prefix: string) => {
+    const qs = new URLSearchParams({ action: 'onedrive', userId: bound, prefix });
+    const { status, body } = await jfetch(`/api/lakehouse/shortcuts/sharepoint?${qs.toString()}`);
+    if (body?.ok) { setGate(null); setError(null); return (body.data?.entries || []) as RemoteEntryUi[]; }
+    if (status === 503) { setGate(body?.hint || body?.error || 'OneDrive shortcuts are not configured.'); throw new Error('not configured'); }
+    setError(body?.error || `Browse failed (HTTP ${status}).`);
+    throw new Error(body?.error || 'browse failed');
+  }, [bound]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody><MessageBarTitle>OneDrive shortcuts not configured</MessageBarTitle>{gate}</MessageBarBody>
+        </MessageBar>
+      )}
+      <Field label="User (UPN or object id)" hint="The OneDrive for Business owner — the Console UAMI reads it with Files.Read.All.">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Input
+            value={draft}
+            onChange={(_, d) => setDraft(d.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim()) { setBound(draft.trim()); props.onUserChange(draft.trim()); props.onPathChange(''); } }}
+            placeholder="user@contoso.com"
+            style={{ flex: 1 }}
+          />
+          <Button appearance="primary" disabled={!draft.trim()} onClick={() => { setBound(draft.trim()); props.onUserChange(draft.trim()); props.onPathChange(''); }}>
+            Browse
+          </Button>
+        </div>
+      </Field>
+      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {bound && (
+        <Field label="Folder" hint="Click a folder to set the shortcut target.">
+          <GraphBrowseTree fetchLevel={fetchItems} onSelect={(p) => props.onPathChange(p)} selectedPath={selectedPath} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+// Generic lazy folder tree driven by a caller-supplied per-level fetcher — used
+// by both the SharePoint and OneDrive pickers (both list Graph drive items).
+interface GraphBrowseTreeProps {
+  fetchLevel: (prefix: string) => Promise<RemoteEntryUi[]>;
+  onSelect: (path: string) => void;
+  selectedPath: string;
+}
+
+function GraphBrowseTree({ fetchLevel, onSelect, selectedPath }: GraphBrowseTreeProps) {
+  const [childrenByPrefix, setChildrenByPrefix] = useState<Record<string, RemoteEntryUi[]>>({});
+  const [loading, setLoading] = useState<Set<string>>(new Set());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async (prefix: string) => {
+    setLoading((s) => new Set(s).add(prefix));
+    setErrors((e) => { const n = { ...e }; delete n[prefix]; return n; });
+    try {
+      const rows = await fetchLevel(prefix);
+      setChildrenByPrefix((c) => ({ ...c, [prefix]: rows }));
+    } catch (e: any) {
+      setErrors((er) => ({ ...er, [prefix]: e?.message || String(e) }));
+    } finally {
+      setLoading((s) => { const n = new Set(s); n.delete(prefix); return n; });
+    }
+  }, [fetchLevel]);
+
+  useEffect(() => {
+    setChildrenByPrefix({}); setErrors({}); setOpenItems(new Set());
+    load('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchLevel]);
+
+  const renderLevel = (prefix: string): React.ReactNode => {
+    if (errors[prefix]) {
+      return (
+        <TreeItem itemType="leaf" value={`err-${prefix}`}>
+          <TreeItemLayout><Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{errors[prefix]}</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    const rows = childrenByPrefix[prefix];
+    if (rows === undefined) {
+      return (
+        <TreeItem itemType="leaf" value={`load-${prefix}`}>
+          <TreeItemLayout><Spinner size="tiny" label="Loading…" labelPosition="after" /></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    if (rows.length === 0) {
+      return (
+        <TreeItem itemType="leaf" value={`empty-${prefix}`}>
+          <TreeItemLayout><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Empty folder</Caption1></TreeItemLayout>
+        </TreeItem>
+      );
+    }
+    return rows.map((e) =>
+      e.isDirectory ? (
+        <TreeItem key={e.path} itemType="branch" value={e.path}>
+          <TreeItemLayout
+            iconBefore={<Folder20Regular />}
+            onClick={() => onSelect(e.path)}
+            style={selectedPath === e.path ? { fontWeight: 600, color: tokens.colorBrandForeground1 } : undefined}
+          >
+            {e.name}
+          </TreeItemLayout>
+          <Tree>
+            {loading.has(e.path)
+              ? <TreeItem itemType="leaf" value={`load-${e.path}`}><TreeItemLayout><Spinner size="tiny" /></TreeItemLayout></TreeItem>
+              : renderLevel(e.path)}
+          </Tree>
+        </TreeItem>
+      ) : (
+        <TreeItem key={e.path} itemType="leaf" value={e.path}>
+          <TreeItemLayout
+            iconBefore={<Document20Regular />}
+            aside={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{fmtBytes(e.size)}</Caption1>}
+          >
+            {e.name}
+          </TreeItemLayout>
+        </TreeItem>
+      ),
+    );
+  };
+
+  return (
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 6, maxHeight: 240, overflow: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <Caption1 style={{ flex: 1, color: tokens.colorNeutralForeground3 }}>
+          {selectedPath ? <>Target folder: <code>{selectedPath || '(root)'}</code></> : 'Click a folder to set the target (blank = whole drive root)'}
+        </Caption1>
+        <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={() => load('')} aria-label="Refresh">Refresh</Button>
+        {selectedPath ? <Badge appearance="tint" color="brand" icon={<CheckmarkCircle16Filled />}>selected</Badge> : null}
+      </div>
+      <Tree
+        aria-label="SharePoint / OneDrive folders"
+        openItems={openItems}
+        onOpenChange={(_, data) => {
+          setOpenItems(new Set(data.openItems as Set<string>));
+          const v = data.value as string;
+          if (data.open && v && childrenByPrefix[v] === undefined && !loading.has(v)) load(v);
         }}
       >
         {renderLevel('')}

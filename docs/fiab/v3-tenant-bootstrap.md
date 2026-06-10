@@ -517,6 +517,51 @@ If the volume is absent, a Tables Delta Sharing shortcut honest-gates
 (`delta_sharing_needs_uc_volume`) with the exact `CREATE VOLUME` remediation; a
 Files Delta Sharing shortcut works without Databricks entirely.
 
+## SharePoint / OneDrive shortcuts (Microsoft Graph) {#sharepoint-onedrive-shortcuts}
+
+A **SharePoint** or **OneDrive** lakehouse shortcut (Lakehouse editor →
+Shortcuts → New shortcut → *SharePoint* / *OneDrive*) virtualizes a SharePoint
+document-library folder — or a OneDrive for Business user folder — under
+**Files** in the lakehouse, as a zero-copy pointer. It resolves through the
+**Microsoft Graph drives API on the Console UAMI's application token** — Azure-
+native parity with Fabric OneLake's SharePoint/OneDrive shortcut sources, with
+**NO Fabric / Power BI dependency**. (SharePoint shortcuts are **Files-only** in
+both Fabric and Loom: Graph drive content is arbitrary documents, not a SQL-
+queryable Delta lake. To query the content as a table, mirror it into ADLS with
+a Data pipeline copy, then make a **Tables** shortcut over that ADLS path.)
+
+This source is **opt-in** and requires two one-time tenant actions:
+
+1. **Grant the Console UAMI the Graph AppRoles** (application permissions):
+
+   ```bash
+   az login   # as a user/SP with Application.ReadWrite.All on Graph
+   CONSOLE_UAMI_PRINCIPAL=<console UAMI object id> \
+     scripts/csa-loom/grant-sharepoint-graph-approles.sh
+   ```
+
+   Grants `Sites.Read.All` (`332a536c-c7ef-4017-ab91-336970924f0d`) +
+   `Files.Read.All` (`01d4889c-1287-42c6-ac1f-5d1e02578ef6`).
+
+2. **Tenant Administrator grants admin consent**: Entra ID → Enterprise
+   applications → Console UAMI → Permissions → *Grant admin consent*. Until
+   consented, every Graph call returns `403` and the wizard renders its honest-
+   gate MessageBar.
+
+Then enable the feature on the Console:
+
+```
+LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true
+```
+
+(or set `loomSharePointShortcutsEnabled=true` in the admin-plane bicepparam and
+redeploy — documented by
+`platform/fiab/bicep/modules/admin-plane/sharepoint-graph-rbac.bicep`). When the
+env var is unset, the shortcut wizard still renders the SharePoint/OneDrive
+source cards but `GET /api/lakehouse/shortcuts/sharepoint` returns `503` with the
+exact remediation above (no mock drives). Sovereign clouds use the cloud-correct
+Graph host (`graph.microsoft.us` in GCC-High, `dod-graph.microsoft.us` in IL5).
+
 ## Approval Logic App — Office 365 connection consent {#approval-logic-app-o365}
 
 The pipeline editor's **Approval (Logic App)** activity (F25) is backed by a

@@ -30,6 +30,7 @@ import {
   dropDeltaSharingCredential,
   externalSourceGate,
   bindExternalSource,
+  bindGraphSource,
   type EngineGate,
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
@@ -37,7 +38,9 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
+const TARGET_TYPES: ShortcutTargetType[] = [
+  'adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing', 'sharepoint', 'onedrive',
+];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
 
 function isGate(x: unknown): x is EngineGate {
@@ -111,7 +114,43 @@ export async function POST(req: NextRequest) {
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
 
+  const isGraph = targetType === 'sharepoint' || targetType === 'onedrive';
   const isExternal = targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' || targetType === 'delta_sharing';
+
+  // --- SharePoint / OneDrive (Microsoft Graph drives, Console UAMI app token). ---
+  // Files-only: validated Graph reachability now → 'active'; Tables → honest gate.
+  // No Key Vault credential and no ADLS resolution path is involved.
+  if (isGraph) {
+    let bound: { readUri: string } | EngineGate;
+    try {
+      bound = await bindGraphSource({ targetType: targetType as 'sharepoint' | 'onedrive', targetUri, kind });
+    } catch (e: any) {
+      if (e?.code === 'sharepoint_bad_target' || /^bad_/.test(e?.code || '')) {
+        return NextResponse.json({ ok: false, error: sanitize(e), code: e.code || 'bad_target' }, { status: 400 });
+      }
+      const msg = sanitize(e);
+      // Persist as error so the operator sees the precise reason + can Test/Delete.
+      const errRow = await createShortcut({
+        lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
+        engine: 'none', format, status: 'error', statusDetail: msg, createdBy,
+      });
+      const status = typeof e?.status === 'number' ? e.status : 502;
+      return NextResponse.json({ ok: false, code: e?.code || 'sharepoint_error', error: msg, hint: msg, data: errRow }, { status });
+    }
+    if (isGate(bound)) {
+      // Either the source isn't wired, or a Tables shortcut was requested.
+      const pending = await createShortcut({
+        lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
+        engine: 'none', format, status: 'pending', statusDetail: bound.hint, createdBy,
+      });
+      return NextResponse.json({ ok: false, code: bound.code, error: bound.hint, hint: bound.hint, data: pending }, { status: 503 });
+    }
+    const row = await createShortcut({
+      lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri: bound.readUri,
+      engine: 'none', format, status: 'active', createdBy,
+    });
+    return NextResponse.json({ ok: true, data: row });
+  }
 
   // --- External cloud sources (S3/GCS/Dataverse): pre-flight honest-gate. ---
   // Gate ONLY when the credentialRef is absent or the vault isn't configured;

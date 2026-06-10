@@ -85,6 +85,9 @@ param loomPowerbiXmlaEndpoint string = ''
 @description('Enable the reusable Identity Picker (Entra user/group/service-principal search + transitive nested-group resolution) via Microsoft Graph. Requires the Console UAMI to be admin-consented for User.Read.All + Group.Read.All + Application.Read.All (scripts/csa-loom/grant-identity-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false /api/governance/identities/search returns 503 with the exact remediation.')
 param loomIdentityPickerEnabled bool = false
 
+@description('Enable SharePoint / OneDrive lakehouse shortcut sources (Files-only, zero-copy pointers via the Microsoft Graph drives API — Azure-native parity with Fabric OneLake SharePoint/OneDrive shortcuts, NO Fabric dependency). Requires the Console UAMI to be admin-consented for Sites.Read.All + Files.Read.All (scripts/csa-loom/grant-sharepoint-graph-approles.sh). Defaults off; when false the shortcut wizard returns 503 with the exact remediation.')
+param loomSharePointShortcutsEnabled bool = false
+
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
@@ -450,6 +453,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
     loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
     loomIdentityPickerEnabled: loomIdentityPickerEnabled
+    loomSharePointShortcutsEnabled: loomSharePointShortcutsEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
