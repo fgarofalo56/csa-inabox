@@ -93,7 +93,9 @@ This is the load-bearing table. Every row cites a real file path in the repo whe
 
 - **AIP Agents / Quiver deeper NL** — CSA-0008 (Copilot MVP, 6-phase build, XL)
 - **Object Explorer pixel-equivalent UX** — will be partially closed by Fabric data-product experience (CSA-0129 Fabric module depth) and the React portal marketplace
-- **IL6** — out of scope for csa-inabox; recommend out-of-band
+- **Phonograph sub-100 ms transactional object store** — out of scope / by design (audit-T35, PMF-GAP-1). Loom's real-time path is an Azure-native **analytics** pipeline (Event Hubs → Stream Analytics `100ms–2s` / Real-Time Intelligence sub-second over ADX, see [benchmarks](palantir-foundry/benchmarks.md)), not a sub-100 ms OLTP backbone serving editable ontology objects. For low-latency editable objects pair the analytics path with **Cosmos DB / Azure SQL**. Disclosed in the live Real-Time hub UI (`apps/fiab-console/lib/components/realtime-hub/rti-hub-view.tsx`).
+- **Ontology writeback round-trip** — out of scope / by design (audit-T35, PMF-GAP-5). No live object writeback in the streaming path; analyst edits use a **separate** Power Apps form + SQL-endpoint / Fabric-notebook path (see [analytics migration §7](palantir-foundry/analytics-migration.md)).
+- **IL6** — out of scope for csa-inabox; recommend out-of-band. Not authorized to IL6 / Azure Government Secret — sponsor-specific deploys only (audit-T35; see [ADR-0001](../fiab/adr/0001-fabric-feature-scope.md)).
 - **Decision trees for service choice** — CSA-0010 (not a Foundry gap per se, but referenced by migrators picking Fabric vs Databricks vs Synapse)
 
 ---

@@ -323,6 +323,27 @@ export function RtiHubView() {
     <>
       {unauth && <SignInRequired subject="Real-Time Intelligence hub" />}
 
+      {/* Honest scope disclosure (by-design, not an infra-gate) — audit-T35.
+          Loom's real-time path is an Azure-native ANALYTICS pipeline, not a
+          Palantir Phonograph-style sub-100ms transactional ontology object
+          store. Rendered unconditionally so no vaporware claim is implied.
+          intent="info" (by-design out-of-scope) is deliberately distinct from
+          the intent="warning" config infra-gate below. See
+          docs/fiab/parity/rti-hub.md + docs/migrations/palantir-foundry. */}
+      <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBarBody>
+          <MessageBarTitle>Real-time scope</MessageBarTitle>
+          Loom&apos;s real-time path is an Azure-native <b>analytics</b> pipeline —
+          Event Hubs → Azure Stream Analytics / Real-Time Intelligence (ADX),
+          typically sub-second to low-second end-to-end. It is <b>not</b> a
+          Palantir Phonograph-style sub-100&nbsp;ms transactional ontology object
+          store, and it does <b>not</b> provide live object writeback — analyst
+          edits use a separate Power&nbsp;Apps + SQL-endpoint path. IL6 /
+          classified-SCI workloads are out of scope (sponsor-specific deploys
+          only; see ADR-0001).
+        </MessageBarBody>
+      </MessageBar>
+
       {/* Summary stats */}
       <div className={styles.stats}>
         <div className={styles.stat}>
