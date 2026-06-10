@@ -25,9 +25,10 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { PathRowsEditor, CompositeIndexEditor } from './cosmos-policy-editors';
+import { PathRowsEditor, CompositeIndexEditor, ConflictResolutionPolicyEditor } from './cosmos-policy-editors';
 import type {
   ThroughputInfo, CosmosIndexingPolicy, CosmosUniqueKeyPolicy, ContainerDetail, CompositePath,
+  CosmosConflictResolutionPolicy,
 } from '@/lib/azure/cosmos-account-client';
 
 const SETTINGS_ROUTE = '/api/cosmos/container-settings';
@@ -93,6 +94,11 @@ export function CosmosSettingsPanel({ db, container, partitionKey, defaultTtl, t
 
   const [uniqueKeyPolicy, setUniqueKeyPolicy] = useState<CosmosUniqueKeyPolicy | undefined>(undefined);
 
+  // Conflict-resolution editor state
+  const [conflictPolicy, setConflictPolicy] = useState<CosmosConflictResolutionPolicy>({ mode: 'LastWriterWins', conflictResolutionPath: '/_ts' });
+  const [crpBusy, setCrpBusy] = useState(false);
+  const [crpMsg, setCrpMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
   const hydrate = useCallback(async () => {
     setLoading(true); setLoadError(null);
     try {
@@ -109,6 +115,9 @@ export function CosmosSettingsPanel({ db, container, partitionKey, defaultTtl, t
       if (typeof d.defaultTtl === 'number' && d.defaultTtl > 0) setTtlSeconds(String(d.defaultTtl));
       setIndexing(d.indexingPolicy ?? emptyIndexing());
       setUniqueKeyPolicy(d.uniqueKeyPolicy);
+      setConflictPolicy(
+        d.conflictResolutionPolicy ?? { mode: 'LastWriterWins', conflictResolutionPath: '/_ts' },
+      );
     } catch (e: any) {
       setLoadError(e?.message || String(e));
     } finally {
@@ -212,6 +221,27 @@ export function CosmosSettingsPanel({ db, container, partitionKey, defaultTtl, t
     }
   }, [db, container, indexing, indexingNone, ttlMode]);
 
+  // ---- Save conflict-resolution policy ----
+  const saveConflictPolicy = useCallback(async () => {
+    setCrpBusy(true); setCrpMsg(null);
+    try {
+      const payload: CosmosConflictResolutionPolicy = conflictPolicy.mode === 'Custom'
+        ? { mode: 'Custom', conflictResolutionProcedure: (conflictPolicy.conflictResolutionProcedure || '').trim() }
+        : { mode: 'LastWriterWins', conflictResolutionPath: (conflictPolicy.conflictResolutionPath || '').trim() || '/_ts' };
+      const r = await fetch(SETTINGS_ROUTE, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ db, container, conflictResolutionPolicy: payload }),
+      }).then(readJson);
+      if (!r.ok) { setCrpMsg({ intent: 'error', text: r.error || 'Conflict-resolution policy update failed.' }); setCrpBusy(false); return; }
+      if (r.container?.conflictResolutionPolicy) setConflictPolicy(r.container.conflictResolutionPolicy);
+      setCrpMsg({ intent: 'success', text: 'Conflict-resolution policy updated.' });
+    } catch (e: any) {
+      setCrpMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setCrpBusy(false);
+    }
+  }, [db, container, conflictPolicy]);
+
   if (loading) {
     return <div className={s.root}><Spinner size="small" label="Loading container settings…" /></div>;
   }
@@ -228,7 +258,7 @@ export function CosmosSettingsPanel({ db, container, partitionKey, defaultTtl, t
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not load settings</MessageBarTitle>{loadError}</MessageBarBody></MessageBar>
       )}
 
-      <Accordion multiple collapsible defaultOpenItems={['scale', 'ttl', 'indexing']}>
+      <Accordion multiple collapsible defaultOpenItems={['scale', 'ttl', 'indexing', 'conflict']}>
         {/* ---- Scale (throughput) ---- */}
         <AccordionItem value="scale">
           <AccordionHeader>Scale</AccordionHeader>
@@ -404,28 +434,34 @@ export function CosmosSettingsPanel({ db, container, partitionKey, defaultTtl, t
           </AccordionPanel>
         </AccordionItem>
 
-        {/* ---- Conflict resolution (honest gate — multi-region write only) ---- */}
+        {/* ---- Conflict resolution (editable — full container PUT) ---- */}
         <AccordionItem value="conflict">
           <AccordionHeader>Conflict Resolution</AccordionHeader>
           <AccordionPanel>
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>Conflict-resolution policy not yet wired</MessageBarTitle>
-                Last-Writer-Wins vs custom stored-procedure conflict resolution applies to
-                multi-region write accounts (<code>properties.resource.conflictResolutionPolicy</code>);
-                editing it needs a multi-region write account. Not wired yet — surfaced honestly per
-                no-vaporware.md.
-              </MessageBarBody>
-            </MessageBar>
+            <div className={s.section}>
+              <ConflictResolutionPolicyEditor
+                policy={conflictPolicy}
+                onChange={setConflictPolicy}
+                disabled={crpBusy}
+              />
+              <div className={s.actionRow}>
+                <Button appearance="primary" disabled={crpBusy} onClick={saveConflictPolicy}>
+                  {crpBusy ? <Spinner size="tiny" label="Saving…" labelPosition="after" /> : 'Save conflict resolution policy'}
+                </Button>
+              </div>
+              {crpMsg && (
+                <MessageBar intent={crpMsg.intent}><MessageBarBody>{crpMsg.text}</MessageBarBody></MessageBar>
+              )}
+            </div>
           </AccordionPanel>
         </AccordionItem>
       </Accordion>
 
       <Divider />
       <Caption1 className={s.note}>
-        Throughput, TTL, and indexing changes are written to the real ARM control plane
-        (<code>Microsoft.DocumentDB/databaseAccounts</code>) and re-read to confirm. Partition key
-        and unique keys are immutable after creation (Azure parity).
+        Throughput, TTL, indexing, and conflict-resolution changes are written to the real ARM
+        control plane (<code>Microsoft.DocumentDB/databaseAccounts</code>) and re-read to confirm.
+        Partition key and unique keys are immutable after creation (Azure parity).
       </Caption1>
     </div>
   );

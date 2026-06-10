@@ -12,11 +12,13 @@
 
 import {
   Button, Input, Dropdown, Option, Caption1, Field, Badge,
+  MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add16Regular, Delete16Regular } from '@fluentui/react-icons';
 import type {
   IndexingPath, CompositePath, CosmosUniqueKeyPolicy,
+  CosmosConflictResolutionPolicy,
 } from '@/lib/azure/cosmos-account-client';
 
 const useStyles = makeStyles({
@@ -273,6 +275,97 @@ export function UniqueKeysEditor({
       >
         Add unique key
       </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Conflict-resolution policy (Last-Writer-Wins path OR Custom stored-proc).
+// Mirrors the Azure portal Data Explorer "Conflict resolution" selector.
+// Editable post-create via a full container PUT (ARM api >= 2019-08-01).
+// ---------------------------------------------------------------------------
+
+const MODE_LABEL: Record<CosmosConflictResolutionPolicy['mode'], string> = {
+  LastWriterWins: 'Last Writer Wins',
+  Custom: 'Custom (merge stored procedure)',
+};
+
+export function ConflictResolutionPolicyEditor({
+  policy, onChange, disabled,
+}: {
+  policy: CosmosConflictResolutionPolicy;
+  onChange: (next: CosmosConflictResolutionPolicy) => void;
+  disabled?: boolean;
+}) {
+  const s = useStyles();
+  const isCustom = policy.mode === 'Custom';
+  return (
+    <div className={s.section}>
+      <Field label="Conflict resolution mode">
+        <Dropdown
+          value={MODE_LABEL[policy.mode]}
+          selectedOptions={[policy.mode]}
+          disabled={disabled}
+          aria-label="Conflict resolution mode"
+          onOptionSelect={(_, d) => {
+            const mode = (d.optionValue as CosmosConflictResolutionPolicy['mode']) || 'LastWriterWins';
+            onChange(
+              mode === 'Custom'
+                ? { mode: 'Custom', conflictResolutionProcedure: policy.conflictResolutionProcedure || '' }
+                : { mode: 'LastWriterWins', conflictResolutionPath: policy.conflictResolutionPath || '/_ts' },
+            );
+          }}
+        >
+          <Option value="LastWriterWins" text={MODE_LABEL.LastWriterWins}>{MODE_LABEL.LastWriterWins}</Option>
+          <Option value="Custom" text={MODE_LABEL.Custom}>{MODE_LABEL.Custom}</Option>
+        </Dropdown>
+      </Field>
+
+      {!isCustom ? (
+        <Field
+          label="Conflict resolution path"
+          hint="Path to a numeric property; the item with the highest value wins. Defaults to /_ts (the system timestamp)."
+        >
+          <Input
+            size="small"
+            value={policy.conflictResolutionPath ?? ''}
+            placeholder="/_ts"
+            disabled={disabled}
+            onChange={(_, d) => onChange({ mode: 'LastWriterWins', conflictResolutionPath: d.value })}
+            aria-label="Conflict resolution path"
+          />
+        </Field>
+      ) : (
+        <Field
+          label="Merge stored procedure"
+          hint="Resource id of the registered stored procedure that resolves conflicts (e.g. sprocs/myMergeProc)."
+        >
+          <Input
+            size="small"
+            value={policy.conflictResolutionProcedure ?? ''}
+            placeholder="sprocs/myMergeProc"
+            disabled={disabled}
+            onChange={(_, d) => onChange({ mode: 'Custom', conflictResolutionProcedure: d.value })}
+            aria-label="Merge stored procedure"
+          />
+        </Field>
+      )}
+
+      {isCustom && (
+        <Caption1 className={s.note}>
+          Leave blank to route unresolved write conflicts to the container&apos;s conflicts feed,
+          where your application drains and resolves them manually.
+        </Caption1>
+      )}
+
+      <MessageBar intent="info">
+        <MessageBarBody>
+          Conflicts only occur when the account has multi-region writes enabled
+          (<code>enableMultipleWriteLocations</code>). On a single-write account this policy is
+          stored but never exercised — it takes effect automatically if the account is later
+          configured for multi-region writes.
+        </MessageBarBody>
+      </MessageBar>
     </div>
   );
 }
