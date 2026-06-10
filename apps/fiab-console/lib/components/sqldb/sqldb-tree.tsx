@@ -51,18 +51,27 @@ import { SqlConstraintsNode } from '@/lib/components/sqldb/sqldb-table-designer'
 import { SqlConstraintBuilder, type SqlConstraintRow as SqlConstraintRowT } from '@/lib/components/sqldb/sqldb-constraint-builder';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 264 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalS,
+    height: '100%', minWidth: 264,
+  },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  colRow: { display: 'flex', alignItems: 'center', gap: 6, width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 },
-  ixRow: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
+  headerActions: { display: 'flex', gap: tokens.spacingHorizontalXXS },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  colRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
+  ixRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' },
+  treeScroll: { overflow: 'auto', flex: 1 },
+  pad: { padding: tokens.spacingVerticalS },
+  clickName: { cursor: 'pointer' },
+  notWired: { color: tokens.colorNeutralForeground3 },
   previewSurface: { maxWidth: '92vw', width: '92vw', display: 'flex', flexDirection: 'column' },
   previewBody: { flex: 1, minHeight: 0, overflow: 'auto', maxHeight: '64vh' },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, color: tokens.colorNeutralForeground3 },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
 });
 
 async function readJson(res: Response): Promise<any> {
@@ -459,7 +468,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>{resolvedDb ? <>Database · <code>{resolvedDb}</code></> : 'SQL database objects'}</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span className={s.headerActions}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="New (opens a template in the Query tab)" relationship="label">
@@ -492,12 +501,12 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading database objects…" /></div>}
+      {loading && <div className={s.pad}><Spinner size="tiny" label="Loading database objects…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Database error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
 
-      <div style={{ overflow: 'auto', flex: 1 }}>
+      <div className={s.treeScroll}>
         <Tree aria-label="SQL database objects" defaultOpenItems={['g-tables']}>
           {/* Tables (expand → columns + indexes) */}
           <TreeItem itemType="branch" value="g-tables">
@@ -645,7 +654,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                 <TreeItem key={v.objectId} itemType="leaf" value={`v-${v.objectId}`}>
                   <TreeItemLayout iconBefore={<ContentView20Regular />}>
                     <span className={s.leafRow}>
-                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                      <span role="button" tabIndex={0} className={s.clickName}
                         onClick={() => openQuery(`SELECT TOP 1000 * FROM [${v.schema}].[${v.name}];`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`SELECT TOP 1000 * FROM [${v.schema}].[${v.name}];`); } }}
                       >{v.fullName}</span>
@@ -681,7 +690,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                 <TreeItem key={p.objectId} itemType="leaf" value={`p-${p.objectId}`}>
                   <TreeItemLayout iconBefore={<DocumentText20Regular />}>
                     <span className={s.leafRow}>
-                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                      <span role="button" tabIndex={0} className={s.clickName}
                         onClick={() => openQuery(`EXEC [${p.schema}].[${p.name}];`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`EXEC [${p.schema}].[${p.name}];`); } }}
                       >{p.fullName}</span>
@@ -797,7 +806,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
                   <Tooltip content={why} relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
+                      <span className={s.notWired}>{label}</span>{' '}
                       <Badge size="small" appearance="tint" color="warning">coming</Badge>
                     </TreeItemLayout>
                   </Tooltip>

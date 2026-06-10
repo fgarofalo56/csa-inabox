@@ -30,11 +30,12 @@ import {
 import type { SqlConstraintRow } from './sqldb-constraint-builder';
 
 const useStyles = makeStyles({
-  row: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  actions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, color: tokens.colorNeutralForeground3 },
+  row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
+  actions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  empty: { color: tokens.colorNeutralForeground3, flex: 1 },
 });
 
 const TYPE_LABEL: Record<SqlConstraintRow['constraintType'], string> = {
@@ -138,7 +139,14 @@ export function SqlConstraintsNode(props: SqlConstraintsNodeProps) {
           <TreeItem itemType="leaf" value={`${treeValuePrefix}-cons-err`}><TreeItemLayout iconBefore={<Warning20Regular />}><Caption1>{state.error}</Caption1></TreeItemLayout></TreeItem>
         )}
         {Array.isArray(state) && state.length === 0 && (
-          <TreeItem itemType="leaf" value={`${treeValuePrefix}-cons-none`}><TreeItemLayout><Caption1>No constraints — use “Add constraint”.</Caption1></TreeItemLayout></TreeItem>
+          <TreeItem itemType="leaf" value={`${treeValuePrefix}-cons-none`}>
+            <TreeItemLayout>
+              <span className={s.row}>
+                <Caption1 className={s.empty}>No keys or constraints defined on this table.</Caption1>
+                <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={onAdd} disabled={busy}>Add constraint</Button>
+              </span>
+            </TreeItemLayout>
+          </TreeItem>
         )}
         {Array.isArray(state) && state.map((c) => {
           const togglable = c.constraintType === 'FK' || c.constraintType === 'CK';
@@ -150,7 +158,11 @@ export function SqlConstraintsNode(props: SqlConstraintsNodeProps) {
                 <span className={s.row}>
                   <span>{c.name}</span>
                   <Badge size="small" appearance="tint" color={badgeColor(c.constraintType)}>{TYPE_LABEL[c.constraintType]}</Badge>
-                  {colsShort && <Caption1 className={s.mono}>({colsShort})</Caption1>}
+                  {colsShort && (
+                    cols.length > 44
+                      ? <Tooltip content={cols} relationship="label"><Caption1 className={s.mono}>({colsShort})</Caption1></Tooltip>
+                      : <Caption1 className={s.mono}>({colsShort})</Caption1>
+                  )}
                   {c.constraintType === 'FK' && c.refTableName && <Caption1 className={s.mono}>→ {c.refTableName}</Caption1>}
                   {!c.isTrusted && <Badge size="small" appearance="tint" color="warning">not trusted</Badge>}
                   {c.isDisabled && <Badge size="small" appearance="outline">disabled</Badge>}

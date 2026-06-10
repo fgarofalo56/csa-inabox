@@ -29,14 +29,46 @@ import {
 
 const useStyles = makeStyles({
   surface: { maxWidth: '640px', width: '640px' },
-  body: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 320 },
-  form: { display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 },
-  colList: { display: 'flex', flexDirection: 'column', gap: 6 },
-  colRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  colName: { flex: 1, fontFamily: 'Consolas, monospace', fontSize: 13 },
+  body: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalM, minHeight: 320,
+  },
+  form: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS,
+  },
+  colList: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    maxHeight: 220, overflowY: 'auto',
+    paddingRight: tokens.spacingHorizontalXS,
+  },
+  colRow: {
+    display: 'flex', alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingBlock: tokens.spacingVerticalXXS,
+    borderRadius: tokens.borderRadiusSmall,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  colName: { flex: 1, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300 },
+  colType: { color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
   hint: { color: tokens.colorNeutralForeground3 },
   mono: { fontFamily: 'Consolas, monospace' },
+  dirDropdown: { minWidth: 124 },
+  actionsRow: { display: 'flex', gap: tokens.spacingHorizontalM },
+  flex1: { flex: 1 },
 });
+
+/** Compact SQL type rendering for the column pickers (e.g. nvarchar(50)). */
+function shortType(c: SqlColumnRow): string {
+  const t = (c.dataType || '').toLowerCase();
+  if (['varchar', 'nvarchar', 'char', 'nchar', 'varbinary', 'binary'].includes(t)) {
+    const len = c.maxLength === -1 ? 'max' : (t.startsWith('n') ? c.maxLength / 2 : c.maxLength);
+    return `${t}(${len})`;
+  }
+  if (['decimal', 'numeric'].includes(t)) return `${t}(${c.precision},${c.scale})`;
+  return t;
+}
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -241,23 +273,28 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                     {columns.length === 0 && <Caption1 className={s.hint}>No columns on this table.</Caption1>}
                     {columns.map((c) => {
                       const sel = keyCols.find((k) => k.columnId === c.columnId);
+                      // A PK column must be NOT NULL; nullable columns are unselectable on the PK tab.
+                      const pkBlocked = tab === 'PK' && c.isNullable;
                       return (
                         <div key={c.columnId} className={s.colRow}>
                           <Checkbox
                             checked={!!sel}
-                            disabled={!c.isNullable ? false : tab === 'PK'} // PK cols must be NOT NULL
+                            disabled={pkBlocked}
                             onChange={(_, d) => toggleKeyCol(c.columnId, !!d.checked)}
                             label={undefined}
+                            aria-label={`Include ${c.name} in key`}
                           />
                           <span className={s.colName}>{c.name}</span>
-                          {c.isNullable && tab === 'PK' && <Badge size="small" appearance="outline" color="warning">nullable</Badge>}
+                          <span className={s.colType}>{shortType(c)}</span>
+                          {pkBlocked && <Badge size="small" appearance="outline" color="warning">nullable</Badge>}
                           {sel && (
                             <Dropdown
                               size="small"
                               value={sel.descending ? 'Descending' : 'Ascending'}
                               selectedOptions={[sel.descending ? 'DESC' : 'ASC']}
                               onOptionSelect={(_, d) => setKeyColDir(c.columnId, d.optionValue === 'DESC')}
-                              style={{ minWidth: 120 }}
+                              className={s.dirDropdown}
+                              aria-label={`Sort direction for ${c.name}`}
                             >
                               <Option value="ASC">Ascending</Option>
                               <Option value="DESC">Descending</Option>
@@ -283,17 +320,24 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                 <Field label="Constraint name">
                   <Input value={fkName} onChange={(_, d) => setFkName(d.value)} />
                 </Field>
-                <Field label="Columns in this table (in order)">
+                <Field label="Columns in this table (in order)" hint="Selection order defines the foreign-key column order; match it below.">
                   <div className={s.colList}>
-                    {columns.map((c) => (
-                      <div key={c.columnId} className={s.colRow}>
-                        <Checkbox
-                          checked={fkCols.includes(c.columnId)}
-                          onChange={(_, d) => setFkCols((prev) => d.checked ? [...prev, c.columnId] : prev.filter((x) => x !== c.columnId))}
-                        />
-                        <span className={s.colName}>{c.name}</span>
-                      </div>
-                    ))}
+                    {columns.length === 0 && <Caption1 className={s.hint}>No columns on this table.</Caption1>}
+                    {columns.map((c) => {
+                      const ord = fkCols.indexOf(c.columnId);
+                      return (
+                        <div key={c.columnId} className={s.colRow}>
+                          <Checkbox
+                            checked={ord >= 0}
+                            onChange={(_, d) => setFkCols((prev) => d.checked ? [...prev, c.columnId] : prev.filter((x) => x !== c.columnId))}
+                            aria-label={`Include ${c.name} in foreign key`}
+                          />
+                          <span className={s.colName}>{c.name}</span>
+                          <span className={s.colType}>{shortType(c)}</span>
+                          {ord >= 0 && <Badge size="small" appearance="tint" color="brand">{ord + 1}</Badge>}
+                        </div>
+                      );
+                    })}
                   </div>
                 </Field>
                 <Field label="Referenced table">
@@ -317,26 +361,32 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                       : (
                         <div className={s.colList}>
                           {refColOpts.length === 0 && <Caption1 className={s.hint}>No columns on the referenced table.</Caption1>}
-                          {refColOpts.map((c) => (
-                            <div key={c.columnId} className={s.colRow}>
-                              <Checkbox
-                                checked={refCols.includes(c.columnId)}
-                                onChange={(_, d) => setRefCols((prev) => d.checked ? [...prev, c.columnId] : prev.filter((x) => x !== c.columnId))}
-                              />
-                              <span className={s.colName}>{c.name}</span>
-                            </div>
-                          ))}
+                          {refColOpts.map((c) => {
+                            const ord = refCols.indexOf(c.columnId);
+                            return (
+                              <div key={c.columnId} className={s.colRow}>
+                                <Checkbox
+                                  checked={ord >= 0}
+                                  onChange={(_, d) => setRefCols((prev) => d.checked ? [...prev, c.columnId] : prev.filter((x) => x !== c.columnId))}
+                                  aria-label={`Reference ${c.name}`}
+                                />
+                                <span className={s.colName}>{c.name}</span>
+                                <span className={s.colType}>{shortType(c)}</span>
+                                {ord >= 0 && <Badge size="small" appearance="tint" color="brand">{ord + 1}</Badge>}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                   </Field>
                 )}
-                <div style={{ display: 'flex', gap: 12 }}>
-                  <Field label="On delete" style={{ flex: 1 }}>
+                <div className={s.actionsRow}>
+                  <Field label="On delete" className={s.flex1}>
                     <Dropdown value={REF_ACTIONS.find((a) => a.key === onDelete)?.label} selectedOptions={[onDelete]} onOptionSelect={(_, d) => setOnDelete(d.optionValue as RefAction)}>
                       {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="On update" style={{ flex: 1 }}>
+                  <Field label="On update" className={s.flex1}>
                     <Dropdown value={REF_ACTIONS.find((a) => a.key === onUpdate)?.label} selectedOptions={[onUpdate]} onOptionSelect={(_, d) => setOnUpdate(d.optionValue as RefAction)}>
                       {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
                     </Dropdown>
