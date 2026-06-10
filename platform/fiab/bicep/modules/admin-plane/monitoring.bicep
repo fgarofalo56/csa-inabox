@@ -182,11 +182,14 @@ resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 // Monitoring Contributor — 749f88ad-0bdc-4e1b-a8b6-bfb96b995e05
-// Lets the Console UAMI PUT/DELETE Microsoft.Insights/scheduledQueryRules +
-// action groups in this RG. This single grant backs BOTH Azure-native
-// query-alert surfaces (per .claude/rules/no-fabric-dependency.md):
-//   1. the Activator rule wizard
-//      (lib/azure/activator-monitor.ts → monitor-client.upsertScheduledQueryRule)
+// Lets the Console UAMI PUT/PATCH/DELETE Microsoft.Insights/scheduledQueryRules
+// + action groups in this RG (all map to .../scheduledQueryRules/write|delete).
+// This single grant backs BOTH Azure-native query-alert surfaces (per
+// .claude/rules/no-fabric-dependency.md):
+//   1. the Activator rule wizard + rule lifecycle (create / enable / disable /
+//      delete) — lib/azure/activator-monitor.ts →
+//      monitor-client.upsertScheduledQueryRule / patchScheduledQueryRule
+//      (enable/disable via in-place PATCH) / deleteScheduledQueryRule
 //   2. the warehouse Alerts editor on the Government boundary
 //      (app/api/items/[type]/[id]/alerts → monitor-client.upsertScheduledQueryRule
 //       / listScheduledQueryRules / deleteScheduledQueryRule), the Azure-native
