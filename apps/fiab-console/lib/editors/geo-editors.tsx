@@ -22,7 +22,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
-  TabList, Tab,
+  TabList, Tab, Checkbox, Dropdown, Option, Field, Divider,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -146,6 +146,23 @@ const useStyles = makeStyles({
   },
   treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   field: { display: 'flex', flexDirection: 'column', gap: 4 },
+  codeBlock: {
+    fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
+    margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto',
+  },
+  enrichGroup: {
+    display: 'flex', flexDirection: 'column', gap: '8px',
+    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  schemaRow: {
+    display: 'flex', flexDirection: 'column', gap: '2px',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+  },
 });
 
 const SAMPLE_GEO_KQL = `// Geoanalytics — KQL with built-in geo functions
@@ -287,6 +304,13 @@ interface GeoDatasetState { adlsPath: string; geomColumn: string; format: 'geojs
 
 interface ContainerInfoDTO { name: string; url: string }
 
+/** Storage-format options for the dataset Inspect probe. */
+const GEO_FORMAT_OPTIONS: Array<{ value: GeoDatasetState['format']; label: string }> = [
+  { value: 'parquet', label: 'Parquet (+ WKB geometry)' },
+  { value: 'geojson', label: 'GeoJSON (line-delimited)' },
+  { value: 'csv', label: 'CSV (lat / lon columns)' },
+];
+
 /** SRID picker options — the spatial reference systems the dataset declares. */
 const GEO_SRID_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '4326', label: '4326 (WGS84 — lat/lon)' },
@@ -319,6 +343,7 @@ function detectGeometryEncoding(value: unknown): 'GeoJSON' | 'WKB' | 'WKT' | nul
  * Serverless query route returns.
  */
 function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows: unknown[][]; geomColumn: string }) {
+  const s = useStyles();
   const row0 = Array.isArray(rows) && rows.length > 0 ? rows[0] : [];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -329,13 +354,13 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
         const enc = isGeom ? detectGeometryEncoding(cell) : null;
         const preview = cell == null ? '∅' : String(cell).slice(0, 64);
         return (
-          <div key={c} style={{ display: 'flex', flexDirection: 'column', gap: 2, borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div key={c} className={s.schemaRow}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <Caption1 style={{ fontWeight: isGeom ? 700 : 500, color: isGeom ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1 }}>{c}</Caption1>
               {isGeom && <Badge appearance="tint" color="brand" size="small">geometry</Badge>}
               {enc && <Badge appearance="outline" color="informative" size="small">{enc}</Badge>}
             </div>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: 11 }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
           </div>
         );
       })}
@@ -450,29 +475,27 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
           <Subtitle2>Geo dataset</Subtitle2>
-          <div className={s.field}><Label>ADLS container</Label>
-            <select
-              value={split.container}
-              onChange={(e) => {
-                const newContainer = e.target.value;
+          <Field label="ADLS container">
+            <Dropdown
+              value={split.container || ''}
+              selectedOptions={split.container ? [split.container] : []}
+              placeholder={
+                lh.loading ? 'Loading containers…'
+                  : (lh.containers?.length ?? 0) === 0 ? (lh.error ? 'Container discovery failed' : 'No ADLS containers found')
+                  : 'Select a container'
+              }
+              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
+              onOptionSelect={(_, d) => {
+                const newContainer = d.optionValue || '';
                 const url = (lh.containers || []).find((c) => c.name === newContainer)?.url;
                 setState((p) => ({ ...p, adlsPath: joinAdlsPath(newContainer, split.suffix, url) }));
               }}
-              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
-              {lh.loading && <option value="">Loading containers…</option>}
-              {!lh.loading && (lh.containers?.length ?? 0) === 0 && (
-                <option value="">{lh.error ? 'Container discovery failed' : 'No ADLS containers found'}</option>
-              )}
-              {!lh.loading && (lh.containers?.length ?? 0) > 0 && !split.container && (
-                <option value="">Select a container</option>
-              )}
               {(lh.containers || []).map((c) => (
-                <option key={c.name} value={c.name}>{c.name}</option>
+                <Option key={c.name} value={c.name}>{c.name}</Option>
               ))}
-            </select>
-          </div>
+            </Dropdown>
+          </Field>
           {lh.error && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -486,35 +509,45 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.field}><Label>Path suffix (under selected container)</Label>
+          <Field label="Path suffix (under selected container)" hint={`Effective path: ${state.adlsPath || '(select a container)'}`}>
             <Input
               value={split.suffix}
               onChange={(_: unknown, d: any) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
               placeholder="geo/events/"
               disabled={!split.container}
             />
-          </div>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Effective path: <code>{state.adlsPath || '(select a container)'}</code>
-          </Caption1>
-          <div className={s.field}><Label>Geometry column</Label>
+          </Field>
+          <Field label="Geometry column">
             <Input value={state.geomColumn} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
-          </div>
-          <div className={s.field}><Label>Format</Label>
-            <select value={state.format} onChange={(e) => setState((p) => ({ ...p, format: e.target.value as GeoDatasetState['format'] }))} style={{ padding: 6 }}>
-              <option value="parquet">Parquet (+ WKB geometry)</option>
-              <option value="geojson">GeoJSON (line-delimited)</option>
-              <option value="csv">CSV (lat / lon columns)</option>
-            </select>
-          </div>
-          <div className={s.field}><Label>Spatial reference (SRID / EPSG)</Label>
-            <select value={GEO_SRID_OPTIONS.some((o) => o.value === state.srid) ? state.srid : 'custom'} onChange={(e) => setState((p) => ({ ...p, srid: e.target.value === 'custom' ? '' : e.target.value }))} style={{ padding: 6 }}>
-              {GEO_SRID_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+          </Field>
+          <Field label="Format">
+            <Dropdown
+              value={GEO_FORMAT_OPTIONS.find((o) => o.value === state.format)?.label || ''}
+              selectedOptions={[state.format]}
+              onOptionSelect={(_, d) => setState((p) => ({ ...p, format: (d.optionValue as GeoDatasetState['format']) || 'parquet' }))}
+            >
+              {GEO_FORMAT_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Spatial reference (SRID / EPSG)">
+            {(() => {
+              const sridSelection = GEO_SRID_OPTIONS.some((o) => o.value === state.srid) ? state.srid : 'custom';
+              return (
+                <Dropdown
+                  value={GEO_SRID_OPTIONS.find((o) => o.value === sridSelection)?.label || ''}
+                  selectedOptions={[sridSelection]}
+                  onOptionSelect={(_, d) => setState((p) => ({ ...p, srid: d.optionValue === 'custom' ? '' : (d.optionValue || '') }))}
+                >
+                  {GEO_SRID_OPTIONS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                </Dropdown>
+              );
+            })()}
             {!GEO_SRID_OPTIONS.some((o) => o.value === state.srid) && (
               <Input value={state.srid} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, srid: d.value }))} placeholder="EPSG code, e.g. 27700" />
             )}
-          </div>
+          </Field>
+          <Divider />
+          <Subtitle2>Geometry inspector</Subtitle2>
           <MessageBar intent="info">
             <MessageBarBody>
               <strong>Inspect</strong> probes the first row via Synapse Serverless <code>OPENROWSET</code> over the
@@ -524,6 +557,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
           <Button appearance="primary" icon={<Play20Regular />} onClick={inspect} disabled={inspecting || !state.adlsPath}>
             {inspecting ? 'Inspecting…' : 'Inspect first row (OPENROWSET)'}
           </Button>
+          {inspecting && <Spinner size="tiny" label="Probing dataset…" labelPosition="after" />}
           {inspectResult && (
             inspectResult.error || inspectResult.status >= 400 ? (
               <MessageBar intent={inspectResult.status === 503 || inspectResult.notDeployed ? 'warning' : 'error'}>
@@ -551,9 +585,9 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
                   </>
                 )}
                 <Caption1>Probe query:</Caption1>
-                <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{inspectResult.sql}</pre>
+                <pre className={s.codeBlock}>{inspectResult.sql}</pre>
                 <Caption1>First row:</Caption1>
-                <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(inspectResult.rows || inspectResult.result || inspectResult, null, 2)}</pre>
+                <pre className={s.codeBlock}>{JSON.stringify(inspectResult.rows || inspectResult.result || inspectResult, null, 2)}</pre>
               </>
             )
           )}
@@ -714,8 +748,9 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
               <GeoJsonMap geojson={resultGeo} />
             </>
           )}
+          {loading && <Spinner size="small" label="Running query…" labelPosition="after" />}
           {result && (
-            <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+            <pre className={s.codeBlock}>
               {JSON.stringify(result, null, 2)}
             </pre>
           )}
@@ -829,25 +864,30 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <div className={s.field}><Label>ADF pipeline (target)</Label>
-            <select
-              value={state.adfPipelineName}
-              onChange={(e) => setState((p) => ({ ...p, adfPipelineName: e.target.value }))}
+          <Field label="ADF pipeline (target)">
+            <Dropdown
+              value={state.adfPipelineName || ''}
+              selectedOptions={state.adfPipelineName ? [state.adfPipelineName] : []}
+              placeholder={
+                adf.loading ? 'Loading pipelines…'
+                  : (adf.pipelines?.length ?? 0) === 0 ? (adf.error ? 'Discovery failed' : 'No ADF pipelines in factory')
+                  : 'Select a pipeline'
+              }
               disabled={adf.loading || (adf.pipelines?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              onOptionSelect={(_, d) => setState((p) => ({ ...p, adfPipelineName: d.optionValue || '' }))}
             >
-              {adf.loading && <option value="">Loading pipelines…</option>}
-              {!adf.loading && (adf.pipelines?.length ?? 0) === 0 && (
-                <option value="">{adf.error ? 'Discovery failed' : 'No ADF pipelines in factory'}</option>
-              )}
-              {!adf.loading && (adf.pipelines?.length ?? 0) > 0 && !state.adfPipelineName && (
-                <option value="">Select a pipeline</option>
-              )}
               {(adf.pipelines || []).map((p) => (
-                <option key={p.name} value={p.name}>{p.name}</option>
+                <Option key={p.name} value={p.name} text={p.name}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <Body1>{p.name}</Body1>
+                    {p.properties?.description && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.properties.description}</Caption1>
+                    )}
+                  </div>
+                </Option>
               ))}
-            </select>
-          </div>
+            </Dropdown>
+          </Field>
           {adf.error && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -860,11 +900,21 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.field}><Label>Enrichments</Label>
-            <label><input type="checkbox" checked={state.enrichH3} onChange={(e) => setState((p) => ({ ...p, enrichH3: e.target.checked }))} /> Add H3 cell id at resolution 7 (<code>enrichH3: Bool</code>)</label>
-            <label style={{ opacity: mapsKey ? 1 : 0.6 }}>
-              <input type="checkbox" checked={state.reverseGeocode && !!mapsKey} disabled={!mapsKey} onChange={(e) => setState((p) => ({ ...p, reverseGeocode: e.target.checked }))} /> Reverse-geocode (<code>reverseGeocode: Bool</code>)
-            </label>
+          <div className={s.field}>
+            <Label>Enrichments</Label>
+            <div className={s.enrichGroup}>
+              <Checkbox
+                checked={state.enrichH3}
+                onChange={(_, d) => setState((p) => ({ ...p, enrichH3: !!d.checked }))}
+                label={<span>Add H3 cell id at resolution 7 (<code>enrichH3: Bool</code>)</span>}
+              />
+              <Checkbox
+                checked={state.reverseGeocode && !!mapsKey}
+                disabled={!mapsKey}
+                onChange={(_, d) => setState((p) => ({ ...p, reverseGeocode: !!d.checked }))}
+                label={<span>Reverse-geocode (<code>reverseGeocode: Bool</code>)</span>}
+              />
+            </div>
           </div>
           {!mapsKey && (
             <MessageBar intent="warning">
@@ -876,9 +926,9 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.field}><Label>Buffer (meters; 0 = no buffer) — <code>bufferMeters: Int</code></Label>
-            <Input type="number" value={String(state.bufferMeters)} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
-          </div>
+          <Field label="Buffer (meters; 0 = no buffer)" hint="ADF parameter bufferMeters: Int">
+            <Input type="number" min={0} value={String(state.bufferMeters)} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
+          </Field>
           {adf.error && /Missing env var|not configured/i.test(adf.error) && (
             <MessageBar intent="warning">
               <MessageBarBody>
