@@ -537,15 +537,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
               {Array.isArray(detail.source.tables) && detail.source.tables.length ? ` · ${detail.source.tables.length} table(s) selected` : ''}
-              {detail.source.includeIceberg ? ' · Iceberg tables included' : ''}
             </Caption1>
           )}
           {detail?.source?.includeIceberg && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Iceberg storage: <code>{detail.source.icebergStorageUrl || '—'}</code>
+            <Caption1 style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', color: tokens.colorNeutralForeground3 }}>
+              <Badge appearance="tint" color="informative" shape="rounded">Iceberg</Badge>
+              storage <code>{detail.source.icebergStorageUrl || '—'}</code>
               {Array.isArray(detail.iceberg) && detail.iceberg.length
-                ? ` · ${detail.iceberg.filter((t: any) => t.status === 'registered').length} Iceberg table(s) registered`
-                : ''}
+                ? <Badge appearance="tint" color="success" shape="rounded">
+                    {detail.iceberg.filter((t: any) => t.status === 'registered').length} of {detail.iceberg.length} registered
+                  </Badge>
+                : null}
             </Caption1>
           )}
 

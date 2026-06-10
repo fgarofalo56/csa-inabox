@@ -31,6 +31,7 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  Table16Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 
@@ -71,6 +72,16 @@ const useStyles = makeStyles({
   connRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   summary: { display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
   sumKey: { color: tokens.colorNeutralForeground3 },
+  icebergPanel: {
+    marginTop: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: '4px solid #29b5e8',
+  },
+  icebergHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXXS },
+  icebergIcon: { display: 'inline-flex', color: '#29b5e8', flexShrink: 0 },
 });
 
 function toB64(s: string): string {
@@ -266,12 +277,15 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     Iceberg tables live in an external cloud-storage volume — one
                     storage path covers all selected Iceberg tables. */}
                 {createSrc === 'Snowflake' && (
-                  <div style={{ marginTop: 10, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 }}>
-                    <Checkbox
-                      checked={includeIceberg}
-                      onChange={(_, d) => { const v = !!d.checked; setIncludeIceberg(v); if (!v) setIcebergStorageUrl(''); }}
-                      label="Include Iceberg tables"
-                    />
+                  <div className={s.icebergPanel}>
+                    <div className={s.icebergHead}>
+                      <span className={s.icebergIcon}><Table16Regular /></span>
+                      <Checkbox
+                        checked={includeIceberg}
+                        onChange={(_, d) => { const v = !!d.checked; setIncludeIceberg(v); if (!v) setIcebergStorageUrl(''); }}
+                        label="Include Iceberg tables"
+                      />
+                    </div>
                     <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 2 }}>
                       Mirror the source’s Apache Iceberg tables in addition to managed tables. Off mirrors managed tables only.
                       Iceberg tables are registered Azure-native (ADLS Gen2 → Synapse Serverless / Delta-readable) — no Microsoft Fabric.
