@@ -24,6 +24,9 @@ import {
 } from '@azure/storage-file-datalake';
 import {
   BlobServiceClient,
+  BlobSASPermissions,
+  SASProtocol,
+  generateBlobSASQueryParameters,
   type BlobClient as AzureBlobClient,
 } from '@azure/storage-blob';
 import { getBlobSuffix } from './cloud-endpoints';
@@ -167,6 +170,90 @@ function getBlobServiceClient(account?: string): BlobServiceClient {
 function getBlobClient(container: string, path: string, account?: string): AzureBlobClient {
   const clean = path.replace(/^\/+/, '');
   return getBlobServiceClient(account).getContainerClient(container).getBlobClient(clean);
+}
+
+// ============================================================
+// Org-visuals / embed-codes blob surface (F23 + F22).
+//
+// uploadBlob: raw block-blob upload for opaque bundles (.pbiviz custom-visual
+//   packages). Uses the .blob endpoint (block-blob API) rather than the .dfs
+//   DataLake path API — bundles are opaque binaries, not HNS directory trees,
+//   and the block-blob surface is what a user-delegation SAS later reads.
+//
+// generateReadSasUrl: a read-only, time-bounded USER-DELEGATION SAS URL —
+//   signed with the Console UAMI's Microsoft Entra credentials via
+//   getUserDelegationKey() (NEVER the storage account key). This is the
+//   Azure-native "embed code": a real, loadable signed URL. Per Azure, a
+//   user-delegation SAS lifetime is capped at 7 days from the delegation
+//   key's start, so ttlHours is clamped to 7*24.
+// ============================================================
+
+const SAS_MAX_TTL_HOURS = 7 * 24; // Azure user-delegation SAS hard cap.
+
+/** Block-blob upload of an opaque bundle (e.g. a .pbiviz custom visual). */
+export async function uploadBlob(
+  container: string,
+  path: string,
+  body: Buffer,
+  contentType: string,
+  account?: string,
+): Promise<{ ok: true; size: number; etag?: string; url: string }> {
+  const clean = path.replace(/^\/+/, '');
+  const block = getBlobServiceClient(account)
+    .getContainerClient(container)
+    .getBlockBlobClient(clean);
+  const res = await block.uploadData(body, {
+    blobHTTPHeaders: { blobContentType: contentType },
+  });
+  return { ok: true, size: body.length, etag: res.etag, url: block.url };
+}
+
+export interface ReadSasUrl {
+  url: string;
+  expiresAt: string;
+}
+
+/**
+ * Mint a read-only user-delegation SAS URL for a single blob. The returned URL
+ * is directly loadable (HTTPS-only) for `ttlHours` (clamped to Azure's 7-day
+ * user-delegation maximum). Throws if the account / RBAC is not configured so
+ * the BFF can surface an honest gate.
+ */
+export async function generateReadSasUrl(
+  container: string,
+  blobPath: string,
+  ttlHours: number,
+  account?: string,
+): Promise<ReadSasUrl> {
+  const acct = account ?? resolveAccountName();
+  const clean = blobPath.replace(/^\/+/, '');
+  const svc = getBlobServiceClient(acct);
+
+  const now = Date.now();
+  // Start a few minutes in the past to tolerate clock skew.
+  const startsOn = new Date(now - 5 * 60 * 1000);
+  const cappedHours = Math.min(Math.max(ttlHours, 1), SAS_MAX_TTL_HOURS);
+  const expiresOn = new Date(now + cappedHours * 60 * 60 * 1000);
+
+  // getUserDelegationKey requires Storage Blob Delegator (or a Blob Data role)
+  // at account scope — granted by org-visuals-rbac.bicep.
+  const delegationKey = await svc.getUserDelegationKey(startsOn, expiresOn);
+
+  const sas = generateBlobSASQueryParameters(
+    {
+      containerName: container,
+      blobName: clean,
+      permissions: BlobSASPermissions.parse('r'),
+      startsOn,
+      expiresOn,
+      protocol: SASProtocol.Https,
+    },
+    delegationKey,
+    acct,
+  ).toString();
+
+  const blobUrl = svc.getContainerClient(container).getBlobClient(clean).url;
+  return { url: `${blobUrl}?${sas}`, expiresAt: expiresOn.toISOString() };
 }
 
 /** Read the current access tier of a single blob via Get Blob Properties. */

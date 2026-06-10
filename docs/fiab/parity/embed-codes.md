@@ -1,91 +1,61 @@
-# embed-codes — parity with Power BI embedding
+# embed-codes — parity with Fabric / Power BI Admin "Embed codes"
 
-Source UI: Power BI **Embed** (Publish to web codes) + embed-for-customers
-Reference: <https://learn.microsoft.com/power-bi/collaborate-share/service-publish-to-web>
-Also: <https://learn.microsoft.com/power-bi/developer/embedded/embed-sample-for-customers>
-Run date: 2026-06-09
+Source UI: Power BI / Fabric Admin portal → **Tenant settings → Embed codes**
+(`https://app.powerbi.com/admin-portal/embedCodes`). Microsoft Learn:
+[Manage embed codes](https://learn.microsoft.com/power-bi/collaborate-share/service-admin-portal-embed-codes).
 
-Loom surfaces:
+Azure-native backing (no Fabric / Power BI workspace): a read-only **Blob Storage
+user-delegation SAS** URL (signed with the Console UAMI's Microsoft Entra
+credentials — never the account key) over a Loom embed-manifest blob in the DLZ
+`org-visuals` Blob container.
 
-- Embed component: `lib/components/embed/powerbi-embed.tsx` → `PowerBIEmbedFrame`
-  (uses `powerbi-client-react`)
-- Token BFF: `app/api/items/report/[id]/embed-token/route.ts`,
-  `app/api/items/semantic-model/[id]/embed-token/route.ts`
-- Client: `lib/azure/powerbi-client.ts` → `getEmbedToken`,
-  `generateReportEmbedToken`, `generateDashboardEmbedToken`,
-  `generateTileEmbedToken`, `generateDatasetEmbedToken`
+## Fabric/Power BI feature inventory
 
-> **Scope note:** the Fabric/Power BI admin "Embed codes" surface manages *public
-> Publish-to-web* iframe codes (list + revoke). Loom's built surface is
-> **authenticated per-item embed** (`PowerBIEmbedFrame` + embed-token mint) — the
-> developer-grade embed. Per `no-fabric-dependency.md`, Power BI is Fabric-family
-> and **opt-in**; tokens mint only when a Power BI workspace is bound. The
-> surface does not require `LOOM_DEFAULT_FABRIC_WORKSPACE`.
-
-## Fabric/Azure feature inventory (grounded in Learn)
-
-1. Generate an embed token for a report / dashboard / tile / dataset
-2. View-mode and edit-mode embeds
-3. Render the embedded artifact in an iframe
-4. Manage public Publish-to-web embed codes (list + revoke)
+| # | Capability (real Admin UI) | Notes |
+|---|----------------------------|-------|
+| 1 | List all embed codes for the tenant | report name, status, who published, date |
+| 2 | See an embed code's **status** (Active / Revoked / etc.) | badge |
+| 3 | See the **publisher** (created-by) of each code | UPN |
+| 4 | Copy / view the embed URL | the loadable URL |
+| 5 | **Revoke** an embed code (Delete) | invalidates the URL |
+| 6 | Search / filter the list | by report / publisher |
 
 ## Loom coverage
 
-| Capability | Status | Backend |
-|---|---|---|
-| Authenticated embed token (report, per item) | ✅ Built | `POST …/report/[id]/embed-token` → `generateReportEmbedToken()` → PBI REST GenerateToken |
-| Authenticated embed token (dashboard) | ✅ Built | `generateDashboardEmbedToken()` |
-| Authenticated embed token (dataset) | ✅ Built | `generateDatasetEmbedToken()` |
-| Authenticated embed token (tile) | ✅ Built | `generateTileEmbedToken()` |
-| `PowerBIEmbedFrame` render (report / dashboard / tile / qna) | ✅ Built | `powerbi-client-react` `PowerBIEmbed`, lazily loaded; honest error when token missing |
-| Edit-mode embed token | ✅ Built | `accessLevel:'Edit'` in POST body |
-| Honest gate when PBI SP not configured / workspace unbound | ⚠️ Honest gate | token route returns `powerbiConfigGate()` 503 naming `LOOM_UAMI_CLIENT_ID` + SP authorization |
-| Public Publish-to-web admin (list + revoke active embed codes) | ⚠️ Honest gate | Not built; the `export.publishToWeb` toggle lives in `tenant-settings.md`. The admin code-management surface is disclosed as a tracked future surface; the authenticated embed path is the recommended, governable alternative and is fully built. |
+| # | Capability | Status | Loom surface |
+|---|------------|--------|--------------|
+| 1 | List embed codes | ✅ built | `LoomDataTable` rows from `GET /api/admin/embed-codes` |
+| 2 | Status badge (active/revoked) | ✅ built | Fluent `Badge` success/danger |
+| 3 | Created-by column | ✅ built | from `createdBy` (session UPN) |
+| 4 | Copy / open the signed URL | ✅ built | Copy + open buttons; URL also shown in a read-only `Input` on create |
+| 5 | Revoke | ✅ built | `DELETE /api/admin/embed-codes?id=` → deletes backing blob + flips status |
+| 6 | Search/filter | ✅ built | `Toolbar` search + per-column filter |
+| — | Create embed code | ✅ built | `POST` → mints a real user-delegation SAS over a manifest blob |
+| — | Honest infra gate | ⚠️ gate | `NotConfiguredBar` names `LOOM_ORG_VISUALS_URL` + `org-visuals-rbac.bicep` |
 
-Zero ❌ rows. The two ⚠️ gates are honest: the opt-in Power-BI-not-bound state,
-and the (deliberately deferred) public Publish-to-web admin — the latter is the
-*less* governable Power BI feature, and Loom's authenticated embed delivers the
-embedding parity today, per `no-vaporware.md`.
+Zero ❌. Zero stub banners.
 
 ## Backend per control
 
-- **Token mint** — each `embed-token` route calls the matching
-  `generate*EmbedToken()` in `powerbi-client.ts`, which hits PBI REST
-  `GenerateToken` for the artifact; `accessLevel:'Edit'` requests an edit-mode
-  token.
-- **Render** — `PowerBIEmbedFrame` lazy-loads `powerbi-client-react` and mounts
-  `PowerBIEmbed` with the embed URL + minted token; when no token is available it
-  renders an honest error rather than a blank frame.
-- **Publish-to-web admin** — not wired (Fabric `POST /admin/...` not called); the
-  honest gate explains the alternative.
+| Control | Backend |
+|---------|---------|
+| List | Cosmos `embed-codes` query (PK /tenantId), lazy SAS refresh within 24h |
+| Create | `adls-client.uploadBlob` (manifest) → `adls-client.generateReadSasUrl` (user-delegation SAS) → Cosmos upsert |
+| Revoke | `adls-client.deletePath` (blob) → Cosmos replace (status=revoked, signedUrl='') |
+| Copy / open | client-side over the real `signedUrl` |
 
-## Per-cloud notes
+## Per-cloud
 
-| Cloud | PBI REST endpoint |
-|---|---|
-| Commercial | `api.powerbi.com` |
-| GCC | `api.powerbigov.us` |
-| GCC-High / IL5 | `api.powerbigov.us` / `api.high.powerbigov.us` (via `cloud-endpoints.ts`) |
-
-Public Publish-to-web is unsupported in GCC/GCC-High/IL5 regardless, which
-reinforces authenticated embed as the cross-cloud parity path.
-
-## Bicep sync
-
-- No new resource — Power BI is an opt-in tenant binding.
-- `LOOM_UAMI_CLIENT_ID` already in `apps[]` env; the PBI SP authorization is a
-  documented tenant bootstrap step surfaced as the honest gate.
+| | Commercial | GCC | GCC-High | IL5/DoD |
+|-|-----------|-----|----------|---------|
+| Blob suffix | `blob.core.windows.net` | `blob.core.windows.net` | `blob.core.usgovcloudapi.net` | `blob.core.usgovcloudapi.net` |
+| User-delegation SAS | ✅ | ✅ | ✅ | ✅ |
+| SAS max TTL | 7 days | 7 days | 7 days | 7 days |
+| Fabric/Power BI dependency | none | none | none | none |
 
 ## Verification
 
-- Default path: with no Power BI workspace bound (and
-  `LOOM_DEFAULT_FABRIC_WORKSPACE` unset), the token route returns the honest gate
-  and the frame shows the honest error — no blank iframe, no fake render.
-- Live walk (PBI bound): open a report item, confirm `PowerBIEmbedFrame` mints a
-  real token via `generateReportEmbedToken()` and renders the report; request an
-  edit-mode token and confirm edit affordances; confirm the Publish-to-web admin
-  MessageBar honestly describes the deferred surface.
-
-Grade: **B** — authenticated per-item embed fully built on real PBI REST for
-report/dashboard/dataset/tile; the public Publish-to-web admin and the opt-in
-PBI-not-bound state are the honest gates.
+`npx vitest run lib/clients/__tests__/embed-codes-org-visuals.test.ts` — create
+writes a real manifest blob + mints a SAS; revoke deletes the blob + flips
+status. With `LOOM_ORG_VISUALS_URL` unset the route returns a 503 + hint and the
+pane renders `NotConfiguredBar`. No `LOOM_DEFAULT_FABRIC_WORKSPACE` required.

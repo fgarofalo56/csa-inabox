@@ -133,6 +133,10 @@ let _taskFlows: Container | null = null;
 // (createIfNotExists) so a fresh environment needs no extra ARM/Bicep step
 // beyond the account+database. Azure-native default — no Fabric dependency.
 let _workspaceSparkConfig: Container | null = null;
+// F22 — embed codes (signed embed URLs), PK /tenantId.
+let _embedCodes: Container | null = null;
+// F23 — org-visuals metadata (tenant-wide custom visuals), PK /tenantId.
+let _orgVisuals: Container | null = null;
 let _ensured = false;
 
 /**
@@ -537,6 +541,14 @@ async function ensure() {
   // Created lazily so a fresh environment needs no extra ARM/Bicep step beyond
   // the account+database. Azure-native default — no Fabric dependency.
   _workspaceSparkConfig = await mk('workspace-spark-config', '/workspaceId');
+  // F22 — embed codes: tenant-scoped signed embed URLs (PK /tenantId). Each row
+  // is one Azure-native "embed code" (a user-delegation SAS to an org-visuals
+  // blob). F23 — org-visuals: tenant-wide custom-visual bundle metadata (PK
+  // /tenantId); the bundle bytes live in the org-visuals Blob container, the
+  // enabled toggle + version live here. Created lazily so a fresh environment
+  // needs no extra ARM/Bicep step beyond the account+database.
+  _embedCodes = await mk('embed-codes', '/tenantId');
+  _orgVisuals = await mk('org-visuals', '/tenantId');
   _ensured = true;
 }
 
@@ -583,6 +595,10 @@ export async function azureConnectionsContainer(): Promise<Container> { await en
 export async function taskFlowsContainer(): Promise<Container> { await ensure(); return _taskFlows!; }
 /** Spark / compute configuration (F13) — PK /workspaceId. */
 export async function workspaceSparkConfigContainer(): Promise<Container> { await ensure(); return _workspaceSparkConfig!; }
+/** F22 — embed codes (signed embed URLs) — PK /tenantId. */
+export async function embedCodesContainer(): Promise<Container> { await ensure(); return _embedCodes!; }
+/** F23 — org-visuals metadata (tenant-wide custom visuals) — PK /tenantId. */
+export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -722,6 +738,7 @@ const KNOWN_CONTAINER_IDS = [
   'azure-connections',
   'task-flows',
   'workspace-spark-config',
+  'embed-codes', 'org-visuals',
 ];
 
 /** List all Loom containers with their current throughput shape. */
