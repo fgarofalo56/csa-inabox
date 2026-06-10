@@ -1,5 +1,20 @@
 # ai-search — parity with Azure AI Search (portal)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** This doc's
+> top gaps (indexer scheduling + run history, semantic-config & vector-profile
+> *designers* that were JSON-only, debug sessions; audit-T22) are closed by
+> **PR #1077** ("AI Search indexer scheduling + semantic/vector designers + debug
+> sessions"). Verified surfaces: `lib/components/ai-search/ai-search-tree.tsx`,
+> `lib/azure/search-field-shapes.ts`, `lib/azure/search-index-client.ts`
+> (+ `__tests__/search-field-shapes.test.ts`, `search-index-client.test.ts`) —
+> the per-field grid + analyzer/type/attribute pickers replace the forbidden JSON
+> textarea, and `semanticConfiguration` / `vectorSearch` profiles now have
+> form-based designers calling the real index PUT. Combined with the prior
+> `ai-search-explorer.md` (B+) query-options work, the field-grid + scheduling +
+> debug flips lift the service **B → A−**. Remaining honest gaps: scoring-profile
+> /analyzer fine-tuning breadth and the Import-data wizard's skillset designer.
+
+
 > Brutally honest 1:1 parity audit. Graded per `.claude/rules/no-vaporware.md`
 > (A=full parity, B=production, C=functional-rough, D=renders-little,
 > F=scaffold). When in doubt, graded DOWN. A UI with no real backend is NOT

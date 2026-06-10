@@ -1,5 +1,16 @@
 # apim-service — parity with Azure API Management (portal service blade)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** This doc's
+> highest-value gap — subscription state transitions + key reveal/regenerate
+> (audit-T09) — is closed by **PR #1063** ("wire APIM subscription state + key
+> regen in product editor"). Verified: `lib/editors/apim-editors.tsx` +
+> `lib/azure/apim-client.ts` (`regeneratePrimaryKey`/secondary, Suspend/Activate/
+> Cancel state) with `lib/azure/__tests__/apim-subscriptions.test.ts`. **Grade
+> B− → B.** Remaining honest gaps: form-based policy editor with effective-policy
+> calc + fragments, named-value secret reveal + KV refs, versions/version-sets,
+> and the whole portal blades (Dev portal, Users, Groups, Certs, Networking).
+
+
 **Source UI:** Azure portal → API Management service instance
 (left blade: Overview, APIs, Products, Subscriptions, Named values, Backends,
 Gateways, Policies, Groups, Users, Certificates, Developer portal, Monitoring,

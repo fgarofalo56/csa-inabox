@@ -1,5 +1,20 @@
 # cosmos-db — parity with Azure Cosmos DB (NoSQL / Core SQL API) Data Explorer
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** Most of
+> this doc's top gaps are now built: **PR #1062** Cosmos stored-proc/trigger/UDF
+> authoring + execute (audit-T08 — `lib/components/cosmos/cosmos-script-editor.tsx`,
+> real ARM resource PUT + data-plane execute); **PR #1083** conflict-resolution
+> policy (audit-T27 — `cosmos-policy-editors.tsx`, PATCH `conflictResolutionPolicy`);
+> **PR #944** container CRUD wizard + editable Scale & Settings (throughput / TTL /
+> indexing write-path); **PR #952** Gremlin graph explorer canvas (addV/addE,
+> cloud-aware endpoint); **PR #956** Keys / connection-strings Connect panel;
+> **PR #957** Metrics tab (RU/s, storage, 429 throttling). Verified
+> (`cosmos-script-editor.tsx`, `cosmos-policy-editors.tsx`, `cosmos-tree.tsx`
+> + `__tests__/conflict-resolution.test.tsx`, `cosmos-script-editor.test.tsx`).
+> **Grade B− → B+.** Remaining honest gaps: account-level Geo/Consistency/Backup/
+> Networking blades and bulk upload.
+
+
 Source UI: Azure portal → Cosmos DB account → **Data Explorer** + account-level blades
 (Scale, Keys, Networking, Replicate data globally, Backup & Restore, Default consistency, Features).
 Standalone Data Explorer: <https://cosmos.azure.com>

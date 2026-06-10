@@ -1,5 +1,18 @@
 # adx-kusto — parity with Azure Data Explorer (Kusto)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** This doc's
+> top gaps — cluster lifecycle/scale/start-stop, RBAC principal mgmt (cluster +
+> database), and RLS authoring (tooltip-only before; audit-T20) — are closed by
+> **PR #1076** ("ADX cluster lifecycle + RBAC principal mgmt + RLS authoring").
+> Verified: `lib/azure/kusto-client.ts` (start/stop/scale, `.add database`
+> principals, `.alter table policy row_level_security`) with
+> `lib/azure/__tests__/kusto-rbac-rls.test.ts`. **PR #1072** also wired the
+> EventhouseEditor "New dashboard" ribbon (audit-T17) and **PR #1114** added the
+> RTI dashboard AI tile (NL→KQL). Combined with the prior `adx-web-ui.md` (B)
+> render/results work, **Grade C+ → B.** Remaining honest gaps: grid group-by/
+> pivot/full-profile breadth and Open-in-Excel / Query-to-Power-BI export.
+
+
 > **Brutally-honest 1:1 parity audit (2026-05-31).** Graded conservatively per
 > `.claude/rules/no-vaporware.md` + `.claude/rules/ui-parity.md`. A UI with no
 > real backend is **not** "built". When in doubt, graded DOWN.

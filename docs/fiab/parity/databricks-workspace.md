@@ -1,5 +1,19 @@
 # databricks-workspace — parity with the Azure Databricks workspace UI
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** The single
+> standing asterisk on this doc's A grade was the read-only Unity Catalog write
+> surface (the 17 ❌ tracked in `databricks-unity-catalog.md` + audit-T18).
+> **PR #1073** ("Databricks UC write-path + DLT/MLflow/Serving + lineage") wires
+> it: `lib/azure/databricks-client.ts` now implements `createCatalog` /
+> `createSchema` / create-table / `GRANT`/`REVOKE`, plus DLT pipeline, MLflow
+> registry, and Model Serving calls, surfaced through `lib/editors/databricks-editors.tsx`
+> and the workspace tree. **PR #1040** added Spark compute (pools/runtime/env/jobs).
+> Net effect: `databricks-unity-catalog.md` flips its 17 UC-write ❌→✅ (re-graded
+> **B+**) and `databricks-workspace.md` F4–F5 ❌→✅. **Grade A (held; UC-write
+> asterisk now cleared).** Remaining honest gaps: UC external-locations breadth,
+> Repos branch ops, cluster Policy/Access-mode pickers.
+
+
 > Brutally-honest 1:1 parity audit (regenerated 2026-05-31). Grading per
 > `.claude/rules/no-vaporware.md` + `.claude/rules/ui-parity.md`. Graded
 > conservatively; when in doubt, graded DOWN. This is the **consolidated** audit

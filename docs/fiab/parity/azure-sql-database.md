@@ -1,5 +1,18 @@
 # azure-sql-database — parity with Azure SQL Database (Azure portal blade)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** Most of
+> this doc's top gaps are now built: **PR #948** Compute & Storage scale tab
+> (vCore/DTU/serverless via ARM PATCH — closes the "no update route" gap);
+> **PR #1070** schema/object browser (audit-T16); **PR #1081** keys & constraints
+> inline designer (audit-T24); **PR #1106** full-text + vector index management
+> tabs; **PR #1098** migration assistant (DACPAC import + compatibility scan);
+> **PR #938** performance dashboard over Query Store (QPI parity); **PR #960** SQL
+> Object Explorer parity (indexes, data preview, context menus); **PR #951** SQL
+> results pane parity (10k rows, multi-result-set, XLSX/copy). **Grade C+ → B+.**
+> Remaining honest gaps: backups/PITR/geo-restore/LTR, copy/export bacpac,
+> Networking/TDE/Defender/Auditing management blades.
+
+
 > **rev.2 — corrected against current code (2026-05-31, PR #541).** The prior
 > revision (below) hinged on a "critical wiring gap": the registered
 > `azure-sql-database` editor (`UnifiedSqlDatabaseEditor`) did **not** mount the
