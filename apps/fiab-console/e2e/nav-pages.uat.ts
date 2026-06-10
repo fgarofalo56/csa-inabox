@@ -6,27 +6,9 @@
  * Page list mirrors the LeftNav.
  */
 import { test, expect } from '@playwright/test';
-import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
+import { BASE, signIn, captureFailures, recordVerdict, NAV_PAGES } from './_lib/uat';
 
-const PAGES = [
-  '/',
-  '/workspaces',
-  '/browse',
-  '/onelake',
-  '/api-marketplace',
-  '/governance',
-  '/monitor',
-  '/realtime-hub',
-  '/data-agent',
-  '/copilot',
-  '/workload-hub',
-  '/deployment-pipelines',
-  '/admin',
-  '/setup',
-  '/apps',
-  '/workloads',
-  '/learn',
-];
+const PAGES = NAV_PAGES;
 
 for (const path of PAGES) {
   test(`page[${path}] — render + console + network`, async ({ browser }) => {

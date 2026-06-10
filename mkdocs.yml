@@ -1566,6 +1566,7 @@ nav:
               - Variable Library: fiab/variable-library-parity-spec.md
               - Vector Store: fiab/vector-store-parity-spec.md
               - Warehouse: fiab/warehouse-parity-spec.md
+          - Visual Tutorials (per item / app / feature): fiab/tutorials/items/index.md
           - Editor Tutorials (per-item):
               - Activator: fiab/tutorials/editor-activator.md
               - ADF Dataset: fiab/tutorials/editor-adf-dataset.md

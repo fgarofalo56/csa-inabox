@@ -19,6 +19,16 @@ on:
         description: 'LOOM_TUTORIAL_TYPES — comma list of item slugs (blank = all editors)'
         type: string
         default: ''
+      dimensions:
+        description: 'LOOM_TUTORIAL_DIMENSIONS — which surfaces to capture'
+        type: choice
+        default: items,apps,features
+        options:
+          - items,apps,features
+          - items
+          - apps
+          - features
+          - items,features
 
 permissions:
   contents: read
@@ -56,6 +66,7 @@ jobs:
         env:
           LOOM_URL: ${{ inputs.loom_url }}
           LOOM_TUTORIAL_TYPES: ${{ inputs.types }}
+          LOOM_TUTORIAL_DIMENSIONS: ${{ inputs.dimensions }}
         run: |
           set -uo pipefail
           # Resolve the live session secret (container-app secret, else Key Vault).
@@ -82,6 +93,21 @@ jobs:
           # Don't fail the job on individual editor capture errors — we want the
           # partial screenshots uploaded for review.
           SESSION_SECRET="$SS" pnpm exec playwright test --project=uat e2e/tutorial-capture.uat.ts || true
+      - name: Capture summary (staged slugs by dimension)
+        if: always()
+        run: |
+          STAGE=temp/azure-screenshots/redacted/loom-tutorials
+          {
+            echo "## Tutorial capture — staged surfaces"
+            echo ""
+            for pfx in item app feature; do
+              n=$(ls -d "$STAGE"/${pfx}-*/ 2>/dev/null | wc -l | tr -d ' ')
+              echo "- **${pfx}s**: ${n} staged"
+            done
+            echo ""
+            echo "Download the \`loom-tutorial-captures\` artifact, review for sensitive Azure"
+            echo "data, then publish with \`node scripts/csa-loom/publish-tutorials.mjs\` and commit."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload staged tutorial captures (REVIEW before publishing)
         uses: actions/upload-artifact@v4
         with:

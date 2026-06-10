@@ -140,6 +140,38 @@ export function loadEditorTypes(): string[] {
     .map(m => m![1]);
 }
 
+/**
+ * Top-level navigation surfaces ("features"), mirroring the LeftNav. Single
+ * source of truth — consumed by both nav-pages.uat.ts (render/console/network
+ * check) and tutorial-capture.uat.ts (per-feature screenshot walkthrough) so
+ * the two never drift.
+ */
+export const NAV_PAGES = [
+  '/',
+  '/workspaces',
+  '/browse',
+  '/onelake',
+  '/api-marketplace',
+  '/governance',
+  '/monitor',
+  '/realtime-hub',
+  '/data-agent',
+  '/copilot',
+  '/workload-hub',
+  '/deployment-pipelines',
+  '/admin',
+  '/setup',
+  '/apps',
+  '/workloads',
+  '/learn',
+] as const;
+
+/** Filesystem-safe slug for a nav page path (`/` -> "home", `/a/b` -> "a-b"). */
+export function pageSlug(p: string): string {
+  const trimmed = p.replace(/^\/+/, '').replace(/\/+$/, '');
+  return trimmed === '' ? 'home' : trimmed.replace(/\//g, '-');
+}
+
 /** Common create-workspace helper. */
 export async function createWorkspace(page: Page, name?: string): Promise<string> {
   const r = await page.request.post(`${BASE}/api/workspaces`, {
