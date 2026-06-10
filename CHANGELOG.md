@@ -25,6 +25,36 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.32.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.31.0...csa-inabox-v0.32.0) (2026-06-10)
+
+
+### Features
+
+* **csa-loom:** Cosmos stored-proc/trigger/UDF authoring (real ARM + data-plane execute) ([#1062](https://github.com/fgarofalo56/csa-inabox/issues/1062)) ([8546733](https://github.com/fgarofalo56/csa-inabox/commit/854673388ef456d874b174e904a0d5105413ed35))
+* **csa-loom:** enforce event-schema-set compatibility before publish (audit-T15) ([#1069](https://github.com/fgarofalo56/csa-inabox/issues/1069)) ([3ef6f3a](https://github.com/fgarofalo56/csa-inabox/commit/3ef6f3a666a90e91dd5798f16d148d99999f2e97))
+* **csa-loom:** geo dataset geometry inspector + geo pipeline ADF params ([#1064](https://github.com/fgarofalo56/csa-inabox/issues/1064)) ([e7b1bb5](https://github.com/fgarofalo56/csa-inabox/commit/e7b1bb5ac4a4e15d0c865612b7f641badd883f0c))
+* **csa-loom:** in-place Power BI paginated report embed + export (T14) ([#1068](https://github.com/fgarofalo56/csa-inabox/issues/1068)) ([f454ff8](https://github.com/fgarofalo56/csa-inabox/commit/f454ff8294171a5d106510b42fb6108c6f4c5b9f))
+* **csa-loom:** ontology Lakehouse/Warehouse entity binding + Activator triggers ([#1066](https://github.com/fgarofalo56/csa-inabox/issues/1066)) ([760a2ab](https://github.com/fgarofalo56/csa-inabox/commit/760a2ab08085e7eaf6aeda8fa37296a4c0500322))
+* **csa-loom:** plan approval-workflow handoff + semantic-model writeback (audit-T13) ([#1067](https://github.com/fgarofalo56/csa-inabox/issues/1067)) ([19ff78d](https://github.com/fgarofalo56/csa-inabox/commit/19ff78d33f27ec00ea08d545410248adc3b7bf96))
+* **csa-loom:** semantic-model workspace pane — real AAS list + XMLA/Fabric deploy ([#1061](https://github.com/fgarofalo56/csa-inabox/issues/1061)) ([7068c9d](https://github.com/fgarofalo56/csa-inabox/commit/7068c9dbb346b9aac69b61ef19e4c7750a77145b))
+* **csa-loom:** wire APIM subscription state + key regen in product editor ([#1063](https://github.com/fgarofalo56/csa-inabox/issues/1063)) ([196c51f](https://github.com/fgarofalo56/csa-inabox/commit/196c51f45da9e2505b12544fd0c3d38b5345bda4))
+* **csa-loom:** wire AzureSqlDatabaseEditor schema browser (audit-t16) ([#1070](https://github.com/fgarofalo56/csa-inabox/issues/1070)) ([05f8d2f](https://github.com/fgarofalo56/csa-inabox/commit/05f8d2f5db105b1839f7b784057f5228fd39dcdc))
+
+
+### Bug Fixes
+
+* **csa-loom:** Gov-safe vector-store similarity search + Console UAMI data-plane RBAC ([#1065](https://github.com/fgarofalo56/csa-inabox/issues/1065)) ([1c9bf27](https://github.com/fgarofalo56/csa-inabox/commit/1c9bf27dac061eec3f59ee12de88fd9aa9f71f44))
+
+
+### Tests
+
+* **csa-loom:** cover warehouse query+history BFF routes; fix pane assertions ([#1060](https://github.com/fgarofalo56/csa-inabox/issues/1060)) ([95ce392](https://github.com/fgarofalo56/csa-inabox/commit/95ce392ea3934c1b983564e0fb847cd8ad168b60))
+
+
+### Performance Improvements
+
+* **csa-loom:** partition-safe OneLake catalog read + workspace owner in tree ([#1059](https://github.com/fgarofalo56/csa-inabox/issues/1059)) ([0b54c10](https://github.com/fgarofalo56/csa-inabox/commit/0b54c105128d53fb30f7ea18369015558f8fe7fd))
+
 ## [0.31.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.30.0...csa-inabox-v0.31.0) (2026-06-10)
 
 
