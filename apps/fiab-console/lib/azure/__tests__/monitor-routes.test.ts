@@ -232,6 +232,118 @@ describe('GET /api/monitor/alerts', () => {
     expectJson(r);
     expect((await r.json()).data.rules[0].name).toBe('a');
   });
+
+  it('lists scheduled query rules via ?kind=scheduled', async () => {
+    stubFetch(() => ({ body: { value: [{
+      id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.Insights/scheduledQueryRules/sq1',
+      name: 'sq1',
+      properties: {
+        enabled: true, severity: 2, displayName: 'sq1', evaluationFrequency: 'PT5M', windowSize: 'PT5M',
+        criteria: { allOf: [{ query: 'Heartbeat | count', operator: 'GreaterThan', threshold: 0 }] },
+        actions: { actionGroups: ['/subscriptions/sub-1/.../actionGroups/ag1'] },
+      },
+    }] } }));
+    const { GET } = await import('@/app/api/monitor/alerts/route');
+    const r = await GET(req('GET', 'https://loom.test/api/monitor/alerts?kind=scheduled'));
+    expect(r.status).toBe(200);
+    expectJson(r);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.rules[0].name).toBe('sq1');
+    expect(j.rules[0].query).toBe('Heartbeat | count');
+    expect(j.rules[0].operator).toBe('GreaterThan');
+  });
+});
+
+describe('POST /api/monitor/alerts (scheduled query rule authoring)', () => {
+  beforeEach(() => { process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID = '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.OperationalInsights/workspaces/loom-law'; });
+
+  it('list-scheduled returns the rules', async () => {
+    stubFetch(() => ({ body: { value: [{ id: '/x/sq1', name: 'sq1', properties: { enabled: false, criteria: { allOf: [{}] } } }] } }));
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'list-scheduled' }));
+    expect(r.status).toBe(200);
+    expect((await r.json()).rules[0].name).toBe('sq1');
+  });
+
+  it('upsert creates a rule (PUT) and returns its id', async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (init?.method === 'PUT') {
+        return { body: { id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.Insights/scheduledQueryRules/my-rule' } };
+      }
+      return { body: {} };
+    });
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', {
+      _action: 'upsert',
+      rule: { name: 'my-rule', query: 'Heartbeat | summarize count()', operator: 'GreaterThan', threshold: 0, severity: 2, evaluationFrequency: 'PT5M', windowSize: 'PT15M', actionGroupIds: [] },
+    }));
+    expect(r.status).toBe(200);
+    expectJson(r);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.id).toContain('scheduledQueryRules/my-rule');
+    const put = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'PUT');
+    expect(put).toBeTruthy();
+    const sentBody = JSON.parse(String((put![1] as RequestInit).body));
+    expect(sentBody.properties.criteria.allOf[0].query).toBe('Heartbeat | summarize count()');
+    expect(sentBody.properties.windowSize).toBe('PT15M');
+  });
+
+  it('upsert rejects a rule without a name', async () => {
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'upsert', rule: { query: 'Heartbeat' } }));
+    expect(r.status).toBe(400);
+  });
+
+  it('upsert rejects a rule without a query', async () => {
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'upsert', rule: { name: 'r' } }));
+    expect(r.status).toBe(400);
+  });
+
+  it('upsert honest-gates (503) when LOOM_LOG_ANALYTICS_RESOURCE_ID missing', async () => {
+    delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'upsert', rule: { name: 'r', query: 'Heartbeat' } }));
+    expect(r.status).toBe(503);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.gate).toBeTruthy();
+  });
+
+  it('patch toggles enabled in place (PATCH)', async () => {
+    const fetchMock = stubFetch(() => ({ body: {} }));
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'patch', name: 'my-rule', enabled: false }));
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+    const patch = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'PATCH');
+    expect(patch).toBeTruthy();
+    expect(JSON.parse(String((patch![1] as RequestInit).body)).properties.enabled).toBe(false);
+  });
+
+  it('patch rejects a missing name', async () => {
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'patch', enabled: true }));
+    expect(r.status).toBe(400);
+  });
+
+  it('delete removes a rule (DELETE 200)', async () => {
+    const fetchMock = stubFetch(() => ({ status: 200, body: {} }));
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'delete', name: 'my-rule' }));
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+    const del = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === 'DELETE');
+    expect(del).toBeTruthy();
+  });
+
+  it('rejects an unknown _action', async () => {
+    const { POST } = await import('@/app/api/monitor/alerts/route');
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'frob' }));
+    expect(r.status).toBe(400);
+  });
 });
 
 describe('GET /api/items/activator/[id]/history', () => {
@@ -326,6 +438,7 @@ describe('unauthenticated', () => {
     expect((await log.POST(req('POST', 'https://loom.test/api/monitor/logs', { query: 'x' }))).status).toBe(401);
     expect((await act.GET(req('GET', 'https://loom.test/api/monitor/activity'))).status).toBe(401);
     expect((await alr.GET()).status).toBe(401);
+    expect((await alr.POST(req('POST', 'https://loom.test/api/monitor/alerts', { _action: 'list-scheduled' }))).status).toBe(401);
     expect((await hea.GET()).status).toBe(401);
   });
 });

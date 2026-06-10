@@ -31,12 +31,16 @@ import {
   Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, Skeleton, SkeletonItem,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Caption1, Subtitle2, Body1,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions, Tooltip,
   makeStyles, tokens, Text,
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, Play20Regular, ShieldTask20Regular, Copy20Regular,
-  Open16Regular, Dismiss24Regular,
+  Open16Regular, Dismiss24Regular, Add20Regular, Edit20Regular, Delete20Regular,
+  Pause20Regular,
 } from '@fluentui/react-icons';
+import { MonitorAlertEditor, type ScheduledQueryRuleLite } from '@/lib/monitor/monitor-alert-editor';
+import { MonitorConditionsBuilder, freqLabel } from '@/lib/monitor/monitor-conditions-builder';
 import { portalLink as defenderPortalLink, portalSteps, powershellScript, canAutoRemediate } from '@/lib/azure/defender-remediation';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
@@ -60,6 +64,11 @@ interface ActivityEvent {
   resourceGroup?: string; resourceType?: string; caller?: string;
 }
 interface AlertRule { id: string; name: string; enabled: boolean; severity?: number; description?: string; resourceGroup?: string }
+interface ScheduledQueryRule {
+  id: string; name: string; enabled: boolean; severity?: number; description?: string;
+  query?: string; operator?: string; threshold?: number;
+  evaluationFrequency?: string; windowSize?: string; actionGroupIds?: string[]; resourceGroup?: string;
+}
 interface LogResult { columns: string[]; rows: unknown[][]; rowCount: number }
 interface Gate { missing: string[]; message: string }
 
@@ -1081,6 +1090,15 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
+  // ── Scheduled query rules (the Loom-managed, authorable rules) ──
+  const [sqRules, setSqRules] = useState<ScheduledQueryRule[] | null>(null);
+  const [sqGate, setSqGate] = useState<{ remediation?: string; reason?: string } | null>(null);
+  const [sqErr, setSqErr] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<ScheduledQueryRuleLite | undefined>(undefined);
+  const [busyName, setBusyName] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ScheduledQueryRule | null>(null);
+
   useEffect(() => {
     let alive = true;
     setRules(null); setGate(null); setErr(null);
@@ -1095,17 +1113,38 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
     return () => { alive = false; };
   }, [tick, onUnauth]);
 
+  // Load the Loom-managed scheduled query rules in parallel.
+  useEffect(() => {
+    let alive = true;
+    setSqRules(null); setSqGate(null); setSqErr(null);
+    fetch('/api/monitor/alerts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ _action: 'list-scheduled' }),
+    }).then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401) { onUnauth(); setSqRules([]); return; }
+      const j = await r.json();
+      if (j.gate) { setSqGate(j.gate); setSqRules([]); return; }
+      if (!j.ok) { setSqErr(j.error || 'Failed to load scheduled query rules'); setSqRules([]); return; }
+      setSqRules(j.rules || []);
+    }).catch((e) => { if (alive) { setSqErr(String(e)); setSqRules([]); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
   const kpis = useMemo(() => {
-    const r = rules ?? [];
-    const enabled = r.filter((x) => x.enabled).length;
-    const sev01 = r.filter((x) => x.severity != null && x.severity <= 1).length;
+    const metric = rules ?? [];
+    const sq = sqRules ?? [];
+    const all = [...metric, ...sq];
+    const enabled = all.filter((x) => x.enabled).length;
+    const sev01 = all.filter((x) => x.severity != null && x.severity <= 1).length;
     return [
-      { label: 'Alert rules', value: r.length, accent: undefined as string | undefined },
+      { label: 'Alert rules', value: all.length, accent: undefined as string | undefined },
       { label: 'Enabled', value: enabled, accent: styles.statAccentSuccess },
-      { label: 'Disabled', value: r.length - enabled, accent: undefined },
+      { label: 'Disabled', value: all.length - enabled, accent: undefined },
       { label: 'Sev 0–1', value: sev01, accent: sev01 > 0 ? styles.statAccentWarn : undefined },
     ];
-  }, [rules, styles]);
+  }, [rules, sqRules, styles]);
 
   const columns: LoomColumn<AlertRule>[] = useMemo(() => [
     { key: 'name', label: 'Name', width: 280, render: (r) => <strong>{r.name}</strong> },
@@ -1118,44 +1157,198 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
     { key: 'description', label: 'Description', width: 320, render: (r) => r.description || '—' },
   ], []);
 
+  const openNew = useCallback(() => { setEditing(undefined); setEditorOpen(true); }, []);
+  const openEdit = useCallback((r: ScheduledQueryRule) => {
+    setEditing({
+      id: r.id, name: r.name, enabled: r.enabled, severity: r.severity, description: r.description,
+      query: r.query, operator: r.operator, threshold: r.threshold,
+      evaluationFrequency: r.evaluationFrequency, windowSize: r.windowSize, actionGroupIds: r.actionGroupIds,
+    });
+    setEditorOpen(true);
+  }, []);
+
+  const toggleEnabled = useCallback(async (r: ScheduledQueryRule) => {
+    setBusyName(r.name);
+    try {
+      const resp = await fetch('/api/monitor/alerts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ _action: 'patch', name: r.name, enabled: !r.enabled }),
+      });
+      const j = await resp.json();
+      if (!j.ok) { setSqErr(j.gate?.remediation || j.error || 'Failed to toggle rule'); return; }
+      setTick((t) => t + 1);
+    } catch (e) {
+      setSqErr((e as Error)?.message || String(e));
+    } finally {
+      setBusyName(null);
+    }
+  }, []);
+
+  const doDelete = useCallback(async (r: ScheduledQueryRule) => {
+    setBusyName(r.name);
+    try {
+      const resp = await fetch('/api/monitor/alerts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ _action: 'delete', name: r.name }),
+      });
+      const j = await resp.json();
+      if (!j.ok) { setSqErr(j.gate?.remediation || j.error || 'Failed to delete rule'); return; }
+      setConfirmDelete(null);
+      setTick((t) => t + 1);
+    } catch (e) {
+      setSqErr((e as Error)?.message || String(e));
+    } finally {
+      setBusyName(null);
+    }
+  }, []);
+
+  const sqColumns: LoomColumn<ScheduledQueryRule>[] = useMemo(() => [
+    { key: 'name', label: 'Name', width: 240, render: (r) => <strong>{r.name}</strong> },
+    {
+      key: 'enabled', label: 'Enabled', width: 100, getValue: (r) => (r.enabled ? 'On' : 'Off'),
+      render: (r) => r.enabled ? <Badge color="success" appearance="filled">On</Badge> : <Badge color="subtle" appearance="outline">Off</Badge>,
+    },
+    {
+      key: 'condition', label: 'Condition', width: 280,
+      render: (r) => (
+        <MonitorConditionsBuilder
+          mode="display"
+          operator={r.operator || 'GreaterThan'}
+          threshold={r.threshold ?? 0}
+          evaluationFrequency={r.evaluationFrequency || 'PT5M'}
+          windowSize={r.windowSize || 'PT5M'}
+          severity={r.severity ?? 3}
+        />
+      ),
+    },
+    { key: 'evaluationFrequency', label: 'Frequency', width: 130, render: (r) => freqLabel(r.evaluationFrequency) },
+    {
+      key: 'actions', label: 'Actions', width: 180, sortable: false, filterable: false,
+      render: (r) => (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <Tooltip content="Edit rule" relationship="label">
+            <Button size="small" appearance="subtle" icon={<Edit20Regular />} aria-label={`Edit ${r.name}`} onClick={() => openEdit(r)} />
+          </Tooltip>
+          <Tooltip content={r.enabled ? 'Disable rule' : 'Enable rule'} relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={r.enabled ? <Pause20Regular /> : <Play20Regular />}
+              aria-label={`${r.enabled ? 'Disable' : 'Enable'} ${r.name}`}
+              disabled={busyName === r.name}
+              onClick={() => void toggleEnabled(r)}
+            />
+          </Tooltip>
+          <Tooltip content="Delete rule" relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Delete20Regular />}
+              aria-label={`Delete ${r.name}`}
+              disabled={busyName === r.name}
+              onClick={() => setConfirmDelete(r)}
+            />
+          </Tooltip>
+        </div>
+      ),
+    },
+  ], [busyName, openEdit, toggleEnabled]);
+
   return (
     <div>
       <Section
         title="Alert rules"
-        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+        actions={<Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
       >
         <MessageBar intent="info">
           <MessageBarBody>
-            Lists metric-alert rules scoped to the Loom resource groups (Azure Monitor <code>metricAlerts</code> REST).
-            Rule authoring (create/edit) is not yet wired — manage rules in the Azure portal for now.
+            <strong>Scheduled query rules</strong> are the Loom-managed, KQL-evaluated alert rules you can
+            create and edit here (Azure Monitor <code>scheduledQueryRules</code> REST). <strong>Metric-alert
+            rules</strong> below are a read-only inventory of <code>metricAlerts</code> scoped to the Loom resource
+            groups. No Microsoft Fabric required — both are Azure-native.
           </MessageBarBody>
         </MessageBar>
         {gate && <GateBar gate={gate} subject="Alerts" />}
         {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-        {rules === null ? (
+        {rules === null || sqRules === null ? (
           <StatCardSkeleton />
         ) : (
           <div className={styles.stats}>
-            {kpis.map((s) => (
-              <div key={s.label} className={styles.stat}>
-                <span className={styles.statLabel}>{s.label}</span>
-                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+            {kpis.map((sc) => (
+              <div key={sc.label} className={styles.stat}>
+                <span className={styles.statLabel}>{sc.label}</span>
+                <span className={`${styles.statValue} ${sc.accent ?? ''}`}>{sc.value}</span>
               </div>
             ))}
           </div>
         )}
       </Section>
 
-      <Section title="Metric-alert rules">
+      <Section
+        title="Scheduled query alert rules"
+        actions={<Button appearance="primary" icon={<Add20Regular />} onClick={openNew}>New alert rule</Button>}
+      >
+        {sqGate && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Authoring not configured</MessageBarTitle>
+              {sqGate.remediation || sqGate.reason || 'Set the Loom alert resource group + Log Analytics resource id and grant the Console UAMI Monitoring Contributor.'}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {sqErr && <MessageBar intent="error"><MessageBarBody>{sqErr}</MessageBarBody></MessageBar>}
+        <LoomDataTable
+          columns={sqColumns}
+          rows={sqRules ?? []}
+          getRowId={(r) => r.id}
+          loading={sqRules === null}
+          empty={sqGate ? 'Configure the alert resource group to author scheduled query rules.' : 'No scheduled query rules yet. Click New alert rule to create one (KQL → condition → schedule → action group).'}
+          ariaLabel="Azure Monitor scheduled query alert rules"
+        />
+      </Section>
+
+      <Section title="Metric-alert rules (read-only inventory)">
         <LoomDataTable
           columns={columns}
           rows={rules ?? []}
           getRowId={(r) => r.id}
           loading={rules === null}
           empty={gate ? 'Configure the Loom subscription to list alert rules.' : 'No metric-alert rules defined for the Loom resource groups.'}
-          ariaLabel="Azure Monitor alert rules"
+          ariaLabel="Azure Monitor metric-alert rules"
         />
       </Section>
+
+      <MonitorAlertEditor
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        rule={editing}
+        onSaved={() => { setEditorOpen(false); setTick((t) => t + 1); }}
+      />
+
+      <Dialog open={!!confirmDelete} onOpenChange={(_, d) => { if (!d.open) setConfirmDelete(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete alert rule</DialogTitle>
+            <DialogContent>
+              Delete <strong>{confirmDelete?.name}</strong>? This removes the Azure Monitor
+              scheduled query rule. This cannot be undone.
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+              <Button
+                appearance="primary"
+                icon={busyName === confirmDelete?.name ? <Spinner size="tiny" /> : <Delete20Regular />}
+                disabled={busyName === confirmDelete?.name}
+                onClick={() => confirmDelete && void doDelete(confirmDelete)}
+              >
+                Delete
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }
