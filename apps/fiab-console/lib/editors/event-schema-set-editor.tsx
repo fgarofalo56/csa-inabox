@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Save20Regular, BookOpen20Regular, DocumentBulletList20Regular,
+  ShieldCheckmark20Regular, BeakerEdit20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -35,13 +36,45 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  toolbar: { display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' },
   treePad: { padding: 8 },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12 },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  section: { display: 'flex', flexDirection: 'column', gap: 8 },
+  policyHeader: { display: 'flex', alignItems: 'center', gap: 8 },
+  versionCard: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  versionHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  pre: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxHeight: 220,
+    overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: 8,
+    borderRadius: tokens.borderRadiusMedium,
+    margin: 0,
+  },
+  violationList: { margin: '4px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 },
+  settingsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'max-content 1fr',
+    gap: '6px 16px',
+    alignItems: 'center',
+    maxWidth: 640,
+  },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -101,6 +134,11 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   const [regSchema, setRegSchema] = useState(SAMPLE_AVRO);
   const [regBusy, setRegBusy] = useState(false);
   const [regErr, setRegErr] = useState<string | null>(null);
+  // Pre-publish dry-run compatibility check (POST .../check-compat) — answers
+  // "would this register?" without persisting, so the author sees breaking
+  // changes before committing.
+  const [checkBusy, setCheckBusy] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string } | null>(null);
 
   useEffect(() => {
     fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
@@ -179,6 +217,23 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     } catch (e: any) { setRegErr(e?.message || String(e)); }
     finally { setRegBusy(false); }
   }, [workspaceId, setId, regSubject, regSchema, active?.format, loadDetail]);
+
+  const checkCompat = useCallback(async () => {
+    if (!workspaceId || !setId || !regSubject.trim() || !regSchema.trim()) return;
+    setCheckBusy(true); setCheckResult(null); setRegErr(null);
+    try {
+      try { JSON.parse(regSchema); }
+      catch (e: any) { setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`); return; }
+      const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/check-compat?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRegErr(j.error || 'compatibility check failed'); return; }
+      setCheckResult({ compatible: !!j.compatible, violations: j.violations || [], checkedVia: j.checkedVia || 'cosmos-inprocess' });
+    } catch (e: any) { setRegErr(e?.message || String(e)); }
+    finally { setCheckBusy(false); }
+  }, [workspaceId, setId, regSubject, regSchema, active?.format]);
 
   const updateCompatibility = useCallback(async (compat: SchemaSet['compatibility']) => {
     if (!workspaceId || !setId) return;
@@ -284,7 +339,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                   </DialogBody>
                 </DialogSurface>
               </Dialog>
-              <Dialog open={regOpen} onOpenChange={(_, d) => setRegOpen(d.open)}>
+              <Dialog open={regOpen} onOpenChange={(_, d) => { setRegOpen(d.open); if (!d.open) { setCheckResult(null); setRegErr(null); } }}>
                 <DialogTrigger disableButtonEnhancement>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={!setId}>Register version</Button>
                 </DialogTrigger>
@@ -292,13 +347,54 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                   <DialogBody>
                     <DialogTitle>Register a new schema version</DialogTitle>
                     <DialogContent>
-                      <Field label="Subject" required><Input value={regSubject} onChange={(_, d) => setRegSubject(d.value)} placeholder="orders.OrderEvent" /></Field>
-                      <Field label="Schema (JSON)"><Textarea value={regSchema} onChange={(_, d) => setRegSchema(d.value)} rows={12} className={s.mono} /></Field>
-                      {regErr && <MessageBar intent="error"><MessageBarBody>{regErr}</MessageBarBody></MessageBar>}
+                      <div className={s.section}>
+                        <Field label="Subject" required>
+                          <Input value={regSubject} onChange={(_, d) => { setRegSubject(d.value); setCheckResult(null); }} placeholder="orders.OrderEvent" />
+                        </Field>
+                        <Field
+                          label="Schema (JSON)"
+                          hint={`Checked against the latest version under the ${active?.compatibility || 'BACKWARD'} policy before it is registered.`}
+                        >
+                          <Textarea value={regSchema} onChange={(_, d) => { setRegSchema(d.value); setCheckResult(null); }} rows={12} className={s.mono} />
+                        </Field>
+                        {checkResult && (
+                          <MessageBar intent={checkResult.compatible ? 'success' : 'error'}>
+                            <MessageBarBody>
+                              <MessageBarTitle>
+                                {checkResult.compatible
+                                  ? `Compatible with the ${active?.compatibility || 'BACKWARD'} policy`
+                                  : `Incompatible with the ${active?.compatibility || 'BACKWARD'} policy`}
+                              </MessageBarTitle>
+                              {checkResult.compatible ? (
+                                <>Registration will be accepted. Verified via {checkResult.checkedVia === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'in-process Avro validator'}.</>
+                              ) : (
+                                <>
+                                  Registration will be blocked. Fix the breaking changes below, then re-check.
+                                  <ul className={s.violationList}>
+                                    {checkResult.violations.map((v, i) => <li key={i} className={s.mono}>{v}</li>)}
+                                  </ul>
+                                </>
+                              )}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {regErr && <MessageBar intent="error"><MessageBarBody>{regErr}</MessageBarBody></MessageBar>}
+                      </div>
                     </DialogContent>
                     <DialogActions>
-                      <Button appearance="secondary" onClick={() => setRegOpen(false)}>Cancel</Button>
-                      <Button appearance="primary" disabled={regBusy || !regSubject.trim() || !regSchema.trim()} onClick={registerVersion}>{regBusy ? 'Registering…' : 'Register'}</Button>
+                      <Button appearance="secondary" onClick={() => { setRegOpen(false); setCheckResult(null); }}>Cancel</Button>
+                      <Button
+                        appearance="outline"
+                        icon={checkBusy ? <Spinner size="tiny" /> : <BeakerEdit20Regular />}
+                        disabled={checkBusy || regBusy || !regSubject.trim() || !regSchema.trim()}
+                        onClick={checkCompat}
+                      >{checkBusy ? 'Checking…' : 'Check compatibility'}</Button>
+                      <Button
+                        appearance="primary"
+                        icon={regBusy ? <Spinner size="tiny" /> : <Save20Regular />}
+                        disabled={regBusy || checkBusy || !regSubject.trim() || !regSchema.trim()}
+                        onClick={registerVersion}
+                      >{regBusy ? 'Registering…' : 'Register'}</Button>
                     </DialogActions>
                   </DialogBody>
                 </DialogSurface>
@@ -360,14 +456,18 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                     {!subject && <Caption1>Pick a subject above.</Caption1>}
                     {subject && subject.versions.length === 0 && <Caption1>No versions yet.</Caption1>}
                     {subject && subject.versions.length > 0 && (
-                      <>
-                        {subject.versions.slice().reverse().map(v => (
-                          <div key={v.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 12 }}>
-                            <Body1><strong>v{v.id}</strong> · <Caption1>{v.createdAt} {v.createdBy ? `· ${v.createdBy}` : ''}</Caption1></Body1>
-                            <pre className={s.mono} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 220, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{v.schema}</pre>
+                      <div className={s.section}>
+                        {subject.versions.slice().reverse().map((v, idx) => (
+                          <div key={v.id} className={s.versionCard}>
+                            <div className={s.versionHead}>
+                              <Badge appearance="filled" color={idx === 0 ? 'brand' : 'informative'}>v{v.id}</Badge>
+                              {idx === 0 && <Badge appearance="tint" color="success">Latest</Badge>}
+                              <Caption1>{v.createdAt}{v.createdBy ? ` · ${v.createdBy}` : ''}</Caption1>
+                            </div>
+                            <pre className={s.pre}>{v.schema}</pre>
                           </div>
                         ))}
-                      </>
+                      </div>
                     )}
                   </>
                 )}
@@ -375,19 +475,30 @@ export function EventSchemaSetEditor({ item, id }: Props) {
             )}
 
             {tab === 'compatibility' && active && (
-              <>
-                <Subtitle2>Compatibility policy</Subtitle2>
+              <div className={s.section}>
+                <div className={s.policyHeader}>
+                  <ShieldCheckmark20Regular />
+                  <Subtitle2>Compatibility policy</Subtitle2>
+                  <Badge
+                    appearance="tint"
+                    color={active.compatBackend === 'eventhubs-sr' ? 'success' : 'informative'}
+                  >
+                    {active.compatBackend === 'eventhubs-sr' ? 'Event Hubs Schema Registry' : 'In-process validator'}
+                  </Badge>
+                </div>
                 <Caption1>Applies when registering a new version under any subject in this set.</Caption1>
-                <Dropdown
-                  selectedOptions={[active.compatibility || 'BACKWARD']}
-                  value={active.compatibility || 'BACKWARD'}
-                  onOptionSelect={(_, d) => updateCompatibility((d.optionValue as any) || 'BACKWARD')}
-                >
-                  <Option value="BACKWARD">BACKWARD (default)</Option>
-                  <Option value="FORWARD">FORWARD</Option>
-                  <Option value="FULL">FULL</Option>
-                  <Option value="NONE">NONE (no check)</Option>
-                </Dropdown>
+                <Field label="Policy" className={s.field}>
+                  <Dropdown
+                    selectedOptions={[active.compatibility || 'BACKWARD']}
+                    value={active.compatibility || 'BACKWARD'}
+                    onOptionSelect={(_, d) => updateCompatibility((d.optionValue as any) || 'BACKWARD')}
+                  >
+                    <Option value="BACKWARD">BACKWARD (default)</Option>
+                    <Option value="FORWARD">FORWARD</Option>
+                    <Option value="FULL">FULL</Option>
+                    <Option value="NONE">NONE (no check)</Option>
+                  </Dropdown>
+                </Field>
                 {active.compatBackend === 'eventhubs-sr' ? (
                   <MessageBar intent="success">
                     <MessageBarBody>
@@ -412,17 +523,25 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-              </>
+              </div>
             )}
 
             {tab === 'settings' && active && (
-              <>
+              <div className={s.section}>
                 <Subtitle2>{active.displayName}</Subtitle2>
-                <Caption1>id: <code>{active.id}</code></Caption1>
-                <Caption1>Default format: <code>{active.format || 'AVRO'}</code></Caption1>
-                <Caption1>External registry: <code>{active.externalRegistry?.endpoint || '(none — Cosmos-backed)'}</code></Caption1>
-                <Button appearance="subtle" icon={<DocumentBulletList20Regular />} onClick={() => setTab('compatibility')}>Open compatibility settings</Button>
-              </>
+                <div className={s.settingsGrid}>
+                  <Caption1>Id</Caption1><code className={s.mono}>{active.id}</code>
+                  <Caption1>Default format</Caption1><code className={s.mono}>{active.format || 'AVRO'}</code>
+                  <Caption1>Compatibility</Caption1><code className={s.mono}>{active.compatibility || 'BACKWARD'}</code>
+                  <Caption1>Enforced by</Caption1>
+                  <code className={s.mono}>{active.compatBackend === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'In-process Avro validator (Cosmos-backed)'}</code>
+                  <Caption1>External registry</Caption1>
+                  <code className={s.mono}>{active.externalRegistry?.endpoint || '(none — Cosmos-backed)'}</code>
+                </div>
+                <div>
+                  <Button appearance="subtle" icon={<DocumentBulletList20Regular />} onClick={() => setTab('compatibility')}>Open compatibility settings</Button>
+                </div>
+              </div>
             )}
           </div>
         </>
