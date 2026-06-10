@@ -51,6 +51,7 @@ import {
   ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -470,7 +471,7 @@ function ResultChart({ columns, rows, kind, onValueClick }: { columns: string[];
 
 /** Render any tile result by its visual type — table / charts / stat / pie / map. */
 function TileVisual({
-  viz, result, conditionalRules, drillthrough, onDrillthrough,
+  viz, result, conditionalRules, drillthrough, onDrillthrough, large,
 }: {
   viz: TileViz;
   result: KqlResult;
@@ -480,6 +481,8 @@ function TileVisual({
   drillthrough?: { column: string; paramName: string };
   /** Fired with (paramName, clickedValue) when a value is clicked. */
   onDrillthrough?: (paramName: string, value: string) => void;
+  /** Larger render (fullscreen tile) bumps chart panel heights. */
+  large?: boolean;
 }) {
   const columns = result.columns || [];
   const rows = result.rows || [];
@@ -508,10 +511,14 @@ function TileVisual({
       return <PieChart columns={columns} rows={rows} onValueClick={chartClick} />;
     case 'map':
       return <MapVisual columns={columns} rows={rows} />;
-    case 'bar':
-    case 'column':
     case 'line':
     case 'timechart':
+      // Time-series visuals get the full Fabric RTD time-chart control surface
+      // (legend search, pin & overlay, multi-panel, Y-axis scaling, zoom
+      // slider) over the real ADX series in this result.
+      return <TimeSeriesChart columns={columns} rows={rows} columnTypes={result.columnTypes} large={large} />;
+    case 'bar':
+    case 'column':
       return <ResultChart columns={columns} rows={rows} kind={viz} onValueClick={chartClick} />;
     case 'table':
     default: {
@@ -15066,6 +15073,7 @@ function LoomTileBody({ tile, result, large }: { tile: LoomTile; result?: KqlRes
       <TileVisual
         viz={(tile.viz as TileViz) || 'table'}
         result={result}
+        large={large}
       />
     </div>
   );
