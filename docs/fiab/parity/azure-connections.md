@@ -1,94 +1,59 @@
-# azure-connections — parity with Fabric/Data Factory connections (gateways)
+# azure-connections — parity with Azure "Connections & gateways" (workspace bindings)
 
-Source UI: Fabric **Manage connections and gateways** / Data Factory connectors
-Reference: <https://learn.microsoft.com/fabric/data-factory/connector-overview>
-Run date: 2026-06-09
+Source UI: Fabric/Power BI **Manage connections and gateways** + Azure portal
+**Storage account → Access Control (IAM)** and **Log Analytics workspace → Agents /
+Data export**. F16 binds two Azure resources to a Loom workspace, Azure-native
+only (no Microsoft Fabric / Power BI dependency, per `no-fabric-dependency.md`).
 
-Loom surfaces:
+## Azure feature inventory (grounded in Learn)
 
-- Page: `/connections` → `app/connections/page.tsx`
-- BFF: `app/api/connections/route.ts` (GET/POST/DELETE)
-- Store: `lib/azure/connections-store.ts` → `listConnections`,
-  `createConnection`, `deleteConnection`
-- Secrets: `lib/azure/kv-secrets-client.ts` → `putKeyVaultSecret`,
-  `deleteKeyVaultSecret`, `kvSecretsConfigGate`
-- Builder: `lib/components/connections/connection-builder.tsx`
-
-Connections are **Azure-native**: metadata in Cosmos, secrets in Azure Key Vault.
-There is **no dependency on real Microsoft Fabric** — connection management works
-with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
-
-## Fabric/Azure feature inventory (grounded in Learn)
-
-1. List connections to data sources
-2. Create a connection (source type, server/host, database, auth method,
-   credentials)
-3. Multiple authentication methods (managed identity, basic, key, SP)
-4. Securely store credentials (never expose secrets)
-5. Delete a connection
+| Capability | Source UI |
+|---|---|
+| Pick a storage account for data staging | Azure portal Storage account picker (Microsoft.Storage list) |
+| Choose / create a staging container | Storage → Containers |
+| Verify the identity can write blobs | Storage IAM → Storage Blob Data Contributor |
+| Pick a Log Analytics workspace for log export | Azure Monitor / LAW picker (Microsoft.OperationalInsights list) |
+| Verify the identity can configure collection/export | LAW IAM → Log Analytics Contributor |
+| Confirm log data plane reachable | LAW → Logs (KQL `print`) |
+| Connect / disconnect / status | Connections list with state + remove |
 
 ## Loom coverage
 
-Source types: `azure-sql`, `synapse-dedicated`, `synapse-serverless`,
-`databricks-sql`, `postgres`, `storage-adls`, `cosmos`, `generic-sql`.
-Auth methods: `entra-mi`, `sql-password`, `connection-string`, `account-key`,
-`service-principal`.
-
-| Capability | Status | Backend |
+| Inventory row | Status | Notes |
 |---|---|---|
-| List connections (no secrets) | ✅ Built | `GET /api/connections` → Cosmos `connections` |
-| Create connection (name, type, auth method, host, database, credentials) | ✅ Built | `POST /api/connections` → KV `putKeyVaultSecret()` + Cosmos metadata |
-| 8 data-source types | ✅ Built | `TYPES` const validated in route |
-| 5 auth methods | ✅ Built | `METHODS` const validated; `authNeedsSecret()` guard |
-| Secret isolation (KV only — never in Cosmos or UI) | ✅ Built | only `secretRef` stored in Cosmos; raw secret → Key Vault |
-| Delete connection (+ KV secret delete) | ✅ Built | `DELETE /api/connections?id=` → `deleteKeyVaultSecret` (best-effort) + Cosmos delete |
-| Honest gate when Key Vault not configured | ⚠️ Honest gate | `kvSecretsConfigGate()` → 503 naming `LOOM_KEY_VAULT_URI/URL/NAME` + `Key Vault Secrets Officer` role |
+| ADLS Gen2 account picker (HNS first) | built ✅ | `GET …/connections/adls-accounts` → `storage-discovery.listStorageAccounts()` (real ARM) |
+| Staging container (default `dataflow-staging`) | built ✅ | created on connect via `DataLakeFileSystemClient.create()` |
+| Storage Blob Data Contributor verification | built ✅ | ARM roleAssignments check on the account, filtered to the UAMI principal + role GUID |
+| Log Analytics workspace picker | built ✅ | `GET …/connections/log-analytics-workspaces` → ARM OperationalInsights list (real ARM) |
+| Log Analytics Contributor verification | built ✅ | ARM roleAssignments check on the LAW |
+| Log data-plane reachability probe | built ✅ | `POST …/v1/workspaces/{customerId}/query` (`print`) |
+| Connect / disconnect / status | built ✅ | Cosmos `azure-connections` (PK /workspaceId); status badge + Disconnect |
+| Missing-role state | honest-gate ⚠️ | saved as `role-missing` + Fluent MessageBar naming the exact role + `azure-connections-rbac.bicep` + Retry |
+| Dataflow staging consumes the binding | built ✅ | `dataflow-run.ts` prefers the workspace-bound ADLS account over the DLZ lake |
 
-Zero ❌ rows. The single ⚠️ gate (Key Vault unconfigured) is honest — it names
-the exact env var + role; with KV configured the full create/list/delete surface
-works, per `no-vaporware.md`.
+Zero ❌, zero stub banners.
 
 ## Backend per control
 
-- **Create** — `POST` validates the type + auth method; for methods that carry a
-  secret (`authNeedsSecret()`), the raw credential is written to Key Vault via
-  `putKeyVaultSecret()` and only the resulting `secretRef` (plus host / database /
-  method metadata) is persisted to the Cosmos `connections` container. The secret
-  is never echoed back.
-- **List** — `GET` returns connection metadata with `secretRef` but never the
-  secret value.
-- **Delete** — `DELETE` best-effort deletes the Key Vault secret then removes the
-  Cosmos record.
-- **Gate** — `kvSecretsConfigGate()` returns a 503 naming
-  `LOOM_KEY_VAULT_URI`/`URL`/`NAME` and the `Key Vault Secrets Officer` role when
-  no vault is resolvable.
-
-## Per-cloud notes
-
-| Cloud | Key Vault endpoint |
+| Control | Backend |
 |---|---|
-| Commercial / GCC | `*.vault.azure.net` (resolved from `LOOM_KEY_VAULT_URI/URL/NAME`) |
-| GCC-High / IL5 | `*.vault.usgovcloudapi.net`; `kv-secrets-client.ts` resolves the gov endpoint from the same env vars |
+| ADLS account list | ARM `Microsoft.Storage/storageAccounts` list (`storage-discovery.ts`) |
+| LAW list | ARM `Microsoft.OperationalInsights/workspaces` list (api 2023-09-01) |
+| Connect ADLS | ARM roleAssignments list (role check) + `DataLakeFileSystemClient.exists()/create()` + Cosmos upsert |
+| Connect LAW | ARM GET workspace + roleAssignments list + `POST …/query` data-plane probe + Cosmos upsert |
+| Disconnect | Cosmos delete (resource + RBAC untouched) |
+| Role grant (remediation) | `platform/fiab/bicep/modules/admin-plane/azure-connections-rbac.bicep` |
 
-`entra-mi` auth needs no stored secret in any cloud and is the recommended
-default per `no-fabric-dependency.md` MI-first guidance.
+## Per-cloud
 
-## Bicep sync
-
-- No new resource — the connections use the existing Cosmos `connections`
-  container and the admin-plane Key Vault.
-- `LOOM_KEY_VAULT_URI`/`URL`/`NAME` are already in the `apps[]` env list.
-- The console UAMI needs **Key Vault Secrets Officer** on the vault (granted in
-  the admin-plane Key Vault bicep); absent that, the surface honest-gates.
+All hosts resolve via `cloud-endpoints.ts` (`armBase` / `dfsUrl` / `getLogAnalyticsHost`):
+Commercial+GCC use `management.azure.com` / `dfs.core.windows.net` / `api.loganalytics.azure.com`;
+GCC-High/IL5 use `management.usgovcloudapi.net` / `dfs.core.usgovcloudapi.net` / `api.loganalytics.us`.
+Both built-in role GUIDs are cloud-invariant.
 
 ## Verification
 
-- Default path works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset — Cosmos + Key
-  Vault only.
-- Live walk: open `/connections`, create an `azure-sql` connection with
-  `sql-password` auth, confirm the secret lands in Key Vault and only `secretRef`
-  is in Cosmos (not the password); create an `entra-mi` connection (no secret);
-  delete a connection and confirm the KV secret is removed.
-
-Grade: **A** — full connection lifecycle with real Cosmos + Key Vault secret
-isolation; only the honest KV-config gate.
+- `npx vitest run lib/clients/__tests__/azure-connections-client.test.ts` (role GUIDs + UAMI principal resolution).
+- Live: with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET, open `/admin/workspaces` → a workspace's
+  **Connections** drawer; connect a real ADLS account (staging container created) and a real LAW
+  (KQL probe succeeds); a missing role renders the honest MessageBar with Retry.

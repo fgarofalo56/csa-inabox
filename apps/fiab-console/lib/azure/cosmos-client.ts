@@ -112,6 +112,11 @@ let _pipelineHistory: Container | null = null;
 let _scorecardConfig: Container | null = null;
 let _reportSubscriptions: Container | null = null;
 let _reportDeliveryLog: Container | null = null;
+// F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings.
+// Partitioned by /workspaceId so every per-workspace connection list hits a
+// single physical partition. Distinct from the tenant-scoped 'connections'
+// container (generic data-source connections with Key Vault secrets).
+let _azureConnections: Container | null = null;
 let _ensured = false;
 
 /**
@@ -453,6 +458,12 @@ async function ensure() {
   // Logic App. No Microsoft Fabric dependency.
   _reportSubscriptions = await mk('report-subscriptions', '/reportId');
   _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
+  // F16 Azure Connections — per-workspace ADLS Gen2 (dataflow staging) +
+  // Log Analytics (query-log export) bindings. PK /workspaceId so every
+  // per-workspace connection list hits a single physical partition. Created
+  // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
+  // account+database.
+  _azureConnections = await mk('azure-connections', '/workspaceId');
   _ensured = true;
 }
 
@@ -493,6 +504,8 @@ export async function scorecardConfigContainer(): Promise<Container> { await ens
 export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
 /** Report delivery log (append-only delivery history) — PK /subscriptionId. */
 export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
+/** F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings (PK /workspaceId). */
+export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
@@ -629,6 +642,7 @@ const KNOWN_CONTAINER_IDS = [
   'pbi-dashboard-overlays',
   'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
   'scorecard-config',
+  'azure-connections',
 ];
 
 /** List all Loom containers with their current throughput shape. */
