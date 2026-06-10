@@ -725,6 +725,7 @@ export const RTH_SOURCE_TYPES = [
   'ApacheKafka',
   'ConfluentCloud',
   'GooglePubSub',
+  'Mqtt',
   'SampleData',
   'CustomEndpoint',
   'FabricWorkspaceItemEvents',

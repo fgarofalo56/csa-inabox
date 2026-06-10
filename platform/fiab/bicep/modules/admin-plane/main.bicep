@@ -332,6 +332,9 @@ param loomParamKeyVaultUri string = ''
 @description('Key Vault URI for external-source SHORTCUT credentials (S3/GCS/SAS/Synapse-Link). Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault to isolate shortcut credentials — keep it the SAME vault the shortcut engine binding reads, or unset to default.')
 param loomShortcutKeyVaultUri string = ''
 
+@description('Key Vault URI holding the CA + client certificates (PEM) for eventstream MQTT/Kafka mutual-TLS (mTLS) connections. Empty defaults to the admin-plane vault. The Console UAMI is granted "Key Vault Certificate User" (read) on the admin-plane vault below; if you point this at a separate vault, grant that role there too.')
+param loomEventstreamCertKeyVaultUri string = ''
+
 @description('Git integration — Azure DevOps host override for on-premises Azure DevOps Server (GCC-High / IL5 / DoD, where ADO Services is unavailable). Empty uses dev.azure.com (commercial/GCC). Example on-prem: https://tfs.agency.gov')
 param loomAdoHost string = ''
 
@@ -1517,6 +1520,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // override loomShortcutKeyVaultUri to isolate them in a dedicated vault
             // (keep it the same vault the shortcut engine binding reads).
             { name: 'LOOM_SHORTCUT_KEYVAULT', value: !empty(loomShortcutKeyVaultUri) ? loomShortcutKeyVaultUri : keyvault.outputs.keyVaultUri }
+            // Eventstream MQTT/Kafka mTLS certs (CA + client cert PEM objects).
+            // Defaults to the admin-plane vault; the Console UAMI is granted
+            // "Key Vault Certificate User" on it (see keyvault.bicep). Override to
+            // isolate streaming certs in a dedicated vault (grant the role there).
+            { name: 'LOOM_EVENTSTREAM_CERT_VAULT', value: !empty(loomEventstreamCertKeyVaultUri) ? loomEventstreamCertKeyVaultUri : keyvault.outputs.keyVaultUri }
             // Git integration (commit / pull / sync). PATs are stored in the
             // admin-plane vault above (Console UAMI has Secrets Officer) under
             // `<LOOM_GIT_PAT_KV_PREFIX>-<workspaceId>`. ADO/GitHub host overrides

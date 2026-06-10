@@ -28,9 +28,27 @@ export interface SourceField {
   label: string;
   placeholder?: string;
   required?: boolean;
-  /** 'text' | 'textarea' — most connection props are short strings. */
-  kind?: 'text' | 'textarea';
+  /**
+   * Field renderer:
+   *  - 'text'     short string (default)
+   *  - 'textarea' multi-line string
+   *  - 'password' secret — value is written to Key Vault, only the secretRef is kept
+   *  - 'select'   single-choice dropdown (uses `options`)
+   *  - 'toggle'   boolean switch that reveals the fields whose `showWhen` names it
+   *  - 'cert'     Key Vault certificate picker (CA or client cert for mTLS)
+   */
+  kind?: 'text' | 'textarea' | 'password' | 'select' | 'toggle' | 'cert';
   help?: string;
+  /** Options for `kind: 'select'`. */
+  options?: Array<{ value: string; label: string }>;
+  /**
+   * Conditional visibility: this field renders only when the named toggle field
+   * (a `kind: 'toggle'` key) is on. Used by the MQTT mTLS panel so the CA/client
+   * cert pickers only show when "Use TLS/mTLS" is enabled.
+   */
+  showWhen?: string;
+  /** Group fields under a collapsible/visual section header in the dialog. */
+  section?: string;
 }
 
 export interface SourceConnector {
@@ -199,6 +217,42 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
       { key: 'dataConnectionId', label: 'Connection id' },
     ],
   },
+  {
+    id: 'mqtt',
+    name: 'MQTT',
+    category: 'External streams',
+    sourceType: 'Mqtt',
+    description: 'Ingest from any MQTT broker (IoT). Supports TLS/SSL + mutual-TLS with Key Vault certs.',
+    preview: true,
+    fields: [
+      {
+        key: 'brokerUrl', label: 'MQTT broker URL', required: true,
+        placeholder: 'ssl://broker.contoso.com:8883',
+        help: 'Supported protocols: ssl://, wss://, tcp://.',
+      },
+      { key: 'topic', label: 'Topic name', required: true, placeholder: 'devices/+/telemetry', help: 'A single MQTT topic to subscribe to.' },
+      {
+        key: 'protocolVersion', label: 'Version', kind: 'select',
+        options: [{ value: 'V5', label: 'V5' }, { value: 'V3', label: 'V3' }],
+        help: "Select your broker's MQTT protocol version.",
+      },
+      { key: 'username', label: 'Username', placeholder: 'mqtt-user', help: 'Broker username (optional for anonymous brokers).' },
+      { key: 'password', label: 'Password', kind: 'password', help: 'Broker password. Stored in Key Vault — never in Cosmos or the browser.' },
+      // ---- TLS / mTLS panel ----
+      {
+        key: 'useMtls', label: 'Use TLS/mTLS settings', kind: 'toggle', section: 'TLS / mTLS settings',
+        help: 'Enable for brokers with a custom CA or that require client-certificate (mutual TLS) authentication.',
+      },
+      {
+        key: 'caCertName', label: 'Trust CA certificate', kind: 'cert', showWhen: 'useMtls', section: 'TLS / mTLS settings',
+        help: 'Server CA certificate (Key Vault certificate object, PEM). The broker is verified against this CA.',
+      },
+      {
+        key: 'clientCertName', label: 'Client certificate and key', kind: 'cert', showWhen: 'useMtls', section: 'TLS / mTLS settings',
+        help: 'Client certificate + private key (Key Vault certificate object, PEM bundle) for mutual-TLS auth.',
+      },
+    ],
+  },
   // ---- Fabric events ----------------------------------------------------
   {
     id: 'fabric-workspace-item-events',
@@ -310,6 +364,7 @@ const SOURCE_ICONS: Partial<Record<RthSourceType, FluentIcon>> = {
   ApacheKafka:                     Branch20Regular,
   ConfluentCloud:                  CloudArrowUp20Regular,
   GooglePubSub:                    Cloud20Regular,
+  Mqtt:                            Iot20Regular,
   SampleData:                      BeakerSettings20Regular,
   CustomEndpoint:                  PlugConnected20Regular,
   FabricWorkspaceItemEvents:       Briefcase20Regular,

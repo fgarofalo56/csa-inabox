@@ -88,6 +88,22 @@ resource consoleKvSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
+// Console UAMI gets "Key Vault Certificate User" (read certificate objects +
+// their secret material) so the eventstream MQTT/Kafka mTLS cert pickers can
+// list CA + client certificates and the connector can read them at connect/
+// preview time. Role: db79e9a7-68ee-4b58-9aeb-b90e7c24fcba — built-in, global
+// GUID (all clouds). Read by kv-secrets-client.listKeyVaultCertificates().
+resource consoleKvCertUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, consolePrincipalId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'Console UAMI: read Key Vault certificates for eventstream MQTT/Kafka mTLS connections.'
+  }
+}
+
 // Console UAMI gets "Key Vault Crypto Service Encryption User" (F14 Customer-
 // Managed Keys). This single role both lets the BFF list keys/versions
 // (keys/read) for the bind wizard AND lets the backing storage account use the
