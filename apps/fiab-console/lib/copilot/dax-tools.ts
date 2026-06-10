@@ -274,27 +274,15 @@ async function handleDescribeModel(
   if (!state.measures.length) {
     return { proposals: [], note: 'No measures found on this model. Add measures first, then re-run describe.' };
   }
-  const measuresList = state.measures
-    .map((m, i) => `${i + 1}. [${m.name}] = ${(m.expression || '').slice(0, 160)}`)
-    .join('\n');
 
-  const raw = await aoaiChat(
-    ctx.userOid,
-    'You are a data catalog writer. For each DAX measure listed, write a concise (1-2 sentence) business-friendly description. Respond with a JSON object {"measures":[{"name":"...","description":"..."}]} only — no prose, no code fence.',
-    `Write descriptions for these DAX measures:\n${measuresList}`,
-    { maxTokens: 700, temperature: 0.3, jsonObject: true },
+  // Reuse the shared bulk-describe AOAI batch generator (one source of truth
+  // with the OneLake catalog bulk action — app/api/catalog/describe).
+  const { resolveBulkDescribeTarget, generateMeasureDescriptions } = await import('@/lib/copilot/bulk-describe');
+  const target = await resolveBulkDescribeTarget(ctx.userOid);
+  const proposals = await generateMeasureDescriptions(
+    target,
+    state.measures.map((m) => ({ name: m.name, expression: m.expression })),
   );
-
-  let proposals: Array<{ name: string; description: string }> = [];
-  try {
-    const parsed = JSON.parse(raw || '{}');
-    const arr = Array.isArray(parsed) ? parsed : (parsed?.measures ?? parsed?.items ?? []);
-    proposals = (Array.isArray(arr) ? arr : [])
-      .filter((p: any) => p && typeof p.name === 'string' && typeof p.description === 'string')
-      .map((p: any) => ({ name: p.name, description: p.description }));
-  } catch {
-    /* non-JSON — return empty proposals with the raw note below */
-  }
 
   return {
     proposals,

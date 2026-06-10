@@ -17,9 +17,10 @@
 import { useState } from 'react';
 import {
   Button, Input, MessageBar, MessageBarBody, MessageBarTitle, Spinner,
-  Body1, makeStyles, tokens, Field, Textarea,
+  Body1, Caption1, Switch, Badge, makeStyles, tokens, Field, Textarea,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Open16Regular } from '@fluentui/react-icons';
+import { Open16Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 
 interface Props {
@@ -83,6 +84,63 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
   const [shortcutName, setShortcutName] = useState('');
   const [shortcutLocation, setShortcutLocation] = useState('https://.dfs.core.windows.net');
   const [shortcutSubpath, setShortcutSubpath] = useState('/container/path');
+
+  // ── Bulk AI auto-description (semantic models) ──────────────────────────────
+  const [descMeasures, setDescMeasures] = useState(true);
+  const [descColumns, setDescColumns] = useState(true);
+  const [descOverwrite, setDescOverwrite] = useState(false);
+  const [descBusy, setDescBusy] = useState(false);
+  const [descGate, setDescGate] = useState<{ missing?: string; detail?: string } | null>(null);
+  const [descResult, setDescResult] = useState<{
+    applied: boolean;
+    measures: Array<{ name: string; description: string }>;
+    columns: Array<{ name: string; description: string }>;
+    note?: string;
+    error?: string;
+  } | null>(null);
+
+  // The OneLake catalog row carries the asset type via detail.itemType /
+  // detail.detail.type; default to semantic-model (the only describable type).
+  const assetItemType =
+    String(detail?.itemType || detail?.detail?.type || detail?.detail?.itemType || 'semantic-model');
+  const isSemanticModel = /semantic.?model/i.test(assetItemType);
+
+  async function generateDescriptions(apply: boolean) {
+    if (!descMeasures && !descColumns) {
+      setDescResult({ applied: false, measures: [], columns: [], error: 'Select measures and/or columns to describe.' });
+      return;
+    }
+    setDescBusy(true); setDescResult(null); setDescGate(null);
+    try {
+      const targets: string[] = [];
+      if (descMeasures) targets.push('measures');
+      if (descColumns) targets.push('columns');
+      const r = await fetch('/api/catalog/describe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemId: id, itemType: 'semantic-model', apply, targets, overwrite: descOverwrite }),
+      });
+      const j = await r.json();
+      if (j.aoaiUnavailable) {
+        setDescGate({ missing: j.missing, detail: j.detail });
+        return;
+      }
+      if (!j.ok) {
+        setDescResult({ applied: false, measures: [], columns: [], error: j.error || 'Description generation failed' });
+        return;
+      }
+      setDescResult({
+        applied: !!j.applied,
+        measures: Array.isArray(j.measures) ? j.measures : [],
+        columns: Array.isArray(j.columns) ? j.columns : [],
+        note: j.note,
+      });
+    } catch (e: any) {
+      setDescResult({ applied: false, measures: [], columns: [], error: e?.message || String(e) });
+    } finally {
+      setDescBusy(false);
+    }
+  }
 
   async function registerInPurview() {
     setBusy(true); setResult(null);
@@ -194,6 +252,128 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
                 {busy ? <Spinner size="tiny" /> : 'Register in Purview'}
               </Button>
             </div>
+          </div>
+        </Section>
+      )}
+
+      {source === 'onelake' && (
+        <Section title="Generate AI descriptions">
+          <div className={s.group}>
+            <Body1 className={s.hint}>
+              Bulk-generates business-friendly descriptions for every measure and
+              table column on this semantic model using Azure OpenAI, then (when
+              applied) writes them back to the model in Cosmos. Azure-native — no
+              Microsoft Fabric / Power BI workspace required.
+            </Body1>
+            {!isSemanticModel && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  AI auto-description targets <strong>semantic models</strong>. This
+                  asset is a <code>{assetItemType}</code> — open a semantic model to
+                  bulk-describe its measures and columns.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' }}>
+              <Switch
+                checked={descMeasures}
+                onChange={(_, d) => setDescMeasures(d.checked)}
+                label="Measures"
+              />
+              <Switch
+                checked={descColumns}
+                onChange={(_, d) => setDescColumns(d.checked)}
+                label="Table columns"
+              />
+              <Switch
+                checked={descOverwrite}
+                onChange={(_, d) => setDescOverwrite(d.checked)}
+                label="Overwrite existing descriptions"
+              />
+            </div>
+            <div className={s.buttonRow}>
+              <Button
+                appearance="secondary"
+                icon={<Sparkle20Regular />}
+                onClick={() => generateDescriptions(false)}
+                disabled={descBusy || !isSemanticModel}
+                data-testid="action-describe-preview"
+              >
+                {descBusy ? <Spinner size="tiny" /> : 'Preview descriptions'}
+              </Button>
+              <Button
+                appearance="primary"
+                icon={<Sparkle20Regular />}
+                onClick={() => generateDescriptions(true)}
+                disabled={descBusy || !isSemanticModel}
+                data-testid="action-describe-apply"
+              >
+                {descBusy ? <Spinner size="tiny" /> : 'Generate + apply to model'}
+              </Button>
+            </div>
+
+            {descGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Azure OpenAI not configured</MessageBarTitle>
+                  {descGate.detail ??
+                    `Set ${descGate.missing ?? 'LOOM_AOAI_ENDPOINT'} to enable AI descriptions.`}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {descResult?.error && (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Description generation failed</MessageBarTitle>
+                  {descResult.error}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {descResult && !descResult.error && (
+              <>
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    <MessageBarTitle>{descResult.applied ? 'Descriptions applied' : 'Descriptions generated'}</MessageBarTitle>
+                    {descResult.note ??
+                      `${descResult.measures.length} measure + ${descResult.columns.length} column description(s).`}
+                  </MessageBarBody>
+                </MessageBar>
+                {(descResult.measures.length > 0 || descResult.columns.length > 0) && (
+                  <div className={s.control} style={{ maxWidth: 640, overflowX: 'auto' }}>
+                    <Table size="small" aria-label="Generated descriptions">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Object</TableHeaderCell>
+                          <TableHeaderCell>Generated description</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {descResult.measures.map((p) => (
+                          <TableRow key={`m:${p.name}`}>
+                            <TableCell>
+                              <Badge appearance="tint" color="brand" size="small">measure</Badge>{' '}
+                              <code>{p.name}</code>
+                            </TableCell>
+                            <TableCell><Caption1>{p.description}</Caption1></TableCell>
+                          </TableRow>
+                        ))}
+                        {descResult.columns.map((p) => (
+                          <TableRow key={`c:${p.name}`}>
+                            <TableCell>
+                              <Badge appearance="tint" color="informative" size="small">column</Badge>{' '}
+                              <code>{p.name}</code>
+                            </TableCell>
+                            <TableCell><Caption1>{p.description}</Caption1></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </Section>
       )}
