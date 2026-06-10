@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.30.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.29.0...csa-inabox-v0.30.0) (2026-06-10)
+
+
+### Features
+
+* **csa-loom:** per-pane Copilot persona registry + context resolver ([#1046](https://github.com/fgarofalo56/csa-inabox/issues/1046)) ([b2446a6](https://github.com/fgarofalo56/csa-inabox/commit/b2446a6237171cd37c3ac931bfed0ec658a4e7ae))
+
 ## [0.29.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.28.0...csa-inabox-v0.29.0) (2026-06-10)
 
 
