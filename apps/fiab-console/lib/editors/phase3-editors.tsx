@@ -10986,7 +10986,100 @@ function describeOp(op: StructureOp): string {
   return `Add relationship ${op.fromTable}[${op.fromColumn}] → ${op.toTable}[${op.toColumn}] (${op.cardinality})${op.rationale ? ` — ${op.rationale}` : ''}`;
 }
 
+const OP_LABEL: Record<StructureOp['kind'], string> = {
+  'rename-measure': 'Rename',
+  'set-measure-description': 'Describe',
+  'suggest-relationship': 'Relationship',
+};
+const opBadgeColor = (k: StructureOp['kind']): 'brand' | 'success' | 'informative' =>
+  k === 'rename-measure' ? 'brand' : k === 'set-measure-description' ? 'success' : 'informative';
+
+const useCopilotPaneStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalM,
+  },
+  actionRow: {
+    display: 'flex',
+    columnGap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  planCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+  },
+  opList: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXS,
+    margin: 0,
+    padding: 0,
+    listStyleType: 'none',
+  },
+  opRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    columnGap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  opText: { flex: 1, minWidth: 0, lineHeight: tokens.lineHeightBase300 },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: tokens.spacingHorizontalS,
+  },
+  cpList: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXS,
+  },
+  cpRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'background-color, border-color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1}`,
+    },
+  },
+  cpMeta: { display: 'flex', flexDirection: 'column', rowGap: '2px', minWidth: 0 },
+  cpLabelRow: { display: 'flex', columnGap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    rowGap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalL,
+    paddingBottom: tokens.spacingVerticalL,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+    borderRadius: tokens.borderRadiusMedium,
+    border: `${tokens.strokeWidthThin} dashed ${tokens.colorNeutralStroke2}`,
+  },
+});
+
 function SemanticModelCopilotPane({ id }: { id: string }) {
+  const cs = useCopilotPaneStyles();
   const [prompt, setPrompt] = useState('');
   const [proposing, setProposing] = useState(false);
   const [plan, setPlan] = useState<CopilotEditPlan | null>(null);
@@ -11073,7 +11166,7 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
   }, [id, loadCheckpoints]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className={cs.root}>
       <MessageBar intent="info">
         <MessageBarBody>
           <MessageBarTitle>Copilot — edit model structure in natural language</MessageBarTitle>
@@ -11081,16 +11174,18 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
         </MessageBarBody>
       </MessageBar>
 
-      <Field label="Ask Copilot to change the model structure">
+      <Field label="Ask Copilot to change the model structure" hint="Plain English — Copilot grounds the plan against the live tables and measures, then waits for your approval.">
         <Textarea
           value={prompt}
           onChange={(_, d) => setPrompt(d.value)}
           placeholder={'e.g. "Rename [Tot Sales] to [Total Sales] and write a description for every measure", or "Suggest relationships between the fact and dimension tables".'}
           rows={3}
           resize="vertical"
+          aria-label="Ask Copilot to change the model structure"
+          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void propose(); } }}
         />
       </Field>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div className={cs.actionRow}>
         <Button appearance="primary" icon={proposing ? <Spinner size="tiny" /> : <Sparkle16Regular />} disabled={proposing || !prompt.trim()} onClick={propose}>
           {proposing ? 'Asking Copilot…' : 'Propose edits'}
         </Button>
@@ -11107,23 +11202,28 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
       )}
 
       {plan && (
-        <Card style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <Subtitle2>Proposed plan</Subtitle2>
+        <Card className={cs.planCard}>
+          <div className={cs.sectionHead}>
+            <Subtitle2>Proposed plan</Subtitle2>
+            {plan.ops.length > 0 && (
+              <Badge appearance="tint" color="brand">{plan.ops.length} edit{plan.ops.length === 1 ? '' : 's'}</Badge>
+            )}
+          </div>
           <Caption1>{plan.summary}</Caption1>
           {plan.ops.length === 0 ? (
             <MessageBar intent="warning"><MessageBarBody>Copilot did not find a valid structure edit for that request against the current model.</MessageBarBody></MessageBar>
           ) : (
-            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <ul className={cs.opList}>
               {plan.ops.map((op, i) => (
-                <li key={i}>
-                  <Badge appearance="tint" color={op.kind === 'rename-measure' ? 'brand' : op.kind === 'set-measure-description' ? 'success' : 'informative'} style={{ marginRight: 6 }}>{op.kind}</Badge>
-                  {describeOp(op)}
+                <li key={i} className={cs.opRow}>
+                  <Badge appearance="tint" color={opBadgeColor(op.kind)}>{OP_LABEL[op.kind]}</Badge>
+                  <span className={cs.opText}>{describeOp(op)}</span>
                 </li>
               ))}
             </ul>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button appearance="primary" disabled={applying || plan.ops.length === 0} icon={applying ? <Spinner size="tiny" /> : undefined} onClick={apply}>
+          <div className={cs.actionRow}>
+            <Button appearance="primary" disabled={applying || plan.ops.length === 0} icon={applying ? <Spinner size="tiny" /> : <Sparkle16Regular />} onClick={apply}>
               {applying ? 'Applying…' : `Apply ${plan.ops.length} edit(s)`}
             </Button>
             <Button appearance="secondary" disabled={applying} onClick={() => setPlan(null)}>Discard</Button>
@@ -11150,24 +11250,32 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
 
       <Divider />
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Subtitle2>Checkpoints</Subtitle2>
-        <Button size="small" appearance="subtle" onClick={loadCheckpoints}>Refresh</Button>
+      <div className={cs.sectionHead}>
+        <div className={cs.cpLabelRow}>
+          <Subtitle2>Checkpoints</Subtitle2>
+          {Array.isArray(checkpoints) && checkpoints.length > 0 && (
+            <Badge appearance="tint" color="informative">{checkpoints.length}</Badge>
+          )}
+        </div>
+        <Button size="small" appearance="subtle" disabled={checkpoints === null} onClick={loadCheckpoints}>Refresh</Button>
       </div>
       {restoreMsg && (
         <MessageBar intent={restoreMsg.ok ? 'success' : 'error'}><MessageBarBody>{restoreMsg.text}</MessageBarBody></MessageBar>
       )}
       {cpErr && <MessageBar intent="error"><MessageBarBody>{cpErr}</MessageBarBody></MessageBar>}
       {checkpoints === null ? (
-        <Spinner size="tiny" label="Loading checkpoints…" style={{ justifyContent: 'flex-start' }} />
+        <Spinner size="tiny" label="Loading checkpoints…" labelPosition="after" style={{ justifyContent: 'flex-start' }} />
       ) : checkpoints.length === 0 ? (
-        <Caption1>No checkpoints yet. One is captured automatically before each Copilot apply, or save one now.</Caption1>
+        <div className={cs.emptyState}>
+          <Subtitle2>No checkpoints yet</Subtitle2>
+          <Caption1>One is captured automatically before each Copilot apply. You can also save one now with “Save checkpoint now”.</Caption1>
+        </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className={cs.cpList}>
           {checkpoints.map((c) => (
-            <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div key={c.id} className={cs.cpRow}>
+              <div className={cs.cpMeta}>
+                <span className={cs.cpLabelRow}>
                   <Badge appearance="outline" color={c.source === 'pre-restore' ? 'warning' : c.source === 'manual' ? 'informative' : 'brand'}>{c.source}</Badge>
                   <strong>{c.label}</strong>
                 </span>
