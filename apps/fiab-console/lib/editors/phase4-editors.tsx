@@ -2781,12 +2781,12 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
               )}
 
               {/* ---- Publish to Microsoft 365 Copilot (Copilot Studio) ---- */}
-              <div style={{ height: 1, background: tokens.colorNeutralStroke2, margin: '20px 0' }} />
+              <div role="separator" aria-orientation="horizontal" style={{ height: 1, background: tokens.colorNeutralStroke2, margin: `${tokens.spacingVerticalXL} 0` }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Publish to Microsoft 365 Copilot</Subtitle2>
                 <Badge appearance="tint" color="brand">Copilot Studio</Badge>
               </div>
-              <Caption1>
+              <Caption1 style={{ display: 'block', marginTop: 2, maxWidth: 720, color: tokens.colorNeutralForeground2 }}>
                 Surfaces this data agent as a Copilot Studio agent and enables the Teams + Microsoft 365 Copilot channel,
                 so users can discover and chat with it in M365 Copilot. After publishing, a tenant admin approves it in the
                 Microsoft 365 admin center (Agents → All agents → Requests).
@@ -2823,10 +2823,25 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     label="Make agent available in Microsoft 365 Copilot (uncheck for Teams only)"
                     style={{ marginTop: 4 }}
                   />
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <Button appearance="primary" onClick={publishM365} disabled={m365Publishing || saving || !m365EnvId || sources.length === 0}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+                    <Button
+                      appearance="primary"
+                      onClick={publishM365}
+                      disabled={m365Publishing || saving || !m365EnvId || sources.length === 0}
+                      title={
+                        sources.length === 0 ? 'Add at least one data source on the Build tab before publishing.'
+                        : !m365EnvId ? 'Select a Power Platform environment first.'
+                        : undefined
+                      }
+                    >
                       {m365Publishing ? 'Publishing to M365 Copilot…' : 'Publish to M365 Copilot'}
                     </Button>
+                    {m365Publishing && <Spinner size="tiny" />}
+                    {sources.length === 0 && (
+                      <Caption1 style={{ color: tokens.colorPaletteYellowForeground1 }}>
+                        Add at least one data source on the Build tab before publishing.
+                      </Caption1>
+                    )}
                   </div>
                 </>
               )}
