@@ -98,3 +98,26 @@ jobs:
           NEXT_TELEMETRY_DISABLED: '1'
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm build
+
+  tutorial-coverage:
+    # Audits visual-tutorial coverage (items + features parsed from source;
+    # apps audited when a catalog JSON is supplied). Pure node, no install.
+    #
+    # REPORT-ONLY for now: reviewed screenshots are published by an operator
+    # behind the Azure-imagery privacy gate, so the published set legitimately
+    # lags the source. Once the first reviewed captures are committed under
+    # docs/fiab/tutorials/items/, flip this to a required, blocking gate by
+    # adding `--strict` (and `--apps-catalog <exported-catalog.json>`) so the
+    # 0/N coverage drift can never silently merge again.
+    name: visual-tutorial coverage (report)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Report tutorial coverage
+        # Non-blocking until reviewed captures land — see comment above to enable --strict.
+        run: node scripts/csa-loom/check-tutorial-coverage.mjs

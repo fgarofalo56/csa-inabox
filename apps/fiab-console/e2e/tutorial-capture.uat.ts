@@ -146,10 +146,27 @@ if (DIMENSIONS.has('apps')) {
     const page = await ctx.newPage();
     try {
       // Ensure catalogs are bootstrapped (idempotent), then fetch the list.
-      await page.request.post(`${BASE}/api/admin/bootstrap-catalogs`).catch(() => undefined);
+      const boot = await page.request.post(`${BASE}/api/admin/bootstrap-catalogs`).catch(() => undefined);
+      if (boot && !boot.ok()) {
+        // Bootstrap is best-effort, but surface a non-OK so a broken admin route
+        // doesn't masquerade as a healthy-but-empty catalog below.
+        console.warn(`bootstrap-catalogs returned HTTP ${boot.status()} — continuing to fetch catalog`);
+      }
       const res = await page.request.get(`${BASE}/api/apps-catalog`);
-      const list = res.ok() ? await res.json().catch(() => ({})) : {};
+      if (!res.ok()) {
+        // Hard-fail: the apps dimension was requested but the catalog endpoint is
+        // unreachable. A silent skip here would let "0 apps captured" pass as done.
+        throw new Error(`GET /api/apps-catalog failed with HTTP ${res.status()} — cannot capture apps dimension`);
+      }
+      const list = await res.json().catch(() => ({}));
       const apps: Array<{ id: string; name?: string; title?: string }> = list.apps || [];
+      if (apps.length === 0) {
+        // Close the silent-zero hole: an empty catalog must FAIL the apps run, not
+        // pass as "captured". (Scope a run to other dimensions via
+        // LOOM_TUTORIAL_DIMENSIONS if apps are intentionally out of scope.)
+        throw new Error('apps-catalog returned 0 apps — nothing to capture for the apps dimension. ' +
+          'Verify /api/admin/bootstrap-catalogs seeded the curated apps, or drop "apps" from LOOM_TUTORIAL_DIMENSIONS.');
+      }
 
       for (const app of apps) {
         const slug = `app-${app.id}`;
@@ -158,13 +175,16 @@ if (DIMENSIONS.has('apps')) {
         try {
           const ws = await createWorkspace(page, `tut-${app.id}-${Date.now()}`);
           // Install the app (compound provisioner) into the demo workspace.
-          await page.request.post(`${BASE}/api/apps/${encodeURIComponent(app.id)}/install`, {
+          const inst = await page.request.post(`${BASE}/api/apps/${encodeURIComponent(app.id)}/install`, {
             data: { workspaceId: ws },
           }).catch(() => undefined);
+          const installNote = !inst
+            ? ' (install request failed to send)'
+            : inst.ok() ? '' : ` (install returned HTTP ${inst.status()})`;
           await page.goto(`${BASE}/apps/${encodeURIComponent(app.id)}`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
           await page.waitForTimeout(3000);
           await closeLearn(page);
-          await shot(1, `Open the ${app.name || app.title || app.id} app`);
+          await shot(1, `Open the ${app.name || app.title || app.id} app${installNote}`);
           await walkTabs(page, shot);
           stageTutorial(slug, `${app.name || app.title || app.id} — step by step`,
             `Visual walkthrough of installing and opening the ${app.name || app.id} app in CSA Loom.`, steps);
