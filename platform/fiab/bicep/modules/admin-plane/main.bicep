@@ -300,6 +300,9 @@ param loomMirrorSourceLinkedService string = ''
 @description('Opt-in ADF CDC mirroring — name of the pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (the Delta sink). Empty = mirrored databases use the built-in CSV snapshot engine.')
 param loomMirrorAdlsLinkedService string = ''
 
+@description('On-Premises/Self-hosted Data Gateway name used to reach private cross-cloud mirroring sources (Google BigQuery private projects, Oracle via OPDG). Empty = no gateway (only sources reachable directly are mirrorable). Azure requirement, not a Fabric one.')
+param loomMirrorGateway string = ''
+
 @description('Semantic-model tabular backend. Default "loom-native" reads model metadata from Cosmos + evaluates DAX over Synapse SQL — NO Power BI / Fabric. Set to "analysis-services" / "aas" (with loomAasServer) to opt into an Azure Analysis Services XMLA backend (Commercial / GCC only — AAS is not in Azure Government). "fabric" / "powerbi" remain opt-in alternatives that require a bound Power BI / Fabric workspace.')
 @allowed([
   'loom-native'
@@ -1519,6 +1522,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in CSV snapshot engine runs (still Azure-native, no Fabric).
             { name: 'LOOM_MIRROR_SOURCE_LINKED_SERVICE', value: loomMirrorSourceLinkedService }
             { name: 'LOOM_MIRROR_ADLS_LINKED_SERVICE', value: loomMirrorAdlsLinkedService }
+            // Data gateway (OPDG/SHIR) name for private cross-cloud mirror sources
+            // (Google BigQuery private projects, Oracle via OPDG). Empty = no gateway.
+            { name: 'LOOM_MIRROR_GATEWAY', value: loomMirrorGateway }
             // Semantic-model tabular backend (Semantic Link read — the tabular_*
             // Copilot tools). Default "loom-native" = Cosmos model metadata +
             // Synapse SQL DAX eval, NO Power BI / Fabric. "analysis-services"

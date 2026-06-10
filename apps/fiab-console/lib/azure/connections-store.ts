@@ -19,14 +19,18 @@ import type { SessionPayload } from '@/lib/auth/session';
 
 export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
-  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql';
+  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql'
+  // Cross-cloud mirroring sources (Azure-native default path; OPDG/SHIR-gated infra):
+  | 'bigquery'          // Google BigQuery (service-account-key auth + projectId)
+  | 'oracle';           // Oracle Database (basic auth username/password, TNS/connect-descriptor server)
 
 export type AuthMethod =
   | 'entra-mi'          // the Console managed identity (no secret)
-  | 'sql-password'      // SQL/PG username + password (password → KV)
+  | 'sql-password'      // SQL/PG/Oracle username + password (password → KV)
   | 'connection-string' // full connection string → KV
   | 'account-key'       // storage account key → KV
-  | 'service-principal';// Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'service-principal' // Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'service-account-key';// Google service-account JSON key file contents → KV (BigQuery)
 
 export interface LoomConnection {
   id: string;
@@ -40,7 +44,13 @@ export interface LoomConnection {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
-  /** KV secret name holding the password / connection string / key / SPN secret. */
+  /** Google Cloud project id (BigQuery sources). Non-secret. */
+  projectId?: string;
+  /** Google service-account email (BigQuery, service-account-key auth). Non-secret. */
+  serviceAccountEmail?: string;
+  /** On-Premises/Self-hosted Data Gateway name to route through (Oracle / BigQuery). Non-secret. */
+  gateway?: string;
+  /** KV secret name holding the password / connection string / key / SPN secret / SA JSON key. */
   secretRef?: string;
   description?: string;
   createdBy?: string;
@@ -65,14 +75,18 @@ export interface CreateConnectionInput {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
+  projectId?: string;
+  serviceAccountEmail?: string;
+  gateway?: string;
   description?: string;
-  /** The secret value (password / connection string / key / SPN secret) — written to KV, never stored. */
+  /** The secret value (password / connection string / key / SPN secret / SA JSON key) — written to KV, never stored. */
   secret?: string;
 }
 
 /** Does this auth method require a secret in Key Vault? */
 export function authNeedsSecret(m: AuthMethod): boolean {
-  return m === 'sql-password' || m === 'connection-string' || m === 'account-key' || m === 'service-principal';
+  return m === 'sql-password' || m === 'connection-string' || m === 'account-key'
+    || m === 'service-principal' || m === 'service-account-key';
 }
 
 export async function listConnections(session: SessionPayload): Promise<LoomConnectionView[]> {
@@ -110,6 +124,9 @@ export async function createConnection(session: SessionPayload, input: CreateCon
     username: input.username?.trim() || undefined,
     spnTenantId: input.spnTenantId?.trim() || undefined,
     spnClientId: input.spnClientId?.trim() || undefined,
+    projectId: input.projectId?.trim() || undefined,
+    serviceAccountEmail: input.serviceAccountEmail?.trim() || undefined,
+    gateway: input.gateway?.trim() || undefined,
     description: input.description?.trim() || undefined,
     secretRef,
     createdBy: session.claims.upn || session.claims.email || tenantId,

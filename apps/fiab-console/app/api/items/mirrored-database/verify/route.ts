@@ -50,7 +50,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Non-SQL sources authenticate with their own credential at mirror time.
+  // Cross-cloud sources authenticate with their own credential (+ a gateway) at
+  // mirror time — give precise, source-specific guidance instead of a generic note.
+  if (sourceType === 'GoogleBigQuery') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `BigQuery authenticates with a Google service-account JSON key — validated when the mirror first reads the project. Confirm the project id (${server}) and dataset (${database}) are correct, the service account has the BigQuery dataset/table + Storage permissions, and (for private projects) a data gateway is set via LOOM_MIRROR_GATEWAY.`,
+    });
+  }
+  if (sourceType === 'Oracle') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `Oracle authenticates with basic auth (username/password) through an On-Premises Data Gateway — validated when the mirror first connects. Confirm the server/connect-descriptor (${server}) and service (${database}), that the DB runs ARCHIVELOG + supplemental logging, and that LOOM_MIRROR_GATEWAY names the gateway reaching it.`,
+    });
+  }
   return NextResponse.json({
     ok: true, verified: false,
     detail: `${sourceType || 'This source'} authenticates with its own credential — the connection is validated when the mirror first syncs. Ensure the server/database are correct and the credential (or managed identity) is granted read access.`,

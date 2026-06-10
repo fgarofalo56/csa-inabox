@@ -33,23 +33,12 @@ import {
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
+import { MIRROR_SOURCES, CREDENTIALED_SOURCES, SOURCE_FIELD_HINTS } from './mirror-source-catalog';
 
 export interface MirrorTableSpec { schema: string; table: string }
 
-/**
- * Mirroring source types → display name, an accent color, and the Loom
- * Connection types that can back them. Each gets its own card in the wizard.
- */
-export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[] }[] = [
-  { id: 'AzureSqlDatabase', name: 'Azure SQL Database', accent: '#0078d4', connTypes: ['azure-sql', 'generic-sql'] },
-  { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
-  { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
-  { id: 'CosmosDb', name: 'Azure Cosmos DB', accent: '#3999c6', connTypes: ['cosmos'] },
-  { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['generic-sql', 'connection-string' as string] },
-  { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
-  { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
-  { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
-];
+// Re-exported for existing consumers (the catalog is the pure source of truth).
+export { MIRROR_SOURCES } from './mirror-source-catalog';
 
 const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
@@ -113,6 +102,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [createErr, setCreateErr] = useState<string | null>(null);
 
   const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || MIRROR_SOURCES[0], [createSrc]);
+  const fieldHints = SOURCE_FIELD_HINTS[createSrc];
+  const needsOwnCred = CREDENTIALED_SOURCES.has(createSrc);
 
   const loadConnections = useCallback(async () => {
     try {
@@ -147,7 +138,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
   useEffect(() => {
     if (pickedConn) {
+      // BigQuery connections carry the GCP project id (not a host); it maps to the
+      // wizard's "server" slot so Start has the project to mirror from.
       if (pickedConn.host) setCreateServer(pickedConn.host);
+      else if (pickedConn.projectId) setCreateServer(pickedConn.projectId);
       if (pickedConn.database) setCreateDb(pickedConn.database);
     }
   }, [pickedConn]);
@@ -274,15 +268,22 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 {pickedConn && (
                   <div className={s.connRow} style={{ marginTop: 6 }}>
                     {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
-                    <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
+                    <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}{pickedConn.gateway ? ` · gateway ${pickedConn.gateway}` : ''}</Caption1>
                   </div>
                 )}
+                {needsOwnCred && !pickedConn && (
+                  <MessageBar intent="info" style={{ marginTop: 8 }}>
+                    <MessageBarBody>
+                      {fieldHints?.note || `${srcDef.name} authenticates with its own credential — pick or create a "${srcDef.name}" connection above so the source accepts the login.`}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
-                  <Field label="Server / host" style={{ flex: 1 }}>
-                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
+                  <Field label={fieldHints?.serverLabel || 'Server / host'} style={{ flex: 1 }}>
+                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder={fieldHints?.serverPlaceholder || 'server.database.windows.net'} disabled={!!pickedConn?.host || (createSrc === 'GoogleBigQuery' && !!pickedConn?.projectId)} />
                   </Field>
-                  <Field label="Database" style={{ flex: 1 }}>
-                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
+                  <Field label={fieldHints?.dbLabel || 'Database'} style={{ flex: 1 }}>
+                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder={fieldHints?.dbPlaceholder || 'prod'} disabled={!!pickedConn?.database} />
                   </Field>
                 </div>
                 <div style={{ marginTop: 10 }}>

@@ -39,6 +39,14 @@ export async function POST(req: NextRequest) {
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+    } else if (sourceType === 'GoogleBigQuery' || sourceType === 'Oracle') {
+      return NextResponse.json(
+        {
+          ok: false, gate: true,
+          error: `${sourceType === 'GoogleBigQuery' ? 'BigQuery' : 'Oracle'} tables are enumerated through its data gateway at mirror time, not from the Console. Leave the table list empty to mirror every table the source exposes, or type the schema.table names you want on the mirror.`,
+        },
+        { status: 200 },
+      );
     } else {
       return NextResponse.json(
         { ok: false, gate: true, error: `${sourceType || 'This source'} can't be enumerated here — leave the table list empty to mirror everything the engine discovers.` },

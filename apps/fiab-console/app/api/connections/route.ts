@@ -18,8 +18,8 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql'];
-const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal'];
+const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql', 'bigquery', 'oracle'];
+const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal', 'service-account-key'];
 
 export async function GET() {
   const session = getSession();
@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
       name, type, authMethod,
       host: body?.host, database: body?.database, username: body?.username,
       spnTenantId: body?.spnTenantId, spnClientId: body?.spnClientId,
+      projectId: body?.projectId, serviceAccountEmail: body?.serviceAccountEmail, gateway: body?.gateway,
       description: body?.description, secret: body?.secret,
     });
     return NextResponse.json({ ok: true, connection: conn }, { status: 201 });

@@ -11,7 +11,7 @@
 import { useState, useCallback } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Input, Dropdown, Option, Button, Badge, MessageBar, MessageBarBody,
+  Field, Input, Textarea, Dropdown, Option, Button, Badge, MessageBar, MessageBarBody,
   Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -21,6 +21,7 @@ import {
 export interface ConnectionView {
   id: string; name: string; type: string; authMethod: string; hasSecret: boolean;
   host?: string; database?: string; username?: string;
+  projectId?: string; serviceAccountEmail?: string; gateway?: string;
 }
 
 const TYPES: { value: string; label: string }[] = [
@@ -32,15 +33,33 @@ const TYPES: { value: string; label: string }[] = [
   { value: 'storage-adls', label: 'ADLS Gen2 / Storage' },
   { value: 'cosmos', label: 'Azure Cosmos DB' },
   { value: 'generic-sql', label: 'Generic SQL Server' },
+  { value: 'bigquery', label: 'Google BigQuery' },
+  { value: 'oracle', label: 'Oracle Database' },
 ];
 
 const METHODS: { value: string; label: string; hint: string }[] = [
   { value: 'entra-mi', label: 'Entra (managed identity)', hint: 'The Console identity connects — no secret. The source must allow this Entra principal.' },
-  { value: 'sql-password', label: 'SQL username + password', hint: 'Password is stored in Key Vault.' },
+  { value: 'sql-password', label: 'Username + password', hint: 'Password is stored in Key Vault. Use for SQL / Oracle basic authentication.' },
   { value: 'connection-string', label: 'Connection string', hint: 'The full connection string is stored in Key Vault.' },
   { value: 'account-key', label: 'Account key', hint: 'Storage account key is stored in Key Vault.' },
   { value: 'service-principal', label: 'Service principal (Entra app)', hint: 'Client secret is stored in Key Vault.' },
+  { value: 'service-account-key', label: 'Service account key (JSON)', hint: 'Google service-account JSON key file contents — stored in Key Vault.' },
 ];
+
+/** The auth methods each source type can use (drives the Authentication dropdown). */
+const METHODS_FOR_TYPE: Record<string, string[]> = {
+  bigquery: ['service-account-key'],
+  oracle: ['sql-password'],
+};
+function methodsFor(type: string): typeof METHODS {
+  const allow = METHODS_FOR_TYPE[type];
+  return allow ? METHODS.filter((m) => allow.includes(m.value)) : METHODS;
+}
+/** Default auth method when a source type is chosen. */
+function defaultMethodFor(type: string): string {
+  const allow = METHODS_FOR_TYPE[type];
+  return allow ? allow[0] : 'entra-mi';
+}
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '460px' },
@@ -65,23 +84,36 @@ export function ConnectionBuilder({
   const [username, setUsername] = useState('');
   const [spnTenantId, setSpnTenantId] = useState('');
   const [spnClientId, setSpnClientId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [serviceAccountEmail, setServiceAccountEmail] = useState('');
+  const [gateway, setGateway] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const needsSecret = ['sql-password', 'connection-string', 'account-key', 'service-principal'].includes(authMethod);
+  const isBigQuery = type === 'bigquery';
+  const isOracle = type === 'oracle';
+  const needsSecret = ['sql-password', 'connection-string', 'account-key', 'service-principal', 'service-account-key'].includes(authMethod);
   const secretLabel = authMethod === 'connection-string' ? 'Connection string'
     : authMethod === 'account-key' ? 'Account key'
-    : authMethod === 'service-principal' ? 'Client secret' : 'Password';
+    : authMethod === 'service-principal' ? 'Client secret'
+    : authMethod === 'service-account-key' ? 'Service account JSON key' : 'Password';
 
-  const reset = () => { setName(''); setType(lockType || 'azure-sql'); setAuthMethod('entra-mi'); setHost(''); setDatabase(''); setUsername(''); setSpnTenantId(''); setSpnClientId(''); setSecret(''); setErr(null); };
+  // When the source type changes, snap the auth method to one valid for it.
+  const onTypeChange = (next: string) => {
+    setType(next);
+    const allowed = methodsFor(next).map((m) => m.value);
+    if (!allowed.includes(authMethod)) setAuthMethod(defaultMethodFor(next));
+  };
+
+  const reset = () => { setName(''); setType(lockType || 'azure-sql'); setAuthMethod(defaultMethodFor(lockType || 'azure-sql')); setHost(''); setDatabase(''); setUsername(''); setSpnTenantId(''); setSpnClientId(''); setProjectId(''); setServiceAccountEmail(''); setGateway(''); setSecret(''); setErr(null); };
 
   const submit = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
       const r = await fetch('/api/connections', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret: needsSecret ? secret : undefined }),
+        body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, projectId, serviceAccountEmail, gateway, secret: needsSecret ? secret : undefined }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
@@ -90,10 +122,11 @@ export function ConnectionBuilder({
       onClose();
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret, needsSecret, onCreated, onClose]);
+  }, [name, type, authMethod, host, database, username, spnTenantId, spnClientId, projectId, serviceAccountEmail, gateway, secret, needsSecret, onCreated, onClose]);
 
   const typeLabel = TYPES.find((t) => t.value === type)?.label || type;
-  const methodObj = METHODS.find((m) => m.value === authMethod);
+  const availMethods = methodsFor(type);
+  const methodObj = availMethods.find((m) => m.value === authMethod) || availMethods[0];
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -107,18 +140,54 @@ export function ConnectionBuilder({
               </Field>
               <Field label="Source type" required>
                 <Dropdown value={typeLabel} selectedOptions={[type]} disabled={!!lockType}
-                  onOptionSelect={(_, d) => setType(d.optionValue || 'azure-sql')}>
+                  onOptionSelect={(_, d) => onTypeChange(d.optionValue || 'azure-sql')}>
                   {TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
                 </Dropdown>
               </Field>
               <Field label="Authentication" required hint={methodObj?.hint}>
-                <Dropdown value={methodObj?.label || ''} selectedOptions={[authMethod]}
-                  onOptionSelect={(_, d) => setAuthMethod(d.optionValue || 'entra-mi')}>
-                  {METHODS.map((m) => <Option key={m.value} value={m.value}>{m.label}</Option>)}
+                <Dropdown value={methodObj?.label || ''} selectedOptions={[authMethod]} disabled={availMethods.length <= 1}
+                  onOptionSelect={(_, d) => setAuthMethod(d.optionValue || defaultMethodFor(type))}>
+                  {availMethods.map((m) => <Option key={m.value} value={m.value}>{m.label}</Option>)}
                 </Dropdown>
               </Field>
 
-              {authMethod !== 'connection-string' && (
+              {/* ── Google BigQuery — service-account-key auth (projectId + SA email + JSON key) ── */}
+              {isBigQuery && (
+                <>
+                  <Field label="Project id" required hint="The Google Cloud project that owns the dataset to mirror.">
+                    <Input value={projectId} placeholder="my-gcp-project" onChange={(_, d) => setProjectId(d.value)} />
+                  </Field>
+                  <Field label="Dataset" hint="Optional — the BigQuery dataset; leave blank to choose at mirror time.">
+                    <Input value={database} placeholder="analytics" onChange={(_, d) => setDatabase(d.value)} />
+                  </Field>
+                  <Field label="Service account email" required hint="From Service accounts in the Google Cloud console.">
+                    <Input value={serviceAccountEmail} placeholder="svc@my-gcp-project.iam.gserviceaccount.com" onChange={(_, d) => setServiceAccountEmail(d.value)} />
+                  </Field>
+                  <Field label="Data gateway" hint="Optional — On-Premises/VNet Data Gateway name (set LOOM_MIRROR_GATEWAY to route private BigQuery sources).">
+                    <Input value={gateway} placeholder="opdg-cluster (optional)" onChange={(_, d) => setGateway(d.value)} />
+                  </Field>
+                </>
+              )}
+
+              {/* ── Oracle — basic authentication (TNS/connect-descriptor server + user/password) ── */}
+              {isOracle && (
+                <>
+                  <Field label="Server (TNS alias / connect descriptor / Easy Connect)" required
+                    hint="e.g. salesserver1:1521/sales.example.com, a TNS alias, or a full (DESCRIPTION=…) connect descriptor.">
+                    <Input value={host} placeholder="dbhost:1521/ORCLPDB1" onChange={(_, d) => setHost(d.value)} />
+                  </Field>
+                  <Field label="Service / schema" hint="Optional — the Oracle service name or schema to mirror.">
+                    <Input value={database} placeholder="ORCLPDB1" onChange={(_, d) => setDatabase(d.value)} />
+                  </Field>
+                  <Field label="Username" required><Input value={username} onChange={(_, d) => setUsername(d.value)} placeholder="MIRROR_USER" /></Field>
+                  <Field label="Data gateway" hint="On-Premises Data Gateway name (Oracle mirroring routes through OPDG; set LOOM_MIRROR_GATEWAY).">
+                    <Input value={gateway} placeholder="opdg-cluster" onChange={(_, d) => setGateway(d.value)} />
+                  </Field>
+                </>
+              )}
+
+              {/* ── Azure / generic SQL family — server + database ── */}
+              {!isBigQuery && !isOracle && authMethod !== 'connection-string' && (
                 <>
                   <Field label={type === 'storage-adls' ? 'Account / host' : 'Server / host'}>
                     <Input value={host} placeholder={type === 'storage-adls' ? 'myaccount' : 'myserver.database.windows.net'} onChange={(_, d) => setHost(d.value)} />
@@ -131,7 +200,7 @@ export function ConnectionBuilder({
                 </>
               )}
 
-              {authMethod === 'sql-password' && (
+              {authMethod === 'sql-password' && !isOracle && (
                 <Field label="Username"><Input value={username} onChange={(_, d) => setUsername(d.value)} /></Field>
               )}
               {authMethod === 'service-principal' && (
@@ -143,8 +212,12 @@ export function ConnectionBuilder({
 
               {needsSecret && (
                 <Field label={`${secretLabel} (→ Key Vault)`} required
-                  hint="Stored in Key Vault — never saved in plaintext.">
-                  <Input type="password" contentBefore={<Key20Regular />} value={secret} onChange={(_, d) => setSecret(d.value)} />
+                  hint={authMethod === 'service-account-key'
+                    ? 'Paste the full JSON key file contents — stored in Key Vault, never in plaintext.'
+                    : 'Stored in Key Vault — never saved in plaintext.'}>
+                  {authMethod === 'service-account-key'
+                    ? <Textarea value={secret} onChange={(_, d) => setSecret(d.value)} resize="vertical" rows={4} placeholder='{ "type": "service_account", "project_id": "…", "private_key": "…" }' />
+                    : <Input type="password" contentBefore={<Key20Regular />} value={secret} onChange={(_, d) => setSecret(d.value)} />}
                 </Field>
               )}
               {authMethod === 'entra-mi' && (

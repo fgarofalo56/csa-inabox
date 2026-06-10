@@ -253,13 +253,19 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
   }
 }
 
-/** Map the bundle's source.kind to a Fabric SourceType (opt-in path only). */
+/** Map the bundle's source.kind (or the wizard's sourceType id) to a Fabric
+ *  SourceType (opt-in path only). BigQuery + Oracle land on GenericMirror — Fabric
+ *  exposes dedicated Mirrored BigQuery / Mirrored Oracle artifacts that the REST
+ *  create surface models as open/generic mirroring with a bound source connection;
+ *  the Azure-native default backend ignores this and uses the ADF/open-mirror path. */
 function fabricSourceType(kind: string | undefined): string {
   switch (kind) {
-    case 'azure-sql': return 'AzureSqlDatabase';
-    case 'snowflake': return 'Snowflake';
-    case 'cosmos': return 'CosmosDb';
-    case 'bigquery': return 'GenericMirror';
+    case 'azure-sql': case 'AzureSqlDatabase': return 'AzureSqlDatabase';
+    case 'AzureSqlMI': return 'AzureSqlMI';
+    case 'snowflake': case 'Snowflake': return 'Snowflake';
+    case 'cosmos': case 'CosmosDb': return 'CosmosDb';
+    case 'bigquery': case 'GoogleBigQuery': return 'GenericMirror';
+    case 'oracle': case 'Oracle': return 'GenericMirror';
     default: return 'AzureSqlDatabase';
   }
 }
