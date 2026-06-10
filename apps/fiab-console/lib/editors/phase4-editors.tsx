@@ -29,7 +29,7 @@ import {
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular } from '@fluentui/react-icons';
+import { Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular, Link20Regular, Flash20Regular, Dismiss16Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
@@ -178,6 +178,39 @@ const useStyles = makeStyles({
     padding: '8px', borderRadius: '4px', overflowX: 'auto',
     marginTop: '4px', whiteSpace: 'pre', color: tokens.colorNeutralForeground1,
   },
+
+  /* ---- Ontology data-bindings + Activator triggers (v3.28) ---- */
+  ontoBindGrid: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL,
+    marginTop: tokens.spacingVerticalS,
+    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
+  },
+  ontoSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  ontoSectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  ontoSectionIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  ontoSectionHint: { color: tokens.colorNeutralForeground3 },
+  ontoBindRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  ontoBindRowSpacer: { flex: 1 },
+  ontoEmpty: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3, textAlign: 'center',
+  },
+  ontoLoading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
+  ontoStartBtn: { alignSelf: 'flex-start' },
 });
 
 // ----- ML Model -----
@@ -1167,37 +1200,52 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         </div>
 
         {/* ── Data bindings + Activator triggers (deferred gate lifted v3.28) ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 8 }}>
-          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <Subtitle2>Data bindings</Subtitle2>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Map Lakehouse / Warehouse tables onto ontology entity types. Rows of the bound source become instances of the entity. Azure-native (no Fabric).
-            </Caption1>
-            <Button appearance="primary" icon={<Database20Regular />} onClick={openBindDlg} disabled={id === 'new' || classes.length === 0} style={{ alignSelf: 'flex-start' }}>
+        <div className={s.ontoBindGrid}>
+          <div className={s.ontoSection}>
+            <div className={s.ontoSectionHead}>
+              <span className={s.ontoSectionIcon}><Link20Regular /></span>
+              <div>
+                <Subtitle2>Data bindings</Subtitle2>
+                <Caption1 as="p" block className={s.ontoSectionHint}>
+                  Map Lakehouse / Warehouse tables onto ontology entity types. Rows of the bound source become instances of the entity. Azure-native (no Fabric).
+                </Caption1>
+              </div>
+            </div>
+            <Button appearance="primary" icon={<Database20Regular />} onClick={openBindDlg} disabled={id === 'new' || classes.length === 0} className={s.ontoStartBtn}>
               Bind to data source
             </Button>
-            {id === 'new' && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Save the ontology to enable binding.</Caption1>}
-            {bindingsLoaded && entityBindings.length === 0 && id !== 'new' && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No data sources bound yet.</Caption1>
+            {!bindingsLoaded && id !== 'new' ? (
+              <div className={s.ontoLoading}><Spinner size="tiny" /><Caption1>Loading data bindings…</Caption1></div>
+            ) : id === 'new' ? (
+              <div className={s.ontoEmpty}><Caption1>Save the ontology to enable binding.</Caption1></div>
+            ) : entityBindings.length === 0 ? (
+              <div className={s.ontoEmpty}><Caption1>No data sources bound yet. Use <strong>Bind to data source</strong> to connect a Lakehouse or Warehouse.</Caption1></div>
+            ) : (
+              entityBindings.map((b) => (
+                <div key={b.sourceItemId} className={s.ontoBindRow}>
+                  <Badge appearance="tint" color={b.sourceKind === 'lakehouse' ? 'brand' : 'success'}>{b.sourceKind}</Badge>
+                  <Body1><strong>{b.sourceDisplayName}</strong></Body1>
+                  <Caption1 className={s.ontoSectionHint}>→ {(b.entityTypes || []).join(', ')}</Caption1>
+                  <span className={s.ontoBindRowSpacer} />
+                  <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove binding ${b.sourceDisplayName}`} onClick={() => removeBinding(b)}>Remove</Button>
+                </div>
+              ))
             )}
-            {entityBindings.map((b) => (
-              <div key={b.sourceItemId} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Badge appearance="tint" color={b.sourceKind === 'lakehouse' ? 'brand' : 'success'}>{b.sourceKind}</Badge>
-                <Body1><strong>{b.sourceDisplayName}</strong></Body1>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>→ {(b.entityTypes || []).join(', ')}</Caption1>
-                <Button size="small" appearance="subtle" onClick={() => removeBinding(b)}>Remove</Button>
-              </div>
-            ))}
             {bindMsg && !bindDlgOpen && (
               <MessageBar intent={bindMsg.intent}><MessageBarBody>{bindMsg.text}</MessageBarBody></MessageBar>
             )}
           </div>
 
-          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <Subtitle2>Activator triggers</Subtitle2>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Fire a real Azure Monitor alert when a bound entity changes (INSERT / UPDATE / DELETE). The first trigger creates a backing Activator item.
-            </Caption1>
+          <div className={s.ontoSection}>
+            <div className={s.ontoSectionHead}>
+              <span className={s.ontoSectionIcon}><Flash20Regular /></span>
+              <div>
+                <Subtitle2>Activator triggers</Subtitle2>
+                <Caption1 as="p" block className={s.ontoSectionHint}>
+                  Fire a real Azure Monitor alert when a bound entity changes (INSERT / UPDATE / DELETE). The first trigger creates a backing Activator item.
+                </Caption1>
+              </div>
+            </div>
             {boundEntityTypes.length === 0 ? (
               <MessageBar intent="info"><MessageBarBody>Bind a data source first — triggers run on bound entity types.</MessageBarBody></MessageBar>
             ) : (
@@ -1213,7 +1261,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 <Field label="Notify email (optional)">
                   <Input value={actEmail} onChange={(_, d) => setActEmail(d.value)} placeholder="oncall@contoso.com" />
                 </Field>
-                <Button appearance="primary" icon={<Sparkle20Regular />} onClick={createTrigger} disabled={activatorBusy || !actEntityType} style={{ alignSelf: 'flex-start' }}>
+                <Button appearance="primary" icon={activatorBusy ? <Spinner size="tiny" /> : <Sparkle20Regular />} onClick={createTrigger} disabled={activatorBusy || !actEntityType} className={s.ontoStartBtn}>
                   {activatorBusy ? 'Creating…' : 'Create trigger'}
                 </Button>
               </>
@@ -1270,8 +1318,8 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 {bindMsg && bindDlgOpen && <MessageBar intent={bindMsg.intent}><MessageBarBody>{bindMsg.text}</MessageBarBody></MessageBar>}
               </DialogContent>
               <DialogActions>
-                <Button appearance="secondary" onClick={() => setBindDlgOpen(false)}>Cancel</Button>
-                <Button appearance="primary" onClick={submitBinding} disabled={bindBusy}>{bindBusy ? 'Binding…' : 'Bind'}</Button>
+                <Button appearance="secondary" onClick={() => setBindDlgOpen(false)} disabled={bindBusy}>Cancel</Button>
+                <Button appearance="primary" onClick={submitBinding} disabled={bindBusy} icon={bindBusy ? <Spinner size="tiny" /> : undefined}>{bindBusy ? 'Binding…' : 'Bind'}</Button>
               </DialogActions>
             </DialogBody>
           </DialogSurface>
