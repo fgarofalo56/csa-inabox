@@ -1683,6 +1683,9 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
                 <Input value={description} onChange={(_, d) => setDescription(d.value.slice(0, 1024))} />
               </Field>
               <Text weight="semibold">Stages (2–10, order is permanent)</Text>
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                Content is promoted from one stage to the next, so each stage needs its own workspace.
+              </Text>
               {workspaces && workspaces.length === 0 && (
                 <MessageBar intent="warning"><MessageBarBody>No Loom workspaces found — create a workspace first.</MessageBarBody></MessageBar>
               )}
