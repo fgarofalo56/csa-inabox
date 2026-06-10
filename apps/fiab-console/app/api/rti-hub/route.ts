@@ -41,6 +41,10 @@ import {
   EventHubsArmError,
   type RtiStreamResource,
 } from '@/lib/azure/eventhubs-client';
+import {
+  eventgridTopicsConfigGate,
+  listEventGridTopics,
+} from '@/lib/azure/eventgrid-topics-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -266,6 +270,35 @@ export async function GET() {
       },
     },
   ];
+
+  // Business-event custom topics (the /business-events publishing surface) are
+  // first-class discoverable sources in the Real-Time hub — each Event Grid
+  // custom topic an operator publishes governed business signals to becomes a
+  // subscribable Azure event source here. Real ARM enumeration; best-effort so
+  // an Event-Grid config gate never blocks the rest of the catalog.
+  try {
+    const egGate = eventgridTopicsConfigGate();
+    if (!egGate) {
+      const topics = await listEventGridTopics();
+      for (const t of topics) {
+        azureEvents.push({
+          id: `eventgrid-topic-${t.name}`,
+          name: t.name,
+          kind: 'azure-event',
+          source: 'Business events · Event Grid',
+          location: t.location,
+          description: `Governed business-event topic (${t.inputSchema || 'CloudEvents v1.0'}). Subscribe to react to published business signals.`,
+          subscribePreFill: {
+            sourceType: 'AzureEventGridCustomTopic',
+            sourceName: t.name,
+            properties: { topic: t.name, inputSchema: t.inputSchema || 'CloudEventSchemaV1_0' },
+          },
+        });
+      }
+    }
+  } catch (e: any) {
+    warnings.push({ source: 'eventgrid-business-topics', error: e?.message || String(e) });
+  }
 
   // ---- 4) Fabric events tab — opt-in only ----
   const fabricEnabled = FABRIC_OPT_IN && !SOVEREIGN;

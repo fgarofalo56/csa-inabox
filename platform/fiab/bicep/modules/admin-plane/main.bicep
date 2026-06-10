@@ -421,6 +421,21 @@ param loomEhSchemaGroup string = ''
 @description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
 param loomExtraSubscriptions string = ''
 
+@description('Business Events — Event Grid custom-topic resource group for the /business-events publishing surface. Empty defaults to LOOM_DLZ_RG.')
+param loomEventGridRg string = ''
+
+@description('Business Events — Event Grid custom-topic subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
+param loomEventGridSub string = ''
+
+@description('Business Events — default Event Grid custom-topic name governed events publish to. Created by modules/landing-zone/eventgrid-business.bicep. Live default: loom-business-events.')
+param loomEventGridBusinessTopic string = 'loom-business-events'
+
+@description('Business Events — default Event Hub entity the durable channel publishes governed events to (LOOM_EVENTHUB_BUSINESS_HUB). Empty uses loom-telemetry.')
+param loomEventHubBusinessHub string = 'loom-telemetry'
+
+@description('Business Events — Cosmos container holding the governed event-type registry (LOOM_BUSINESS_EVENTS_CONTAINER). Created on first write by business-events-store.ts. Live default: business-event-types.')
+param loomBusinessEventsContainer string = 'business-event-types'
+
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
 
@@ -1596,6 +1611,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // Business Events publishing surface (/business-events) — Event Grid
+            // custom-topic channel + durable Event Hub channel + governed
+            // event-type registry (Cosmos). The Event Grid sub/RG default to the
+            // deployment sub / DLZ RG when empty (eventgridTopicsConfigGate).
+            { name: 'LOOM_EVENTGRID_RG', value: loomEventGridRg }
+            { name: 'LOOM_EVENTGRID_SUB', value: loomEventGridSub }
+            { name: 'LOOM_EVENTGRID_BUSINESS_TOPIC', value: loomEventGridBusinessTopic }
+            { name: 'LOOM_EVENTHUB_BUSINESS_HUB', value: loomEventHubBusinessHub }
+            { name: 'LOOM_BUSINESS_EVENTS_CONTAINER', value: loomBusinessEventsContainer }
             // Capture form pre-fill (Event Hubs navigator "Configure capture"
             // panel). Optional — empty leaves the form blank. Capture is
             // configured per-hub at runtime; these only seed the destination.
