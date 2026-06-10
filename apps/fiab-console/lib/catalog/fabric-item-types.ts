@@ -86,17 +86,17 @@ export interface FabricItemType {
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Fabric Apps — Rayfin (Build 2026 preview)
   { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
-    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI.',
+    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI — author entities by hand or bind a semantic model to build a full web app.',
     learnContent: {
       "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace as a Rayfin item — data lands in OneLake (no ETL) and inherits your tenant's Entra identity, security, and governance. In Loom you author the backend spec here and Loom generates the SDK model + the exact CLI commands to deploy; the Rayfin CLI runs on your dev machine.",
       "steps": [
         {
-          "title": "Define entities + services",
-          "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
+          "title": "Choose a build mode",
+          "body": "General mode: add entities (text/boolean/date/number fields) by hand. Model-bound mode: bind a Loom-native semantic model and Loom derives the entire web app from its tables, columns, and relationships — no Fabric or Power BI workspace required."
         },
         {
-          "title": "Generate the model + commands",
-          "body": "Loom emits a model.ts using @microsoft/rayfin-core decorators (@entity/@text/@boolean/@date) and the exact CLI sequence — copy them into your project."
+          "title": "Generate the model + web app + commands",
+          "body": "Loom emits a model.ts (@microsoft/rayfin-core @entity/@text/@boolean/@date/@relation), a Data API Builder config exposing each table as REST + GraphQL read endpoints, a React data-grid page per table plus a measures dashboard, and the exact CLI sequence — copy them into your project."
         },
         {
           "title": "Scaffold + deploy",
