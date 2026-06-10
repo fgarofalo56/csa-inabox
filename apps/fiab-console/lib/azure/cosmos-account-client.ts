@@ -658,6 +658,153 @@ export async function listContainerScripts(db: string, container: string): Promi
 }
 
 // ---------------------------------------------------------------------------
+// Server-side scripts — create / read-body / delete (authoring)
+//
+// Authoring runs on the SAME ARM control plane as the read-only list above
+// (api-version 2024-11-15), grounded in Microsoft Learn:
+//   …/storedProcedures/{name}        PUT { properties:{ resource:{ id, body }, options:{} } }
+//   …/triggers/{name}               PUT { properties:{ resource:{ id, body,
+//                                          triggerType, triggerOperation }, options:{} } }
+//   …/userDefinedFunctions/{name}    PUT { properties:{ resource:{ id, body }, options:{} } }
+//   GET on each leaf returns { properties:{ resource:{ id, body, … } } }
+//   DELETE on each leaf removes it (same async 202 + waitForProvisioned path
+//   as containers).
+//
+// ARM RBAC: the "DocumentDB Account Contributor" role (5bd9cd88-…) the
+// navigator already requires covers `Microsoft.DocumentDB/databaseAccounts/*`,
+// which includes the storedProcedures / triggers / userDefinedFunctions
+// sub-resources — no extra role assignment is needed for authoring. (Executing
+// a stored procedure is a DATA-plane call handled by cosmos-data-client.ts and
+// needs the Cosmos data-plane RBAC role, same as the Items tab.)
+// ---------------------------------------------------------------------------
+
+export interface StoredProcedureDetail extends StoredProcedureSummary { body: string }
+export interface TriggerDetail extends TriggerSummary { body: string }
+export interface UdfDetail extends UdfSummary { body: string }
+
+export interface CreateStoredProcedureInput { id: string; body: string }
+export interface CreateTriggerInput {
+  id: string;
+  body: string;
+  triggerType: 'Pre' | 'Post';
+  triggerOperation: 'All' | 'Create' | 'Delete' | 'Replace' | 'Update';
+}
+export interface CreateUdfInput { id: string; body: string }
+
+function scriptLeafPath(db: string, container: string, leaf: string, name: string): string {
+  return (
+    `/sqlDatabases/${encodeURIComponent(db)}` +
+    `/containers/${encodeURIComponent(container)}` +
+    `/${leaf}/${encodeURIComponent(name)}`
+  );
+}
+
+// --- Stored procedures ---
+
+export async function getStoredProcedure(db: string, container: string, name: string): Promise<StoredProcedureDetail | null> {
+  const res = await armFetch(scriptLeafPath(db, container, 'storedProcedures', name));
+  const j = await readJson<any>(res);
+  if (!j) return null;
+  const r = j?.properties?.resource || {};
+  return { id: j?.id, name: j?.name ?? r.id, body: r.body ?? '' };
+}
+
+export async function upsertStoredProcedure(db: string, container: string, input: CreateStoredProcedureInput): Promise<StoredProcedureDetail> {
+  const path = scriptLeafPath(db, container, 'storedProcedures', input.id);
+  const res = await armFetch(path, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: { resource: { id: input.id, body: input.body }, options: {} } }),
+  });
+  if (!res.ok && res.status !== 202) await readJson<unknown>(res);
+  await waitForProvisioned(path);
+  const detail = await getStoredProcedure(db, container, input.id);
+  return detail ?? { id: input.id, name: input.id, body: input.body };
+}
+
+export async function deleteStoredProcedure(db: string, container: string, name: string): Promise<void> {
+  await deleteScriptLeaf(scriptLeafPath(db, container, 'storedProcedures', name));
+}
+
+// --- Triggers ---
+
+export async function getTrigger(db: string, container: string, name: string): Promise<TriggerDetail | null> {
+  const res = await armFetch(scriptLeafPath(db, container, 'triggers', name));
+  const j = await readJson<any>(res);
+  if (!j) return null;
+  const r = j?.properties?.resource || {};
+  return {
+    id: j?.id, name: j?.name ?? r.id, body: r.body ?? '',
+    triggerType: r.triggerType, triggerOperation: r.triggerOperation,
+  };
+}
+
+export async function upsertTrigger(db: string, container: string, input: CreateTriggerInput): Promise<TriggerDetail> {
+  const path = scriptLeafPath(db, container, 'triggers', input.id);
+  const res = await armFetch(path, {
+    method: 'PUT',
+    body: JSON.stringify({
+      properties: {
+        resource: {
+          id: input.id,
+          body: input.body,
+          triggerType: input.triggerType,
+          triggerOperation: input.triggerOperation,
+        },
+        options: {},
+      },
+    }),
+  });
+  if (!res.ok && res.status !== 202) await readJson<unknown>(res);
+  await waitForProvisioned(path);
+  const detail = await getTrigger(db, container, input.id);
+  return detail ?? {
+    id: input.id, name: input.id, body: input.body,
+    triggerType: input.triggerType, triggerOperation: input.triggerOperation,
+  };
+}
+
+export async function deleteTrigger(db: string, container: string, name: string): Promise<void> {
+  await deleteScriptLeaf(scriptLeafPath(db, container, 'triggers', name));
+}
+
+// --- User-defined functions ---
+
+export async function getUdf(db: string, container: string, name: string): Promise<UdfDetail | null> {
+  const res = await armFetch(scriptLeafPath(db, container, 'userDefinedFunctions', name));
+  const j = await readJson<any>(res);
+  if (!j) return null;
+  const r = j?.properties?.resource || {};
+  return { id: j?.id, name: j?.name ?? r.id, body: r.body ?? '' };
+}
+
+export async function upsertUdf(db: string, container: string, input: CreateUdfInput): Promise<UdfDetail> {
+  const path = scriptLeafPath(db, container, 'userDefinedFunctions', input.id);
+  const res = await armFetch(path, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: { resource: { id: input.id, body: input.body }, options: {} } }),
+  });
+  if (!res.ok && res.status !== 202) await readJson<unknown>(res);
+  await waitForProvisioned(path);
+  const detail = await getUdf(db, container, input.id);
+  return detail ?? { id: input.id, name: input.id, body: input.body };
+}
+
+export async function deleteUdf(db: string, container: string, name: string): Promise<void> {
+  await deleteScriptLeaf(scriptLeafPath(db, container, 'userDefinedFunctions', name));
+}
+
+/** Shared DELETE + async-poll for any script leaf (same shape as deleteContainer). */
+async function deleteScriptLeaf(path: string): Promise<void> {
+  const res = await armFetch(path, { method: 'DELETE' });
+  if (res.status === 404 || res.ok || res.status === 204) {
+    if (res.status === 202) await waitForProvisioned(path);
+    return;
+  }
+  if (res.status === 202) { await waitForProvisioned(path); return; }
+  await readJson<unknown>(res);
+}
+
+// ---------------------------------------------------------------------------
 // Account info (header chip + sanity probe)
 // ---------------------------------------------------------------------------
 

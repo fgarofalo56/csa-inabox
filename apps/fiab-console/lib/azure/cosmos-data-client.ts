@@ -393,3 +393,57 @@ export async function deleteItem(
     throw e;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Stored-procedure execute (data plane)
+//
+// POST {endpoint}/dbs/{db}/colls/{coll}/sprocs/{name}
+//   Content-Type: application/json
+//   x-ms-documentdb-partitionkey: ["<pk value>"]   (REQUIRED for partitioned
+//                                                    containers — the execution
+//                                                    is scoped to one partition)
+//   body: [<param1>, <param2>, …]                   (JSON array of positional
+//                                                    params passed to the sproc)
+// Grounded in:
+//   https://learn.microsoft.com/rest/api/cosmos-db/execute-a-stored-procedure
+//
+// The response is whatever the sproc set via response.setBody(...); the RU
+// charge comes back in x-ms-request-charge like every other data-plane call.
+// (Triggers fire implicitly on item write ops via the pre/post-trigger include
+// headers; UDFs are invoked inline in SQL — neither has a standalone execute
+// REST call, so only stored procedures expose an Execute action.)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteStoredProcedureOptions {
+  /** JSON array of positional parameters passed to the sproc body. */
+  params?: unknown[];
+  /** Partition key value — REQUIRED for partitioned containers. */
+  partitionKey: unknown;
+}
+
+export interface ExecuteStoredProcedureResult {
+  /** The parsed response body returned by the sproc (any JSON value). */
+  result: unknown;
+  /** RU charge for the execution (x-ms-request-charge). */
+  requestCharge: number;
+}
+
+export async function executeStoredProcedure(
+  db: string,
+  coll: string,
+  sprocName: string,
+  opts: ExecuteStoredProcedureOptions,
+): Promise<ExecuteStoredProcedureResult> {
+  const { json, requestCharge } = await dataFetch(
+    `/dbs/${seg(db)}/colls/${seg(coll)}/sprocs/${seg(sprocName)}`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-ms-documentdb-partitionkey': partitionKeyHeader(opts.partitionKey),
+      },
+      body: JSON.stringify(opts.params ?? []),
+    },
+  );
+  return { result: json ?? null, requestCharge };
+}
