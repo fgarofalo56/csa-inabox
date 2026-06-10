@@ -30,7 +30,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
-  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled, PlugConnectedCheckmark20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 
@@ -68,6 +68,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
     ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px', boxShadow: tokens.shadow8 },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
   cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: '#fff' },
@@ -248,15 +249,20 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
-                <div className={s.grid} style={{ marginTop: 8 }}>
-                  {MIRROR_SOURCES.map((src) => (
-                    <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
-                      style={{ borderLeftColor: src.accent }}
-                      onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); }} role="button" tabIndex={0}>
-                      <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
-                      <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
-                    </div>
-                  ))}
+                <div className={s.grid} style={{ marginTop: 8 }} role="radiogroup" aria-label="Mirroring source type">
+                  {MIRROR_SOURCES.map((src) => {
+                    const pick = () => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); };
+                    return (
+                      <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
+                        style={{ borderLeftColor: src.accent }}
+                        onClick={pick}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}
+                        role="radio" aria-checked={createSrc === src.id} tabIndex={0}>
+                        <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
+                        <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -308,8 +314,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   </Caption1>
                 )}
                 <div style={{ marginTop: 10 }}>
-                  <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
-                    {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
+                  <Button size="small" appearance="outline"
+                    icon={verify.status === 'busy' ? <ArrowSync20Regular /> : <PlugConnectedCheckmark20Regular />}
+                    disabled={verify.status === 'busy'} onClick={runVerify}>
+                    {verify.status === 'busy' ? 'Verifying…' : verify.status === 'ok' ? 'Re-verify connection' : 'Verify connection'}
                   </Button>
                 </div>
                 {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
