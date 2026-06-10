@@ -181,8 +181,40 @@ output consolePurviewRoleGrant string = purviewEnabled && !empty(consolePrincipa
   ? 'Post-deploy: ROLE=data-reader CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
   : ''
 
+// F19 Audit logs: the Purview Data Map /datamap/api/audit/query endpoint
+// (api-version 2023-10-01-preview) is on the same data-plane scope as the F5
+// MIP-label lookup above. The Console UAMI needs at minimum "Data Reader" on the
+// root collection to read audit history; "Data Curator" / "Data Source
+// Administrator" (granted by the same script) are supersets and also sufficient.
+// No additional ARM role assignment is needed — classic Data Map roles are
+// collection metadata-policy and the bootstrap workflow performs the grant.
+output consolePurviewAuditNote string = purviewEnabled && !empty(consolePrincipalId)
+  ? 'F19 audit read: Loom UAMI needs "Data Reader" (minimum) on the root collection for /datamap/api/audit/query. Granted by grant-purview-datamap-role.sh (ROLE=data-reader). When LOOM_PURVIEW_ACCOUNT is unset the audit grid falls back to Cosmos + Log Analytics sources and renders an honest gate.'
+  : ''
+
 // F4 domain-image gallery storage — consumed by main.bicep → LOOM_DOMAIN_IMAGES_URL.
 output domainImagesStorageId string = purviewEnabled ? domainImagesStorage.id : ''
 output domainImagesEndpoint string = purviewEnabled
   ? 'https://${domainImagesStorage.name}.blob.core.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
+  : ''
+
+// ADLS Gen2 (DFS) endpoint for the domain-images container — consumed by
+// main.bicep → LOOM_DOMAIN_IMAGE_STORAGE. The images BFF route lists gallery
+// blobs via the DataLakeServiceClient, which targets the `.dfs.` host and the
+// container path (the `.blob.` endpoint above is kept for callers that want the
+// plain blob host). DFS listing works on a flat StorageV2 account — Hierarchical
+// Namespace is NOT required. '' when Purview/catalog storage is not deployed, so
+// the editor falls back to preset swatches/icons and shows the honest gate.
+output domainImagesDfsContainerUrl string = purviewEnabled
+  ? 'https://${domainImagesStorage.name}.dfs.core.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}/domain-images'
+  : ''
+
+// Post-deploy reminder: mirroring a Loom domain to a Purview classic COLLECTION
+// (create/update/delete via PUT/DELETE /collections) requires the Console UAMI
+// to hold the "Collection Admin" Data Map role on the root collection. Like the
+// data-reader grant above this is a data-plane metadata-policy role (NOT ARM
+// RBAC), so it is applied post-deploy by csa-loom-post-deploy-bootstrap.yml via
+// scripts/csa-loom/grant-purview-datamap-role.sh (ROLE=collection-administrator).
+output consolePurviewCollectionAdminGrant string = purviewEnabled && !empty(consolePrincipalId)
+  ? 'Post-deploy: ROLE=collection-administrator CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
   : ''

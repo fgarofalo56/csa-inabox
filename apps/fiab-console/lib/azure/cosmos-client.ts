@@ -19,6 +19,11 @@ let _db: Database | null = null;
 let _workspaces: Container | null = null;
 let _items: Container | null = null;
 let _copilotSessions: Container | null = null;
+// Per-message Copilot feedback (thumbs up/down) — append-only audit log, one
+// row per rating, partitioned by /sessionId so every per-session feedback read
+// hits a single physical partition. NO defaultTtl: feedback is a permanent
+// audit record (unlike copilot-sessions, which auto-expire after 28 days).
+let _copilotFeedback: Container | null = null;
 let _appsCatalog: Container | null = null;
 let _workloadsCatalog: Container | null = null;
 let _userPrefs: Container | null = null;
@@ -38,6 +43,7 @@ let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
+let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
@@ -59,6 +65,8 @@ let _dataProductJobs: Container | null = null;
 let _accessRequests: Container | null = null;
 let _attributeGroups: Container | null = null;
 let _okrs: Container | null = null;
+let _scorecardGoals: Container | null = null;
+let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _wsRoles: Container | null = null;
@@ -97,6 +105,36 @@ let _taskFlows: Container | null = null;
 let _embedCodes: Container | null = null;
 let _orgVisuals: Container | null = null;
 let _azureConnections: Container | null = null;
+let _pbiDashboardOverlays: Container | null = null;
+// Paginated-report (RDL) definitions — the Loom-native authoring document for
+// the paginated-report editor (data sources, datasets, tablixes, parameters).
+// One row per report (id = reportId, PK /workspaceId) so every per-report load
+// hits a single physical partition. Azure-native parity with a Power BI
+// Paginated Report .rdl — NO Fabric/Power BI workspace required to author or
+// export (export delegates to the paginated-report-renderer Azure Function).
+// Created lazily so a fresh environment needs no extra ARM/Bicep step beyond
+// the account+database.
+let _paginatedReportDefinitions: Container | null = null;
+// Loom-native deployment pipelines — Azure-native parity for Fabric Deployment
+// pipelines (no-fabric-dependency.md). `loom-pipelines` holds one doc per
+// pipeline (PK /tenantId so the per-tenant list hits a single physical
+// partition); `pipeline-stage-rules` holds per-stage parameter/data-source
+// override rules (PK /pipelineId); `pipeline-history` holds one receipt per
+// deploy run (PK /pipelineId). Created lazily so a fresh environment needs no
+// extra ARM/Bicep step beyond the account+database.
+let _loomPipelines: Container | null = null;
+let _pipelineStageRules: Container | null = null;
+let _pipelineHistory: Container | null = null;
+// Scorecard rollup + status-rule config — one row per scorecard (id =
+// scorecardId), PK /scorecardId so every per-scorecard read is a single-
+// partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
+// overlay applied to live Fabric goals (loom: items carry their config inline
+// in state.content). Created lazily so a fresh environment needs no extra
+// ARM/Bicep step beyond the account+database (the Console UAMI already holds
+// Cosmos DB Built-in Data Contributor at account scope).
+let _scorecardConfig: Container | null = null;
+let _reportSubscriptions: Container | null = null;
+let _reportDeliveryLog: Container | null = null;
 let _ensured = false;
 
 /**
@@ -121,6 +159,56 @@ export interface DataProductImportJob {
   /** True when the raw CSV was staged to ADLS; false when the storage gate fired (inline-only). */
   staged: boolean;
   createdBy?: string;
+}
+
+/**
+ * Report subscription — a scheduled, recurring export+email delivery of a
+ * Power BI report (Azure-native parity with Fabric/Power BI "Subscribe to
+ * report" + "Subscriptions"). One row per subscription, partitioned by the
+ * reportId so the editor's per-report subscription list hits a single physical
+ * partition. The fiab-report-subscriptions timer Function reads `enabled=true`
+ * rows, renders the report via the real Power BI ExportTo REST job, and emails
+ * the file via the report-subscription Logic App. No Microsoft Fabric
+ * dependency — Power BI REST is the Azure-native rendering backend.
+ */
+export interface ReportSubscription {
+  id: string;                       // 'sub:<uuid>' — partition companion
+  reportId: string;                 // PK — the Power BI report id (groupId-scoped)
+  workspaceId: string;              // the Power BI workspace (groupId) the report lives in
+  itemId?: string;                  // owning Loom item id (when launched from an item editor)
+  format: 'PDF' | 'PPTX' | 'PNG';   // export format
+  cron: string;                     // NCRONTAB (6-field: sec min hour day month day-of-week)
+  recipients: string[];             // email addresses the export is delivered to
+  subject?: string;                 // email subject override (defaults to the report name)
+  enabled: boolean;                 // false pauses delivery without deleting the row
+  createdBy: string;                // creator oid — scopes ownership
+  createdByName?: string;           // creator display name/upn for the audit trail
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;               // last delivery attempt (set by the timer Function)
+  lastStatus?: 'succeeded' | 'failed';
+  lastError?: string;               // last failure message (cleared on success)
+}
+
+/**
+ * Report delivery log — one append-only row per delivery attempt for a
+ * subscription, partitioned by subscriptionId so the editor's per-subscription
+ * "Delivery history" view hits a single physical partition. Written by the
+ * timer Function after each export+email. This is the "delivery log" half of
+ * the acceptance receipt.
+ */
+export interface ReportDeliveryLog {
+  id: string;                       // 'del:<uuid>'
+  subscriptionId: string;           // PK — the parent subscription id
+  reportId: string;
+  workspaceId: string;
+  format: 'PDF' | 'PPTX' | 'PNG';
+  recipients: string[];
+  deliveredAt: string;
+  status: 'succeeded' | 'failed';
+  fileSizeBytes?: number;           // size of the exported file (succeeded only)
+  blobPath?: string;                // ADLS path the export was archived to (succeeded only)
+  error?: string;                   // failure detail (failed only)
 }
 
 function endpoint(): string {
@@ -165,8 +253,29 @@ async function ensure() {
   const { container: cs } = await database.containers.createIfNotExists({
     id: 'copilot-sessions',
     partitionKey: { paths: ['/sessionId'] },
+    defaultTtl: 2419200, // 28 days = 28 * 24 * 3600 — chat sessions auto-expire
   });
   _copilotSessions = cs;
+  // Idempotent TTL upgrade. createIfNotExists ignores `defaultTtl` for a
+  // PRE-EXISTING container, so environments whose copilot-sessions container
+  // was created before TTL was added would never expire. Read the current
+  // container def and, if TTL isn't 28 days, replace() it once. Best-effort:
+  // a failure here (e.g. transient throttle) never blocks the BFF.
+  try {
+    const csDef = await cs.read();
+    if (csDef.resource && (csDef.resource as any).defaultTtl !== 2419200) {
+      await cs.replace({ ...(csDef.resource as any), defaultTtl: 2419200 });
+    }
+  } catch {
+    /* TTL upgrade is best-effort */
+  }
+  // Per-message Copilot feedback (thumbs up/down). PK /sessionId. NO defaultTtl
+  // — feedback is a permanent audit record, unlike the sessions above.
+  const { container: cf } = await database.containers.createIfNotExists({
+    id: 'copilot-feedback',
+    partitionKey: { paths: ['/sessionId'] },
+  });
+  _copilotFeedback = cf;
 
   // Chunk 0 — UI foundation containers
   const mk = async (id: string, pk: string) =>
@@ -200,6 +309,13 @@ async function ensure() {
   // the lakehouse id so every Tables-tree lookup hits a single physical
   // partition. 'dbo' is synthetic (never stored) and always present.
   _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
+  // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
+  // outbound private-endpoint rule registry. One doc per workspace
+  // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
+  // single physical partition. The NSG rules + private endpoints themselves
+  // live in Azure (ARM); this container only records the Loom-side metadata so
+  // the pane can list/remove them. Created lazily — no extra ARM/Bicep step.
+  _networkingConfig = await mk('networking-config', '/workspaceId');
   // Copilot & Agents config — tenant-wide default Foundry account + model
   // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
   // and per-workspace data-agent config (PK /workspaceId) set by workspace
@@ -261,6 +377,20 @@ async function ensure() {
   // item id so the editor's OKR list hits a single physical partition. The F10
   // linked-resources route is the live consumer (PK /dataProductId).
   _okrs              = await mk('okrs',                '/dataProductId');
+  // Scorecard extended goal metadata (F — Scorecard goals + connected metrics)
+  // — status / owner / dueDate / connected-DAX-metric binding / sub-goals that
+  // the Fabric Scorecards REST surface doesn't expose as first-class fields.
+  // One row per (scorecard, goal), PK /scorecardId so the editor's per-scorecard
+  // goal-merge load hits a single physical partition. Azure-native: the goal's
+  // live value is pulled from a Power BI / AAS semantic model via executeQueries
+  // (see aas-client.ts) — no real Fabric scorecard required. Created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  _scorecardGoals    = await mk('scorecard-goals',     '/scorecardId');
+  // Scorecard check-in history — one append-only row per manual/automated
+  // check-in (value + status + note + date). PK /goalId so every per-goal
+  // history query is a single-partition read. Records check-ins even for
+  // bundle-template scorecards that aren't yet live in Fabric.
+  _scorecardCheckins = await mk('scorecard-checkins',  '/goalId');
   // Item-level permissions & sharing (F6) — one row per (item, principal),
   // partitioned by the item id so every per-item permission lookup hits a
   // single physical partition. The Azure-native default mirrors each grant to
@@ -322,6 +452,40 @@ async function ensure() {
   _embedCodes        = await mk('embed-codes',         '/tenantId');
   _orgVisuals        = await mk('org-visuals',         '/tenantId');
   _azureConnections  = await mk('azure-connections',   '/tenantId');
+  // Loom-native overlay for Power BI / AAS dashboards: pinned-DAX tiles, Q&A
+  // (Copilot→DAX) tiles, streaming (ADX/KQL) tiles, and the grid layout. Stored
+  // separately from the Power BI REST tile list so the PBI ACL never gates the
+  // Loom layout, and so the Azure-native streaming tiles persist with NO Power
+  // BI / Fabric workspace bound. Partitioned by /itemId → one physical
+  // partition per dashboard. Created lazily; no extra ARM/Bicep step.
+  _pbiDashboardOverlays = await mk('pbi-dashboard-overlays', '/itemId');
+  // Paginated-report (RDL) definitions — Loom-native authoring doc per report.
+  // PK /workspaceId so the editor's per-report GET/PUT and the renderer's read
+  // hit a single physical partition. Azure-native; no Fabric/Power BI needed.
+  _paginatedReportDefinitions = await mk('paginated-report-definitions', '/workspaceId');
+  // Loom-native deployment pipelines (Azure-native parity for Fabric Deployment
+  // pipelines). Three containers: the pipeline catalog (PK /tenantId), the
+  // per-stage deployment rules (PK /pipelineId), and the deploy-receipt history
+  // (PK /pipelineId). Created lazily so a fresh environment needs no extra
+  // ARM/Bicep step beyond the account+database.
+  _loomPipelines = await mk('loom-pipelines', '/tenantId');
+  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
+  _pipelineHistory = await mk('pipeline-history', '/pipelineId');
+  // Scorecard rollup + status-rule config — one row per scorecard (PK
+  // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
+  // live Fabric goals; loom: bundle scorecards carry config inline in
+  // state.content. Single-partition point-read per scorecard.
+  _scorecardConfig = await mk('scorecard-config', '/scorecardId');
+  // Report subscriptions (scheduled export + email delivery) — one row per
+  // subscription, PK /reportId so the editor's per-report subscription list and
+  // the timer Function's per-report reads hit a single physical partition. The
+  // delivery log is append-only, PK /subscriptionId. Both created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  // Azure-native parity with Fabric/Power BI report subscriptions — rendering is
+  // the real Power BI ExportTo REST job; delivery is the report-subscription
+  // Logic App. No Microsoft Fabric dependency.
+  _reportSubscriptions = await mk('report-subscriptions', '/reportId');
+  _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
   _ensured = true;
 }
 
@@ -347,6 +511,21 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
+export async function pbiDashboardOverlaysContainer(): Promise<Container> { await ensure(); return _pbiDashboardOverlays!; }
+/** Paginated-report (RDL) authoring definitions — PK /workspaceId. */
+export async function paginatedReportDefinitionsContainer(): Promise<Container> { await ensure(); return _paginatedReportDefinitions!; }
+/** Loom-native deployment-pipeline catalog — PK /tenantId. */
+export async function loomPipelinesContainer(): Promise<Container> { await ensure(); return _loomPipelines!; }
+/** Per-stage deployment rules (parameter / data-source overrides) — PK /pipelineId. */
+export async function pipelineStageRulesContainer(): Promise<Container> { await ensure(); return _pipelineStageRules!; }
+/** Deploy-receipt history (diff + deployed item ids per run) — PK /pipelineId. */
+export async function pipelineHistoryContainer(): Promise<Container> { await ensure(); return _pipelineHistory!; }
+/** Scorecard rollup + status-rule config — PK /scorecardId. */
+export async function scorecardConfigContainer(): Promise<Container> { await ensure(); return _scorecardConfig!; }
+/** Report subscriptions (scheduled export + email delivery) — PK /reportId. */
+export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
+/** Report delivery log (append-only delivery history) — PK /subscriptionId. */
+export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -368,11 +547,57 @@ export async function dataProductJobsContainer(): Promise<Container> { await ens
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
 export async function okrsContainer(): Promise<Container> { await ensure(); return _okrs!; }
+/** Status of a scorecard goal — mirrors Fabric/Power BI scorecard status bands. */
+export type ScorecardGoalStatus =
+  | 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
+
+/** Binding from a scorecard goal to a live DAX measure in a PBI/AAS model. */
+export interface ScorecardConnectedMetric {
+  workspaceId: string;
+  datasetId: string;
+  daxExpression: string;
+  /** ISO timestamp of the last successful live pull. */
+  lastRefreshed?: string;
+  /** Last value pulled from the model. */
+  lastValue?: number;
+}
+
+/** Extended per-goal metadata that the Fabric Scorecards REST surface lacks. */
+export interface ScorecardGoalRecord {
+  id: string;            // `${scorecardId}:${goalId}`
+  scorecardId: string;   // partition key
+  goalId: string;        // Fabric goal GUID or bundle OKR id
+  status?: ScorecardGoalStatus;
+  owner?: string;        // display name or email
+  dueDate?: string;      // ISO date
+  connectedMetric?: ScorecardConnectedMetric;
+  subGoalIds?: string[];
+  updatedAt: string;
+  updatedBy: string;     // session OID
+}
+
+/** A single scorecard goal check-in (manual or metric-driven). */
+export interface ScorecardCheckIn {
+  id: string;            // UUID
+  goalId: string;        // partition key
+  scorecardId: string;
+  value: number;
+  status?: ScorecardGoalStatus;
+  note?: string;
+  checkInDate?: string;  // ISO date the value is for (defaults to today)
+  source?: 'manual' | 'metric';
+  recordedAt: string;    // ISO timestamp, server-side
+  recordedBy: string;    // session OID
+}
+
+export async function scorecardGoalsContainer(): Promise<Container> { await ensure(); return _scorecardGoals!; }
+export async function scorecardCheckinsContainer(): Promise<Container> { await ensure(); return _scorecardCheckins!; }
 
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
+export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
@@ -392,6 +617,12 @@ export async function itemsContainer(): Promise<Container> {
 export async function copilotSessionsContainer(): Promise<Container> {
   await ensure();
   return _copilotSessions!;
+}
+
+/** Per-message Copilot feedback (thumbs up/down) — PK /sessionId, no TTL. */
+export async function copilotFeedbackContainer(): Promise<Container> {
+  await ensure();
+  return _copilotFeedback!;
 }
 
 export async function appsCatalogContainer(): Promise<Container> { await ensure(); return _appsCatalog!; }
@@ -424,7 +655,7 @@ export interface ContainerThroughputInfo {
 }
 
 const KNOWN_CONTAINER_IDS = [
-  'workspaces', 'items', 'copilot-sessions',
+  'workspaces', 'items', 'copilot-sessions', 'copilot-feedback',
   'apps-catalog', 'workloads-catalog', 'user-prefs',
   'tabs-state', 'notifications', 'audit-log', 'comments',
   'shares', 'folders', 'downloads', 'search-history',
@@ -439,11 +670,15 @@ const KNOWN_CONTAINER_IDS = [
   'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
+  'scorecard-goals', 'scorecard-checkins',
   'access-request-workflow',
   'saved-queries',
   // Foundation admin containers (shared cloud-endpoints resolver task).
   'loom-workspaces', 'workspace-folders', 'task-flows',
   'embed-codes', 'org-visuals', 'azure-connections',
+  'pbi-dashboard-overlays',
+  'loom-pipelines', 'pipeline-stage-rules', 'pipeline-history',
+  'scorecard-config',
 ];
 
 /** List all Loom containers with their current throughput shape. */

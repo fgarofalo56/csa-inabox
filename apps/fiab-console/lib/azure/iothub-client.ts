@@ -30,20 +30,12 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+// ARM endpoint is sovereign-cloud aware — canonical resolver, not a local copy
+// (keeps the management host literal solely in cloud-endpoints.ts).
+import { armBase } from './cloud-endpoints';
 
 // Stable GA api-version for Microsoft.Devices/IotHubs.
 const IOTHUB_API = '2023-06-30';
-
-// ARM endpoint is sovereign-cloud aware (mirrors adf-client.ts armBase()).
-function armBase(): string {
-  const explicit = process.env.LOOM_ARM_ENDPOINT;
-  if (explicit) return explicit.replace(/\/+$/, '');
-  switch ((process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase()) {
-    case 'azureusgovernment': return 'https://management.usgovcloudapi.net';
-    case 'azuredod':          return 'https://management.azure.microsoft.scloud';
-    default:                  return 'https://management.azure.com';
-  }
-}
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId

@@ -22,6 +22,8 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { CopilotResult } from '@/lib/components/copilot-result';
+import { tagResult } from '@/lib/components/copilot-result-tagger';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -180,10 +182,24 @@ function StepCard({ step }: { step: Step }) {
       </div>
     );
   }
+  // tool_result success → typed renderer (DataGrid / chart / Monaco / markdown /
+  // change-set) instead of the old raw JSON.stringify dump. The error path keeps
+  // its readable text below.
+  if (step.kind === 'tool_result' && !step.error && step.result != null) {
+    return (
+      <div className={s.step}>
+        <div className={s.stepHeader}>
+          <Badge appearance="filled" color="success">tool_result</Badge>
+          <Caption1><strong>{step.name}</strong> · {step.durationMs}ms</Caption1>
+        </div>
+        <CopilotResult result={tagResult(step.result, step.name)} toolName={step.name} />
+      </div>
+    );
+  }
   let body = '';
   if (step.kind === 'thought') body = step.content;
   else if (step.kind === 'tool_call') body = JSON.stringify(step.args, null, 2);
-  else if (step.kind === 'tool_result') body = step.error ? `ERROR: ${step.error}` : JSON.stringify(step.result, null, 2);
+  else if (step.kind === 'tool_result') body = step.error ? `ERROR: ${step.error}` : '';
 
   return (
     <div className={s.step}>
@@ -375,7 +391,21 @@ function ToolRow({ tool }: { tool: Tool }) {
 interface OrchestratorStatus {
   ok: boolean;
   ready?: boolean;
-  aoai?: { ok: boolean; endpoint?: string; deployment?: string; error?: string; remediation?: string };
+  /** Top-level config flags (task contract): is AOAI wired + active sovereign cloud. */
+  configured?: boolean;
+  cloud?: string;
+  endpoint?: string;
+  model?: string;
+  aoai?: {
+    ok: boolean;
+    endpoint?: string;
+    deployment?: string;
+    model?: string;
+    error?: string;
+    remediation?: string;
+    /** Cloud-correct AI Foundry portal (ai.azure.com vs ai.azure.us) for the honest gate. */
+    portalDeepLink?: string;
+  };
   tools?: { count: number; byService: Record<string, number> };
   sessions?: { recent: number };
 }
@@ -544,7 +574,13 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
     }
   }, [prompt, running, activeSessionId, loadSessions]);
 
-  const foundryPortalUrl = useMemo(() => 'https://ai.azure.com', []);
+  // AI Foundry portal deep-link. Prefer the server-resolved, cloud-correct link
+  // from /api/copilot/status (ai.azure.com for Commercial/GCC, ai.azure.us for
+  // GCC-High / IL5 / DoD); fall back to Commercial only if status hasn't loaded.
+  const foundryPortalUrl = useMemo(
+    () => status?.aoai?.portalDeepLink ?? 'https://ai.azure.com',
+    [status?.aoai?.portalDeepLink],
+  );
 
   const body = (
     <div className={s.shell}>
@@ -591,6 +627,17 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
                 )}
               </MessageBarBody>
               <MessageBarActions>
+                {!status.aoai?.ok && (
+                  <Button
+                    as="a"
+                    href={foundryPortalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    appearance="primary"
+                  >
+                    Configure in AI Studio
+                  </Button>
+                )}
                 <Button appearance="subtle" onClick={loadStatus}>Recheck</Button>
               </MessageBarActions>
             </MessageBar>

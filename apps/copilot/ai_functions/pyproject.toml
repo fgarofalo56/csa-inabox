@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loom-ai-functions"
+version = "0.1.0"
+description = "Loom AI helper library — calls Azure OpenAI from PySpark/pandas notebook cells (summarize/classify/sentiment/extract/translate). No Microsoft Fabric dependency."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Deliberately minimal: only `requests` (raw HTTP transport) and
+# `azure-identity` (managed-identity token). The `openai` SDK is intentionally
+# excluded so the wheel installs cleanly on DEP-locked Synapse pools that
+# cannot reach PyPI. pandas / pyspark are provided by the Spark runtime, so
+# they are optional extras here (imported lazily at call time).
+dependencies = [
+    "requests>=2.31",
+    "azure-identity>=1.15",
+]
+
+[project.optional-dependencies]
+# Installed only for local pandas-only use; on a Spark pool these are runtime-
+# provided. Listed so `pip install loom-ai-functions[spark]` is self-contained.
+spark = ["pandas>=1.5", "pyspark>=3.4"]
+
+[tool.setuptools]
+# Map the top-level import package `ai_functions` to THIS directory, so the
+# wheel exposes `import ai_functions` even though the source lives at
+# apps/copilot/ai_functions/ inside the monorepo. Tests are excluded from the
+# wheel by listing only the package itself.
+packages = ["ai_functions"]
+
+[tool.setuptools.package-dir]
+ai_functions = "."

@@ -127,6 +127,92 @@ yet built and are intentionally **not** documented here as parity.
 
 ---
 
+## Platform & Admin experience — per-surface parity (rev.5 — 2026-06-09)
+
+> The **Platform & Admin** experience ships 19 per-surface docs (the 18 authored
+> here plus the existing `domains.md`) covering the AdminShell chrome, the admin
+> tabs, workspace lifecycle, networking/CMK, connections, and org branding. Each
+> doc satisfies the "zero ❌" DoD: every inventoried control is **✅ built** or
+> **⚠️ honest-gate** — no missing rows, no stub banners, no dead controls. All
+> surfaces work with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET on the default path;
+> Power BI / Fabric legs (refresh, embed, Fabric workspace-role sync) are the
+> *allowed* opt-in honest-gate per `no-fabric-dependency.md`, and every
+> infra-config gate names the exact env var / role / bicep module per
+> `no-vaporware.md`.
+
+| Surface | Doc | Grade | Default backend | Gate |
+|---|---|:--:|---|---|
+| AdminShell layout / chrome | `admin-shell.md` | **A** | none (pure client) | — |
+| Tenant settings | `tenant-settings.md` | **A** | Cosmos `tenant-settings` | — |
+| Capacity inventory + Scale by SKU (11 services) | `capacity.md` | **A** | ARM (UAMI) + per-service PATCH | cost ⚠️ |
+| Workspaces (user browser + admin) | `workspaces.md` | **A** | Cosmos `workspaces` + `items` | — |
+| Workspace create | `workspace-create.md` | **A** | Cosmos + PBI capacities | Purview ⚠️ |
+| Workspace roles (Manage access) | `workspace-roles.md` | **A** | Cosmos `workspace-roles` + ARM RBAC | RBAC-admin ⚠️ / Fabric opt-in ⚠️ |
+| Folders (+ task flows) | `folders-taskflows.md` | **A−** | Cosmos `folders` | task flows ⚠️ |
+| Git integration (SCM binding) | `git-integration.md` | **B+** | Cosmos `workspace-git` | Git-exec ⚠️ |
+| Spark compute (notebook backend) | `spark-compute.md` | **A** | AML Serverless Spark (Com/GCC) / Synapse Livy (GovH/IL5) | config ⚠️ |
+| CMK encryption | `cmk.md` | **A** | `storage.bicep` + `keyvault.bicep` | key-URI ⚠️ / no-blade ⚠️ |
+| Network & Private DNS | `networking.md` | **A** | ARM network-discovery + `network.bicep` | Reader ⚠️ |
+| Azure Connections | `azure-connections.md` | **A** | Cosmos + Key Vault (`kv-secrets-client.ts`) | KV role ⚠️ |
+| Users & licenses | `users-licenses.md` | **B+** | Cosmos derivation + Graph (gated) | Graph ⚠️ / license ⚠️ |
+| Domains | `domains.md` | **A** | Cosmos `tenant-settings` + Purview (gated) | Purview ⚠️ |
+| Audit logs | `audit-logs.md` | **A** | Cosmos `audit-log` | — |
+| Refresh summary & schedule | `refresh-summary.md` | **A** | Power BI REST (opt-in) | PBI-bound ⚠️ |
+| Usage & adoption | `usage-adoption.md` | **A** | Cosmos aggregates | — |
+| Embed codes | `embed-codes.md` | **B** | PBI REST GenerateToken + `powerbi-client-react` | PBI-bound ⚠️ / Publish-to-web admin ⚠️ |
+| Org visuals & branding | `org-visuals.md` | **B+** | Cosmos `tenant-themes` + ADLS (domain images) | custom `.pbiviz` ⚠️ |
+
+**Grade distribution (rev.5):** 14 × A / A−, 5 × B+ / B. **Zero D, zero F.
+Zero ❌ in any of the 19 docs** (grep-clean), backend-per-control on every row.
+The two surfaces with material Power-BI-tenant gaps (public Publish-to-web admin,
+custom `.pbiviz` org visuals) are the *less* governable Power BI features; Loom's
+authenticated-embed and tenant/domain-branding paths deliver the parity today and
+the gaps are disclosed as honest ⚠️ gates per `no-vaporware.md`. These 19 are the
+shipped Platform & Admin surfaces; the broader Platform PRP
+(`docs/fiab/prp/platform-admin.md`) tracks further build-out separately.
+
+---
+
+## Copilot surfaces — parity (rev.5 — 2026-06-09)
+
+The Copilot surface spans **14 distinct personas** across the console — the
+Copilot Studio item family, the SQL/notebook in-editor assistants, the
+cross-item orchestrator, the global help widget, inline ghost-text completion,
+and the in-blade governance assistant. Each persona now has a per-surface
+parity doc under `docs/fiab/parity/` showing **zero ❌** (every inventory row
+built ✅ or honest-gate ⚠️). All AOAI-backed personas are Azure-native by
+default and work with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (per
+`no-fabric-dependency.md`); the Copilot Studio family is a Power Platform /
+Dataverse workload routed by `LOOM_POWER_PLATFORM_BAP_BASE`.
+
+| # | Persona | Parity doc | Grade | Default backend |
+|---|---|---|:--:|---|
+| 1 | Copilot Studio — agent | `copilot-studio-agent.md` | A | Dataverse `msdyn_copilots` + Direct Line |
+| 2 | Copilot Studio — topic | `copilot-studio-topic.md` | A | Dataverse `msdyn_botcomponents` |
+| 3 | Copilot Studio — action | `copilot-studio-action.md` | A | Dataverse `msdyn_bot_actions` |
+| 4 | Copilot Studio — knowledge | `copilot-studio-knowledge.md` | A | Dataverse `msdyn_knowledgesources` |
+| 5 | Copilot Studio — analytics | `copilot-studio-analytics.md` | A | BAP admin analytics |
+| 6 | Copilot Studio — channel | `copilot-studio-channel.md` | A | Dataverse `msdyn_botchannels` |
+| 7 | Copilot Studio — template library | `copilot-template-library.md` | A | Cosmos gallery + Dataverse instantiate |
+| 8 | Notebook in-cell Copilot | `notebook-in-cell-copilot.md` | A | Azure OpenAI (`/api/notebook/[id]/assist`) |
+| 9 | Warehouse Copilot (NL→SQL) | `warehouse-copilot.md` | A | Azure OpenAI + live warehouse schema |
+| 10 | Azure SQL Copilot | `azure-sql-copilot.md` | A | Azure OpenAI (SSE) + TDS schema |
+| 11 | Cross-item Copilot orchestrator | `copilot-cross-item.md` | A | Azure OpenAI 37-tool function-calling |
+| 12 | Help Copilot widget | `copilot-help-widget.md` | A | Azure OpenAI + docs index (AI Search/Cosmos) |
+| 13 | Inline code completion (ghost text) | `copilot-inline-complete.md` | A | Azure OpenAI (`/api/copilot/complete`) |
+| 14 | Governance Copilot | `copilot-governance.md` | A | Azure OpenAI (SSE) grounded on live posture |
+
+**Coverage:** 14/14 personas at zero ❌. **Deep-functional UAT:**
+`apps/fiab-console/e2e/copilot.uat.ts` exercises every persona's primary action
+against the real backend (authenticated `pnpm uat`), accepting real success
+**or** a documented honest gate (`no_aoai` / `disabled` / `admin_only` /
+Dataverse-not-wired) — passing green whether or not AOAI / Power Platform are
+wired in the target deployment. The Copilot Studio low-code conversation-flow
+visual designer is the one **honest scope boundary** (Copilot Studio portal
+authoring, forbidden as parity per `ui-parity.md`), not a missing row.
+
+---
+
 ## Overall honest assessment: how far is Loom from 1:1 Azure parity?
 
 **Loom is roughly one-third of the way to 1:1 Azure parity, and not close to

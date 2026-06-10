@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
+import { armBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,19 +20,22 @@ export const dynamic = 'force-dynamic';
 // the user and cache it (lib/azure/user-token-store) — enabling per-user RBAC
 // in the cross-subscription resource picker. If this scope isn't admin-
 // consented, AAD simply omits it and login still succeeds (MSAL won't fail the
-// code exchange for the base scopes).
-const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
+// code exchange for the base scopes). The ARM host is sovereign-cloud aware via
+// armBase() so the delegated scope matches the deployment's cloud (Commercial
+// management.azure.com vs Gov management.usgovcloudapi.net).
+const ARM_SCOPE = `${armBase()}/user_impersonation`;
 // Delegated Azure SQL Database scope — used to obtain a SQL-audience token for
 // the user so a SQL analytics endpoint set to "user's identity" data-access
 // mode (F10) can run queries under the caller's own identity. The audience host
-// is cloud-portable via LOOM_SYNAPSE_SQL_TOKEN_SCOPE (same env var the TDS
-// service-identity path uses), so a single image serves every sovereign cloud:
+// is cloud-portable: LOOM_SYNAPSE_SQL_TOKEN_SCOPE overrides, else the default
+// follows getSqlSuffix() so a single image serves every sovereign cloud without
+// the operator having to set the env var:
 //   Commercial/GCC:  https://database.windows.net/user_impersonation
-//   GCC-High/IL5:    https://database.usgovcloudapi.net/user_impersonation
+//   GCC-High/IL5/DoD: https://database.usgovcloudapi.net/user_impersonation
 // If this scope isn't admin-consented, AAD simply omits it and login still
 // succeeds (MSAL won't fail the code exchange for the base scopes); the query
 // route then surfaces an honest "sign in again / grant consent" gate.
-const SQL_USER_SCOPE = `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || 'database.windows.net'}/user_impersonation`;
+const SQL_USER_SCOPE = `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || getSqlSuffix()}/user_impersonation`;
 const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read', ARM_SCOPE, SQL_USER_SCOPE];
 
 function redirectUri(req: NextRequest): string {

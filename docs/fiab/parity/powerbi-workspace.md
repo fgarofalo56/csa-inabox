@@ -170,6 +170,19 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 
 Every Loom control above that is marked built/partial calls a **real** Power BI REST (`api.powerbi.com/v1.0/myorg`) or Fabric REST (`api.fabric.microsoft.com/v1`) endpoint through `powerbi-client.ts` / `fabric-client.ts` using the Console UAMI (`ManagedIdentityCredential` chained with `DefaultAzureCredential`). No mock arrays, no hard-coded sample data. When the UAMI SP isn't authorized in the PBI tenant or not a workspace member, the underlying 401/403 is surfaced verbatim with the exact remediation (enable "Service principals can use Fabric APIs" + add UAMI to the workspace). This is the no-vaporware floor and it is met for the built surfaces.
 
+## Per-cloud notes
+
+Power BI REST surfaces resolve their sovereign host via `cloud-endpoints.ts`; the **Fabric**-only surfaces (Scorecards, Deployment Pipelines, endorsement reads via Fabric Items REST) depend on Fabric, which is not offered in GCC.
+
+| Cloud | Power BI REST host | Fabric REST (scorecards, pipelines, item endorsement reads) |
+| --- | --- | --- |
+| Commercial | `api.powerbi.com` | ✅ `api.fabric.microsoft.com` |
+| GCC | `api.powerbigov.us` | ❌ **Fabric not available in GCC** — Section F (scorecards) live path + Section G (pipelines) Fabric tab show the honest 401/403 / infra-gate; the Loom-native + ARM paths still render |
+| GCC-High / IL4 | `api.high.powerbigov.us` | ✅ Fabric available |
+| DoD / IL5 | `api.mil.powerbigov.us` | ✅ Fabric available |
+
+The built Power BI REST surfaces (Sections A5, B1–B14, C1–C10/C14, D1–D4/D7, E1–E4) work in every cloud with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset. The ❌ rows below are **parity build backlog** (T28 — content grid, lineage, subscriptions, sensitivity, item ⋯ menu), not cloud-specific gaps; they are honestly disclosed, never faked.
+
 ## Scorecard / honest gap statement
 
 Loom's Power BI work is a **vertical slice of real, working per-item editors**, not a reproduction of the Power BI service workspace. What exists is genuinely backed (B-grade for the SemanticModel editor and Report viewer in isolation; B for deployment pipelines). But measured against the rule's bar — *"whatever you can do in the Power BI service workspace UI you should be able to do in Loom"* — the coverage is partial:

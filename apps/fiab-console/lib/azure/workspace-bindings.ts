@@ -15,14 +15,22 @@
  * by the time these run.
  */
 
+import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import type { Workspace } from '@/lib/types/workspace';
 import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
 import { registerAtlasEntity, PurviewError, PurviewNotConfiguredError } from './purview-client';
 import { marketplaceListingsContainer } from './cosmos-client';
+import { armBase, armScope } from './cloud-endpoints';
 
 export interface BindingResult {
   capacityAssignment?: Workspace['capacityAssignment'];
   domainRegistration?: Workspace['domainRegistration'];
+  backingRgProvision?: Workspace['backingRgProvision'];
+}
+
+export interface BindingOptions {
+  /** When true, provision a dedicated Azure resource group for this workspace. */
+  provisionBackingRg?: boolean;
 }
 
 /**
@@ -31,7 +39,7 @@ export interface BindingResult {
  * `replace()` the workspace document with the merged result so the UI
  * shows the right state.
  */
-export async function applyWorkspaceBindings(ws: Workspace): Promise<BindingResult> {
+export async function applyWorkspaceBindings(ws: Workspace, opts: BindingOptions = {}): Promise<BindingResult> {
   const out: BindingResult = {};
 
   // --- Capacity binding ---
@@ -93,7 +101,73 @@ export async function applyWorkspaceBindings(ws: Workspace): Promise<BindingResu
     }
   }
 
+  // --- Optional dedicated backing resource group (ARM PUT) ---
+  if (opts.provisionBackingRg) {
+    out.backingRgProvision = await tryProvisionBackingRg(ws);
+  }
+
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Backing resource group — optional dedicated Azure RG per workspace.
+//
+// ARM PUT /subscriptions/{sub}/resourceGroups/{name}?api-version=2021-04-01.
+// Uses the Console UAMI ARM credential (Contributor at subscription scope, the
+// same identity the setup/scaling clients use). Sovereign-cloud correct via
+// armBase()/armScope(). Best-effort — any failure is captured into the status
+// field and never blocks the workspace create.
+// ---------------------------------------------------------------------------
+
+const ARM_RG_API = '2021-04-01';
+const armCredUami = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+const armCredential = armCredUami
+  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: armCredUami }), new DefaultAzureCredential())
+  : new DefaultAzureCredential();
+
+/** Build the backing RG name from the configurable prefix + a short workspace id. */
+export function backingRgName(ws: Pick<Workspace, 'id'>): string {
+  const prefix = process.env.LOOM_WORKSPACE_RG_PREFIX || 'rg-loom-ws-';
+  return `${prefix}${ws.id.replace(/-/g, '').slice(0, 8)}`;
+}
+
+async function tryProvisionBackingRg(ws: Workspace): Promise<Workspace['backingRgProvision']> {
+  const at = new Date().toISOString();
+  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+  const location = process.env.LOOM_LOCATION || process.env.LOOM_REGION || process.env.LOOM_ALERT_LOCATION;
+  if (!sub) {
+    return { status: 'failed', error: 'LOOM_SUBSCRIPTION_ID is not set — cannot create a backing resource group.', at };
+  }
+  if (!location) {
+    return { status: 'failed', error: 'LOOM_LOCATION (or LOOM_REGION) is not set — cannot create a backing resource group.', at };
+  }
+  const rgName = backingRgName(ws);
+  try {
+    const t = await armCredential.getToken(armScope());
+    if (!t?.token) return { status: 'failed', rgName, error: 'Failed to acquire ARM token for resource-group provision.', at };
+    const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${encodeURIComponent(rgName)}?api-version=${ARM_RG_API}`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        location,
+        tags: { loomWorkspaceId: ws.id, loomWorkspaceName: ws.name, managedBy: 'csa-loom' },
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      return {
+        status: 'failed',
+        rgName,
+        error: `ARM ${res.status}: ${body.slice(0, 300)}${res.status === 403 ? ' (grant the Console UAMI Contributor at subscription scope)' : ''}`,
+        at,
+      };
+    }
+    return { status: 'provisioned', rgName, at };
+  } catch (e: any) {
+    return { status: 'failed', rgName, error: e?.message || String(e), at };
+  }
 }
 
 async function tryRegisterInPurview(ws: Workspace): Promise<{ guid?: string; error?: string }> {

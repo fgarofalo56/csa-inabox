@@ -160,3 +160,55 @@ describe('container-apps-arm-client / updateContainerAppScale', () => {
     expect(body.properties.template.scale).toEqual({ minReplicas: 1, maxReplicas: 5 });
   });
 });
+
+describe('aks-arm-client / scaleAksAgentPool', () => {
+  beforeEach(() => {
+    process.env.LOOM_AKS_CLUSTER_NAME = 'aks-test';
+    process.env.LOOM_AKS_RG = 'rg-admin';
+  });
+
+  it('reads the pool then PUTs count with autoscaler disabled, preserving immutable fields', async () => {
+    const calls = captureFetch((url, init) => {
+      if (init?.method === 'PUT') return { body: { name: 'apps', properties: { count: 5, provisioningState: 'Updating', vmSize: 'Standard_D8ds_v5', mode: 'User' } } };
+      // initial GET of the agent pool
+      return { body: { name: 'apps', properties: { count: 3, enableAutoScaling: true, minCount: 3, maxCount: 12, vmSize: 'Standard_D8ds_v5', mode: 'User', provisioningState: 'Succeeded', powerState: { code: 'Running' } } } };
+    });
+    const { scaleAksAgentPool } = await import('../aks-arm-client');
+    const out = await scaleAksAgentPool('apps', 5);
+    const put = calls.find(c => c.init?.method === 'PUT')!;
+    expect(put.url).toMatch(/Microsoft\.ContainerService\/managedClusters\/aks-test\/agentPools\/apps/);
+    const body = JSON.parse(String(put.init?.body));
+    expect(body.properties.count).toBe(5);
+    expect(body.properties.enableAutoScaling).toBe(false);
+    expect(body.properties.minCount).toBeUndefined();
+    expect(body.properties.maxCount).toBeUndefined();
+    expect(body.properties.provisioningState).toBeUndefined();
+    expect(body.properties.powerState).toBeUndefined();
+    // immutable field carried through from the GET
+    expect(body.properties.vmSize).toBe('Standard_D8ds_v5');
+    expect(out.count).toBe(5);
+  });
+
+  it('lists agent pools', async () => {
+    captureFetch(() => ({ body: { value: [
+      { name: 'system', properties: { count: 3, mode: 'System', vmSize: 'Standard_D4ds_v5', provisioningState: 'Succeeded', enableAutoScaling: true } },
+      { name: 'apps', properties: { count: 4, mode: 'User', vmSize: 'Standard_D8ds_v5', provisioningState: 'Succeeded', enableAutoScaling: false } },
+    ] } }));
+    const { listAksAgentPools } = await import('../aks-arm-client');
+    const pools = await listAksAgentPools();
+    expect(pools.map(p => p.name)).toEqual(['system', 'apps']);
+    expect(pools[1].count).toBe(4);
+    expect(pools[1].enableAutoScaling).toBe(false);
+  });
+
+  it('throws AksNotConfiguredError when the cluster name is unset (Commercial / GCC path)', async () => {
+    delete process.env.LOOM_AKS_CLUSTER_NAME;
+    const mod = await import('../aks-arm-client');
+    expect(() => mod.readAksConfig()).toThrow(mod.AksNotConfiguredError);
+  });
+
+  it('rejects an out-of-range count', async () => {
+    const { scaleAksAgentPool } = await import('../aks-arm-client');
+    await expect(scaleAksAgentPool('apps', -1)).rejects.toThrow(/count must be/);
+  });
+});

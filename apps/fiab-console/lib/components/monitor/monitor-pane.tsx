@@ -40,10 +40,12 @@ import {
 import { portalLink as defenderPortalLink, portalSteps, powershellScript, canAutoRemediate } from '@/lib/azure/defender-remediation';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
+import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
 
 // ---- types mirrored from monitor-client ------------------------------------
 
@@ -141,9 +143,9 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security' | 'maintenance';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'refresh' | 'alerts' | 'cost' | 'security' | 'maintenance';
 
-const TAB_KEYS: TabKey[] = ['overview', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'alerts', 'cost', 'security', 'maintenance'];
+const TAB_KEYS: TabKey[] = ['overview', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'refresh', 'alerts', 'cost', 'security', 'maintenance'];
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -173,6 +175,7 @@ export function MonitorPane() {
         <Tab value="diagnostics">Diagnostics</Tab>
         <Tab value="activity">Activity log</Tab>
         <Tab value="items">Deployed items</Tab>
+        <Tab value="refresh">Refresh summary</Tab>
         <Tab value="alerts">Alerts</Tab>
         <Tab value="cost">Cost</Tab>
         <Tab value="security">Security</Tab>
@@ -186,6 +189,7 @@ export function MonitorPane() {
       {tab === 'diagnostics' && <DiagnosticsTab onUnauth={onUnauth} />}
       {tab === 'activity' && <ActivityTab onUnauth={onUnauth} />}
       {tab === 'items' && <ActivityFeedPane />}
+      {tab === 'refresh' && <RefreshSummaryPane />}
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
       {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
       {tab === 'security' && <SecurityTab onUnauth={onUnauth} />}
@@ -1363,6 +1367,10 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by region.' : 'No cost recorded.'}
           ariaLabel="Cost by region" />
       </Section>
+
+      {/* Copilot token consumption rolls into the cost context — real App
+          Insights metering, honest-gated when unconfigured. */}
+      <CopilotUsageInline />
     </div>
   );
 }

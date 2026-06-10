@@ -137,6 +137,9 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
     return FABRIC_ITEM_TYPES.filter((i) => {
+      // Deprecated item types (e.g. datamart) have no create path — never offer
+      // them in the New item dialog, whether browsing or searching.
+      if (i.deprecated) return false;
       if (q) {
         // when searching, ignore the category filter so the user finds
         // results across all workloads

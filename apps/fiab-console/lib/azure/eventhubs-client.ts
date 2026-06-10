@@ -541,7 +541,7 @@ export async function listDisasterRecoveryConfigs(): Promise<DisasterRecoveryCon
 
 const ARG_API = '2022-10-01';
 const ARG_URL = process.env.LOOM_ARG_URL
-  || 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources';
+  || `${armBase()}/providers/Microsoft.ResourceGraph/resources`;
 const ARG_SCOPE = process.env.LOOM_ARM_SCOPE || ARM_SCOPE;
 
 export type RtiStreamKind = 'eventhub-namespace' | 'iothub' | 'adx-cluster';

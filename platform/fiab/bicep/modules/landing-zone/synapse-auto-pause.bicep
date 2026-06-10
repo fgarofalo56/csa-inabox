@@ -32,7 +32,16 @@ param skipRoleGrants bool = false
 @description('Compliance tags')
 param complianceTags object
 
-var pauseUri = 'https://management.azure.com/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}/pause?api-version=2021-06-01'
+@description('ARM management endpoint (no trailing slash). Empty defaults to the Commercial host; set to https://management.usgovcloudapi.net for GCC-High / IL5. Sovereign-cloud aware so the auto-pause Logic App calls the correct ARM plane.')
+param loomArmEndpoint string = ''
+
+// Resolve the sovereign-cloud ARM host once. The Logic App HTTP actions + MSI
+// audience all hang off this so a Gov deployment never calls the Commercial
+// management plane (which would 401/403 at the boundary).
+var armHost = empty(loomArmEndpoint) ? 'https://management.azure.com' : loomArmEndpoint
+var armAudience = '${armHost}/'
+
+var pauseUri = '${armHost}/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}/pause?api-version=2021-06-01'
 
 resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   name: 'la-loom-synapse-autopause-${domainName}'
@@ -63,10 +72,10 @@ resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           type: 'Http'
           inputs: {
             method: 'GET'
-            uri: 'https://management.azure.com/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}?api-version=2021-06-01'
+            uri: '${armHost}/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}?api-version=2021-06-01'
             authentication: {
               type: 'ManagedServiceIdentity'
-              audience: 'https://management.azure.com/'
+              audience: armAudience
             }
           }
         }
@@ -91,7 +100,7 @@ resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                 uri: pauseUri
                 authentication: {
                   type: 'ManagedServiceIdentity'
-                  audience: 'https://management.azure.com/'
+                  audience: armAudience
                 }
               }
             }
