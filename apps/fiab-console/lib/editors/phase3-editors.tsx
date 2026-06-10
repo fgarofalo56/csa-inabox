@@ -6718,8 +6718,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
       {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
       {aiNote && (
-        <MessageBar intent="warning" onClick={() => setAiNote(null)}>
+        <MessageBar intent="warning">
           <MessageBarBody><MessageBarTitle>Copilot tile</MessageBarTitle>{aiNote}</MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setAiNote(null)}>Dismiss</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
       {state && !state.ok && (
@@ -7019,6 +7022,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   }}
                 />
               </Field>
+              <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                Press <kbd style={{ fontFamily: tokens.fontFamilyMonospace }}>Ctrl</kbd>+<kbd style={{ fontFamily: tokens.fontFamilyMonospace }}>Enter</kbd> to generate.
+              </Caption1>
               {dataSources.length > 0 && (
                 <Field label="Data source (optional)" style={{ marginTop: 10 }}>
                   <Select value={aiDataSourceId} onChange={(_: unknown, d: any) => setAiDataSourceId(d.value)} disabled={aiBusy}>
@@ -7034,7 +7040,16 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   'Top 10 error messages by count as a bar chart',
                   'Requests per minute over time',
                 ].map((ex) => (
-                  <Button key={ex} size="small" appearance="subtle" disabled={aiBusy} onClick={() => setAiPrompt(ex)}>{ex}</Button>
+                  <Button
+                    key={ex}
+                    size="small"
+                    appearance="outline"
+                    shape="circular"
+                    disabled={aiBusy}
+                    onClick={() => setAiPrompt(ex)}
+                  >
+                    {ex}
+                  </Button>
                 ))}
               </div>
               {aiErr && (
