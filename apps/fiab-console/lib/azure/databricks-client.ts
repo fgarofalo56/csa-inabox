@@ -1399,6 +1399,15 @@ export interface UcCatalogCreateSpec {
   comment?: string;
   storage_root?: string;             // optional managed-storage root (abfss://…)
   properties?: Record<string, string>;
+  // Catalog type — matches the Catalog Explorer "Type" selector. A standard
+  // managed catalog is the default; a FOREIGN catalog wraps an external
+  // database via a UC connection; a Delta-Sharing catalog mounts a share from
+  // a provider. (Learn: catalogs/create-catalog, query-foreign, delta-sharing.)
+  catalog_type?: 'MANAGED_CATALOG' | 'FOREIGN_CATALOG' | 'DELTASHARING_CATALOG';
+  connection_name?: string;          // FOREIGN_CATALOG: the UC connection to wrap
+  options?: Record<string, string>;  // FOREIGN_CATALOG: e.g. { database: 'sales' }
+  provider_name?: string;            // DELTASHARING_CATALOG: share provider
+  share_name?: string;               // DELTASHARING_CATALOG: share to mount
 }
 
 /** POST /api/2.1/unity-catalog/catalogs */
@@ -1407,6 +1416,17 @@ export async function createUcCatalog(spec: UcCatalogCreateSpec): Promise<UcCata
   if (spec.comment) body.comment = spec.comment;
   if (spec.storage_root) body.storage_root = spec.storage_root;
   if (spec.properties && Object.keys(spec.properties).length) body.properties = spec.properties;
+  // Foreign catalogs wrap a connection; Delta-Sharing catalogs mount a share.
+  // Standard catalogs send no catalog_type (UC defaults to a managed catalog).
+  if (spec.catalog_type === 'FOREIGN_CATALOG') {
+    if (!spec.connection_name) throw new Error('createUcCatalog: FOREIGN catalog requires connection_name');
+    body.connection_name = spec.connection_name;
+    if (spec.options && Object.keys(spec.options).length) body.options = spec.options;
+  } else if (spec.catalog_type === 'DELTASHARING_CATALOG') {
+    if (!spec.provider_name || !spec.share_name) throw new Error('createUcCatalog: Delta-Sharing catalog requires provider_name and share_name');
+    body.provider_name = spec.provider_name;
+    body.share_name = spec.share_name;
+  }
   const res = await dbxFetch('/api/2.1/unity-catalog/catalogs', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -1591,6 +1611,58 @@ export async function updateUcPermissions(
   });
   const body = await asJsonOrThrow<{ privilege_assignments?: UcPrivilegeAssignment[] }>(res, 'updateUcPermissions');
   return body.privilege_assignments || [];
+}
+
+// ---- Ownership transfer / metadata update (ALTER … SET OWNER / SET … ) ----
+// The Catalog Explorer "Owner" pencil and "Change owner" action map to a UC
+// PATCH/UPDATE on the securable: `ALTER CATALOG c SET OWNER TO principal`,
+// `ALTER SCHEMA c.s SET OWNER TO principal`, `ALTER TABLE c.s.t SET OWNER TO
+// principal`. The REST equivalents are PATCH/UPDATE on the securable URL with
+// `{ owner }` (and optionally `{ comment }`). Requires the caller to be the
+// current owner, a metastore admin, or hold MANAGE on the object — a UC 403 is
+// surfaced verbatim. (Learn: data-governance/unity-catalog/manage-privileges,
+// catalogs/manage-catalog, schemas/manage-schema, tables/index.)
+export interface UcMetadataPatch {
+  owner?: string;
+  comment?: string;
+  new_name?: string;
+}
+
+function ucPatchBody(patch: UcMetadataPatch): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (patch.owner !== undefined) body.owner = patch.owner;
+  if (patch.comment !== undefined) body.comment = patch.comment;
+  if (patch.new_name !== undefined) body.new_name = patch.new_name;
+  return body;
+}
+
+/** PATCH /api/2.1/unity-catalog/catalogs/{name} — change owner / comment. */
+export async function patchUcCatalog(name: string, patch: UcMetadataPatch): Promise<UcCatalog> {
+  const res = await dbxFetch(`/api/2.1/unity-catalog/catalogs/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(ucPatchBody(patch)),
+  });
+  return asJsonOrThrow<UcCatalog>(res, `patchUcCatalog(${name})`);
+}
+
+/** PATCH /api/2.1/unity-catalog/schemas/{full_name} (catalog.schema). */
+export async function patchUcSchema(fullName: string, patch: UcMetadataPatch): Promise<UcSchema> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/schemas/${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify(ucPatchBody(patch)),
+  });
+  return asJsonOrThrow<UcSchema>(res, `patchUcSchema(${fullName})`);
+}
+
+/** PATCH /api/2.1/unity-catalog/tables/{full_name} (catalog.schema.table). */
+export async function patchUcTable(fullName: string, patch: UcMetadataPatch): Promise<UcTable> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/tables/${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify(ucPatchBody(patch)),
+  });
+  return asJsonOrThrow<UcTable>(res, `patchUcTable(${fullName})`);
 }
 
 // ============================================================

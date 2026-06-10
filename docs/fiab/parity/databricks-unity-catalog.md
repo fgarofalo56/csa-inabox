@@ -28,9 +28,11 @@
   the SQL-editor UC tree is the browse surface).
 - BFF: `apps/fiab-console/app/api/databricks/unity-catalog/{catalogs,schemas,tables,grants}/route.ts`
 - Client (real, AAD-token, no mocks): `apps/fiab-console/lib/azure/databricks-client.ts`
-  — `listUcCatalogs/createUcCatalog/deleteUcCatalog`, `listUcSchemas/createUcSchema/deleteUcSchema`,
-  `listUcTables/listUcVolumes/listUcFunctions/getUcTable/createUcTable/deleteUcTable`,
+  — `listUcCatalogs/createUcCatalog/deleteUcCatalog/patchUcCatalog`, `listUcSchemas/createUcSchema/deleteUcSchema/patchUcSchema`,
+  `listUcTables/listUcVolumes/listUcFunctions/getUcTable/createUcTable/deleteUcTable/patchUcTable`,
   `getUcPermissions/getUcEffectivePermissions/updateUcPermissions`.
+- Tests: `apps/fiab-console/lib/azure/__tests__/databricks-uc-write-path.test.ts`
+  (catalog type + tags + ownership PATCH REST contract).
 
 **Backend reality check.** Every dialog hits the real Databricks Unity Catalog
 REST (api 2.1): `GET/POST/DELETE /api/2.1/unity-catalog/{catalogs,schemas,tables}`,
@@ -56,10 +58,10 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | A2 | Optional storage root (managed-location override) | ✅ built | `storage_root` field → POST body |
 | A3 | Comment | ✅ built | `comment` field → POST body |
 | A4 | Drop catalog (with force) | ✅ built | `DELETE /catalogs?name=&force=` `deleteUcCatalog` |
-| A5 | Catalog **type** (standard / foreign / shared / Delta-Sharing) | ❌ MISSING | standard only |
-| A6 | Workspace-binding assignment (All / specific + Read-Only) | ❌ MISSING | wizard step absent |
-| A7 | Tags (key-value) on the catalog | ❌ MISSING | not surfaced |
-| A8 | Set owner | ❌ MISSING | creator-owned only |
+| A5 | Catalog **type** (standard / foreign / Delta-Sharing) | ✅ built | "Type" dropdown → `catalog_type`; Foreign shows connection_name + options.database, Delta-Sharing shows provider_name + share_name → `createUcCatalog` |
+| A6 | Workspace-binding assignment (All / specific + Read-Only) | ❌ MISSING | wizard step absent (multi-workspace metastore only) |
+| A7 | Tags (key-value) on the catalog | ✅ built | inline `KvTagEditor` → `properties` map → `POST /catalogs` |
+| A8 | Set owner | ✅ built | grants dialog "Change owner" → `PATCH /catalogs` `patchUcCatalog` (see E9) |
 
 ### B. Create schema
 
@@ -70,7 +72,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | B3 | Optional storage root | ✅ built | `storage_root` → POST body |
 | B4 | Comment | ✅ built | `comment` → POST body |
 | B5 | Drop schema (full_name + force) | ✅ built | `DELETE /schemas?full_name=&force=` `deleteUcSchema` |
-| B6 | Tags / owner on schema | ❌ MISSING | not surfaced |
+| B6 | Tags / owner on schema | ✅ built | tags via `KvTagEditor` → `properties` on `POST /schemas`; owner via grants dialog "Change owner" → `PATCH /schemas` `patchUcSchema` |
 
 ### C. Create table (column designer)
 
@@ -111,7 +113,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | E6 | Principal = user email / group / SP applicationId | ✅ built | free-text principal field (matches UC REST) |
 | E7 | Per-securable privilege matrix (only valid privileges offered) | ✅ built | `UC_PRIVILEGES[securable]` chip set |
 | E8 | EXTERNAL_LOCATION / STORAGE_CREDENTIAL / METASTORE securables | ⚠️ partial | BFF accepts them; dialog picker exposes only the 5 data securables |
-| E9 | **Change owner** of a securable | ❌ MISSING | grant/revoke only; no ownership transfer |
+| E9 | **Change owner** of a securable | ✅ built | grants dialog "Change owner" section (CATALOG/SCHEMA/TABLE) → `PATCH /{catalogs,schemas,tables}` `patchUc{Catalog,Schema,Table}` with `{ owner }` (UC `ALTER … SET OWNER`) |
 | E10 | Principal **picker** (browse account users/groups) | ❌ MISSING | free-text only (no directory autocomplete) |
 
 ### F. Governance surfaces NOT in scope of this write build
@@ -130,12 +132,12 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 
 ## Coverage tally
 
-- **built ✅: 24**
+- **built ✅: 29** (was 24; this wave added A5 catalog type, A7 catalog tags, A8/E9 ownership transfer, B6 schema tags/owner)
 - **partial ⚠️: 1**
 - **honest-gate ⚠️: 0** (the only gate is the workspace-level `not_configured` 503)
-- **MISSING ❌: 17**
+- **MISSING ❌: 12** (was 17)
 
-## Honest grade: **B−**
+## Honest grade: **B**
 
 The create-catalog / create-schema / create-table-with-column-designer /
 grant-revoke surface is genuinely **production-grade** and a real 1:1 with the
@@ -146,23 +148,30 @@ correct per-securable privilege matrix and an effective-permissions toggle, and 
 403s surface verbatim. **No vaporware.** This flips the `databricks-workspace.md`
 `F4–F5` rows (UC create + GRANT/REVOKE) from ❌ to ✅.
 
-Held to **B−** (not A) by `ui-parity.md`'s "feature completeness must match"
-applied to the whole Catalog Explorer write surface: no **create-table-from-file**
-(the portal's most-used table-create path), no **volume/function create**, no
-**lineage / sample-data / history**, no **external locations / storage credentials
-/ connections / Delta Sharing**, no **ownership transfer**, no **workspace-binding**
-or **tag** management, and the grant principal is free-text rather than a directory
-picker.
+This wave (audit-t18) closed the cheapest governance-completeness gaps:
+**ownership transfer** (E9/A8/B6-owner) via real `PATCH
+/api/2.1/unity-catalog/{catalogs,schemas,tables}/{full_name}` with `{ owner }`,
+**catalog type** (A5: Standard / Foreign / Delta-Sharing with the right
+conditional fields), and **key-value tags** (A7/B6) on create-catalog and
+create-schema. All on real UC 2.1 REST; UC 403s surface verbatim.
 
-## Highest-value gaps to build first
+Held to **B** (not A) by `ui-parity.md`'s "feature completeness must match"
+applied to the whole Catalog Explorer write surface: still no
+**create-table-from-file** (the portal's most-used table-create path), no
+**volume/function create**, no **lineage / sample-data / history**, no **external
+locations / storage credentials / connections / Delta-Sharing CRUD**, no
+**workspace-binding** management, no **column-level tags** (C12), and the grant
+principal is free-text rather than a directory picker.
 
-1. **Ownership transfer** (E9) — `updateUcPermissions` already exists; add an owner
-   PATCH path. Cheapest governance completeness win.
-2. **Create-table-from-file/volume** (C10) — the portal's primary table-create flow.
-3. **Volume create + file browser** (D3–D4).
-4. **Lineage graph** (F1) — the defining Catalog Explorer differentiator.
-5. **Tags & comments browser** (A7/B6/C12/F3) across securables.
-6. **External locations / storage credentials / connections / Delta Sharing** (F4–F5).
+## Highest-value gaps to build next
+
+1. **Create-table-from-file/volume** (C10) — the portal's primary table-create flow.
+2. **Volume create + file browser** (D3–D4).
+3. **Lineage graph** (F1) — the defining Catalog Explorer differentiator.
+4. **Column-level tags** (C12) + a cross-securable tag/comment browser (F3).
+5. **External locations / storage credentials / connections / Delta Sharing CRUD** (F4–F5).
+6. **Workspace-catalog bindings** (A6/F6) — multi-workspace metastore only.
+7. **Principal directory picker** (E10) — autocomplete over account users/groups/SPs.
 
 ## Backend per control
 
@@ -181,6 +190,11 @@ picker.
 | View grants | `GET …/grants?securable_type=&full_name=` | `getUcPermissions` | `GET /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
 | View effective grants | `GET …/grants?…&effective=true` | `getUcEffectivePermissions` | `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` |
 | Grant / revoke | `PATCH …/grants` | `updateUcPermissions` | `PATCH /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
+| Create foreign / Delta-Sharing catalog | `POST …/catalogs` (catalog_type) | `createUcCatalog` | `POST /api/2.1/unity-catalog/catalogs` |
+| Catalog / schema tags | `POST …/{catalogs,schemas}` (properties) | `createUcCatalog`/`createUcSchema` | `POST /api/2.1/unity-catalog/{catalogs,schemas}` |
+| Change catalog owner / comment | `PATCH …/catalogs` | `patchUcCatalog` | `PATCH /api/2.1/unity-catalog/catalogs/{name}` |
+| Change schema owner / comment | `PATCH …/schemas` | `patchUcSchema` | `PATCH /api/2.1/unity-catalog/schemas/{full_name}` |
+| Change table owner / comment | `PATCH …/tables` | `patchUcTable` | `PATCH /api/2.1/unity-catalog/tables/{full_name}` |
 
 ## Bicep / env sync
 
@@ -190,6 +204,12 @@ picker.
   `CREATE SCHEMA`, `CREATE TABLE`, object ownership / `MANAGE`); SCIM-bootstrapped per
   `platform/fiab/bicep/modules/landing-zone/databricks*.bicep`. A 403 renders the
   verbatim UC error.
+- **Ownership transfer (E9)** uses the same UC privilege model as grants —
+  current-owner / metastore-admin / `MANAGE` on the object. No new Azure resource,
+  role assignment, or app-env entry; it is a UC-runtime privilege, surfaced
+  verbatim as a 403 if absent. **Foreign catalogs** need `CREATE FOREIGN CATALOG`
+  on the connection and **Delta-Sharing catalogs** need `USE PROVIDER` — both are
+  UC privileges, not Azure roles, and 403 verbatim when missing.
 - No new Azure resource or Cosmos container.
 
 ## Verification
