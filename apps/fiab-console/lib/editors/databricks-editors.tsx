@@ -510,6 +510,11 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     else if (activeCatalog) { setGrSecurable('CATALOG'); setGrFullName(activeCatalog); }
   }, [grantsOpen, activeCatalog, activeSchema]);
 
+  // A prior "owner is now…" confirmation describes one specific object — drop it
+  // (and the new-owner draft) whenever the target securable/full-name changes so
+  // the success bar never lingers under an unrelated object.
+  useEffect(() => { setGrOwnerMsg(null); setGrOwner(''); }, [grSecurable, grFullName]);
+
   const loadGrants = useCallback(async () => {
     if (!grFullName.trim() && grSecurable !== 'METASTORE' as any) { setGrErr('Enter the securable full name.'); return; }
     setGrBusy(true); setGrErr(null); setGrGrants(null);
