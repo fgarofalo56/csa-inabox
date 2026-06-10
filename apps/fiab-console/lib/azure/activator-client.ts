@@ -199,6 +199,38 @@ export async function startReflex(
 }
 
 /**
+ * Set a single trigger's state (Active | Stopped) — the per-rule enable/disable
+ * parity for the Fabric opt-in path. PATCHes one trigger rather than the whole
+ * reflex.
+ */
+export async function setTriggerState(
+  workspaceId: string,
+  activatorId: string,
+  ruleId: string,
+  state: 'Active' | 'Stopped',
+): Promise<{ ok: true }> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/reflexes/${encodeURIComponent(activatorId)}/triggers/${encodeURIComponent(ruleId)}`,
+    { method: 'PATCH', body: { state } },
+  );
+  return { ok: true };
+}
+
+/** Delete a single trigger from a reflex — the per-rule delete parity for the
+ *  Fabric opt-in path. */
+export async function deleteTrigger(
+  workspaceId: string,
+  activatorId: string,
+  ruleId: string,
+): Promise<{ ok: true }> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/reflexes/${encodeURIComponent(activatorId)}/triggers/${encodeURIComponent(ruleId)}`,
+    { method: 'DELETE' },
+  );
+  return { ok: true };
+}
+
+/**
  * Stop a reflex — sets every trigger to Stopped. Same approach as
  * startReflex (no single "disable reflex" endpoint in preview today).
  */

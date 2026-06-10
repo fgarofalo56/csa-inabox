@@ -174,6 +174,25 @@ async function armPost(path: string, body: unknown): Promise<{ status: number; j
   return { status: res.status, json, operationLocation };
 }
 
+async function armPatch(path: string, body: unknown): Promise<any> {
+  const tk = await token(ARM_SCOPE);
+  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || text || `ARM PATCH failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  return json;
+}
+
 async function armDelete(path: string): Promise<void> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
@@ -1309,5 +1328,24 @@ export async function deleteScheduledQueryRule(name: string): Promise<void> {
   const rg = alertResourceGroup();
   await armDelete(
     `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(name)}?api-version=${SCHEDULED_QUERY_RULES_API}`,
+  );
+}
+
+/**
+ * Enable/disable a scheduled query alert rule in place via a partial ARM PATCH
+ * to properties.enabled. Unlike upsertScheduledQueryRule (a full PUT), this
+ * preserves every other property of the rule — so toggling a rule on/off never
+ * risks dropping its query, scopes, action groups, or schedule.
+ *   PATCH .../scheduledQueryRules/{name}?api-version=2023-12-01
+ *   body { properties: { enabled: true|false } }
+ * This is the Azure-native parity for a Fabric Reflex trigger Start/Stop.
+ */
+export async function patchScheduledQueryRule(name: string, enabled: boolean): Promise<void> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  await armPatch(
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(name)}?api-version=${SCHEDULED_QUERY_RULES_API}`,
+    { properties: { enabled } },
   );
 }

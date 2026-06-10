@@ -14,9 +14,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import { listRules, addRule, triggerRule, ActivatorError } from '@/lib/azure/activator-client';
 import {
-  createMonitorActivatorRule, triggerMonitorActivatorRule, type MonitorRuleRecord,
+  listRules, addRule, triggerRule, setTriggerState, deleteTrigger, ActivatorError,
+} from '@/lib/azure/activator-client';
+import {
+  createMonitorActivatorRule, triggerMonitorActivatorRule,
+  enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
+  type MonitorRuleRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
@@ -155,6 +159,106 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule, backend: 'azure-monitor' });
+  } catch (e: any) {
+    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}
+
+/**
+ * PATCH /api/items/activator/[id]/rules?workspaceId=&ruleId=<id>&enabled=<true|false>
+ *
+ * Enable/disable a single rule. Azure-native (DEFAULT): an in-place ARM PATCH
+ * of the backing scheduledQueryRule's properties.enabled — preserves the query,
+ * scopes, action group, and schedule. The new state is persisted onto the Cosmos
+ * item so the list reflects it across reloads. Fabric opt-in: PATCH the trigger
+ * to Active/Stopped.
+ */
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  const { id } = await ctx.params;
+  const ruleId = req.nextUrl.searchParams.get('ruleId');
+  if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });
+  const enabledParam = req.nextUrl.searchParams.get('enabled');
+  if (enabledParam !== 'true' && enabledParam !== 'false') {
+    return NextResponse.json({ ok: false, error: 'enabled=true|false required' }, { status: 400 });
+  }
+  const enabled = enabledParam === 'true';
+
+  // ── Fabric Reflex (opt-in) ──
+  if (useFabric()) {
+    try {
+      await setTriggerState(workspaceId, id, ruleId, enabled ? 'Active' : 'Stopped');
+      return NextResponse.json({ ok: true, backend: 'fabric', enabled });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e instanceof ActivatorError ? e.status : 502 });
+    }
+  }
+
+  // ── Azure Monitor (DEFAULT) ──
+  const item = await loadContentBackedItem(id, 'activator', session.claims.oid);
+  if (!item) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  const rules: MonitorRuleRecord[] = Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
+  const rule = rules.find((r) => r.id === ruleId || r.name === ruleId || r.azureRuleName === ruleId);
+  if (!rule?.azureRuleName) return NextResponse.json({ ok: false, error: `rule '${ruleId}' not found` }, { status: 404 });
+
+  try {
+    if (enabled) await enableMonitorRule(rule.azureRuleName);
+    else await disableMonitorRule(rule.azureRuleName);
+    // Persist the new state on the Cosmos item.
+    const updatedRule: MonitorRuleRecord = { ...rule, state: enabled ? 'Active' : 'Disabled', updatedAt: new Date().toISOString() };
+    const nextRules = rules.map((r) => (r.id === rule.id ? updatedRule : r));
+    const items = await itemsContainer();
+    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    await items.item(item.id, item.workspaceId).replace(next);
+    return NextResponse.json({ ok: true, rule: updatedRule, backend: 'azure-monitor' });
+  } catch (e: any) {
+    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}
+
+/**
+ * DELETE /api/items/activator/[id]/rules?workspaceId=&ruleId=<id>
+ *
+ * Delete a single rule. Azure-native (DEFAULT): ARM DELETE of the backing
+ * scheduledQueryRule, then splice the record out of the Cosmos item's
+ * state.rules. Fabric opt-in: DELETE the trigger.
+ */
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  const { id } = await ctx.params;
+  const ruleId = req.nextUrl.searchParams.get('ruleId');
+  if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });
+
+  // ── Fabric Reflex (opt-in) ──
+  if (useFabric()) {
+    try {
+      await deleteTrigger(workspaceId, id, ruleId);
+      return NextResponse.json({ ok: true, backend: 'fabric' });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e instanceof ActivatorError ? e.status : 502 });
+    }
+  }
+
+  // ── Azure Monitor (DEFAULT) ──
+  const item = await loadContentBackedItem(id, 'activator', session.claims.oid);
+  if (!item) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  const rules: MonitorRuleRecord[] = Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
+  const rule = rules.find((r) => r.id === ruleId || r.name === ruleId || r.azureRuleName === ruleId);
+  if (!rule) return NextResponse.json({ ok: false, error: `rule '${ruleId}' not found` }, { status: 404 });
+
+  try {
+    if (rule.azureRuleName) await deleteMonitorActivatorRule(rule.azureRuleName);
+    const nextRules = rules.filter((r) => r.id !== rule.id);
+    const items = await itemsContainer();
+    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    await items.item(item.id, item.workspaceId).replace(next);
+    return NextResponse.json({ ok: true, backend: 'azure-monitor' });
   } catch (e: any) {
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

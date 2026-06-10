@@ -17,6 +17,8 @@
 import {
   upsertActionGroup,
   upsertScheduledQueryRule,
+  patchScheduledQueryRule,
+  deleteScheduledQueryRule,
   queryLogs,
   listAlertHistory,
   type AlertHistoryEvent,
@@ -141,9 +143,13 @@ export interface MonitorRuleRecord {
   severity: number;
   evaluationFrequency: string;
   windowSize: string;
-  state: 'Active';
+  /** Whether the backing scheduledQueryRule is evaluating ('Active') or paused
+   *  ('Disabled'). Toggled by enable/disable via an in-place ARM PATCH. */
+  state: 'Active' | 'Disabled';
   backend: 'azure-monitor';
   createdAt: string;
+  /** Last enable/disable timestamp, when the rule has been toggled. */
+  updatedAt?: string;
   note?: string;
 }
 
@@ -210,6 +216,29 @@ export async function createMonitorActivatorRule(
     createdAt: new Date().toISOString(),
     ...(note ? { note } : {}),
   };
+}
+
+/** Enable a Loom activator rule = un-pause its scheduledQueryRule (PATCH
+ *  properties.enabled=true). Azure-native; no Fabric. Throws
+ *  MonitorNotConfiguredError/MonitorError which the route maps to an honest
+ *  Azure infra-gate. */
+export async function enableMonitorRule(azureRuleName: string): Promise<void> {
+  await patchScheduledQueryRule(azureRuleName, true);
+}
+
+/** Disable a Loom activator rule = pause its scheduledQueryRule (PATCH
+ *  properties.enabled=false). The rule stays defined (query/scope/action group
+ *  intact) but stops evaluating until re-enabled. Azure-native; no Fabric. */
+export async function disableMonitorRule(azureRuleName: string): Promise<void> {
+  await patchScheduledQueryRule(azureRuleName, false);
+}
+
+/** Delete a Loom activator rule = remove its scheduledQueryRule from ARM. A 404
+ *  (already gone) is treated as success by the underlying client. Azure-native;
+ *  no Fabric. The route is responsible for also splicing the record out of the
+ *  Cosmos item's state.rules. */
+export async function deleteMonitorActivatorRule(azureRuleName: string): Promise<void> {
+  await deleteScheduledQueryRule(azureRuleName);
 }
 
 /** "Trigger now" on the Azure-native backend = run the rule's KQL against the

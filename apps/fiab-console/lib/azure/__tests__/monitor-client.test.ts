@@ -398,6 +398,35 @@ describe('listActionGroups', () => {
   });
 });
 
+describe('patchScheduledQueryRule', () => {
+  it('PATCHes properties.enabled=false (disable) preserving everything else', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    const calls = captureFetch(() => ({ body: { id: '/x/my-rule' } }));
+    const { patchScheduledQueryRule } = await import('../monitor-client');
+    await patchScheduledQueryRule('my-rule', false);
+    expect(calls[0].init?.method).toBe('PATCH');
+    expect(calls[0].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/scheduledQueryRules/my-rule?api-version=2023-12-01');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body).toEqual({ properties: { enabled: false } });
+  });
+
+  it('PATCHes properties.enabled=true (enable)', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    const calls = captureFetch(() => ({ body: {} }));
+    const { patchScheduledQueryRule } = await import('../monitor-client');
+    await patchScheduledQueryRule('rule-2', true);
+    expect(calls[0].init?.method).toBe('PATCH');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.properties.enabled).toBe(true);
+  });
+
+  it('honest-gates when LOOM_SUBSCRIPTION_ID unset', async () => {
+    delete process.env.LOOM_SUBSCRIPTION_ID;
+    const { patchScheduledQueryRule, MonitorNotConfiguredError } = await import('../monitor-client');
+    await expect(patchScheduledQueryRule('r', false)).rejects.toBeInstanceOf(MonitorNotConfiguredError);
+  });
+});
+
 describe('getLogicAppCallbackUrl', () => {
   it('POSTs listCallbackUrl and returns the URL', async () => {
     const calls = captureFetch(() => ({ body: { value: 'https://prod-x.logic.azure.com/workflows/abc/triggers/manual/run?sig=xyz' } }));

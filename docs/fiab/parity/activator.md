@@ -56,6 +56,8 @@ right-side Monitor + Analytics panes, with a Start/Stop activation toggle.
 | 4 Action templates (Email/Teams/Pipeline/Notebook/Power Automate) | ✅ built | `openTemplate()` pre-fills the rule wizard; 6 action kinds (`TeamsMessage`/`Email`/`Webhook`/`AdfPipelineRun`/`NotebookRun`/`PowerAutomateFlow`) |
 | 5 Start reflex | ✅ built | `POST /api/items/activator/[id]/start?workspaceId=…` → PATCH triggers Active |
 | 6 Stop reflex | ✅ built | `POST /api/items/activator/[id]/stop?workspaceId=…` → PATCH triggers Stopped |
+| 6a Enable / disable a single rule | ✅ built | `PATCH /api/items/activator/[id]/rules?ruleId=&enabled=` → Azure-native: in-place ARM PATCH of the scheduledQueryRule's `properties.enabled` (`patchScheduledQueryRule`), persisted on the Cosmos `state.rules`; Fabric opt-in: `setTriggerState` Active/Stopped. Surfaced as the per-row Enable/Disable toggle in the workspace Activator overview pane (`lib/panes/activator.tsx`). |
+| 6b Delete a single rule | ✅ built | `DELETE /api/items/activator/[id]/rules?ruleId=` → Azure-native: ARM DELETE of the scheduledQueryRule (`deleteScheduledQueryRule`) + splice from `state.rules`; Fabric opt-in: `deleteTrigger`. Per-row delete in the overview pane. |
 | 7 Trigger rule now (test fire) | ✅ built | `GET /api/items/activator/[id]/rules?…&trigger={ruleId}` → Fabric rules-preview |
 | 8 Rules table (name/condition/action/state/last-triggered) | ✅ built | `GET /api/items/activator/[id]/rules?workspaceId=…` → `listRules` |
 | — Bundle-installed fallback | ✅ built | `loadContentBackedItem` + `activatorRuleFromContent` synthesize a rule from `state.content` when no workspace bound |
@@ -91,6 +93,9 @@ the exact definition entity / control required — never a fake list (per
 | Trigger / test fire | `GET /api/items/activator/[id]/rules?…&trigger={ruleId}` → Fabric rules-preview |
 | Start | `POST /api/items/activator/[id]/start?workspaceId=…` → PATCH triggers Active |
 | Stop | `POST /api/items/activator/[id]/stop?workspaceId=…` → PATCH triggers Stopped |
+| Enable / disable rule | `PATCH /api/items/activator/[id]/rules?ruleId=&enabled=` → `enableMonitorRule`/`disableMonitorRule` → `patchScheduledQueryRule` (ARM PATCH `properties.enabled`, GA api `2023-12-01`); state persisted on `state.rules`. Fabric opt-in → `setTriggerState`. |
+| Delete rule | `DELETE /api/items/activator/[id]/rules?ruleId=` → `deleteMonitorActivatorRule` → `deleteScheduledQueryRule` (ARM DELETE) + splice `state.rules`. Fabric opt-in → `deleteTrigger`. |
+| Workspace Activator overview (Rules / Objects / Action-history tabs) | `lib/panes/activator.tsx` → `GET /api/items/activator` + per-activator `GET .../rules` (LoomDataTable). Objects = distinct KQL source tables across `state.rules`. Action history = `GET /api/items/activator/[id]/history` (`Microsoft.AlertsManagement/alerts`). All Azure-native; no `seedRules` mock. |
 | Bundle fallback (no workspace) | `loadContentBackedItem` → `activatorRuleFromContent(state.content)` (Cosmos) |
 
 Token scope for the Fabric path: `https://analysis.windows.net/powerbi/api/.default`
