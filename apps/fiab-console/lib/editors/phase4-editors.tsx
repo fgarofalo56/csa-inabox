@@ -2155,6 +2155,8 @@ interface DataAgentState {
   systemPrompt?: string; model?: string;
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
   lastDeployedAt?: string;
+  /** Receipt of the last publish to Microsoft 365 Copilot (Copilot Studio). */
+  m365Copilot?: { envId: string; agentId: string; agentName: string; agentState?: string; channelId?: string; m365CopilotEnabled?: boolean; publishedAt: string };
   [k: string]: unknown;
 }
 
@@ -2353,6 +2355,52 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setPublishResult({ ok: false, error: e?.message || String(e) }); }
     finally { setPublishing(false); }
   }, [id, save, reload, dirty, lastSaveError, state.description, state.alias]);
+
+  // ---- publish to Microsoft 365 Copilot (Copilot Studio) ----
+  const [m365Envs, setM365Envs] = useState<{ id: string; displayName: string }[]>([]);
+  const [m365EnvId, setM365EnvId] = useState('');
+  const [m365EnvLoaded, setM365EnvLoaded] = useState(false);
+  const [m365EnvError, setM365EnvError] = useState<string | null>(null);
+  const [m365Available, setM365Available] = useState(true);
+  const [m365Publishing, setM365Publishing] = useState(false);
+  const [m365Result, setM365Result] = useState<any>(null);
+  const loadM365Envs = useCallback(async () => {
+    if (id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/m365-copilot`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        const envs = (j.environments || []) as { id: string; displayName: string }[];
+        setM365Envs(envs);
+        setM365EnvError(j.envError || null);
+        // Prefer the persisted env, then the configured default, then the first.
+        const persisted = state.m365Copilot?.envId;
+        setM365EnvId((cur) => cur || persisted || j.defaultEnvId || envs[0]?.id || '');
+      } else {
+        setM365EnvError(j?.error || `HTTP ${r.status}`);
+      }
+    } catch (e: any) { setM365EnvError(e?.message || String(e)); }
+    finally { setM365EnvLoaded(true); }
+  }, [id, state.m365Copilot]);
+  useEffect(() => { if (tab === 'publish' && !m365EnvLoaded) loadM365Envs(); }, [tab, m365EnvLoaded, loadM365Envs]);
+  const publishM365 = useCallback(async () => {
+    setM365Publishing(true); setM365Result(null);
+    try {
+      if (dirty) {
+        const saved = await save();
+        if (!saved) { setM365Result({ ok: false, error: `Couldn't save before publishing: ${lastSaveError() || 'unknown save error'}` }); return; }
+      }
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/m365-copilot`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ envId: m365EnvId || undefined, description: state.description, availableInM365Copilot: m365Available }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (!r.ok && j && j.ok === undefined) j.ok = false;
+      setM365Result(j);
+      if (j.ok) await reload();
+    } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
+    finally { setM365Publishing(false); }
+  }, [id, m365EnvId, m365Available, dirty, save, reload, lastSaveError, state.description]);
 
   // ---- delete this agent (owner-scoped via the item DELETE route) ----
   const [deleting, setDeleting] = useState(false);
@@ -2728,6 +2776,82 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     )}
                     {publishResult.error && <div>{publishResult.error}</div>}
                     {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {/* ---- Publish to Microsoft 365 Copilot (Copilot Studio) ---- */}
+              <div style={{ height: 1, background: tokens.colorNeutralStroke2, margin: '20px 0' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Subtitle2>Publish to Microsoft 365 Copilot</Subtitle2>
+                <Badge appearance="tint" color="brand">Copilot Studio</Badge>
+              </div>
+              <Caption1>
+                Surfaces this data agent as a Copilot Studio agent and enables the Teams + Microsoft 365 Copilot channel,
+                so users can discover and chat with it in M365 Copilot. After publishing, a tenant admin approves it in the
+                Microsoft 365 admin center (Agents → All agents → Requests).
+              </Caption1>
+              {!m365EnvLoaded && <Spinner size="tiny" label="Loading Power Platform environments…" labelPosition="after" style={{ marginTop: 8 }} />}
+              {m365EnvLoaded && m365Envs.length === 0 && (
+                <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>No Power Platform environment available</MessageBarTitle>
+                    <div>
+                      Microsoft 365 Copilot publishing requires a Dataverse-enabled Power Platform environment with Copilot Studio enabled.
+                      Set <code>LOOM_COPILOT_STUDIO_ENVIRONMENT_ID</code> and the Dataverse app-user creds
+                      (<code>LOOM_DATAVERSE_CLIENT_ID</code> / <code>LOOM_DATAVERSE_CLIENT_SECRET</code> / <code>LOOM_DATAVERSE_TENANT_ID</code>) on the console app.
+                    </div>
+                    {m365EnvError && <div style={{ marginTop: 4 }}><em>Detail:</em> {m365EnvError}</div>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {m365EnvLoaded && m365Envs.length > 0 && (
+                <>
+                  <Field label="Power Platform environment" style={{ marginTop: 8, maxWidth: 480 }}>
+                    <Dropdown
+                      value={m365Envs.find((e) => e.id === m365EnvId)?.displayName || ''}
+                      selectedOptions={m365EnvId ? [m365EnvId] : []}
+                      onOptionSelect={(_, d) => d.optionValue && setM365EnvId(d.optionValue)}
+                      placeholder="Select an environment"
+                    >
+                      {m365Envs.map((e) => <Option key={e.id} value={e.id}>{e.displayName}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Switch
+                    checked={m365Available}
+                    onChange={(_, d) => setM365Available(d.checked)}
+                    label="Make agent available in Microsoft 365 Copilot (uncheck for Teams only)"
+                    style={{ marginTop: 4 }}
+                  />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <Button appearance="primary" onClick={publishM365} disabled={m365Publishing || saving || !m365EnvId || sources.length === 0}>
+                      {m365Publishing ? 'Publishing to M365 Copilot…' : 'Publish to M365 Copilot'}
+                    </Button>
+                  </div>
+                </>
+              )}
+              {state.m365Copilot?.publishedAt && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                  <Badge appearance="filled" color="success">M365 Copilot</Badge>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Published {new Date(state.m365Copilot.publishedAt).toLocaleString()} · agent <code>{state.m365Copilot.agentName}</code>
+                  </Caption1>
+                </div>
+              )}
+              {m365Result && (
+                <MessageBar intent={m365Result.ok ? 'success' : m365Result.deferred ? 'warning' : 'error'} style={{ marginTop: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {m365Result.ok ? 'Published to Microsoft 365 Copilot' : m365Result.deferred ? 'Copilot Studio not configured' : 'M365 Copilot publish failed'}
+                    </MessageBarTitle>
+                    {m365Result.ok && (
+                      <div style={{ marginTop: 4 }}>
+                        Copilot Studio agent <strong>{m365Result.agentName}</strong> ({m365Result.agentState || 'published'}) is now on the
+                        Teams + Microsoft 365 Copilot channel{m365Result.m365CopilotEnabled ? ' with M365 Copilot enabled' : ' (Teams only)'}.
+                      </div>
+                    )}
+                    {m365Result.error && <div>{m365Result.error}</div>}
+                    {m365Result.hint && <div style={{ marginTop: 4 }}><em>Next:</em> {m365Result.hint}</div>}
                   </MessageBarBody>
                 </MessageBar>
               )}

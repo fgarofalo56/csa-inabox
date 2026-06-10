@@ -665,6 +665,159 @@ export async function publishToChannel(
 }
 
 // ============================================================
+// Publish to Microsoft 365 Copilot (Teams + M365 channel)
+// ============================================================
+//
+// A Loom data agent becomes discoverable / chattable in Microsoft 365 Copilot
+// by representing it as a Copilot Studio agent (Dataverse msdyn_copilot),
+// publishing it, then enabling the "Teams and Microsoft 365 Copilot" channel
+// with the "make available in Microsoft 365 Copilot" flag set. This mirrors
+// the portal flow (Copilot Studio → Channels → Teams and Microsoft 365 Copilot
+// → "Make agent available in Microsoft 365 Copilot" → Add channel) using the
+// Dataverse Web API so the whole publish is one button in Loom.
+//
+// References:
+//   learn.microsoft.com/microsoft-copilot-studio/publication-add-bot-to-microsoft-teams
+//   learn.microsoft.com/microsoft-365/copilot/extensibility/publish
+//
+// After this completes the agent appears as a pending request in the Microsoft
+// 365 admin center (Agents → All agents → Requests); a tenant admin approves it
+// to make it available to end users in the M365 Copilot Agent Store. That admin
+// approval is a tenant action outside Loom's RBAC — surfaced in the result hint.
+
+/** The Dataverse channel type for the combined Teams + Microsoft 365 Copilot channel. */
+const M365_CHANNEL_TYPE = 'msteams';
+
+/** Resolve the Power Platform environment to publish into, by id or the default env var. */
+export function resolvePublishEnvId(envId?: string): string | null {
+  const v = (envId || process.env.LOOM_COPILOT_STUDIO_ENVIRONMENT_ID || '').trim();
+  return v || null;
+}
+
+/** Find an existing Copilot Studio agent by exact display name (idempotent upsert support). */
+export async function findAgentByName(envId: string, name: string): Promise<CopilotAgent | null> {
+  const host = await envHost(envId);
+  const safe = name.replace(/'/g, "''");
+  const j = await rawCall<{ value: any[] }>(
+    dvUrl(host, '/msdyn_copilots', {
+      $select: AGENT_SELECT,
+      $filter: `msdyn_name eq '${safe}'`,
+      $top: '1',
+    }),
+    { scope: dvScope(host) },
+  );
+  const row = (j.value || [])[0];
+  return row ? mapAgent(row) : null;
+}
+
+/** Create the agent if absent, else patch instructions/description in place. */
+export async function upsertAgentByName(envId: string, body: AgentUpsertBody): Promise<CopilotAgent> {
+  const existing = await findAgentByName(envId, body.name);
+  if (existing) {
+    return updateAgent(envId, existing.id, {
+      description: body.description,
+      instructions: body.instructions,
+      modelDeployment: body.modelDeployment,
+    });
+  }
+  return createAgent(envId, body);
+}
+
+export interface M365PublishResult {
+  envId: string;
+  agentId: string;
+  agentName: string;
+  agentState?: string;
+  channelId: string;
+  channelEnabled: boolean;
+  m365CopilotEnabled: boolean;
+  /** Deep link into the M365 Copilot / Teams app once an admin approves the agent. */
+  shareUrl?: string;
+}
+
+export interface M365PublishInput {
+  name: string;
+  description?: string;
+  instructions?: string;
+  modelDeployment?: string;
+  /** Knowledge / source references to attach (e.g. a published Foundry agent or AI Search index). */
+  knowledge?: KnowledgeSourcePayload[];
+  /** Whether to flip "Make agent available in Microsoft 365 Copilot" (default true). */
+  availableInM365Copilot?: boolean;
+}
+
+/**
+ * End-to-end publish of a Loom data agent to Microsoft 365 Copilot:
+ *   1. upsert the Copilot Studio agent (idempotent by name)
+ *   2. attach any knowledge sources (best-effort; non-fatal on a single failure)
+ *   3. publish the agent (msdyn_PublishCopilot)
+ *   4. enable the Teams + Microsoft 365 Copilot channel with the M365 flag set
+ *
+ * Throws CopilotStudioError on any hard failure so the BFF surfaces the real
+ * Dataverse error verbatim.
+ */
+export async function publishToM365Copilot(envId: string, input: M365PublishInput): Promise<M365PublishResult> {
+  const host = await envHost(envId);
+  const availableInM365Copilot = input.availableInM365Copilot !== false;
+
+  // 1. upsert the agent
+  const agent = await upsertAgentByName(envId, {
+    name: input.name,
+    description: input.description,
+    instructions: input.instructions,
+    modelDeployment: input.modelDeployment,
+  });
+
+  // 2. attach knowledge (best-effort — a single source failure must not abort
+  //    the publish; the source can be re-added from the editor afterwards).
+  if (input.knowledge?.length) {
+    const existing = await listKnowledgeSources(envId, agent.id).catch(() => [] as KnowledgeSource[]);
+    const haveUris = new Set(existing.map((k) => (k.uri || '').toLowerCase()).filter(Boolean));
+    for (const ks of input.knowledge) {
+      if (ks.uri && haveUris.has(ks.uri.toLowerCase())) continue;
+      await addKnowledgeSource(envId, agent.id, ks).catch(() => undefined);
+    }
+  }
+
+  // 3. publish
+  await publishAgent(envId, agent.id);
+
+  // 4. enable Teams + M365 Copilot channel. Re-use the existing channel row if
+  //    one is already present so re-publishing is idempotent.
+  const channels = await listChannels(envId, agent.id).catch(() => [] as CopilotChannel[]);
+  const existingChannel = channels.find((c) => c.type === M365_CHANNEL_TYPE);
+  const channelConfig = {
+    enableTeams: true,
+    enableMicrosoft365Copilot: availableInM365Copilot,
+    // "make agent available in Microsoft 365 Copilot" toggle from the portal panel.
+    makeAvailableInMicrosoft365Copilot: availableInM365Copilot,
+  };
+  let channel: CopilotChannel;
+  if (existingChannel) {
+    const j = await rawCall<any>(dvUrl(host, `/msdyn_botchannels(${existingChannel.id})`), {
+      scope: dvScope(host),
+      method: 'PATCH',
+      body: { msdyn_enabled: true, msdyn_configuration: JSON.stringify(channelConfig) },
+      headers: { prefer: 'return=representation' },
+    });
+    channel = mapChannel(j);
+  } else {
+    channel = await publishToChannel(envId, agent.id, M365_CHANNEL_TYPE, channelConfig);
+  }
+
+  return {
+    envId,
+    agentId: agent.id,
+    agentName: agent.name,
+    agentState: agent.state,
+    channelId: channel.id,
+    channelEnabled: channel.enabled,
+    m365CopilotEnabled: availableInM365Copilot,
+    shareUrl: channel.embedUrl,
+  };
+}
+
+// ============================================================
 // Analytics (Power Platform admin analytics REST)
 // ============================================================
 

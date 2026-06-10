@@ -15,8 +15,31 @@ So for any `*.crm.dynamics.com` scope, Loom routes the token request through a *
 | `LOOM_DATAVERSE_CLIENT_ID` | Same value as `LOOM_MSAL_CLIENT_ID` (e.g. `9844c28c-3b3a-4949-8d63-9eefa3b50a9d`) |
 | `LOOM_DATAVERSE_CLIENT_SECRET` | KV secret `loom-msal-client-secret` (same as `LOOM_MSAL_CLIENT_SECRET`) |
 | `LOOM_DATAVERSE_TENANT_ID` | `tenant().tenantId` from bicep |
+| `LOOM_COPILOT_STUDIO_ENVIRONMENT_ID` | Power Platform environment GUID for the data-agent **Publish to Microsoft 365 Copilot** action (bicep param `loomCopilotStudioEnvironmentId`; empty = the editor lists discoverable envs + honest-gates) |
 
 These are wired automatically by `platform/fiab/bicep/modules/admin-plane/main.bicep` — no manual step.
+
+## Publish a data agent to Microsoft 365 Copilot
+
+Once the App User above exists in a **Copilot Studio-enabled** environment, the
+data-agent editor's **Publish → Publish to Microsoft 365 Copilot** button does the
+end-to-end publish via the Dataverse Web API:
+
+1. Upserts a Copilot Studio agent (`msdyn_copilot`) seeded from the data agent's
+   instructions + typed sources (idempotent by name).
+2. Publishes it (`msdyn_PublishCopilot`).
+3. Enables the **Teams and Microsoft 365 Copilot** channel (`msdyn_botchannels`,
+   type `msteams`) with *Make agent available in Microsoft 365 Copilot* set.
+
+Set `LOOM_COPILOT_STUDIO_ENVIRONMENT_ID` (bicep param `loomCopilotStudioEnvironmentId`)
+to pin the target environment; otherwise the editor lists every Dataverse-enabled
+environment the App User can see and lets the author pick one.
+
+**Tenant admin approval (one-time per agent):** after publish, the agent appears as
+a request in the [Microsoft 365 admin center](https://admin.microsoft.com/) →
+**Agents → All agents → Requests**. An admin approves it to make it discoverable in
+the M365 Copilot Agent Store (**Agents → Built by your org**). This approval is a
+tenant action outside Loom's RBAC and cannot be automated by the console.
 
 The manual step is: **register that SP as an Application User in each Dataverse-enabled env**, with an appropriate Security Role.
 

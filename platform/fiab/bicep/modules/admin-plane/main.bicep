@@ -242,6 +242,9 @@ param loomDlCacheTtlSeconds int = 3600
 @description('Entra group object ID whose members may run the Ops Admin Copilot ARM/config actions (scale capacity, toggle the Synapse outbound-access policy, create workspaces). Empty = any signed-in admin (matches the rest of the admin pane). Recommended: a dedicated "Loom Ops Admins" group. Membership is checked via Microsoft Graph transitiveMembers using the Console UAMI Group.Read.All AppRole (already granted by identity-graph-rbac).')
 param loomOpsAdminEntraGroup string = ''
 
+@description('Power Platform environment GUID that the data-agent "Publish to Microsoft 365 Copilot" action targets (Copilot Studio agent + Teams/M365 Copilot channel via Dataverse). Empty = the editor surfaces an honest infra-gate and lists any environments the Dataverse app-user can see. Requires the LOOM_DATAVERSE_* app-user creds and Copilot Studio enabled in the environment. See docs/fiab/dataverse-app-user.md.')
+param loomCopilotStudioEnvironmentId string = ''
+
 @description('Enable the OneLake Security tab (F7) ADLS-ACL backend on the Console app (sets LOOM_ONELAKE_SECURITY_ACL=true). Requires the Console UAMI to hold Storage Blob Data Owner on the DLZ storage account — deploy synapse.bicep with loomOnelakeSecurityEnabled=true. Off by default.')
 param loomOnelakeSecurityEnabled bool = false
 
@@ -2190,6 +2193,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
+            // Power Platform environment for the data-agent "Publish to Microsoft
+            // 365 Copilot" action (Copilot Studio agent + Teams/M365 Copilot
+            // channel via Dataverse). Empty = editor lists discoverable envs +
+            // honest-gates. See docs/fiab/dataverse-app-user.md.
+            { name: 'LOOM_COPILOT_STUDIO_ENVIRONMENT_ID', value: loomCopilotStudioEnvironmentId }
             // Power Apps canvas web-player base for the in-Loom "Play / embed"
             // tab + Studio tab (powerplatform-client.powerAppPlayerEmbedUri).
             // Commercial = apps.powerapps.com (the code default). Sovereign
