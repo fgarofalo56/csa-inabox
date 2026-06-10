@@ -1163,6 +1163,13 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [subKeys, setSubKeys] = useState<Record<string, { primaryKey?: string; secondaryKey?: string }>>({});
   const [subKeyBusy, setSubKeyBusy] = useState<string | null>(null);
   const [subKeyErr, setSubKeyErr] = useState<{ sid: string; msg: string } | null>(null);
+  // Subscription state transitions (Suspend / Activate / Cancel) — real ARM
+  // PATCH .../subscriptions/{sid} via /api/marketplace/subscriptions/[sid].
+  const [subStateBusy, setSubStateBusy] = useState<string | null>(null);
+  const [subStateErr, setSubStateErr] = useState<{ sid: string; msg: string } | null>(null);
+  // Key regeneration — real ARM POST regenerate{Primary,Secondary}Key + listSecrets
+  // via /api/marketplace/subscriptions/[sid]/keys/regenerate?which=...
+  const [subRegenBusy, setSubRegenBusy] = useState<{ sid: string; which: 'primary' | 'secondary' } | null>(null);
 
   const revealSubKeys = useCallback(async (sid: string) => {
     // Toggle off if already revealed.
@@ -1176,6 +1183,44 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) { setSubKeyErr({ sid, msg: e?.message || String(e) }); }
     finally { setSubKeyBusy(null); }
   }, [subKeys]);
+
+  // Suspend / Activate / Cancel — real ARM PATCH .../subscriptions/{sid} (If-Match:*).
+  // The BFF returns the updated SubscriptionContract; we patch the row in place.
+  const changeSubState = useCallback(async (sid: string, newState: 'active' | 'suspended' | 'cancelled') => {
+    setSubStateBusy(sid); setSubStateErr(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: newState }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSubStateErr({ sid, msg: j.error || `HTTP ${r.status}` }); return; }
+      const resolved = j.subscription?.state ?? newState;
+      setSubs((cur) => ({
+        ...cur,
+        data: (cur.data || []).map((s: any) => (s.name === sid ? { ...s, state: resolved } : s)),
+      }));
+    } catch (e: any) { setSubStateErr({ sid, msg: e?.message || String(e) }); }
+    finally { setSubStateBusy(null); }
+  }, []);
+
+  // Regenerate a subscription key — real ARM POST regenerate{Primary,Secondary}Key,
+  // then listSecrets so the fresh value is shown immediately (old key is revoked).
+  const regenKey = useCallback(async (sid: string, which: 'primary' | 'secondary') => {
+    setSubRegenBusy({ sid, which }); setSubKeyErr(null);
+    try {
+      const r = await fetch(
+        `/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys/regenerate?which=${which}`,
+        { method: 'POST' },
+      );
+      const j = await r.json();
+      if (!j.ok) { setSubKeyErr({ sid, msg: j.error || `HTTP ${r.status}` }); return; }
+      // Reveal-in-place: update both keys (listSecrets returns the full pair).
+      setSubKeys((cur) => ({ ...cur, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
+    } catch (e: any) { setSubKeyErr({ sid, msg: e?.message || String(e) }); }
+    finally { setSubRegenBusy(null); }
+  }, []);
 
   const loadApis = useCallback(async () => {
     if (isNew) return;
@@ -1438,17 +1483,11 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                 Subscriptions scoped to this product. Use <strong>Show keys</strong> to reveal the primary/secondary key (resolved server-side via listSecrets — keys never persist in the browser).
               </Caption1>
             </div>
-            {/* Honest gate: APIM exposes Suspend / Activate / Cancel state transitions and
-                key regeneration on subscriptions. Those write-paths have no BFF route in
-                this deployment yet, so they are surfaced as a tracked gap rather than a
-                dead button. */}
-            <MessageBar intent="info">
-              <MessageBarBody>
-                <MessageBarTitle>Read + reveal only</MessageBarTitle>
-                State transitions (Suspend / Activate / Cancel) and key <em>regeneration</em> are not yet wired — they need a
-                {' '}<code>PATCH/POST /api/apim/subscriptions/&#123;sid&#125;</code> route (<code>updateSubscriptionState</code> / <code>regenerateSubscriptionKey</code> on the ARM client). Reveal + copy below are live.
-              </MessageBarBody>
-            </MessageBar>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Click a subscription&apos;s <strong>state badge</strong> to Suspend, Activate, or Cancel it (real ARM <code>PATCH .../subscriptions/&#123;sid&#125;</code>).
+              {' '}Use <strong>Regen</strong> next to a revealed key to rotate it — the old key is revoked immediately
+              (<code>regeneratePrimaryKey</code>/<code>regenerateSecondaryKey</code> + <code>listSecrets</code>).
+            </Caption1>
             {subs.loading && <Spinner size="tiny" label="Loading subscriptions…" labelPosition="after" />}
             {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
             {subs.data && (
@@ -1470,7 +1509,41 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                       <TableRow key={sub.name}>
                         <TableCell><code>{sub.name}</code></TableCell>
                         <TableCell>{sub.displayName || '—'}</TableCell>
-                        <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
+                        <TableCell>
+                          {['active', 'suspended'].includes(sub.state) ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                              <Menu>
+                                <MenuTrigger disableButtonEnhancement>
+                                  <Tooltip content="Change subscription state" relationship="label">
+                                    <Badge
+                                      appearance="outline"
+                                      color={sub.state === 'active' ? 'success' : 'warning'}
+                                      style={{ cursor: 'pointer' }}
+                                    >
+                                      {sub.state}{subStateBusy === sub.name ? ' …' : ' ▾'}
+                                    </Badge>
+                                  </Tooltip>
+                                </MenuTrigger>
+                                <MenuPopover>
+                                  <MenuList>
+                                    {sub.state === 'suspended' && (
+                                      <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'active')}>Activate</MenuItem>
+                                    )}
+                                    {sub.state === 'active' && (
+                                      <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'suspended')}>Suspend</MenuItem>
+                                    )}
+                                    <MenuItem disabled={subStateBusy === sub.name} onClick={() => changeSubState(sub.name, 'cancelled')}>Cancel</MenuItem>
+                                  </MenuList>
+                                </MenuPopover>
+                              </Menu>
+                              {subStateErr && subStateErr.sid === sub.name && (
+                                <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{subStateErr.msg}</Caption1>
+                              )}
+                            </div>
+                          ) : (
+                            <Badge appearance="outline" color="informative">{sub.state || '—'}</Badge>
+                          )}
+                        </TableCell>
                         <TableCell>{sub.createdDate || '—'}</TableCell>
                         <TableCell>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1493,6 +1566,22 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                                     {revealed[k] && (
                                       <Button size="small" appearance="transparent" icon={<Copy20Regular />} aria-label={`Copy ${k === 'primaryKey' ? 'primary' : 'secondary'} key`} onClick={() => navigator.clipboard?.writeText(revealed[k]!).catch(() => {})} />
                                     )}
+                                    {(() => {
+                                      const which = k === 'primaryKey' ? 'primary' : 'secondary';
+                                      const busy = !!subRegenBusy && subRegenBusy.sid === sub.name && subRegenBusy.which === which;
+                                      return (
+                                        <Button
+                                          size="small"
+                                          appearance="transparent"
+                                          icon={<ArrowSync20Regular />}
+                                          disabled={!!subRegenBusy}
+                                          aria-label={`Regenerate ${which} key for ${sub.name}`}
+                                          onClick={() => regenKey(sub.name, which)}
+                                        >
+                                          {busy ? 'Regenerating…' : 'Regen'}
+                                        </Button>
+                                      );
+                                    })()}
                                   </div>
                                 ))}
                               </div>
