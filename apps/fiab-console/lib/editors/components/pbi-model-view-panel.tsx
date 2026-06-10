@@ -30,6 +30,7 @@ import {
   SemanticModelHierarchyEditor, type ModelHierarchy,
 } from './semantic-model-hierarchy-editor';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SemanticModelCopilotPane } from './semantic-model-copilot-pane';
 
 interface CanvasRelationship extends ModelRelationship { editable?: boolean }
 
@@ -281,6 +282,14 @@ export function PbiModelViewPanel({ workspaceId, datasetId }: PbiModelViewPanelP
             ariaLabel="TMSL model.bim preview"
           />
         </div>
+      </div>
+
+      {/* Copilot · model structure (Fabric Build 2026 #26) — NL edits the
+          structure (rename measures, descriptions, suggested relationships)
+          with auto-checkpoint + restore. Loom-native by default; opt-in XMLA
+          write when configured. Reloads the canvas on apply / restore. */}
+      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: 4 }}>
+        <SemanticModelCopilotPane datasetId={datasetId} onChanged={() => void load()} />
       </div>
     </div>
   );
