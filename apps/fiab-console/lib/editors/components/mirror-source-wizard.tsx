@@ -31,6 +31,7 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
+  Layer20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 
@@ -71,6 +72,18 @@ const useStyles = makeStyles({
   connRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   summary: { display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
   sumKey: { color: tokens.colorNeutralForeground3 },
+  icebergCard: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM,
+    marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: `4px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  icebergIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  icebergBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
 });
 
 function toB64(s: string): string {
@@ -320,16 +333,19 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   Optional — leave all unchecked to mirror <strong>every</strong> table the engine discovers. Or load + pick a subset.
                 </Caption1>
                 {createSrc === 'Snowflake' && (
-                  <div style={{ marginTop: 8 }}>
-                    <Checkbox
-                      checked={includeIceberg}
-                      onChange={(_, d) => setIncludeIceberg(!!d.checked)}
-                      label="Include Iceberg tables"
-                    />
-                    <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginLeft: 28 }}>
-                      Also mirror Snowflake-managed Apache Iceberg tables, not just standard tables. The engine reads each
-                      Iceberg table&apos;s metadata from Snowflake and lands it as Bronze Delta.
-                    </Caption1>
+                  <div className={s.icebergCard}>
+                    <span className={s.icebergIcon}><Layer20Regular /></span>
+                    <div className={s.icebergBody}>
+                      <Checkbox
+                        checked={includeIceberg}
+                        onChange={(_, d) => setIncludeIceberg(!!d.checked)}
+                        label="Include Iceberg tables"
+                      />
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Also mirror Snowflake-managed Apache Iceberg tables, not just standard tables. The engine reads each
+                        Iceberg table&apos;s metadata from Snowflake and lands it as Bronze Delta.
+                      </Caption1>
+                    </div>
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
