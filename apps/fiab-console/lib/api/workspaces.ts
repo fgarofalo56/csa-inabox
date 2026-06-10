@@ -224,3 +224,80 @@ export async function deleteWorkspaceItem(workspaceId: string, itemId: string): 
     { method: 'DELETE' },
   );
 }
+
+// --- Task flows (F11) -----------------------------------------------------
+
+export interface TaskFlowStep {
+  id: string;
+  label: string;
+  /** Optional ref to a real WorkspaceItem.id this step represents. */
+  itemId?: string | null;
+  itemType?: string | null;
+  note?: string;
+  /** @xyflow/react canvas position. */
+  x: number;
+  y: number;
+}
+
+export interface TaskFlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface TaskFlow {
+  id: string;
+  workspaceId: string;
+  displayName: string;
+  description?: string;
+  steps: TaskFlowStep[];
+  edges: TaskFlowEdge[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listTaskFlows(workspaceId: string): Promise<TaskFlow[]> {
+  const res = await fetchJson<{ ok: boolean; flows: TaskFlow[] }>(
+    `/api/workspaces/${workspaceId}/task-flows`,
+  );
+  return res.flows ?? [];
+}
+
+export async function createTaskFlow(
+  workspaceId: string,
+  input: { displayName: string; description?: string },
+): Promise<TaskFlow> {
+  const res = await fetchJson<{ ok: boolean; flow: TaskFlow }>(
+    `/api/workspaces/${workspaceId}/task-flows`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+  return res.flow;
+}
+
+export async function getTaskFlow(workspaceId: string, id: string): Promise<TaskFlow> {
+  const res = await fetchJson<{ ok: boolean; flow: TaskFlow }>(
+    `/api/workspaces/${workspaceId}/task-flows/${id}`,
+  );
+  return res.flow;
+}
+
+export async function saveTaskFlow(
+  workspaceId: string,
+  id: string,
+  patch: Partial<Pick<TaskFlow, 'steps' | 'edges' | 'displayName' | 'description'>>,
+): Promise<TaskFlow> {
+  const res = await fetchJson<{ ok: boolean; flow: TaskFlow }>(
+    `/api/workspaces/${workspaceId}/task-flows/${id}`,
+    { method: 'PUT', body: JSON.stringify(patch) },
+  );
+  return res.flow;
+}
+
+export async function deleteTaskFlow(workspaceId: string, id: string): Promise<void> {
+  await fetchJson<{ ok: boolean }>(
+    `/api/workspaces/${workspaceId}/task-flows/${id}`,
+    { method: 'DELETE' },
+  );
+}

@@ -18,6 +18,7 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { WorkspaceCreateWizard } from '@/lib/wizards/workspace-create';
 import { WorkspaceSettingsPane } from '@/lib/panes/workspace-settings';
+import { AzureConnectionsPane } from '@/lib/panes/azure-connections';
 
 interface Workspace {
   id: string; name: string; description?: string;
@@ -143,6 +144,14 @@ export default function AdminWorkspacesPage() {
         <Badge appearance={w.state === 'Active' || !w.state ? 'filled' : 'outline'} color="success" size="small">
           {w.state || 'Active'}
         </Badge>
+      ),
+    },
+    {
+      key: 'connections', label: 'Connections', width: 150, sortable: false, filterable: false,
+      render: (w) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <AzureConnectionsPane workspaceId={w.id} />
+        </span>
       ),
     },
     {

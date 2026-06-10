@@ -109,6 +109,9 @@ var databases = [
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
 //   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
+//   folders           ← F10 nested folder hierarchy (PK /workspaceId)
+//   task-flows        ← F11 task-flow visual step sequences (PK /workspaceId).
+//     Loom-native (Fabric workspace "task flow" parity, no Fabric dependency).
 //   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
 //     registry (Azure-native, no Fabric). Internal shortcuts need no extra
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
