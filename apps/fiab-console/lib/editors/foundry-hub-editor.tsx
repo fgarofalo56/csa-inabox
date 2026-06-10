@@ -24,7 +24,7 @@
  * gates via MessageBar, and refreshes on Reload. No mock data.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Switch,
   Tab, TabList,
@@ -149,10 +149,10 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
       {w.description && <Body1>{w.description}</Body1>}
       <div className={s.metaGrid}>
         {rows.map(([k, v]) => (
-          <>
-            <span key={`k-${k}`} className={s.metaKey}>{k}</span>
-            <span key={`v-${k}`}>{v ?? '—'}</span>
-          </>
+          <Fragment key={String(k)}>
+            <span className={s.metaKey}>{k}</span>
+            <span>{v ?? '—'}</span>
+          </Fragment>
         ))}
       </div>
     </div>

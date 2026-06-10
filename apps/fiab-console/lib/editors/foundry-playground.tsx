@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle1, Subtitle2, Body1, Body1Strong, Caption1, Badge, Spinner, Button,
   SearchBox, Dropdown, Option, Slider, Label, Field, Input, Textarea, Tooltip,
-  Card, Avatar, Divider, Tag,
+  Card, Avatar, Divider, Tag, Checkbox,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, shorthands,
@@ -1173,8 +1173,8 @@ export function AssistantsPlaygroundPanel({ active, nonce, acct = null }: { acti
         <Field label="Instructions"><Textarea value={instructions} onChange={(_, d) => setInstructions(d.value)} rows={4} resize="vertical" disabled={!!assistantId} /></Field>
         <Body1Strong>Tools</Body1Strong>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={codeInterpreter} disabled={!!assistantId} onChange={(e) => setCodeInterpreter(e.target.checked)} /><Caption1>Code interpreter</Caption1></label>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={fileSearch} disabled={!!assistantId} onChange={(e) => setFileSearch(e.target.checked)} /><Caption1>File search</Caption1></label>
+          <Checkbox label="Code interpreter" checked={codeInterpreter} disabled={!!assistantId} onChange={(_, d) => setCodeInterpreter(!!d.checked)} />
+          <Checkbox label="File search" checked={fileSearch} disabled={!!assistantId} onChange={(_, d) => setFileSearch(!!d.checked)} />
         </div>
         {assistantId && <Badge appearance="tint" color="brand">Assistant + thread created</Badge>}
       </div>
