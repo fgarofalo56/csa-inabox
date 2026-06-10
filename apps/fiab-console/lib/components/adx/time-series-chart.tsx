@@ -75,6 +75,16 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     fontSize: '12px', userSelect: 'none',
+    transitionDuration: tokens.durationFaster,
+    transitionProperty: 'background-color, border-color',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      borderColor: tokens.colorNeutralStroke1,
+    },
+  },
+  legendItemPinned: {
+    borderColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorBrandBackground2,
   },
   legendItemDim: { opacity: '0.4' },
   swatch: { width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0 },
@@ -85,8 +95,25 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1, padding: '4px',
   },
   panelTitle: { padding: '2px 6px', fontWeight: '600', fontSize: '12px' },
-  rangeRow: { display: 'flex', alignItems: 'center', gap: '8px', padding: '2px 4px' },
-  range: { flexGrow: 1 },
+  rangeRow: {
+    display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
+    borderRadius: '6px',
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  rangeLabel: {
+    color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap',
+    fontWeight: '600',
+  },
+  rangePair: { display: 'flex', flexDirection: 'column', flexGrow: 1, gap: '2px' },
+  range: {
+    flexGrow: 1, width: '100%', height: '16px', cursor: 'pointer',
+    accentColor: tokens.colorBrandBackground,
+  },
+  rangeReadout: {
+    color: tokens.colorNeutralForeground2, minWidth: '210px',
+    textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+  },
   numInput: { width: '92px' },
 });
 
@@ -262,33 +289,37 @@ export function TimeSeriesChart({ columns, rows, columnTypes, height = 220, comp
         )}
       </div>
 
-      {/* Zoom range slider over the X axis (no re-query). */}
+      {/* Zoom range slider over the X axis (no re-query). The two handles
+          clamp the start and end of the visible window. */}
       <div className={s.rangeRow}>
-        <Tooltip content="Zoom: drag to clamp the start of the visible window" relationship="label">
-          <input
-            className={s.range}
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            value={zoom.lo}
-            aria-label="Zoom window start"
-            onChange={(e) => { const v = Number(e.target.value); setZoom((z) => ({ lo: Math.min(v, z.hi - 0.01), hi: z.hi })); }}
-          />
-        </Tooltip>
-        <Tooltip content="Zoom: drag to clamp the end of the visible window" relationship="label">
-          <input
-            className={s.range}
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            value={zoom.hi}
-            aria-label="Zoom window end"
-            onChange={(e) => { const v = Number(e.target.value); setZoom((z) => ({ lo: z.lo, hi: Math.max(v, z.lo + 0.01) })); }}
-          />
-        </Tooltip>
-        <Caption1 style={{ minWidth: 132, textAlign: 'right' }}>
+        <Caption1 className={s.rangeLabel}>Zoom</Caption1>
+        <div className={s.rangePair}>
+          <Tooltip content="Drag to clamp the start of the visible window" relationship="label">
+            <input
+              className={s.range}
+              type="range"
+              min={0}
+              max={1}
+              step={0.001}
+              value={zoom.lo}
+              aria-label="Zoom window start"
+              onChange={(e) => { const v = Number(e.target.value); setZoom((z) => ({ lo: Math.min(v, z.hi - 0.01), hi: z.hi })); }}
+            />
+          </Tooltip>
+          <Tooltip content="Drag to clamp the end of the visible window" relationship="label">
+            <input
+              className={s.range}
+              type="range"
+              min={0}
+              max={1}
+              step={0.001}
+              value={zoom.hi}
+              aria-label="Zoom window end"
+              onChange={(e) => { const v = Number(e.target.value); setZoom((z) => ({ lo: z.lo, hi: Math.max(v, z.lo + 0.01) })); }}
+            />
+          </Tooltip>
+        </div>
+        <Caption1 className={s.rangeReadout}>
           {fmtX(x0, shape.xIsTime)} → {fmtX(x1, shape.xIsTime)}
         </Caption1>
         {(zoom.lo > 0 || zoom.hi < 1) && (
@@ -308,7 +339,11 @@ export function TimeSeriesChart({ columns, rows, columnTypes, height = 220, comp
             <div
               key={srx.key}
               role="listitem"
-              className={mergeClasses(s.legendItem, isHidden && s.legendItemDim)}
+              className={mergeClasses(
+                s.legendItem,
+                isPinned && s.legendItemPinned,
+                isHidden && s.legendItemDim,
+              )}
               title={`${srx.name} — ${srx.points.length} points`}
             >
               <span className={s.swatch} style={{ backgroundColor: color }} />
