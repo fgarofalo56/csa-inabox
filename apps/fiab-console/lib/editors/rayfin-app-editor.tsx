@@ -95,6 +95,25 @@ const useStyles = makeStyles({
   },
   head: { display: 'flex', alignItems: 'center', gap: '8px' },
   resultWrap: { maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
+  stickyHead: {
+    '& th': {
+      position: 'sticky', top: 0, zIndex: 1,
+      backgroundColor: tokens.colorNeutralBackground1,
+      boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+    },
+  },
+  resultMeta: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: '8px', flexWrap: 'wrap',
+  },
+  spread: { marginLeft: 'auto' },
+  bindingMeta: {
+    display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+    padding: '8px 10px', borderRadius: '6px',
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  modelId: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, wordBreak: 'break-all' },
 });
 
 function CopyBtn({ text }: { text: string }) {
@@ -420,7 +439,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
               {spec.entities.map((e, i) => (
                 <div key={i} className={s.entity}>
                   <div className={s.fieldRow}>
-                    <Input value={e.name} onChange={(_, d) => patchEntity(i, { name: d.value })} />
+                    <Input value={e.name} aria-label={`Entity ${i + 1} name`} onChange={(_, d) => patchEntity(i, { name: d.value })} />
                     <Button size="small" appearance="subtle" icon={<Add20Regular />}
                       onClick={() => patchEntity(i, { fields: [...e.fields, { name: 'field', type: 'text' }] })}>Field</Button>
                     <Tooltip content="Remove entity" relationship="label">
@@ -430,13 +449,15 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                   </div>
                   {e.fields.map((f, fi) => (
                     <div key={fi} className={s.fieldRow} style={{ paddingLeft: 16 }}>
-                      <Input size="small" value={f.name} onChange={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, name: d.value } : x) })} />
+                      <Input size="small" value={f.name} aria-label="Field name" onChange={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, name: d.value } : x) })} />
                       <Dropdown size="small" value={f.type} selectedOptions={[f.type]}
                         onOptionSelect={(_, d) => patchEntity(i, { fields: e.fields.map((x, xi) => xi === fi ? { ...x, type: (d.optionValue as FieldType) } : x) })}>
                         {(['text', 'boolean', 'date', 'number'] as FieldType[]).map((t) => <Option key={t} value={t}>{t}</Option>)}
                       </Dropdown>
-                      <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                        onClick={() => patchEntity(i, { fields: e.fields.filter((_, xi) => xi !== fi) })} />
+                      <Tooltip content="Remove field" relationship="label">
+                        <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                          onClick={() => patchEntity(i, { fields: e.fields.filter((_, xi) => xi !== fi) })} />
+                      </Tooltip>
                     </div>
                   ))}
                 </div>
@@ -515,9 +536,9 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
 
               {binding && (
                 <>
-                  <div className={s.fieldRow}>
+                  <div className={s.bindingMeta}>
                     {sourceBadge(binding.source)}
-                    <Caption1>{binding.modelId}</Caption1>
+                    <Caption1 className={s.modelId}>{binding.modelId}</Caption1>
                   </div>
                   {binding.source === 'powerbi' && (
                     <Field label="Power BI workspace id" hint="Required to query a Fabric/Power BI dataset (opt-in).">
@@ -543,22 +564,30 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
 
                   {probeErr && <MessageBar intent="error"><MessageBarBody>{probeErr}</MessageBarBody></MessageBar>}
                   {probeRows && (
-                    <div className={s.resultWrap}>
-                      {probeRows.length === 0 ? (
-                        <Caption1 style={{ padding: 8, display: 'block' }}>Query returned 0 rows (binding works).</Caption1>
-                      ) : (
-                        <Table size="extra-small" aria-label="DAX probe result">
-                          <TableHeader>
-                            <TableRow>{probeCols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {probeRows.slice(0, 50).map((r, ri) => (
-                              <TableRow key={ri}>{probeCols.map((c) => <TableCell key={c}>{String((r as any)[c] ?? '')}</TableCell>)}</TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                    <>
+                      <div className={s.resultMeta}>
+                        <Caption1>
+                          {probeRows.length === 0
+                            ? 'Query returned 0 rows — binding works.'
+                            : `${probeRows.length} row${probeRows.length === 1 ? '' : 's'}${probeRows.length > 50 ? ' (showing first 50)' : ''} · ${probeCols.length} column${probeCols.length === 1 ? '' : 's'}`}
+                        </Caption1>
+                        {probeRows.length > 0 && <Badge appearance="tint" color="success" className={s.spread}>Live result</Badge>}
+                      </div>
+                      {probeRows.length > 0 && (
+                        <div className={s.resultWrap}>
+                          <Table size="extra-small" aria-label="DAX probe result" className={s.stickyHead}>
+                            <TableHeader>
+                              <TableRow>{probeCols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {probeRows.slice(0, 50).map((r, ri) => (
+                                <TableRow key={ri}>{probeCols.map((c) => <TableCell key={c}>{String((r as any)[c] ?? '')}</TableCell>)}</TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
-                    </div>
+                    </>
                   )}
 
                   {binding.queries.length > 0 && (
@@ -568,11 +597,13 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                       {binding.queries.map((q, qi) => (
                         <div key={qi} className={s.entity}>
                           <div className={s.fieldRow}>
-                            <Input size="small" value={q.name}
+                            <Input size="small" value={q.name} aria-label={`Saved query ${qi + 1} name`}
                               onChange={(_, d) => setBinding((prev) => prev ? { ...prev, queries: prev.queries.map((x, xi) => xi === qi ? { ...x, name: d.value } : x) } : prev)} />
                             <Button size="small" appearance="subtle" onClick={() => setDax(q.dax)}>Load</Button>
-                            <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                              onClick={() => setBinding((prev) => prev ? { ...prev, queries: prev.queries.filter((_, xi) => xi !== qi) } : prev)} />
+                            <Tooltip content="Delete saved query" relationship="label">
+                              <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                                onClick={() => setBinding((prev) => prev ? { ...prev, queries: prev.queries.filter((_, xi) => xi !== qi) } : prev)} />
+                            </Tooltip>
                           </div>
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap' }}>{q.dax}</Caption1>
                         </div>
