@@ -163,3 +163,106 @@ def test_monitoring_bicep_has_scheduled_analytics_rules(tmp_path):
     assert len(scheduled_rules) >= 2, (
         f"expected >=2 Sentinel scheduled rules; found {len(scheduled_rules)}"
     )
+
+
+# ----- A-4 / PMF-64 IL5/GCC-High MAF orchestration tier -----------------
+# The MAF (Microsoft Agent Framework) tier is the Gov AOAI-direct copilot
+# backend for GCC-High / IL5 (no AI Foundry Hub at IL4+). These tests are the
+# deterministic half of the "full-stack gov deploy verification" — they prove
+# the loom-copilot-maf Container App emits with the correct sovereign-cloud
+# wiring, and that copilotMafEnabled is threaded through the top-level template.
+
+MAIN_BICEP = REPO_ROOT / "platform" / "fiab" / "bicep" / "main.bicep"
+COPILOT_MAF_BICEP = BICEP_MODULES / "copilot" / "maf.bicep"
+
+
+def _container_env(arm: dict) -> dict:
+    """Collect the env name→entry map of the first containerApps container."""
+    for r in arm.get("resources", []):
+        if "Microsoft.App/containerApps" in r.get("type", ""):
+            containers = (
+                r.get("properties", {})
+                .get("template", {})
+                .get("containers", [])
+            )
+            if containers:
+                return {e["name"]: e for e in containers[0].get("env", [])}
+    return {}
+
+
+@needs_az
+def test_maf_bicep_builds_to_valid_arm(tmp_path):
+    arm = _build_bicep(COPILOT_MAF_BICEP, tmp_path)
+    assert arm.get("$schema", "").startswith("https://schema.management.azure.com/")
+    container_apps = [
+        r for r in arm.get("resources", [])
+        if "Microsoft.App/containerApps" in r.get("type", "")
+    ]
+    assert container_apps, "no Microsoft.App/containerApps resource in maf.bicep"
+    assert any(
+        r.get("name", "").strip("[]").replace("'", "") == "loom-copilot-maf"
+        or "loom-copilot-maf" in json.dumps(r.get("name"))
+        for r in container_apps
+    ), "loom-copilot-maf Container App not found"
+
+
+@needs_az
+def test_maf_bicep_wires_gov_aoai_direct(tmp_path):
+    """MAF must target the sovereign Gov AOAI plane, never commercial."""
+    arm = _build_bicep(COPILOT_MAF_BICEP, tmp_path)
+    env = _container_env(arm)
+    # AZURE_CLOUD is hard-set to the Gov discriminator.
+    assert env.get("AZURE_CLOUD", {}).get("value") == "AzureUSGovernment", (
+        "MAF AZURE_CLOUD must be AzureUSGovernment"
+    )
+    # The Gov Cognitive Services audience — never the commercial one.
+    aud = env.get("LOOM_AOAI_AUDIENCE", {}).get("value", "")
+    assert aud == "https://cognitiveservices.azure.us", (
+        f"MAF LOOM_AOAI_AUDIENCE must be the Gov audience; got {aud!r}"
+    )
+    assert "cognitiveservices.azure.com" not in json.dumps(env), (
+        "MAF must not reference the commercial cognitiveservices.azure.com audience"
+    )
+    # Tier discriminator the Console orchestrator keys off.
+    assert env.get("LOOM_TIER", {}).get("value") == "maf"
+
+
+@needs_az
+def test_maf_bicep_has_health_probes_and_internal_ingress(tmp_path):
+    """/health probes + VNet-internal-only ingress (never public)."""
+    arm = _build_bicep(COPILOT_MAF_BICEP, tmp_path)
+    blob = json.dumps(arm)
+    assert "/health" in blob, "MAF must expose /health liveness+readiness probes"
+    app = next(
+        r for r in arm["resources"]
+        if "Microsoft.App/containerApps" in r.get("type", "")
+    )
+    ingress = app["properties"]["configuration"]["ingress"]
+    assert ingress.get("external") is False, "MAF ingress must be VNet-internal (external=false)"
+    assert ingress.get("targetPort") == 3100, "MAF must serve on port 3100"
+
+
+@needs_az
+def test_maf_bicep_boundary_allowed_values(tmp_path):
+    """boundary param accepts exactly the two Gov boundaries MAF serves."""
+    arm = _build_bicep(COPILOT_MAF_BICEP, tmp_path)
+    allowed = arm["parameters"]["boundary"].get("allowedValues", [])
+    assert set(allowed) == {"GCC-High", "IL5"}, (
+        f"MAF boundary allowedValues must be GCC-High + IL5; got {allowed}"
+    )
+
+
+@needs_az
+def test_main_bicep_threads_copilot_maf_enabled(tmp_path):
+    """GAP-1 regression: copilotMafEnabled must be a real top-level param.
+
+    Before this fix the flag only existed on admin-plane/main.bicep with a
+    default of false, so the MAF tier could never activate via the gov
+    .bicepparam files. This guards the wiring through main.bicep.
+    """
+    arm = _build_bicep(MAIN_BICEP, tmp_path)
+    assert "copilotMafEnabled" in arm.get("parameters", {}), (
+        "copilotMafEnabled is not a parameter of main.bicep — "
+        "the gov params cannot enable the MAF tier"
+    )
+    assert arm["parameters"]["copilotMafEnabled"]["type"] == "bool"

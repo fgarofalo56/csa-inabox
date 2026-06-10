@@ -174,6 +174,9 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
+param copilotMafEnabled bool = false
+
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set any of these (via params/<boundary>.bicepparam readEnvironmentVariable('EXISTING_*',''))
 // to reuse an EXISTING resource in any RG/sub instead of provisioning a new one.
@@ -419,6 +422,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
+    copilotMafEnabled: copilotMafEnabled
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg
     existingApimName: existingApimName

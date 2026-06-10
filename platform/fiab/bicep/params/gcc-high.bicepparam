@@ -37,6 +37,13 @@ param catalogPrimary = 'purview'          // UC managed not yet in Gov
 // AI orchestration (Gov)
 param agentOrchestrator = 'maf'           // Microsoft Agent Framework + AOAI direct
 param foundryPortalEnabled = false        // Foundry portal NOT at IL4
+// MAF orchestration tier (loom-copilot-maf) — Gov AOAI-direct copilot backend.
+// GCC-High is a supported MAF boundary. The admin-plane only activates it when
+// containerPlatform==containerApps + deployAppsEnabled; on the AKS compute path
+// below it is a safe no-op and the Console copilot-orchestrator falls back to
+// Gov AOAI-direct (no broken deploy, no silent claim).
+// See docs/fiab/runbooks/il5-gcch-fullstack-verification.md.
+param copilotMafEnabled = true
 
 // Capacity sizing
 param capacitySku = 'F8'

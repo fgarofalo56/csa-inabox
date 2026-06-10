@@ -1099,8 +1099,6 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
     tags: complianceTags
   }
 }
-  }
-}
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.

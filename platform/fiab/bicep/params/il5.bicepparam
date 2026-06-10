@@ -34,6 +34,13 @@ param catalogPrimary = 'atlas-aks'        // Atlas on AKS — Purview Data Map n
 // AI orchestration (IL5)
 param agentOrchestrator = 'maf'           // Foundry Agent Service NOT IL5
 param foundryPortalEnabled = false
+// MAF orchestration tier (loom-copilot-maf) — Gov AOAI-direct copilot backend.
+// IL5 is exactly the boundary it exists for (no AI Foundry Hub here). The
+// admin-plane only activates it when containerPlatform==containerApps +
+// deployAppsEnabled; on the AKS compute path below it is a safe no-op and the
+// Console copilot-orchestrator falls back to Gov AOAI-direct (no broken deploy,
+// no silent claim). See docs/fiab/runbooks/il5-gcch-fullstack-verification.md.
+param copilotMafEnabled = true
 
 // Capacity sizing
 param capacitySku = 'F8'
