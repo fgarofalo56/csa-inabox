@@ -63,6 +63,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Phase 4
   'ml-model':             reg(() => import('./phase4-editors'),           'MlModelEditor'),
   'ml-experiment':        reg(() => import('./ml-experiment-editor'),     'MlExperimentEditor'),
+  'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
   'graphql-api':          reg(() => import('./phase4-editors'),           'GraphqlApiEditor'),
   'user-data-function':   reg(() => import('./phase4-editors'),           'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4-editors'),           'VariableLibraryEditor'),
