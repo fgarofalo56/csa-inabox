@@ -46,6 +46,7 @@ import {
   Sparkle16Regular, Info16Regular, Wrench16Regular,
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
   DataBarVertical20Regular,
+  ArrowImport20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
   ArrowDownload20Regular,
@@ -104,6 +105,7 @@ import { QueryParamsBar, substituteSynapse, type QueryParam } from './components
 import { ResultVisualize } from './components/result-visualize';
 import { ReportVisualDesigner } from './components/report-visual-designer';
 import { ReportSubscriptionsPanel } from './components/report-subscriptions-panel';
+import { SqlMigrationWizard } from './sql-migration-wizard';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -8749,7 +8751,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
   // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'migrate'>('query');
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -9201,11 +9203,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'migrate')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
+            <Tab value="migrate" icon={<ArrowImport20Regular />}>Migrate</Tab>
           </TabList>
+          {editorTab === 'migrate' && <SqlMigrationWizard />}
           {editorTab === 'monitoring' && (
             isNew
               ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
