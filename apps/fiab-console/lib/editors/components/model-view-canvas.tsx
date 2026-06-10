@@ -590,7 +590,20 @@ const panelStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: 12 },
   measuresHead: { display: 'flex', alignItems: 'center', gap: 8 },
   spacer: { flex: 1 },
-  descTableWrap: { maxHeight: 420, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  descTableWrap: {
+    maxHeight: '420px', overflow: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  descDialogBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  descIntro: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  descIntroSpacer: { flex: 1 },
+  descCheckCol: { width: '44px' },
+  descTypeCol: { width: '90px' },
+  descObjectCol: { width: '200px' },
+  descObjectCell: { wordBreak: 'break-word' },
+  descTextarea: { width: '100%' },
+  descEmpty: { fontStyle: 'italic', color: tokens.colorNeutralForeground3 },
 });
 
 /** One proposed description row in the review dialog (measure or table). */
@@ -808,6 +821,10 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
   const relationships = data?.relationships ?? [];
   const measures = data?.measures ?? [];
 
+  // Derived selection state for the bulk-description review dialog.
+  const descSelectedCount = descRows.filter((r) => r.selected && r.description.trim()).length;
+  const descAllSelected = descRows.length > 0 && descRows.every((r) => r.selected);
+
   return (
     <div className={ps.wrap}>
       {loading && <Spinner size="tiny" label="Loading model…" labelPosition="after" />}
@@ -883,7 +900,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                 <TableCell style={{ maxWidth: 280 }}>
                   {m.description
                     ? <Caption1>{m.description}</Caption1>
-                    : <Caption1 style={{ fontStyle: 'italic', color: tokens.colorNeutralForeground3 }}>—</Caption1>}
+                    : <Caption1 className={ps.descEmpty}>—</Caption1>}
                 </TableCell>
                 <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <code style={{ fontSize: 11 }}>{m.expression.slice(0, 160)}</code>
@@ -912,7 +929,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           <DialogBody>
             <DialogTitle>AI-generated descriptions</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={ps.descDialogBody}>
                 {descBusy && <Spinner size="tiny" label="Generating descriptions with Azure OpenAI…" labelPosition="after" />}
                 {descErr && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not generate descriptions</MessageBarTitle>{descErr}</MessageBarBody></MessageBar>
@@ -935,17 +952,31 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                 )}
                 {!descBusy && !aiGate && descRows.length > 0 && (
                   <>
-                    <Caption1>
-                      Review and edit the proposed descriptions, then save. Only the checked rows are written
-                      to the model catalog (Cosmos) — nothing is saved until you click “Save descriptions”.
-                    </Caption1>
+                    <div className={ps.descIntro}>
+                      <Caption1>
+                        Review and edit the proposed descriptions, then save. Only the checked rows are written
+                        to the model catalog (Cosmos) — nothing is saved until you click “Save descriptions”.
+                      </Caption1>
+                      <div className={ps.descIntroSpacer} />
+                      <Badge appearance="tint" color="brand">
+                        {descSelectedCount} of {descRows.length} selected
+                      </Badge>
+                    </div>
                     <div className={ps.descTableWrap}>
                       <Table aria-label="Proposed descriptions" size="small">
                         <TableHeader>
                           <TableRow>
-                            <TableHeaderCell style={{ width: 44 }}> </TableHeaderCell>
-                            <TableHeaderCell style={{ width: 90 }}>Type</TableHeaderCell>
-                            <TableHeaderCell style={{ width: 200 }}>Object</TableHeaderCell>
+                            <TableHeaderCell className={ps.descCheckCol}>
+                              <Checkbox
+                                checked={descAllSelected ? true : descSelectedCount > 0 ? 'mixed' : false}
+                                aria-label={descAllSelected ? 'Deselect all descriptions' : 'Select all descriptions'}
+                                onChange={(_, d) =>
+                                  setDescRows((prev) => prev.map((r) => ({ ...r, selected: !!d.checked })))
+                                }
+                              />
+                            </TableHeaderCell>
+                            <TableHeaderCell className={ps.descTypeCol}>Type</TableHeaderCell>
+                            <TableHeaderCell className={ps.descObjectCol}>Object</TableHeaderCell>
                             <TableHeaderCell>Description</TableHeaderCell>
                           </TableRow>
                         </TableHeader>
@@ -964,12 +995,12 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                               <TableCell>
                                 <Badge appearance="outline" color={row.kind === 'measure' ? 'brand' : 'informative'}>{row.kind}</Badge>
                               </TableCell>
-                              <TableCell style={{ wordBreak: 'break-word' }}><Caption1>{row.label}</Caption1></TableCell>
+                              <TableCell className={ps.descObjectCell}><Caption1>{row.label}</Caption1></TableCell>
                               <TableCell>
                                 <Textarea
                                   value={row.description}
                                   resize="vertical"
-                                  style={{ width: '100%' }}
+                                  className={ps.descTextarea}
                                   aria-label={`Description for ${row.label}`}
                                   onChange={(_, d) =>
                                     setDescRows((prev) => prev.map((r, j) => (j === i ? { ...r, description: d.value } : r)))
@@ -992,10 +1023,11 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
               {!aiGate && descRows.length > 0 && (
                 <Button
                   appearance="primary"
+                  icon={<Sparkle20Regular />}
                   onClick={() => void saveDescriptions()}
-                  disabled={saveBusy || descBusy || descRows.every((r) => !r.selected || !r.description.trim())}
+                  disabled={saveBusy || descBusy || descSelectedCount === 0}
                 >
-                  {saveBusy ? 'Saving…' : `Save descriptions (${descRows.filter((r) => r.selected && r.description.trim()).length})`}
+                  {saveBusy ? 'Saving…' : `Save descriptions (${descSelectedCount})`}
                 </Button>
               )}
             </DialogActions>
