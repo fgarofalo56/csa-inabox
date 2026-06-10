@@ -27,7 +27,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getItem, createItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { WarehouseContent, RollupMethod, StatusColor, StatusOperator, StatusMetricKind, StatusRule } from '@/lib/apps/content-bundles/types';
 import {
-  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
+  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field, Link,
   Tab, TabList, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -7184,6 +7184,20 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [provisionResult, setProvisionResult] = useState<{ ehId?: string; asaJobId?: string | null; steps?: string[]; partial?: boolean; hint?: string | null } | null>(null);
   const [provisionErr, setProvisionErr] = useState<string | null>(null);
   const [provisionHint, setProvisionHint] = useState<string | null>(null);
+  // Add-alert (embedded Activator): the ribbon quick-create lazily creates a
+  // REAL backing Activator item linked to this stream and pre-seeds an Azure
+  // Monitor scheduled-query alert rule from the stream's source. No Fabric.
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertName, setAlertName] = useState('');
+  const [alertProperty, setAlertProperty] = useState('value');
+  const [alertOperator, setAlertOperator] = useState<'gt' | 'lt' | 'gte' | 'lte' | 'eq' | 'ne'>('gt');
+  const [alertThreshold, setAlertThreshold] = useState('0');
+  const [alertFrequency, setAlertFrequency] = useState<'PT1M' | 'PT5M' | 'PT15M' | 'PT1H'>('PT5M');
+  const [alertEmail, setAlertEmail] = useState('');
+  const [alertBusy, setAlertBusy] = useState(false);
+  const [alertErr, setAlertErr] = useState<string | null>(null);
+  const [alertHint, setAlertHint] = useState<string | null>(null);
+  const [alertResult, setAlertResult] = useState<{ activatorId: string; activatorName?: string; ruleId: string; source?: { kind: string; name: string } | null } | null>(null);
 
   // Visual designer ↔ JSON sync. Best-effort: when JSON parses we mirror
   // it into the designer; when the designer changes we re-serialize JSON.
@@ -7402,6 +7416,44 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [save, id, load]);
 
+  // Add-alert: create + link a backing Activator pre-seeded with this stream's
+  // source. Saves the canvas first so the route reads the latest topology (the
+  // alert KQL is composed from the first source node), then POSTs to the
+  // eventstream activator route. The created Activator is linked onto this
+  // stream (state.activatorId) and a real Azure Monitor scheduledQueryRule is
+  // created — Azure-native default, no Fabric Reflex required.
+  const doAddAlert = useCallback(async () => {
+    setAlertBusy(true); setAlertErr(null); setAlertHint(null); setAlertResult(null);
+    try {
+      if (dirty) { await save(); }
+      const action = alertEmail.trim() ? { target: alertEmail.trim() } : undefined;
+      const r = await fetch(`/api/items/eventstream/${id}/activator`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ruleName: alertName.trim() || undefined,
+          property: alertProperty.trim() || 'value',
+          operator: alertOperator,
+          threshold: alertThreshold.trim(),
+          evaluationFrequency: alertFrequency,
+          windowSize: alertFrequency,
+          ...(action ? { action } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setAlertErr(j.error || `HTTP ${r.status}`);
+        setAlertHint(j.gate?.remediation || j.hint || null);
+        return;
+      }
+      setAlertResult({ activatorId: j.activatorId, activatorName: j.activatorName, ruleId: j.ruleId, source: j.source });
+    } catch (e: any) {
+      setAlertErr(e?.message || String(e));
+    } finally {
+      setAlertBusy(false);
+    }
+  }, [dirty, save, id, alertEmail, alertName, alertProperty, alertOperator, alertThreshold, alertFrequency]);
+
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
   // shape) directly so the visual designer + Monaco JSON view stay in sync.
   const ribbonAdd = useCallback(
@@ -7451,6 +7503,12 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Lakehouse (ADLS)', onClick: () => ribbonAdd('sink', { kind: 'lakehouse' }) },
         { label: 'Event Hub', onClick: () => ribbonAdd('sink', { kind: 'eventhub' }) },
         { label: 'Activator', onClick: () => ribbonAdd('sink', { kind: 'reflex' }) },
+      ]},
+      { label: 'Alerts', actions: [
+        // Fabric Eventstream "Set alert" parity — create + link an Activator
+        // pre-seeded with this stream's source (Azure Monitor alert, no Fabric).
+        { label: 'Add alert', onClick: () => { setAlertResult(null); setAlertErr(null); setAlertHint(null); setAlertOpen(true); },
+          title: 'Create a linked Activator alert pre-seeded with this stream’s source (Azure Monitor scheduled-query rule)' },
       ]},
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
@@ -7613,6 +7671,150 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                 <Button appearance="secondary" onClick={() => setPublishOpen(false)} disabled={publishBusy}>Close</Button>
                 <Button appearance="primary" onClick={doPublish} disabled={publishBusy || !fabricWsId.trim()}>
                   {publishBusy ? 'Publishing…' : 'Publish'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        {/* Add-alert (embedded Activator). Fabric Eventstream "Set alert" parity:
+            create + link an Activator pre-seeded with this stream's source. The
+            backend creates a real Azure Monitor scheduledQueryRule — no Fabric. */}
+        <Dialog open={alertOpen} onOpenChange={(_: unknown, d: any) => setAlertOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add alert (linked Activator)</DialogTitle>
+              <DialogContent>
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: tokens.spacingHorizontalS,
+                    padding: tokens.spacingVerticalS,
+                    borderRadius: tokens.borderRadiusMedium,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                    background: tokens.colorNeutralBackground2,
+                  }}
+                >
+                  <Flash20Regular style={{ flexShrink: 0, marginTop: 2, color: tokens.colorBrandForeground1 }} />
+                  <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                    Creates an <strong>Activator</strong> alert linked to this Eventstream and
+                    pre-seeds it with the stream&apos;s source. Loom maps the alert to a real
+                    Azure Monitor scheduled-query rule (Azure-native default — no Microsoft
+                    Fabric Reflex required). The rule fires when the condition below matches
+                    this stream&apos;s events.
+                  </Caption1>
+                </div>
+                <Field label="Alert name" style={{ marginTop: 12 }}>
+                  <Input
+                    value={alertName}
+                    onChange={(_: unknown, d: any) => setAlertName(d.value)}
+                    placeholder={`${state?.displayName || 'stream'}-alert`}
+                    aria-label="Alert name"
+                  />
+                </Field>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                  <Field label="Event property" style={{ flex: 2 }}>
+                    <Input
+                      value={alertProperty}
+                      onChange={(_: unknown, d: any) => setAlertProperty(d.value)}
+                      placeholder="value"
+                      aria-label="Event property"
+                    />
+                  </Field>
+                  <Field label="Operator" style={{ flex: 1 }}>
+                    <Dropdown
+                      selectedOptions={[alertOperator]}
+                      value={{ gt: 'greater than', lt: 'less than', gte: '≥', lte: '≤', eq: 'equals', ne: 'not equals' }[alertOperator]}
+                      onOptionSelect={(_: unknown, d: any) => setAlertOperator(d.optionValue)}
+                      aria-label="Operator"
+                    >
+                      <Option value="gt">greater than</Option>
+                      <Option value="lt">less than</Option>
+                      <Option value="gte">≥</Option>
+                      <Option value="lte">≤</Option>
+                      <Option value="eq">equals</Option>
+                      <Option value="ne">not equals</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Threshold" style={{ flex: 1 }}>
+                    <Input
+                      value={alertThreshold}
+                      onChange={(_: unknown, d: any) => setAlertThreshold(d.value)}
+                      placeholder="0"
+                      aria-label="Threshold"
+                    />
+                  </Field>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                  <Field label="Evaluate every" style={{ flex: 1 }}>
+                    <Dropdown
+                      selectedOptions={[alertFrequency]}
+                      value={{ PT1M: '1 minute', PT5M: '5 minutes', PT15M: '15 minutes', PT1H: '1 hour' }[alertFrequency]}
+                      onOptionSelect={(_: unknown, d: any) => setAlertFrequency(d.optionValue)}
+                      aria-label="Evaluation frequency"
+                    >
+                      <Option value="PT1M">1 minute</Option>
+                      <Option value="PT5M">5 minutes</Option>
+                      <Option value="PT15M">15 minutes</Option>
+                      <Option value="PT1H">1 hour</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Notify email (optional)" style={{ flex: 2 }}>
+                    <Input
+                      value={alertEmail}
+                      onChange={(_: unknown, d: any) => setAlertEmail(d.value)}
+                      placeholder="oncall@contoso.com"
+                      aria-label="Notify email"
+                    />
+                  </Field>
+                </div>
+                {/* Live rule preview — mirrors Azure portal's alert condition summary. */}
+                <div
+                  aria-live="polite"
+                  style={{
+                    marginTop: 12,
+                    padding: tokens.spacingVerticalS,
+                    borderRadius: tokens.borderRadiusMedium,
+                    background: tokens.colorNeutralBackground3,
+                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  }}
+                >
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Rule preview</Caption1>
+                  <div style={{ marginTop: 4, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
+                    Fire when <strong>{(alertProperty.trim() || 'value')}</strong>{' '}
+                    {{ gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠' }[alertOperator]}{' '}
+                    <strong>{(alertThreshold.trim() || '0')}</strong>, evaluated every{' '}
+                    {{ PT1M: '1 minute', PT5M: '5 minutes', PT15M: '15 minutes', PT1H: '1 hour' }[alertFrequency]}
+                    {alertEmail.trim() ? <> → email <strong>{alertEmail.trim()}</strong></> : null}.
+                  </div>
+                </div>
+                {alertErr && (
+                  <MessageBar intent={alertHint ? 'warning' : 'error'} style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>{alertHint ? 'Azure Monitor not configured' : 'Add alert failed'}</MessageBarTitle>
+                      {alertErr}{alertHint ? <><br /><Caption1>{alertHint}</Caption1></> : null}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {alertResult && !alertErr && (
+                  <MessageBar intent="success" style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Alert created and linked</MessageBarTitle>
+                      Linked Activator <strong>{alertResult.activatorName || alertResult.activatorId}</strong> with
+                      rule <code>{alertResult.ruleId}</code>
+                      {alertResult.source ? <> (pre-seeded from source <code>{alertResult.source.name}</code>)</> : null}.
+                      {' '}
+                      <Link href={`/items/activator/${alertResult.activatorId}`} target="_blank">
+                        Open the Activator <Open20Regular style={{ verticalAlign: 'middle' }} />
+                      </Link>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setAlertOpen(false)} disabled={alertBusy}>Close</Button>
+                <Button appearance="primary" icon={<Flash20Regular />} onClick={doAddAlert} disabled={alertBusy || !alertThreshold.trim()}>
+                  {alertBusy ? 'Creating…' : 'Create alert'}
                 </Button>
               </DialogActions>
             </DialogBody>
