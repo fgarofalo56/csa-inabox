@@ -328,6 +328,37 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
 
+## Azure SQL — full-text search + SQL 2025 vector indexes {#azure-sql-search-management}
+
+The standalone **Azure SQL database** editor's **Full-text search** and **Vector
+indexes** tabs create/populate/drop full-text catalogs + indexes and SQL Server
+2025 vector indexes via real T-SQL DDL over TDS (`search-management` BFF). They
+ride the existing Azure SQL Query path, so they need **no new Azure resource,
+env var, role assignment, or Cosmos container** — only data-plane prerequisites:
+
+1. The console UAMI must be `db_owner` or `db_ddladmin` on the target database
+   (the same identity the Query tab already uses as the server's Microsoft Entra
+   admin). A permission error surfaces verbatim in the action MessageBar.
+
+2. **Vector indexes on SQL Server 2025 (NOT Azure SQL Database)** require
+   enabling the preview-features database-scoped configuration once per database:
+
+   ```sql
+   ALTER DATABASE SCOPED CONFIGURATION SET PREVIEW_FEATURES = ON;
+   ```
+
+   On **Azure SQL Database** this step is not needed — `CREATE VECTOR INDEX`
+   works without it. The editor's Vector tab surfaces an honest gate naming the
+   missing prerequisite when the engine lacks `sys.vector_indexes`, and a guided
+   "add a `VECTOR(N)` column first" hint (`ALTER TABLE ... ADD col VECTOR(1536)`)
+   when no vector column exists yet.
+
+### Bicep sync
+
+- None. The feature uses the existing Azure SQL TDS connection (no new resource,
+  env var, role, or container). The `PREVIEW_FEATURES` toggle and `db_owner`
+  grant are data-plane actions that intentionally cannot be expressed in ARM/bicep.
+
 ## ADX Event Hub data connections — cluster MI grant {#adx-eventhub-data-connection}
 
 The KQL-database **Event Hub data connection** wizard (KqlDatabaseEditor →
