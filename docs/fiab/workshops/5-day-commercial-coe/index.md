@@ -76,6 +76,44 @@ can forward-migrate **today** to Fabric Commercial:
 This is a major differentiator vs the Federal CoE workshop where
 forward migration is planning-only.
 
+## Day-by-day curriculum
+
+Each day ships a facilitator guide and a participant lab guide (hands-on against
+the live Loom from Day 1) in one page. Content is tuned to commercial concerns;
+**Day 5 forward-migrates live to Fabric Commercial** (GA):
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch: [**Day 1 — Foundation & Deploy**](day-1-foundation.md)
+
+    Commercial param, `azd up`, UC managed catalog, Console health.
+
+-   :material-database-import: [**Day 2 — Ingest & Mirroring & Catalog**](day-2-ingest.md)
+
+    Ingest synthetic data, mirrored database, UC managed + Purview overlay.
+
+-   :material-layers-triple: [**Day 3 — Transform & Lakehouse & Warehouse**](day-3-transform.md)
+
+    Medallion, dbt + Git, Databricks SQL Warehouse (Photon), KQL over ADX.
+
+-   :material-chart-box: [**Day 4 — BI & AI & Direct Lake & Data Agents**](day-4-bi-ai.md)
+
+    Semantic model + report, Direct-Lake-Shim, Data Agents on Foundry (GA).
+
+-   :material-cog-sync: [**Day 5 — Operate & Govern & Forward-Migrate**](day-5-operate.md)
+
+    Monitoring, cost, DR, **live** Fabric Commercial migration, CoE charter.
+
+</div>
+
+## Workshop materials
+
+- [Datasets](../datasets/index.md) — CUI-safe synthetic (IoT, financial, clinical)
+- [CoE charter template](../templates/coe-charter.md)
+- [Pre-workshop readiness checklist](../templates/readiness-checklist.md)
+- [Post-workshop survey + outcome metrics](../templates/post-survey.md)
+- Slide decks: `make loom-decks` renders each day page to PPTX/PDF (Marp)
+
 ## Audience differences
 
 | Role | Federal CoE | Commercial CoE |

@@ -137,10 +137,12 @@ Operate + Forward-Migrate.
 
 ## PDF generation
 
-This markdown is rendered to PDF via mkdocs-pdf plugin. Front/back
-layout uses CSS page-break rules.
-
-**File**: `docs/fiab/marketing/one-pager.pdf` (auto-generated nightly)
+Render this one-pager to PDF with
+`make loom-decks DECK=docs/fiab/marketing/one-pager.md FORMAT=pdf` (or
+`python scripts/csa-loom/build-decks.py --format pdf docs/fiab/marketing/one-pager.md`).
+The generator transforms this markdown into a [Marp](https://marp.app/)
+front/back layout. Output lands in `build/decks/one-pager.pdf` (gitignored) —
+regenerate from source, never hand-edit.
 
 ## Related
 

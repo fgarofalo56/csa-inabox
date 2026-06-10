@@ -1920,8 +1920,29 @@ nav:
               - GeoAnalytics: fiab/examples/geoanalytics.md
           - Workshops:
               - Index: fiab/workshops/index.md
-              - 5-Day Federal CoE Workshop: fiab/workshops/5-day-federal-coe/index.md
-              - 5-Day Commercial CoE Workshop: fiab/workshops/5-day-commercial-coe/index.md
+              - 5-Day Federal CoE Workshop:
+                  - Overview: fiab/workshops/5-day-federal-coe/index.md
+                  - Day 1 — Foundation & Deploy: fiab/workshops/5-day-federal-coe/day-1-foundation.md
+                  - Day 2 — Ingest & Mirroring & Catalog: fiab/workshops/5-day-federal-coe/day-2-ingest.md
+                  - Day 3 — Transform & Lakehouse & Warehouse: fiab/workshops/5-day-federal-coe/day-3-transform.md
+                  - Day 4 — BI & AI & Direct Lake & Data Agents: fiab/workshops/5-day-federal-coe/day-4-bi-ai.md
+                  - Day 5 — Operate & Govern & Forward-Migrate: fiab/workshops/5-day-federal-coe/day-5-operate.md
+              - 5-Day Commercial CoE Workshop:
+                  - Overview: fiab/workshops/5-day-commercial-coe/index.md
+                  - Day 1 — Foundation & Deploy: fiab/workshops/5-day-commercial-coe/day-1-foundation.md
+                  - Day 2 — Ingest & Mirroring & Catalog: fiab/workshops/5-day-commercial-coe/day-2-ingest.md
+                  - Day 3 — Transform & Lakehouse & Warehouse: fiab/workshops/5-day-commercial-coe/day-3-transform.md
+                  - Day 4 — BI & AI & Direct Lake & Data Agents: fiab/workshops/5-day-commercial-coe/day-4-bi-ai.md
+                  - Day 5 — Operate & Govern & Forward-Migrate: fiab/workshops/5-day-commercial-coe/day-5-operate.md
+              - Datasets:
+                  - Index: fiab/workshops/datasets/index.md
+                  - Synthetic IoT: fiab/workshops/datasets/synthetic-iot.md
+                  - Synthetic Financial Transactions: fiab/workshops/datasets/synthetic-financial-transactions.md
+                  - Synthetic Clinical Encounters: fiab/workshops/datasets/synthetic-clinical-encounters.md
+              - Templates:
+                  - CoE Charter: fiab/workshops/templates/coe-charter.md
+                  - Readiness Checklist: fiab/workshops/templates/readiness-checklist.md
+                  - Post-Workshop Survey: fiab/workshops/templates/post-survey.md
 
       # ------------------------------------------------------------
       # 11. Marketing & Sales

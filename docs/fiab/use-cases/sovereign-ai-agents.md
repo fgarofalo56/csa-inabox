@@ -1,5 +1,7 @@
 # Sovereign AI Agents
 
+![Sovereign AI agents — Loom Data Agents on Azure OpenAI Gov with identity passthrough](../../assets/images/hero/fiab/use-cases.svg){ .architecture-hero loading="eager" }
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
@@ -24,10 +26,14 @@ passthrough throughout.
 Per [Loom Data Agents parity](../workloads/data-agents-parity.md) +
 [Compliance — feature × boundary matrix](../compliance/feature-boundary-matrix.md):
 
-- **Foundry Agent Service** Gov-GA unconfirmed → can't use server-
-  side thread persistence
-- **Foundry portal** not at IL4+ → can't use Foundry Toolboxes for
-  agent visibility
+- **Foundry Agent Service** is
+  [`Forecasted`](https://learn.microsoft.com/azure/azure-government/documentation-government-product-roadmap#product-general-availability-roadmap)
+  (not GA) for FedRAMP High / IL4 / IL5 / IL6 → can't use server-side
+  thread persistence
+- **Foundry Agents playground / Azure AI Agents** are
+  [unsupported in Azure Government regions](https://learn.microsoft.com/azure/foundry/reference/region-support#foundry-in-sovereign-clouds)
+  → no portal-based agent authoring or Toolboxes (the Foundry portal
+  itself *is* available at `ai.azure.us`, but not the Agents surface)
 - **OpenAI Content Safety** not at IL4+ → must self-host Presidio
 - **OpenAI Batch API** not in Gov → synchronous calls only
 - **Defender for Cloud AI Threat Protection** Commercial-only →
@@ -173,4 +179,5 @@ These gaps close when Foundry Agent Service Gov-GAs.
 - [Copilot orchestration ADR](../adr/0009-copilot-orchestration.md)
 - [Defender AI workaround](../compliance/defender-ai-workaround.md)
 - [Tutorial 05 — Data Agent over Lakehouse](../tutorials/05-data-agent.md)
+- Example: [Fabric Data Agent](../examples/fabric-data-agent.md)
 - Existing parent: [AI Document Analytics & eDiscovery](../../use-cases/ai-document-analytics-ediscovery.md)

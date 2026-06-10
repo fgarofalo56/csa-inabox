@@ -51,7 +51,7 @@ By end of day 5:
 - Day-by-day facilitator guides
 - Hands-on lab guides for participants
 - Sample datasets (CUI-safe synthetic)
-- Slide decks per day (auto-generated from markdown)
+- Slide decks per day (rendered from the day markdown via `make loom-decks`)
 - Pre-workshop readiness checklist
 - Post-workshop satisfaction survey + outcome metrics
 - CoE charter template

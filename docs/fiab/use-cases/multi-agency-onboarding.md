@@ -1,5 +1,7 @@
 # Multi-Agency Onboarding
 
+![Multi-agency onboarding — adding a new agency as a domain in an existing Loom deploy](../../assets/images/hero/fiab/use-cases.svg){ .architecture-hero loading="eager" }
+
 A federal department onboarding additional agencies to its CSA Loom
 deployment after the initial Admin Plane + first DLZ are live.
 
@@ -119,3 +121,6 @@ cross-tenant (e.g., partner federation across separate orgs):
 - [Multi-sub multi-tenant deployment](../deployment/multi-sub-multi-tenant.md)
 - [Workspace RBAC](../governance/workspace-rbac.md)
 - Runbook: [DLZ onboard new domain](../runbooks/dlz-onboard-new-domain.md)
+- Workload: [Data engineering](../workloads/data-engineering.md)
+- Tutorial: [01 — First workspace](../tutorials/01-first-workspace.md)
+- Example: [Retail end-to-end](../examples/retail-e2e.md)

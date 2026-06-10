@@ -1,8 +1,11 @@
 # CSA Loom — Pitch Deck (20 slides)
 
 30-minute pitch to federal CIO / CDO / architect audiences. Outline +
-speaker notes; `.pptx` generated nightly from this markdown via the
-existing `learn/multimedia/presentations/` infrastructure.
+speaker notes. Render to `.pptx` / `.pdf` with
+`make loom-decks DECK=docs/fiab/marketing/pitch-deck.md` (or
+`python scripts/csa-loom/build-decks.py`), which transforms this markdown
+into a [Marp](https://marp.app/) slide deck. Artifacts land in
+`build/decks/` (gitignored) — regenerate from source, never hand-edit.
 
 ## Deck outline
 

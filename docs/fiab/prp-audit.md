@@ -53,11 +53,11 @@ documented (no remaining code gates).
 | PRP-18 | Compliance docs | ✅ | 11 pages: FedRAMP High, SRG IL4/IL5/IL6 maps, ATO, NIST 800-53 r5, audit, MS partner |
 | PRP-19 | ADRs | ✅ | 12 ADRs (fiab-0001..fiab-0012 + README) |
 | PRP-20 | Tutorials | ✅ | 8 tutorials under `docs/fiab/tutorials/` |
-| PRP-21 | Marketing kit | ✅ | 7 marketing pages: pitch deck, seller playbook, demo script, battlecard, one-pager, video plan, federal pitch + brand legal review package |
-| PRP-22 | Workshops | ✅ | 3 workshop pages including 5-day Federal CoE + 5-day Commercial CoE |
-| PRP-23 | Use cases | ✅ | 5 use-case pages |
+| PRP-21 | Marketing kit | ✅ | 10 marketing pages (pitch deck, seller playbook, demo script, 3 pitches, battlecard, one-pager, video plan, federal pitch) + brand legal review; real Marp deck generator `scripts/csa-loom/build-decks.py` + `make loom-decks` (PPTX/PDF) replaces the prior vaporware "auto-gen" claim |
+| PRP-22 | Workshops | ✅ | Federal + Commercial CoE, each: index + Day 1-5 facilitator/participant pages (10 day files); 3 CUI-safe synthetic datasets (IoT/financial/clinical); 3 templates (CoE charter, readiness checklist, post-survey); nav wired |
+| PRP-23 | Use cases | ✅ | 5 use-case pages, each with hero + workload/tutorial/example links; Foundry-in-Gov claims corrected to Learn (Agent Service `Forecasted`; Agents playground unsupported) |
 | PRP-24 | Cross-link updates | ✅ | `docs/fabric-in-gov-cloud.md` Option 3a callout; `docs/index.md` tip; ADR-0010 addendum; `docs/solution-store/` grid card |
-| PRP-25 | Solution-store entry | ✅ | `docs/solution-store/csa-loom/index.md` |
+| PRP-25 | Solution-store entry | ✅ | `docs/solution-store/csa-loom/index.md` with hero, deploy path, quickstart, and a **Bicep-derived** cost table tracing to `params/*.bicepparam` SKUs |
 
 ## Engineering audit — what's deployed live (iter #8 success)
 
