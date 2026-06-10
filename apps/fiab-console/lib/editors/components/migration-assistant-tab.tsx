@@ -54,36 +54,71 @@ import {
   ErrorCircle20Filled,
   Info20Regular,
   DatabaseArrowUp20Regular,
+  Copy20Regular,
+  CheckmarkCircle20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '1000px' },
-  steps: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
   step: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorNeutralForeground3,
+    transitionProperty: 'background-color, border-color, color', transitionDuration: tokens.durationNormal,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
   },
-  stepActive: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
-  stepDone: { ...shorthands.borderColor(tokens.colorPaletteGreenBorder1) },
+  stepActive: {
+    ...shorthands.borderColor(tokens.colorBrandStroke1),
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  stepDone: {
+    ...shorthands.borderColor(tokens.colorPaletteGreenBorder1),
+    color: tokens.colorNeutralForeground1,
+  },
+  stepConnector: {
+    flexGrow: 1, minWidth: '12px', maxWidth: '48px', height: '2px',
+    backgroundColor: tokens.colorNeutralStroke2, borderRadius: tokens.borderRadiusSmall,
+    transitionProperty: 'background-color', transitionDuration: tokens.durationNormal,
+  },
+  stepConnectorDone: { backgroundColor: tokens.colorPaletteGreenBorder1 },
   card: { padding: tokens.spacingVerticalL },
   dropZone: {
     ...shorthands.border('2px', 'dashed', tokens.colorNeutralStroke2),
     borderRadius: tokens.borderRadiusLarge,
     padding: tokens.spacingVerticalXXL, textAlign: 'center', cursor: 'pointer',
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
-    transitionProperty: 'border-color', transitionDuration: '.15s',
+    transitionProperty: 'border-color, background-color', transitionDuration: tokens.durationNormal,
+    ':hover': { ...shorthands.borderColor(tokens.colorNeutralStroke1Hover), backgroundColor: tokens.colorNeutralBackground1Hover },
+    ':focus-visible': {
+      outlineWidth: '2px', outlineStyle: 'solid', outlineColor: tokens.colorBrandStroke1, outlineOffset: '2px',
+    },
   },
   dropZoneActive: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
-  counts: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  dropIcon: { color: tokens.colorBrandForeground1, fontSize: '32px' },
+  counts: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
   controls: { display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '180px' },
-  actions: { display: 'flex', gap: tokens.spacingHorizontalM },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  previewHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXS,
+  },
   pre: {
     backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusMedium, fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', maxHeight: '320px', overflow: 'auto',
+    margin: 0, ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+  },
+  cleanState: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorPaletteGreenBackground1,
+    borderRadius: tokens.borderRadiusMedium,
+    ...shorthands.border('1px', 'solid', tokens.colorPaletteGreenBorder1),
   },
   hidden: { display: 'none' },
 });
@@ -133,6 +168,7 @@ export function MigrationAssistantTab({ id }: { id: string }) {
   const [deploy, setDeploy] = useState<DeployResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pool, setPool] = useState<PoolState | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const [distribution, setDistribution] = useState<'ROUND_ROBIN' | 'HASH' | 'REPLICATE'>('ROUND_ROBIN');
   const [index, setIndex] = useState<'CLUSTERED COLUMNSTORE INDEX' | 'HEAP'>('CLUSTERED COLUMNSTORE INDEX');
@@ -193,6 +229,15 @@ export function MigrationAssistantTab({ id }: { id: string }) {
     }
   }, [base, file, distribution, index, ifNotExists]);
 
+  const copyDdl = useCallback(() => {
+    const script = scan?.preview?.script;
+    if (!script) return;
+    void navigator.clipboard.writeText(script).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {});
+  }, [scan?.preview?.script]);
+
   const report = scan?.ok ? scan.report : undefined;
   const step = deploy ? 4 : report ? 3 : file ? 2 : 1;
 
@@ -206,16 +251,18 @@ export function MigrationAssistantTab({ id }: { id: string }) {
         </Body1>
       </div>
 
-      <div className={s.steps}>
-        <div className={`${s.step} ${step >= 1 ? s.stepActive : ''} ${step > 1 ? s.stepDone : ''}`}>
+      <div className={s.steps} role="list" aria-label="Migration steps">
+        <div role="listitem" aria-current={step === 1 ? 'step' : undefined} className={`${s.step} ${step >= 1 ? s.stepActive : ''} ${step > 1 ? s.stepDone : ''}`}>
           {step > 1 ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} /> : <Text>1</Text>}
           <Text>Upload .dacpac</Text>
         </div>
-        <div className={`${s.step} ${step >= 2 ? s.stepActive : ''} ${step > 2 ? s.stepDone : ''}`}>
+        <div className={`${s.stepConnector} ${step > 1 ? s.stepConnectorDone : ''}`} aria-hidden />
+        <div role="listitem" aria-current={step === 2 ? 'step' : undefined} className={`${s.step} ${step >= 2 ? s.stepActive : ''} ${step > 2 ? s.stepDone : ''}`}>
           {step > 2 ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} /> : <Text>2</Text>}
           <Text>Assess compatibility</Text>
         </div>
-        <div className={`${s.step} ${step >= 3 ? s.stepActive : ''} ${step > 3 ? s.stepDone : ''}`}>
+        <div className={`${s.stepConnector} ${step > 2 ? s.stepConnectorDone : ''}`} aria-hidden />
+        <div role="listitem" aria-current={step >= 3 ? 'step' : undefined} className={`${s.step} ${step >= 3 ? s.stepActive : ''} ${step > 3 ? s.stepDone : ''}`}>
           {step > 3 ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} /> : <Text>3</Text>}
           <Text>Import to pool</Text>
         </div>
@@ -254,7 +301,7 @@ export function MigrationAssistantTab({ id }: { id: string }) {
           tabIndex={0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click(); }}
         >
-          <ArrowUpload20Regular />
+          <ArrowUpload20Regular className={s.dropIcon} />
           <Text weight="semibold">{file ? file.name : 'Drop a .dacpac here, or click to browse'}</Text>
           <Caption1>
             {file
@@ -311,6 +358,13 @@ export function MigrationAssistantTab({ id }: { id: string }) {
             </Badge>
           </div>
 
+          {report.findings.length === 0 && (
+            <div className={s.cleanState}>
+              <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />
+              <Text weight="semibold">No compatibility issues found — every object maps cleanly to the dedicated SQL pool.</Text>
+            </div>
+          )}
+
           {report.findings.length > 0 && (
             <Table size="small" aria-label="Compatibility findings">
               <TableHeader>
@@ -336,7 +390,18 @@ export function MigrationAssistantTab({ id }: { id: string }) {
 
           {scan.preview && (
             <div style={{ marginTop: tokens.spacingVerticalL }}>
-              <Text weight="semibold">Generated DDL preview ({scan.preview.statementCount} statement(s))</Text>
+              <div className={s.previewHead}>
+                <Text weight="semibold">Generated DDL preview ({scan.preview.statementCount} statement(s))</Text>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={copied ? <CheckmarkCircle20Regular /> : <Copy20Regular />}
+                  onClick={copyDdl}
+                  disabled={!scan.preview.script}
+                >
+                  {copied ? 'Copied' : 'Copy DDL'}
+                </Button>
+              </div>
               <pre className={s.pre}>{scan.preview.script || '-- nothing to deploy'}</pre>
               {scan.preview.skipped.length > 0 && (
                 <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
