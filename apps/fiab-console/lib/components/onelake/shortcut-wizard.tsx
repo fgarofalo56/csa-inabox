@@ -171,7 +171,45 @@ const useStyles = makeStyles({
   actions: { display: 'flex', gap: '4px' },
   empty: { padding: '24px', textAlign: 'center', color: tokens.colorNeutralForeground3 },
   stepBody: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '520px' },
+  // SharePoint / OneDrive browser polish ------------------------------------
+  col: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  rowGap8: { display: 'flex', gap: '8px' },
+  cardText: { minWidth: 0, display: 'flex', flexDirection: 'column' },
+  truncate: {
+    display: 'block',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: tokens.colorNeutralForeground3,
+  },
+  entryMeta: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '10px',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'nowrap',
+  },
+  spacer: { flex: 1 },
+  subtle: { color: tokens.colorNeutralForeground3 },
 });
+
+function fmtBytesSp(n?: number): string {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${u[i]}`;
+}
+
+function fmtDateSp(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
 
 function statusPill(s: ShortcutStatus) {
   if (s === 'active') return <Badge appearance="filled" color="success">OK</Badge>;
@@ -1339,7 +1377,7 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className={styles.col}>
       <TabList selectedValue={mode} onTabSelect={(_, d) => {
         const m = d.value as 'site' | 'onedrive' | 'link';
         setMode(m); setError(null);
@@ -1360,6 +1398,7 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
               value={link}
               onChange={(_, d) => setLink(d.value)}
               placeholder="https://contoso.sharepoint.com/sites/Finance/Shared%20Documents/Reports"
+              onKeyDown={(e) => { if (e.key === 'Enter') resolveLink(); }}
               contentAfter={<Button size="small" appearance="primary" icon={<Link20Regular />} onClick={resolveLink} disabled={!link.trim() || itemsBusy}>Resolve</Button>}
             />
           </Field>
@@ -1372,12 +1411,13 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
 
       {mode === 'site' && (
         <Field label="Find a SharePoint site">
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className={styles.rowGap8}>
             <Input
               className={styles.grow}
               value={siteQuery}
               onChange={(_, d) => setSiteQuery(d.value)}
               placeholder="Search sites by name (e.g. Finance)"
+              contentBefore={<Search20Regular />}
               onKeyDown={(e) => { if (e.key === 'Enter') searchSites(); }}
             />
             <Button appearance="primary" icon={<Search20Regular />} onClick={searchSites} disabled={siteBusy}>Search</Button>
@@ -1389,7 +1429,10 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
       {mode === 'site' && (siteBusy ? (
         <Spinner size="tiny" label="Searching sites…" />
       ) : sites && sites.length === 0 ? (
-        <Caption1>No sites matched. Try a different keyword.</Caption1>
+        <div className={styles.empty}>
+          <Globe20Regular />
+          <Body1>No sites matched &quot;{siteQuery}&quot;. Try a different keyword.</Body1>
+        </div>
       ) : sites ? (
         <div className={styles.cardGrid}>
           {sites.map((site) => (
@@ -1397,18 +1440,24 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
               key={site.id}
               className={`${styles.card} ${activeSite?.id === site.id ? styles.cardSelected : ''}`}
               role="button" tabIndex={0}
+              aria-pressed={activeSite?.id === site.id}
               onClick={() => openSite(site)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openSite(site); }}
             >
               <Globe20Regular />
-              <div style={{ minWidth: 0 }}>
+              <div className={styles.cardText}>
                 <Body1>{site.displayName}</Body1>
-                {site.webUrl && <Caption1 style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{site.webUrl}</Caption1>}
+                {site.webUrl && <Caption1 className={styles.truncate}>{site.webUrl}</Caption1>}
               </div>
             </div>
           ))}
         </div>
-      ) : null)}
+      ) : (
+        <div className={styles.empty}>
+          <Search20Regular />
+          <Body1>Search for a SharePoint site by name to list its document libraries.</Body1>
+        </div>
+      ))}
 
       {/* Drives (document libraries or OneDrive) */}
       {(mode === 'onedrive' || (mode === 'site' && activeSite)) && (
@@ -1424,13 +1473,14 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
                   key={dr.id}
                   className={`${styles.card} ${activeDrive?.id === dr.id ? styles.cardSelected : ''}`}
                   role="button" tabIndex={0}
+                  aria-pressed={activeDrive?.id === dr.id}
                   onClick={() => openDrive(dr)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openDrive(dr); }}
                 >
                   <Folder20Regular />
-                  <div style={{ minWidth: 0 }}>
+                  <div className={styles.cardText}>
                     <Body1>{dr.name}</Body1>
-                    <Caption1>{dr.driveType === 'personal' ? 'OneDrive' : 'Document library'}</Caption1>
+                    <Caption1 className={styles.subtle}>{dr.driveType === 'personal' ? 'OneDrive' : 'Document library'}</Caption1>
                   </div>
                 </div>
               ))}
@@ -1449,13 +1499,13 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
                 <Link onClick={() => openDrive(activeDrive, c.prefix)}>{c.label}</Link>
               </span>
             ))}
-            <span style={{ flex: 1 }} />
+            <span className={styles.spacer} />
             <Button
               size="small"
               appearance={selected?.driveId === activeDrive.id && selected?.path === prefix ? 'primary' : 'secondary'}
               onClick={() => onSelect({ driveId: activeDrive.id, driveName: activeDrive.name, path: prefix, isFolder: true })}
             >
-              Use this folder
+              {selected?.driveId === activeDrive.id && selected?.path === prefix ? 'Folder selected' : 'Use this folder'}
             </Button>
           </div>
           {itemsBusy ? (
@@ -1465,6 +1515,7 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
           ) : (
             (items || []).map((it) => {
               const isSel = selected?.driveId === activeDrive.id && selected?.path === it.path;
+              const meta = [fmtBytesSp(it.size), fmtDateSp(it.lastModified)].filter(Boolean);
               return (
                 <div key={it.id} className={`${styles.entryRow} ${isSel ? styles.entryRowSel : ''}`}>
                   {it.isFolder ? <Folder20Regular /> : <Document20Regular />}
@@ -1477,6 +1528,7 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
                   >
                     <Body1>{it.name}</Body1>
                   </span>
+                  {meta.length > 0 && <span className={styles.entryMeta}>{meta.join(' · ')}</span>}
                   <Button
                     size="small"
                     appearance={isSel ? 'primary' : 'secondary'}
