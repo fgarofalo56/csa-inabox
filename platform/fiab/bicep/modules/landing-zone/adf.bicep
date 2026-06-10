@@ -10,6 +10,8 @@
 //   - PE on snet-private-endpoints (groupId 'dataFactory')
 //   - Private DNS zone group → privatelink.adf.azure.com (commercial)
 //   - RBAC: Loom Console UAMI → "Data Factory Contributor" on the factory
+//     (covers pipelines/datasets/triggers AND adfcdcs/* — list/get/status/
+//      start/stop/delete/put — backing the Change Data Capture (preview) UI)
 //   - Diagnostic settings → standardized Loom LAW
 
 targetScope = 'resourceGroup'

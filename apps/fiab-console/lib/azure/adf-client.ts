@@ -1056,6 +1056,37 @@ export async function deleteAdfCdc(name: string): Promise<void> {
   }
 }
 
+/** List every ChangeDataCapture (adfcdcs) resource in the env-pinned factory. */
+export async function listAdfCdcs(): Promise<AdfCdc[]> {
+  const r = await call(`${base()}/adfcdcs?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfCdc[] }>(r, 'listAdfCdcs');
+  return body.value || [];
+}
+
+/**
+ * GET the live status for a CDC resource. The ARM endpoint
+ * `GET .../adfcdcs/{name}/status` responds with a BARE JSON string — e.g.
+ * `"Running"` / `"Stopped"` / `"Starting"` / `"Stopping"` — not an object.
+ * We strip the surrounding quotes and return the plain string. (Some
+ * api-versions wrap it as `{ status: "Running" }`; both are normalized.)
+ */
+export async function statusAdfCdc(name: string): Promise<string> {
+  const r = await call(`${base()}/adfcdcs/${encodeURIComponent(name)}/status?api-version=${API}`);
+  if (!r.ok) throw new Error(`statusAdfCdc failed ${r.status}: ${await r.text()}`);
+  const text = (await r.text()).trim();
+  if (!text) return 'Unknown';
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { status?: unknown }).status === 'string') {
+      return (parsed as { status: string }).status;
+    }
+    return text;
+  } catch {
+    return text.replace(/^"|"$/g, '');
+  }
+}
+
 // ============================================================
 // Cross-factory helpers — back the MountedDataFactory editor which
 // targets an externally-referenced ADF by (subscriptionId, resourceGroup,
