@@ -2016,6 +2016,102 @@ export function buildCreateCalcTableTmsl(
 }
 
 // ---------------------------------------------------------------------------
+// Measure-structure TMSL builders (audit-T82) — Copilot model-structure pane.
+//
+// These power the "Copilot edits model structure" surface: rename a measure,
+// set/clear a measure's business description, set/clear a table description.
+// Each is a pure TMSL command object fed to command()/executeXmlaCommand() on
+// the opt-in XMLA backend. The DEFAULT (no-fabric) path persists the same edit
+// to the Loom-native Cosmos model store — these builders only run when an XMLA
+// endpoint is configured (honest gate otherwise). Per no-fabric-dependency.md
+// the structure edits are 100% functional Azure-native without any of these.
+// ---------------------------------------------------------------------------
+
+export interface TmslAlterMeasureCommand {
+  alter: {
+    object: { database: string; table: string; measure: string };
+    measure: Record<string, unknown>;
+  };
+}
+export interface TmslAlterTableCommand {
+  alter: {
+    object: { database: string; table: string };
+    table: Record<string, unknown>;
+  };
+}
+
+/**
+ * Rename a measure (TMSL Alter — the alter object's `measure.name` is the NEW
+ * name; the object path holds the OLD name). The expression MUST be carried
+ * forward because an Alter replaces the read-write measure body.
+ */
+export function buildRenameMeasureTmsl(
+  database: string,
+  tableName: string,
+  currentName: string,
+  newName: string,
+  expression: string,
+  opts: { description?: string; formatString?: string; displayFolder?: string } = {},
+): TmslAlterMeasureCommand {
+  return {
+    alter: {
+      object: { database, table: tableName, measure: currentName },
+      measure: compactObj({
+        name: newName,
+        expression,
+        description: opts.description,
+        formatString: opts.formatString,
+        displayFolder: opts.displayFolder,
+      }),
+    },
+  };
+}
+
+/**
+ * Set (or clear, when description is undefined/empty) a measure's business
+ * description via TMSL Alter. The expression is carried forward (Alter replaces
+ * the whole read-write body).
+ */
+export function buildSetMeasureDescriptionTmsl(
+  database: string,
+  tableName: string,
+  measureName: string,
+  expression: string,
+  description: string | undefined,
+  opts: { formatString?: string; displayFolder?: string } = {},
+): TmslAlterMeasureCommand {
+  return {
+    alter: {
+      object: { database, table: tableName, measure: measureName },
+      measure: compactObj({
+        name: measureName,
+        expression,
+        description: description && description.trim() ? description.trim() : undefined,
+        formatString: opts.formatString,
+        displayFolder: opts.displayFolder,
+      }),
+    },
+  };
+}
+
+/** Set (or clear) a table's description via TMSL Alter. */
+export function buildSetTableDescriptionTmsl(
+  database: string,
+  tableName: string,
+  description: string | undefined,
+): TmslAlterTableCommand {
+  return {
+    alter: {
+      object: { database, table: tableName },
+      table: compactObj({
+        name: tableName,
+        description: description && description.trim() ? description.trim() : undefined,
+      }),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // XMLA SOAP transport for the column-editor surface
 // ---------------------------------------------------------------------------
 

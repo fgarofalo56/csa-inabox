@@ -28,6 +28,7 @@ import { getItem, createItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { WarehouseContent, RollupMethod, StatusColor, StatusOperator, StatusMetricKind, StatusRule } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field, Link,
+  Card, Divider,
   Tab, TabList, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -10961,6 +10962,228 @@ const INGEST_SOURCES: Array<{ key: string; label: string; hint: string; m: strin
     m: 'OData.Feed("https://<host>/<service>/", null, [Implementation="2.0"])' },
 ];
 
+// ── Copilot model-structure pane (audit-T82) ────────────────────────────────
+// NL → structured edit plan → checkpoint + apply (rename measures, set
+// descriptions, suggest relationships) → restore. Azure-native default: posts
+// to /api/items/semantic-model/[id]/copilot-structure which writes the
+// Loom-native Cosmos model store (no Fabric / Power BI / XMLA required) and
+// mirrors to a live XMLA model when one is configured.
+
+type StructureOp =
+  | { kind: 'rename-measure'; from: string; to: string }
+  | { kind: 'set-measure-description'; measure: string; description: string }
+  | { kind: 'suggest-relationship'; fromTable: string; fromColumn: string; toTable: string; toColumn: string; cardinality: string; rationale?: string };
+interface CopilotEditPlan { summary: string; ops: StructureOp[] }
+interface CopilotCheckpoint {
+  id: string; createdAt: string; label: string;
+  source: 'copilot' | 'manual' | 'pre-restore';
+  stats: { measures: number; relationships: number };
+}
+
+function describeOp(op: StructureOp): string {
+  if (op.kind === 'rename-measure') return `Rename measure [${op.from}] → [${op.to}]`;
+  if (op.kind === 'set-measure-description') return `Describe [${op.measure}]: "${op.description}"`;
+  return `Add relationship ${op.fromTable}[${op.fromColumn}] → ${op.toTable}[${op.toColumn}] (${op.cardinality})${op.rationale ? ` — ${op.rationale}` : ''}`;
+}
+
+function SemanticModelCopilotPane({ id }: { id: string }) {
+  const [prompt, setPrompt] = useState('');
+  const [proposing, setProposing] = useState(false);
+  const [plan, setPlan] = useState<CopilotEditPlan | null>(null);
+  const [proposeErr, setProposeErr] = useState<{ text: string; gate?: { missing: string; detail: string } } | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState<{ ok: boolean; text: string; applied?: string[]; skipped?: string[]; xmla?: { attempted: boolean; backend?: string } } | null>(null);
+  const [checkpoints, setCheckpoints] = useState<CopilotCheckpoint[] | null>(null);
+  const [cpErr, setCpErr] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [restoreMsg, setRestoreMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadCheckpoints = useCallback(async () => {
+    setCpErr(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure?action=checkpoints`);
+      const j = await r.json();
+      if (!j.ok) { setCpErr(j.error || `HTTP ${r.status}`); setCheckpoints([]); return; }
+      setCheckpoints(Array.isArray(j.checkpoints) ? j.checkpoints : []);
+    } catch (e: any) { setCpErr(e?.message || String(e)); setCheckpoints([]); }
+  }, [id]);
+
+  useEffect(() => { loadCheckpoints(); }, [loadCheckpoints]);
+
+  const propose = useCallback(async () => {
+    const q = prompt.trim();
+    if (!q) return;
+    setProposing(true); setPlan(null); setProposeErr(null); setApplyResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'propose', prompt: q }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setProposeErr({ text: j.error || `HTTP ${r.status}`, gate: j.gate }); return; }
+      setPlan(j.plan as CopilotEditPlan);
+    } catch (e: any) { setProposeErr({ text: e?.message || String(e) }); }
+    finally { setProposing(false); }
+  }, [prompt, id]);
+
+  const apply = useCallback(async () => {
+    if (!plan || plan.ops.length === 0) return;
+    setApplying(true); setApplyResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'apply', plan }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setApplyResult({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setApplyResult({ ok: true, text: j.note || 'Applied.', applied: j.applied, skipped: j.skipped, xmla: j.xmla });
+      setPlan(null);
+      await loadCheckpoints();
+    } catch (e: any) { setApplyResult({ ok: false, text: e?.message || String(e) }); }
+    finally { setApplying(false); }
+  }, [plan, id, loadCheckpoints]);
+
+  const restore = useCallback(async (checkpointId: string) => {
+    setRestoringId(checkpointId); setRestoreMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'restore', checkpointId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRestoreMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setRestoreMsg({ ok: true, text: j.note || 'Restored.' });
+      await loadCheckpoints();
+    } catch (e: any) { setRestoreMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setRestoringId(null); }
+  }, [id, loadCheckpoints]);
+
+  const checkpointNow = useCallback(async () => {
+    setRestoreMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'checkpoint', label: 'Manual checkpoint' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRestoreMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setRestoreMsg({ ok: true, text: 'Checkpoint captured.' });
+      await loadCheckpoints();
+    } catch (e: any) { setRestoreMsg({ ok: false, text: e?.message || String(e) }); }
+  }, [id, loadCheckpoints]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Copilot — edit model structure in natural language</MessageBarTitle>
+          Describe a structure change (rename a measure, write business descriptions, suggest relationships). Copilot proposes a plan you review and approve. A checkpoint is captured before any edit so you can restore. Edits persist Azure-native to the Loom model and mirror to a live Analysis Services model via TMSL when one is configured — no Microsoft Fabric / Power BI required.
+        </MessageBarBody>
+      </MessageBar>
+
+      <Field label="Ask Copilot to change the model structure">
+        <Textarea
+          value={prompt}
+          onChange={(_, d) => setPrompt(d.value)}
+          placeholder={'e.g. "Rename [Tot Sales] to [Total Sales] and write a description for every measure", or "Suggest relationships between the fact and dimension tables".'}
+          rows={3}
+          resize="vertical"
+        />
+      </Field>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Button appearance="primary" icon={proposing ? <Spinner size="tiny" /> : <Sparkle16Regular />} disabled={proposing || !prompt.trim()} onClick={propose}>
+          {proposing ? 'Asking Copilot…' : 'Propose edits'}
+        </Button>
+        <Button appearance="secondary" disabled={!!restoringId} onClick={checkpointNow}>Save checkpoint now</Button>
+      </div>
+
+      {proposeErr && (
+        <MessageBar intent={proposeErr.gate ? 'warning' : 'error'}>
+          <MessageBarBody>
+            <MessageBarTitle>{proposeErr.gate ? `Copilot not configured (${proposeErr.gate.missing})` : 'Copilot could not produce a plan'}</MessageBarTitle>
+            {proposeErr.gate ? proposeErr.gate.detail : proposeErr.text}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {plan && (
+        <Card style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Subtitle2>Proposed plan</Subtitle2>
+          <Caption1>{plan.summary}</Caption1>
+          {plan.ops.length === 0 ? (
+            <MessageBar intent="warning"><MessageBarBody>Copilot did not find a valid structure edit for that request against the current model.</MessageBarBody></MessageBar>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {plan.ops.map((op, i) => (
+                <li key={i}>
+                  <Badge appearance="tint" color={op.kind === 'rename-measure' ? 'brand' : op.kind === 'set-measure-description' ? 'success' : 'informative'} style={{ marginRight: 6 }}>{op.kind}</Badge>
+                  {describeOp(op)}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button appearance="primary" disabled={applying || plan.ops.length === 0} icon={applying ? <Spinner size="tiny" /> : undefined} onClick={apply}>
+              {applying ? 'Applying…' : `Apply ${plan.ops.length} edit(s)`}
+            </Button>
+            <Button appearance="secondary" disabled={applying} onClick={() => setPlan(null)}>Discard</Button>
+          </div>
+        </Card>
+      )}
+
+      {applyResult && (
+        <MessageBar intent={applyResult.ok ? 'success' : 'error'}>
+          <MessageBarBody>
+            <MessageBarTitle>{applyResult.ok ? 'Edits applied' : 'Apply failed'}</MessageBarTitle>
+            {applyResult.text}
+            {applyResult.applied && applyResult.applied.length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
+            )}
+            {applyResult.skipped && applyResult.skipped.length > 0 && (
+              <div style={{ marginTop: 6 }}><strong>Skipped:</strong>
+                <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
+              </div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <Divider />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Subtitle2>Checkpoints</Subtitle2>
+        <Button size="small" appearance="subtle" onClick={loadCheckpoints}>Refresh</Button>
+      </div>
+      {restoreMsg && (
+        <MessageBar intent={restoreMsg.ok ? 'success' : 'error'}><MessageBarBody>{restoreMsg.text}</MessageBarBody></MessageBar>
+      )}
+      {cpErr && <MessageBar intent="error"><MessageBarBody>{cpErr}</MessageBarBody></MessageBar>}
+      {checkpoints === null ? (
+        <Spinner size="tiny" label="Loading checkpoints…" style={{ justifyContent: 'flex-start' }} />
+      ) : checkpoints.length === 0 ? (
+        <Caption1>No checkpoints yet. One is captured automatically before each Copilot apply, or save one now.</Caption1>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {checkpoints.map((c) => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Badge appearance="outline" color={c.source === 'pre-restore' ? 'warning' : c.source === 'manual' ? 'informative' : 'brand'}>{c.source}</Badge>
+                  <strong>{c.label}</strong>
+                </span>
+                <Caption1>{new Date(c.createdAt).toLocaleString()} · {c.stats.measures} measure(s), {c.stats.relationships} relationship(s)</Caption1>
+              </div>
+              <Button size="small" appearance="secondary" disabled={restoringId === c.id} icon={restoringId === c.id ? <Spinner size="tiny" /> : undefined} onClick={() => restore(c.id)}>
+                {restoringId === c.id ? 'Restoring…' : 'Restore'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Azure-native default (no-fabric-dependency.md): when the AAS backend is the
@@ -10983,7 +11206,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -12238,7 +12461,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </div>
             )}
           </div>
-          {(datasetId || tab === 'build') && (
+          {(datasetId || tab === 'build' || tab === 'copilot') && (
             <>
               <div className={s.tabBar}>
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
@@ -12246,6 +12469,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="model">Model view</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot (structure)</Tab>
                   <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
@@ -13314,6 +13538,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBarBody>
                   </MessageBar>
                 )}
+                {tab === 'copilot' && <SemanticModelCopilotPane id={id} />}
                 {tab === 'calcGroups' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <MessageBar intent="info">
