@@ -61,13 +61,30 @@ import {
 } from './column-grid-designer';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 248 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: {
+    display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalS, height: '100%', minWidth: '248px',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS,
+    justifyContent: 'space-between',
+  },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  headerActions: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  groupLayout: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalSNudge, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, width: '100%', minWidth: 0 },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXXS },
+  leafName: {
+    cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    ':hover': { textDecorationLine: 'underline' },
+  },
+  scroller: { overflowY: 'auto', flexGrow: 1, marginInline: `calc(-1 * ${tokens.spacingHorizontalXXS})` },
+  loadingPad: { padding: tokens.spacingHorizontalS },
+  muted: { color: tokens.colorNeutralForeground3 },
+  dialogForm: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS },
+  mono: { fontFamily: tokens.fontFamilyMonospace },
+  hint: { color: tokens.colorNeutralForeground3 },
 });
 
 async function readJson(res: Response): Promise<any> {
@@ -515,7 +532,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>{database ? <>KQL database · <code>{database}</code></> : 'KQL database'}</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span className={s.headerActions}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="New" relationship="label">
@@ -547,12 +564,12 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading database objects…" /></div>}
+      {loading && <div className={s.loadingPad}><Spinner size="tiny" label="Loading database objects…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Database error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
 
-      <div style={{ overflow: 'auto', flex: 1 }}>
+      <div className={s.scroller}>
         <Tree aria-label="KQL database objects" defaultOpenItems={['g-tables']}>
           {/* Tables */}
           <TreeItem itemType="branch" value="g-tables">
@@ -564,7 +581,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                   <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
                     <span className={s.leafRow}>
                       <span
-                        role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                        role="button" tabIndex={0} className={s.leafName} title={t.name}
                         onClick={() => openQuery(`["${t.name}"]\n| take 100`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`["${t.name}"]\n| take 100`); } }}
                       >{t.name}</span>
@@ -603,7 +620,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem key={fn.name} itemType="leaf" value={`fn-${fn.name}`}>
                   <TreeItemLayout iconBefore={<MathFormula20Regular />}>
                     <span className={s.leafRow}>
-                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                      <span role="button" tabIndex={0} className={s.leafName} title={fn.name}
                         onClick={() => openQuery(`${fn.name}(${(fn.parameters || '').trim()})`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`${fn.name}(${(fn.parameters || '').trim()})`); } }}
                       >{fn.name}{fn.parameters ? <Caption1> ({fn.parameters})</Caption1> : null}</span>
@@ -629,7 +646,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem key={mv.name} itemType="leaf" value={`mv-${mv.name}`}>
                   <TreeItemLayout iconBefore={<Table20Regular />}>
                     <span className={s.leafRow}>
-                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                      <span role="button" tabIndex={0} className={s.leafName} title={mv.name}
                         onClick={() => openQuery(`["${mv.name}"]\n| take 100`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`["${mv.name}"]\n| take 100`); } }}
                       >{mv.name}{mv.sourceTable ? <Caption1> · on {mv.sourceTable}</Caption1> : null}</span>
@@ -673,7 +690,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem itemType="leaf" value="ce-empty">
                   <Tooltip content="Authoring a continuous export needs an external table + Database Admin: .create-or-alter continuous-export NAME over (T) to ExternalTable <| query. Listed read-only here." relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{f ? 'No matches' : 'No continuous exports'}</span>{' '}
+                      <span className={s.muted}>{f ? 'No matches' : 'No continuous exports'}</span>{' '}
                       <Badge size="small" appearance="tint" color="warning">read-only</Badge>
                     </TreeItemLayout>
                   </Tooltip>
@@ -705,7 +722,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem itemType="leaf" value="pol-empty">
                   <Tooltip content="Database policies are read from .show database <db> policy <kind> (retention, caching, sharding, mergepolicy, streamingingestion). Altering a policy needs Database Admin (.alter database <db> policy ...) and is not wired here. Listed read-only." relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{f ? 'No matches' : 'No policies set'}</span>{' '}
+                      <span className={s.muted}>{f ? 'No matches' : 'No policies set'}</span>{' '}
                       <Badge size="small" appearance="tint" color="warning">read-only</Badge>
                     </TreeItemLayout>
                   </Tooltip>
@@ -734,7 +751,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             <Tree>
               <TreeItem itemType="leaf" value="schema-show">
                 <TreeItemLayout iconBefore={<Database20Regular />}>
-                  <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                  <span role="button" tabIndex={0} className={s.leafName}
                     onClick={() => openQuery('.show database schema')}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery('.show database schema'); } }}
                   >Show full schema (.show database schema)</span>
@@ -746,7 +763,14 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
           {/* Security — database roles (RBAC) + row-level security.
               Mirrors the ADX web UI "Security" pane (Manage → Security). */}
           <TreeItem itemType="branch" value="g-security">
-            <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>Security</TreeItemLayout>
+            <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
+              <span className={s.groupLayout}>
+                <span>Security</span>
+                <Badge className={s.groupActions} size="small" appearance="outline" color="brand">
+                  {principals.length} {principals.length === 1 ? 'principal' : 'principals'}
+                </Badge>
+              </span>
+            </TreeItemLayout>
             <Tree>
               {/* Database roles (RBAC principals) */}
               <TreeItem itemType="branch" value="g-db-roles">
@@ -765,7 +789,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                     <TreeItem key={`${p.role}-${p.principalFQN || p.principalObjectId || i}`} itemType="leaf" value={`role-${p.role}-${i}`}>
                       <TreeItemLayout iconBefore={<Person16Regular />}>
                         <span className={s.leafRow}>
-                          <span title={p.principalFQN}>{p.principalDisplayName || p.principalFQN || '(unknown)'}</span>
+                          <span className={s.leafName} style={{ cursor: 'default' }} title={p.principalFQN}>{p.principalDisplayName || p.principalFQN || '(unknown)'}</span>
                           <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                             <Badge size="small" appearance="tint" color="brand">{p.role}</Badge>
                             {p.principalType && <Caption1>{p.principalType.replace(/^Microsoft Entra /, '')}</Caption1>}
@@ -824,7 +848,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem key={`ext-${x.name}`} itemType="leaf" value={`ext-${x.name}`}>
                   <TreeItemLayout iconBefore={<CloudLink20Regular />}>
                     <span className={s.leafRow}>
-                      <span role="button" tabIndex={0} style={{ cursor: 'pointer' }}
+                      <span role="button" tabIndex={0} className={s.leafName} title={x.name}
                         onClick={() => openQuery(`external_table("${x.name}")\n| take 100`)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQuery(`external_table("${x.name}")\n| take 100`); } }}
                       >{x.name}</span>
@@ -852,7 +876,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
                   <Tooltip content={why} relationship="description">
                     <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
+                      <span className={s.muted}>{label}</span>{' '}
                       <Badge size="small" appearance="tint" color="warning">coming</Badge>
                     </TreeItemLayout>
                   </Tooltip>
@@ -905,7 +929,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 : 'materialized view (.create materialized-view)'}
             </DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className={s.dialogForm}>
                 <Field label="Name" required>
                   <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="events" />
                 </Field>
@@ -933,7 +957,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                       </Dropdown>
                     </Field>
                     <Field label="Query (one row per group key)">
-                      <Textarea value={cQuery} onChange={(_, d) => setCQuery(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
+                      <Textarea value={cQuery} onChange={(_, d) => setCQuery(d.value)} rows={4} className={s.mono} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
                     </Field>
                     <Field label="Backfill from existing data">
                       <Switch
@@ -942,7 +966,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                         onChange={(_, d) => setCBackfill(!!d.checked)}
                       />
                       {cBackfill && (
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        <Caption1 className={s.hint}>
                           Large tables may take minutes to hours; the view is unavailable for query until the backfill completes. Track with <code>.show operations</code>.
                         </Caption1>
                       )}
@@ -967,7 +991,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
           <DialogBody>
             <DialogTitle>Add database principal (.add database {database || '<db>'} &lt;role&gt;)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className={s.dialogForm}>
                 <Field label="Role" required>
                   <Dropdown value={pRole} selectedOptions={[pRole]} onOptionSelect={(_, d) => setPRole((d.optionValue as typeof DATABASE_ROLES[number]) || 'viewers')}>
                     {DATABASE_ROLES.map((r) => <Option key={r} value={r} text={r}>{r}</Option>)}
@@ -997,7 +1021,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 <Field label="Description (Notes column)">
                   <Input value={pDesc} onChange={(_, d) => setPDesc(d.value)} placeholder="Granted via CSA Loom" />
                 </Field>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={s.hint}>
                   Will run <code>.add database {database || '<db>'} {pRole} ('{buildPrincipalFqn() || `${pType}=…`}')</code> — requires Database Admin.
                 </Caption1>
                 {pError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Grant failed</MessageBarTitle>{pError}</MessageBarBody></MessageBar>}
@@ -1017,7 +1041,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
           <DialogBody>
             <DialogTitle>Row-level security · {rlsTable}</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className={s.dialogForm}>
                 {rlsLoading && <Spinner size="tiny" label="Loading current policy…" />}
                 <Field label="Enforcement">
                   <Switch
@@ -1037,11 +1061,11 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                     onChange={(_, d) => setRlsQuery(d.value)}
                     rows={6}
                     disabled={rlsLoading || !rlsEnabled}
-                    style={{ fontFamily: 'Consolas, monospace' }}
+                    className={s.mono}
                     placeholder={`${rlsTable} | where Owner == current_principal()`}
                   />
                 </Field>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={s.hint}>
                   Applies <code>.alter table ["{rlsTable}"] policy row_level_security {rlsEnabled ? 'enable' : 'disable'} "&lt;query&gt;"</code> — requires Table/Database Admin.
                 </Caption1>
                 {rlsReceipt && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Policy applied</MessageBarTitle>{rlsReceipt}</MessageBarBody></MessageBar>}
@@ -1062,7 +1086,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
           <DialogBody>
             <DialogTitle>New external table (.create-or-alter external table)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className={s.dialogForm}>
                 <Field label="Name" required>
                   <Input value={extName} onChange={(_, d) => setExtName(d.value)} placeholder="orders_archive" />
                 </Field>
@@ -1114,7 +1138,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                   <Input value={extDoc} onChange={(_, d) => setExtDoc(d.value)} placeholder="Cold orders mirrored to ADLS" />
                 </Field>
 
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={s.hint}>
                   SQL external tables (kind=sql) require an embedded credential and aren't supported here yet — see the &quot;Not yet wired&quot; group.
                 </Caption1>
                 {extError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{extError}</MessageBarBody></MessageBar>}
