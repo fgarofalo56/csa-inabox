@@ -704,6 +704,9 @@ param loomEventBackend string = 'eventhubs'
 @allowed(['azure-monitor', 'fabric'])
 param loomActivatorBackend string = 'azure-monitor'
 
+@description('Default Log Analytics custom-log table the Azure-native Activator targets for entity-change triggers (e.g. ontology entity-change rules). Empty uses the code default AppEvents_CL.')
+param loomActivatorDefaultTable string = 'AppEvents_CL'
+
 @description('Dashboard backend selector. Default: adx (Azure Data Explorer/Kusto). Alternatives: fabric.')
 @allowed(['adx', 'fabric'])
 param loomDashboardBackend string = 'adx'
@@ -1744,6 +1747,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PIPELINE_BACKEND', value: loomPipelineBackend }
             { name: 'LOOM_EVENT_BACKEND', value: loomEventBackend }
             { name: 'LOOM_ACTIVATOR_BACKEND', value: loomActivatorBackend }
+            { name: 'LOOM_ACTIVATOR_DEFAULT_TABLE', value: loomActivatorDefaultTable }
             { name: 'LOOM_DASHBOARD_BACKEND', value: loomDashboardBackend }
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }

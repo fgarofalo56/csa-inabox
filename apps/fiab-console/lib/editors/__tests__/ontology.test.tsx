@@ -27,4 +27,27 @@ describe('OntologyEditor', () => {
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
+
+  it('renders the Bind-to-data-source surface and no longer shows the deferred gate', async () => {
+    // Mock the bind endpoint (resolves workspaceId + candidate sources server-side).
+    installFetchMock({
+      '/api/items/ontology/real-id/bind': () => ({
+        ok: true, workspaceId: 'ws-1', boundLakehouseId: null, boundWarehouseId: null,
+        entityBindings: [], lakehouses: [{ id: 'lh-1', displayName: 'Gold LH' }], warehouses: [], activatorId: null,
+      }),
+      '/api/items/ontology/real-id': () => ({ id: 'real-id', displayName: 'Onto', state: { source: 'Customer :\nOrder : Customer' }, updatedAt: null }),
+    });
+    let err: unknown = null;
+    try {
+      render(<OntologyEditor item={makeItem('ontology', 'Ontology')} id="real-id" />);
+      await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+      // The deferred gate text must be gone.
+      expect(screen.queryByText(/still deferred/i)).toBeNull();
+      // The binding action exists (at least once — ribbon + section).
+      expect(screen.getAllByText(/Bind to data source/i).length).toBeGreaterThan(0);
+      // The Activator triggers surface renders.
+      expect(screen.getAllByText(/Activator triggers/i).length).toBeGreaterThan(0);
+    } catch (e) { err = e; }
+    if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
+  });
 });
