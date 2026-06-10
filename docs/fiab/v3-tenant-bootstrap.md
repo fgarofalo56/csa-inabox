@@ -1225,6 +1225,38 @@ filter (e.g. `[Region] = "East"`) and a hidden column → Save → **Test as rol
 with a tenant UPN. The result grid returns only the filtered rows and omits the
 OLS-hidden column — that JSON is the receipt. Not available in the DoD (IL6)
 boundary (AAS is not offered there; the tab shows a DoD gate).
+## Lakehouse "Expose as Iceberg" — Delta UniForm (OneLake Iceberg V2 endpoint parity) {#lakehouse-iceberg-uniform}
+
+The Lakehouse **Settings → Expose as Iceberg** control gives Fabric OneLake's
+"Iceberg V2 endpoint" parity on the Azure-native path: a Delta table is made
+readable by Apache Iceberg V2 readers (Snowflake, Trino, Spark, Athena) with no
+data copy. There is **no Microsoft Fabric / OneLake / Power BI dependency** —
+it works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+On save (toggle Enabled), Loom runs a real Delta Lake **UniForm** statement via
+a Databricks SQL Warehouse:
+
+```sql
+ALTER TABLE delta.`abfss://<container>@<account>.dfs.core.windows.net/Tables/<table>`
+  SET TBLPROPERTIES (
+    'delta.enableIcebergCompatV2' = 'true',
+    'delta.universalFormat.enabledFormats' = 'iceberg'
+  );
+```
+
+Delta then asynchronously generates Iceberg V2 metadata (`metadata/*.metadata.json`)
+alongside the Delta log. The Settings panel surfaces the `abfss://` table path,
+the HTTPS metadata-folder URL, and the `azure://` form for a Snowflake
+`EXTERNAL VOLUME`. Tables with deletion vectors should be upgraded once in a
+notebook with `REORG TABLE … APPLY (UPGRADE UNIFORM(ICEBERG_COMPAT_VERSION=2))`.
+
+This **reuses the existing `LOOM_DATABRICKS_HOSTNAME`** env var (already injected
+into the Console Container App by `platform/fiab/bicep/modules/admin-plane/main.bicep`),
+the same wiring as Lakehouse liquid clustering — **no new env var, bicep
+resource, or role grant is needed.** When `LOOM_DATABRICKS_HOSTNAME` is unset or
+no SQL Warehouse exists, the panel renders an honest warning MessageBar, persists
+the selection, and still shows the Iceberg metadata path.
+
 ## Spark / compute configuration — Databricks "Allow pool creation" entitlement {#spark-compute-pool-entitlement}
 
 The workspace **Spark compute** surface (Settings → Spark compute; F13) configures
