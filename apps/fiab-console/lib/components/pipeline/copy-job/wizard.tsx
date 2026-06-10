@@ -110,8 +110,17 @@ const useStyles = makeStyles({
     flex: '1 1 200px', minWidth: '190px', padding: '12px', borderRadius: '10px',
     border: `1px solid ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column', gap: '4px',
+    transitionProperty: 'border-color, background-color, box-shadow',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { borderColor: tokens.colorBrandStroke2, backgroundColor: tokens.colorNeutralBackground1Hover },
+    ':focus-visible': {
+      outlineStyle: 'none',
+      borderColor: tokens.colorBrandStroke1,
+      boxShadow: `0 0 0 2px ${tokens.colorBrandStroke1}`,
+    },
   },
   cardActive: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  cardDisabled: { opacity: 0.5, cursor: 'not-allowed', ':hover': { borderColor: tokens.colorNeutralStroke2, backgroundColor: tokens.colorNeutralBackground1 } },
   cardTitle: { fontWeight: 600, fontSize: '13px' },
   cardDesc: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
@@ -289,9 +298,8 @@ export function CopyJobWizard({
                       };
                       return (
                         <div key={m.kind} role="button" tabIndex={disabled ? -1 : 0}
-                          aria-disabled={disabled}
-                          className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''}`}
-                          style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                          aria-disabled={disabled} aria-pressed={mode === m.kind}
+                          className={`${styles.card} ${mode === m.kind ? styles.cardActive : ''} ${disabled ? styles.cardDisabled : ''}`}
                           onClick={onPick}
                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onPick(); }}>
                           <span className={styles.cardTitle}>{m.title}</span>
@@ -360,9 +368,8 @@ export function CopyJobWizard({
                     const disabled = mode === 'CDC' && w.kind !== 'Merge';
                     return (
                       <div key={w.kind} role="button" tabIndex={disabled ? -1 : 0}
-                        aria-disabled={disabled}
-                        className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''}`}
-                        style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                        aria-disabled={disabled} aria-pressed={writeMode === w.kind}
+                        className={`${styles.card} ${writeMode === w.kind ? styles.cardActive : ''} ${disabled ? styles.cardDisabled : ''}`}
                         onClick={() => { if (!disabled) setWriteMode(w.kind); }}
                         onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) setWriteMode(w.kind); }}>
                         <span className={styles.cardTitle}>{w.title}</span>
