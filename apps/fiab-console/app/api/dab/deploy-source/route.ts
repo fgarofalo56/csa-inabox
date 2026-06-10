@@ -33,6 +33,7 @@ import { jerr } from '../../items/_lib/item-crud';
 import {
   listServers, createDatabase, setAadAdmin, type AadAdmin,
 } from '@/lib/azure/azure-sql-client';
+import { getSqlSuffix } from '@/lib/azure/cloud-endpoints';
 import {
   isPurviewConfigured, getPurviewAccountName, registerDataSource,
 } from '@/lib/azure/purview-client';
@@ -171,7 +172,7 @@ export async function POST(req: NextRequest) {
     }
     server = servers[0].name;
   }
-  const serverFqdn = servers.find((s) => s.name === server)?.fqdn || `${server}.database.windows.net`;
+  const serverFqdn = servers.find((s) => s.name === server)?.fqdn || `${server}.${getSqlSuffix()}`;
 
   const steps: StepResult[] = [];
 

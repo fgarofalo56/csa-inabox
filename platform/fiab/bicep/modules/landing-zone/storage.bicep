@@ -19,6 +19,9 @@ param cmkKeyUri string = ''
 @description('UAMI principal ID with Key Vault Crypto Service Encryption User role')
 param cmkIdentityId string = ''
 
+@description('Pin CMK to a specific key version (F14). Empty = auto-rotate to the latest version (recommended). A hex version string pins the account to that exact version.')
+param cmkKeyVersion string = ''
+
 @description('Private endpoints subnet ID')
 param privateEndpointSubnetId string
 
@@ -74,6 +77,8 @@ resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
       keyvaultproperties: requireCmk ? {
         keyvaulturi: substring(cmkKeyUri, 0, indexOf(cmkKeyUri, '/keys/'))
         keyname: split(split(cmkKeyUri, '/keys/')[1], '/')[0]
+        // Empty = auto-rotate to latest; a hex version pins the account (F14).
+        keyversion: cmkKeyVersion
       } : null
       services: {
         blob: { enabled: true }
@@ -106,7 +111,7 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   }
 }
 
-var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports']
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs

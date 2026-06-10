@@ -25,6 +25,13 @@ param workspaceId string = ''
 @description('Compliance tags')
 param complianceTags object
 
+@description('Console UAMI principal id (F15). Granted Network Contributor on this RG so the Console BFF can write NSG security rules + create private endpoints for the workspace Advanced-networking pane. Empty skips the grant.')
+param consolePrincipalId string = ''
+
+@description('Skip role grants on re-deploy to avoid RoleAssignmentExists (409).')
+param skipRoleGrants bool = false
+
+
 // =====================================================================
 // Subnet calculations
 // =====================================================================
@@ -292,7 +299,7 @@ var dnsZones = [
   'privatelink.cognitiveservices.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.openai.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.search.windows.net'
-  'privatelink.documents.azure.com'
+  'privatelink.documents.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.servicebus.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
   'privatelink.eventgrid.azure.net'
   'privatelink.azurewebsites.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
@@ -334,6 +341,21 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06
 // =====================================================================
 // Outputs
 // =====================================================================
+
+// F15 — Network Contributor (4d97b98b-1d4f-4787-a291-c67834d212e7) on this RG
+// for the Console UAMI. Needed so the BFF can: PUT/DELETE NSG securityRules
+// (IP firewall + trusted instances) and PUT/DELETE privateEndpoints +
+// privateDnsZoneGroups (inbound protection + outbound rules). Azure-native —
+// no Microsoft Fabric dependency.
+resource networkContributorGrant 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: resourceGroup()
+  name: guid(resourceGroup().id, consolePrincipalId, '4d97b98b-1d4f-4787-a291-c67834d212e7')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 // Diagnostic settings → standardized Loom LAW
 resource diagVnet 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
@@ -383,6 +405,11 @@ output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'
 output apimSubnetId string = '${hubVnet.id}/subnets/snet-apim'
 output privateEndpointsSubnetId string = '${hubVnet.id}/subnets/snet-private-endpoints'
+// F15 — the NSG attached to snet-private-endpoints (named nsg-${subnetName} by
+// the nsgs loop above). The Advanced-networking pane writes IP-firewall +
+// trusted-instance security rules onto this NSG. Threaded into the Console as
+// LOOM_NSG_NAME so the BFF targets the right NSG.
+output nsgPrivateEndpointsName string = 'nsg-snet-private-endpoints'
 output gatewaySubnetId string = '${hubVnet.id}/subnets/GatewaySubnet'
 output appGatewaySubnetId string = '${hubVnet.id}/subnets/snet-appgw'
 output privateDnsZoneIds object = {

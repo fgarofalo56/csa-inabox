@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { getItem, createItem, type WorkspaceItem } from '@/lib/api/workspaces';
-import type { WarehouseContent } from '@/lib/apps/content-bundles/types';
+import type { WarehouseContent, RollupMethod, StatusColor, StatusOperator, StatusMetricKind, StatusRule } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList, Dropdown, Option,
@@ -47,6 +47,7 @@ import {
   Warning20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular, Info20Regular,
   DataBarVertical20Regular,
   Eye20Regular, Form20Regular,
+  ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
@@ -60,12 +61,21 @@ import {
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { ModelViewPanel } from './components/model-view-canvas';
+import { PbiModelViewPanel } from './components/pbi-model-view-panel';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
+import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import type {
+  RdlReportDefinition, RdlDataSource, RdlDataset, RdlTablix, RdlParameter,
+  RdlField, RdlDataSourceType, RdlExportFormat,
+} from '@/lib/azure/paginated-report-client';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { NewItemCreateGate } from './new-item-gate';
+import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
 import { StatsMaintenanceDialog } from './components/stats-maintenance-dialog';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
@@ -76,12 +86,21 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
 import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
 import { WarehouseAlerts } from './components/warehouse-alerts';
+import {
+  useWarehouseCopilot,
+  WarehouseCopilotActions,
+  WarehouseCopilotPanels,
+} from './warehouse-editor';
 import { VisualQueryCanvas } from './components/visual-query-canvas';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
+import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from './components/query-params';
 import { ResultVisualize } from './components/result-visualize';
+import { ReportVisualDesigner } from './components/report-visual-designer';
+import { ReportSubscriptionsPanel } from './components/report-subscriptions-panel';
 import {
   VisualDesigner as EventstreamVisualDesigner,
   type PipelineConfig as VisualPipelineConfig,
@@ -3185,6 +3204,16 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [kql, setKql] = useState(SAMPLE_KQL_DB);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // ── KQL Copilot (NL2KQL / explain / fix) ──────────────────────────────
+  // Persona-backed inline assist — POSTs to /api/items/kql-database/<id>/assist,
+  // which grounds generation in the live ADX schema (KQL_COPILOT_PERSONA) and
+  // calls real AOAI. Azure-native; no Fabric dependency.
+  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
+  const [assistView, setAssistView] = useState<AssistView>('idle');
+  const [assistPrompt, setAssistPrompt] = useState('');
+  const [assistResult, setAssistResult] = useState<string | null>(null);
+  const [assistError, setAssistError] = useState<string | null>(null);
+  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
   // Bumped after a ribbon-wizard create so the AdxDatabaseTree re-lists objects.
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   // Wizard dialog state — Fabric-parity create flows for table/MV/function/update-policy
@@ -3329,6 +3358,36 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
+
+  // KQL Copilot edge — generate (NL2KQL) / explain (Markdown) / fix.
+  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
+    lastModeRef.current = mode;
+    setAssistView('loading'); setAssistError(null);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/assist`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          kql,
+          prompt: mode === 'generate' ? assistPrompt : undefined,
+          errorText: mode === 'fix' ? (result && !result.ok ? result.error || '' : '') : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setAssistView('idle');
+        setAssistError(j?.code === 'no_aoai'
+          ? `KQL Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
+          : (j?.error || 'AI assist failed'));
+        return;
+      }
+      setAssistResult(j.result);
+      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
+    } catch (e: any) {
+      setAssistView('idle');
+      setAssistError(e?.message || String(e));
+    }
+  }, [id, kql, assistPrompt, result]);
 
   // Shift+Enter runs the query (the "Run (Shift+Enter)" button label promises
   // this). Only fires when focus is inside the KQL editor surface so it never
@@ -4172,6 +4231,30 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
 
           {editorTab === 'query' && (
           <>
+          <div className={s.toolbar}>
+            <Tooltip content="Generate KQL from a description (NL2KQL, grounded in the live ADX schema)" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
+                disabled={assistView === 'loading' || !id || id === 'new'}
+                onClick={() => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
+                aria-label="Ask Copilot to generate KQL">Ask Copilot</Button>
+            </Tooltip>
+            <Tooltip content="Explain this query in Markdown" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Info16Regular />}
+                disabled={!kql.trim() || assistView === 'loading' || !id || id === 'new'}
+                onClick={() => callAssist('explain')}
+                aria-label="Explain KQL">Explain</Button>
+            </Tooltip>
+            {result && !result.ok && result.error && (
+              <Tooltip content="Fix the KQL error" relationship="label">
+                <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
+                  disabled={assistView === 'loading' || !id || id === 'new'}
+                  onClick={() => callAssist('fix')}
+                  aria-label="Fix KQL error">
+                  {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
+                </Button>
+              </Tooltip>
+            )}
+          </div>
           <MonacoTextarea
             value={kql}
             onChange={setKql}
@@ -4180,6 +4263,63 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             minHeight={180}
             ariaLabel="KQL query editor"
           />
+          {/* NL prompt input — generate mode */}
+          {assistView === 'prompt' && (
+            <div className={s.assistBar}>
+              <Input size="small" autoFocus style={{ flex: 1 }}
+                placeholder="Describe the query (e.g. 'count events per hour for the last day')…"
+                value={assistPrompt}
+                onChange={(_: unknown, d: any) => setAssistPrompt(d.value)}
+                onKeyDown={(e: any) => {
+                  if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
+                  if (e.key === 'Escape') setAssistView('idle');
+                }}
+                aria-label="AI KQL generation prompt" />
+              <Button size="small" appearance="primary"
+                disabled={!assistPrompt.trim()}
+                onClick={() => callAssist('generate')}>Generate</Button>
+              <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
+            </div>
+          )}
+          {/* Loading spinner */}
+          {assistView === 'loading' && (
+            <div className={s.assistBar}>
+              <Spinner size="tiny" labelPosition="after"
+                label={lastModeRef.current === 'generate' ? 'Generating…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
+            </div>
+          )}
+          {/* Suggestion / explanation result */}
+          {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
+            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>
+                <pre className={s.assistResult}>{assistResult}</pre>
+              </MessageBarBody>
+              <MessageBarActions>
+                {assistView === 'suggestion' && (
+                  <>
+                    <Button size="small" appearance="primary"
+                      onClick={() => { setKql(assistResult); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
+                      Apply
+                    </Button>
+                    <Button size="small" appearance="outline"
+                      onClick={() => { setKql(assistResult); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); setTimeout(() => run(), 0); }}>
+                      Apply &amp; Run
+                    </Button>
+                  </>
+                )}
+                <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {/* Honest config gate / error */}
+          {assistError && (
+            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+              <MessageBarBody>{assistError}</MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
           <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" />
 
           {/* Starter schema + queries from the app-install template. Surfaced
@@ -7757,12 +7897,33 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setRuleOpen(true);
   }, []);
 
+  // Activator Copilot — open the Copilot pane bound to the 'activator' persona,
+  // pre-loaded with this reflex's context (id, workspace, existing rule names)
+  // so the model can author a real Azure Monitor scheduled-query alert rule from
+  // plain English, suggest a threshold from real history, and create it.
+  const openActivatorCopilot = useCallback(() => {
+    const reflex = (activators || []).find((a) => a.id === selectedId);
+    openCopilotWithPersona({
+      persona: 'activator',
+      personaContext: {
+        activatorId: selectedId,
+        activatorName: reflex?.displayName,
+        workspaceId,
+        existingRuleNames: rules.map((r) => r.azureRuleName || r.name).filter(Boolean),
+      },
+      prefillPrompt: 'Alert me when failed logins exceed normal.',
+    });
+  }, [activators, selectedId, workspaceId, rules]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Rules', actions: [
         { label: 'New rule', onClick: canNewRule ? () => setRuleOpen(true) : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
         { label: reflexBusy === 'start' ? 'Starting…' : 'Start', onClick: canNewRule && !reflexBusy ? () => startStop('start') : undefined, disabled: !canNewRule || !!reflexBusy },
         { label: reflexBusy === 'stop' ? 'Stopping…' : 'Stop', onClick: canNewRule && !reflexBusy ? () => startStop('stop') : undefined, disabled: !canNewRule || !!reflexBusy },
+      ]},
+      { label: 'Copilot', actions: [
+        { label: 'Author rule with Copilot', onClick: canNewRule ? openActivatorCopilot : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : 'Describe an alert in plain English — Copilot drafts the KQL, suggests a threshold from real history, and creates the Azure Monitor rule after you approve.' },
       ]},
       { label: 'Actions', actions: [
         { label: 'Email', onClick: canNewRule ? () => openTemplate('Email') : undefined, disabled: !canNewRule },
@@ -7775,7 +7936,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Power Automate', onClick: canNewRule ? () => openTemplate('PowerAutomate') : undefined, disabled: !canNewRule },
       ]},
     ]},
-  ], [canNewRule, reflexBusy, startStop, openTemplate]);
+  ], [canNewRule, reflexBusy, startStop, openTemplate, openActivatorCopilot]);
 
   // On /new there is no reflex selected yet, so every rule/action button is
   // gated. Mirror the PR #438 NewItemGate pattern: show an ENABLED create
@@ -8481,43 +8642,20 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, [id, sqlText]);
 
-  // Warehouse Copilot — inline NL→SQL / explain / fix over the Loom AOAI
-  // deployment (no Fabric Copilot). State machine mirrors KqlQuerysetEditor.
-  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
-  const [assistView, setAssistView] = useState<AssistView>('idle');
-  const [assistPrompt, setAssistPrompt] = useState('');
-  const [assistResult, setAssistResult] = useState<string | null>(null);
-  const [assistError, setAssistError] = useState<string | null>(null);
-  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
-
-  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
-    lastModeRef.current = mode;
-    setAssistView('loading'); setAssistError(null);
-    try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/assist`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          sql: sqlText,
-          prompt: mode === 'generate' ? assistPrompt : undefined,
-          errorText: mode === 'fix' ? (result?.error || '') : undefined,
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) {
-        setAssistView('idle');
-        setAssistError(j?.code === 'no_aoai'
-          ? `Warehouse Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
-          : (j?.error || 'AI assist failed'));
-        return;
-      }
-      setAssistResult(j.result);
-      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
-    } catch (e: any) {
-      setAssistView('idle');
-      setAssistError(e?.message || String(e));
-    }
-  }, [id, sqlText, assistPrompt, result]);
+  // Warehouse Copilot — inline NL→SQL / explain / fix / optimize over the Loom
+  // AOAI deployment (no Fabric Copilot). The hook owns the assist state machine
+  // and the INSERT BRIDGE: an applied generate/fix suggestion replaces sqlText
+  // and clears the prior result so the next Run executes the new query against
+  // the real Synapse Dedicated SQL pool. Optimize grounds in a real EXPLAIN
+  // WITH_RECOMMENDATIONS plan (see lib/editors/warehouse-editor.tsx).
+  const copilot = useWarehouseCopilot(id, {
+    sql: sqlText,
+    resultError: result && !result.ok ? result.error || null : null,
+    onInsert: (next) => {
+      setSqlText(next);
+      setResult(null);
+    },
+  });
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -8529,8 +8667,9 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Copilot', actions: [
-        { label: 'Ask Copilot', onClick: () => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }, title: 'Generate T-SQL from natural language' },
-        { label: 'Explain', onClick: sqlText.trim() ? () => callAssist('explain') : undefined, disabled: !sqlText.trim(), title: 'Explain this T-SQL query' },
+        { label: 'Ask Copilot', onClick: copilot.openPrompt, title: 'Generate T-SQL from natural language' },
+        { label: 'Explain', onClick: sqlText.trim() ? copilot.explain : undefined, disabled: !sqlText.trim(), title: 'Explain this T-SQL query' },
+        { label: 'Optimize', onClick: (canRun && sqlText.trim()) ? copilot.optimize : undefined, disabled: !canRun || !sqlText.trim(), title: !ready ? 'warehouse compute is not ready' : 'Analyze the query plan (EXPLAIN WITH_RECOMMENDATIONS) and suggest optimizations' },
       ]},
       { label: 'Modeling', actions: [
         // Open the interactive Model view (table cards + relationship lines +
@@ -8588,7 +8727,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Column & Row security', onClick: canRun ? () => setSecOpen(true) : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : 'Column-level GRANT, Row-Level Security, Dynamic Data Masking' },
       ]},
     ]},
-  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, callAssist]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -8824,28 +8963,12 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 {canceling ? 'Canceling…' : 'Cancel'}
               </Button>
             )}
-            <Tooltip content="Generate T-SQL from a description" relationship="label">
-              <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
-                disabled={assistView === 'loading'}
-                onClick={() => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
-                aria-label="Ask Copilot to generate T-SQL">Ask Copilot</Button>
-            </Tooltip>
-            <Tooltip content="Explain this query" relationship="label">
-              <Button size="small" appearance="subtle" icon={<Info16Regular />}
-                disabled={!sqlText.trim() || assistView === 'loading'}
-                onClick={() => callAssist('explain')}
-                aria-label="Explain T-SQL">Explain</Button>
-            </Tooltip>
-            {result && !result.ok && result.error && (
-              <Tooltip content="Fix the T-SQL error" relationship="label">
-                <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
-                  disabled={assistView === 'loading'}
-                  onClick={() => callAssist('fix')}
-                  aria-label="Fix T-SQL error">
-                  {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
-                </Button>
-              </Tooltip>
-            )}
+            <WarehouseCopilotActions
+              copilot={copilot}
+              sql={sqlText}
+              canOptimize={canRun}
+              hasError={!!(result && !result.ok && result.error)}
+            />
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !ready} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
           </div>
           {schema && !ready && (
@@ -8869,30 +8992,8 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             onChange={setComputeId}
           />
           <SqlTabBar tabs={tabs} activeTabId={activeTabId} onSelect={setActiveTabId} onAdd={addTab} onClose={closeTab} />
-          {/* NL prompt input — generate mode */}
-          {assistView === 'prompt' && (
-            <div className={s.assistBar}>
-              <Input size="small" autoFocus style={{ flex: 1 }}
-                placeholder="Describe the query (e.g. 'top 10 customers by revenue last quarter')…"
-                value={assistPrompt}
-                onChange={(_: unknown, d: any) => setAssistPrompt(d.value)}
-                onKeyDown={(e: any) => {
-                  if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
-                  if (e.key === 'Escape') setAssistView('idle');
-                }}
-                aria-label="AI T-SQL generation prompt" />
-              <Button size="small" appearance="primary"
-                disabled={!assistPrompt.trim()}
-                onClick={() => callAssist('generate')}>Generate</Button>
-              <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
-            </div>
-          )}
-          {assistView === 'loading' && (
-            <div className={s.assistBar}>
-              <Spinner size="tiny" labelPosition="after"
-                label={lastModeRef.current === 'generate' ? 'Generating T-SQL…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
-            </div>
-          )}
+          {/* Warehouse Copilot — NL prompt bar + loading spinner (generate mode) */}
+          <WarehouseCopilotPanels copilot={copilot} />
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}
@@ -8902,32 +9003,6 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             ariaLabel="Warehouse T-SQL editor"
             onReady={handleEditorReady}
           />
-          {/* Suggestion / explanation result */}
-          {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
-              <MessageBarBody>
-                <pre className={s.assistResult}>{assistResult}</pre>
-              </MessageBarBody>
-              <MessageBarActions>
-                {assistView === 'suggestion' && (
-                  <Button size="small" appearance="primary"
-                    onClick={() => { setSqlText(assistResult); setResult(null); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
-                    Apply
-                  </Button>
-                )}
-                <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
-              </MessageBarActions>
-            </MessageBar>
-          )}
-          {/* Honest config gate / error */}
-          {assistError && (
-            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
-              <MessageBarBody>{assistError}</MessageBarBody>
-              <MessageBarActions>
-                <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
-              </MessageBarActions>
-            </MessageBar>
-          )}
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
@@ -9068,12 +9143,668 @@ interface TableLite {
   columns?: Array<{ name: string; dataType?: string }>;
   measures?: Array<{ name: string; expression?: string }>;
 }
+// Full tabular-model column/table shapes returned by the XMLA-backed
+// GET /api/items/semantic-model/[id]/model (Azure Analysis Services / Power BI
+// Premium XMLA). These carry the editable column metadata (data category,
+// format string, summarize-by, display folder, sort-by, hidden, calc DAX).
+interface SmColumn {
+  name: string;
+  type?: 'data' | 'calculated' | 'calculatedTableColumn' | 'rowNumber';
+  dataType?: string;
+  dataCategory?: string;
+  isHidden?: boolean;
+  summarizeBy?: string;
+  formatString?: string;
+  displayFolder?: string;
+  sortByColumn?: string;
+  expression?: string;
+}
+interface SmTable {
+  name: string;
+  isCalculatedTable?: boolean;
+  calculatedExpression?: string;
+  columns: SmColumn[];
+  measures: Array<{ name: string; expression?: string }>;
+}
+const SM_DATA_CATEGORIES = ['WebUrl', 'ImageUrl', 'Country', 'StateOrProvince', 'City', 'PostalCode', 'County', 'Continent', 'Address', 'Place', 'Latitude', 'Longitude', 'Barcode'];
+const SM_SUMMARIZE = ['default', 'none', 'sum', 'min', 'max', 'count', 'average', 'distinctCount'];
+const SM_DATA_TYPES = ['string', 'int64', 'double', 'dateTime', 'decimal', 'boolean'];
+const SM_FORMATS: Array<{ value: string; label: string }> = [
+  { value: '', label: '— none —' },
+  { value: '#,0', label: 'Integer (#,0)' },
+  { value: '#,0.00', label: '2 decimals (#,0.00)' },
+  { value: '0%', label: 'Percent (0%)' },
+  { value: '0.00%', label: 'Percent 2dp (0.00%)' },
+  { value: '$#,0.##;($#,0.##)', label: 'Currency ($)' },
+  { value: 'yyyy-mm-dd', label: 'Date (yyyy-mm-dd)' },
+  { value: 'yyyy-mm-dd hh:mm:ss', label: 'DateTime' },
+  { value: 'General Date', label: 'General Date' },
+];
 interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
 
+// ============================================================
+// AAS (Azure Analysis Services) — Azure-native semantic-model backend.
+// Rendered when NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas' (bicep sets this when the
+// AAS module is deployed; per no-fabric-dependency.md AAS is the Azure-native
+// default and Power BI is opt-in). Storage Mode + Refresh (now / scheduled /
+// history) wire to the real AAS REST + ARM backend via the /api/items/
+// semantic-model/aas-databases and /[id]/refresh{,-schedule,es} routes.
+// ============================================================
+
+interface AasDbLite { name: string; storageMode?: string; state?: string; compatibilityLevel?: number; }
+interface AasRefreshLite { refreshId?: string; type?: string; startTime?: string; endTime?: string; status?: string; }
+interface AasScheduleLite {
+  enabled: boolean; days: string[]; times: string[];
+  localTimeZoneId?: string; notifyOption?: 'NoNotification' | 'MailOnFailure'; updatedAt?: string;
+}
+
+function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const AAS_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const [gate, setGate] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [databases, setDatabases] = useState<AasDbLite[]>([]);
+  const [serverName, setServerName] = useState('');
+  const [dbName, setDbName] = useState('');
+  const [tab, setTab] = useState<'storage' | 'refresh'>('storage');
+
+  const [refreshes, setRefreshes] = useState<AasRefreshLite[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Scheduled refresh form (mirrors the Power BI Scheduled-refresh pane; AAS has
+  // no 30-minute boundary so times may be any HH:MM).
+  const [schedEnabled, setSchedEnabled] = useState(false);
+  const [schedDays, setSchedDays] = useState<string[]>([]);
+  const [schedTimes, setSchedTimes] = useState('07:00');
+  const [schedTz, setSchedTz] = useState('UTC');
+  const [schedNotify, setSchedNotify] = useState<'NoNotification' | 'MailOnFailure'>('NoNotification');
+  const [schedBusy, setSchedBusy] = useState(false);
+  const [schedUpdatedAt, setSchedUpdatedAt] = useState<string>('');
+  const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadDatabases = useCallback(async () => {
+    setLoading(true); setGate(null);
+    try {
+      const r = await fetch('/api/items/semantic-model/aas-databases');
+      const j = await r.json();
+      if (!j.ok) { setGate(j.error || `HTTP ${r.status}`); setDatabases([]); return; }
+      setDatabases(j.databases || []);
+      setServerName(j.serverName || '');
+      setDbName((prev) => prev || (j.databases?.[0]?.name ?? ''));
+    } catch (e: any) { setGate(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, []);
+
+  const loadRefreshes = useCallback(async (db: string) => {
+    if (!db) return;
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refreshes?dbName=${encodeURIComponent(db)}`);
+      const j = await r.json();
+      if (j.ok) setRefreshes(j.refreshes || []);
+    } catch { /* keep last */ }
+  }, []);
+
+  const loadSchedule = useCallback(async (db: string) => {
+    if (!db) return;
+    setSchedMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refresh-schedule`);
+      const j = await r.json();
+      const sch: AasScheduleLite | null = j.ok ? j.schedule : null;
+      if (sch && typeof sch === 'object') {
+        setSchedEnabled(!!sch.enabled);
+        setSchedDays(Array.isArray(sch.days) ? sch.days : []);
+        setSchedTimes(Array.isArray(sch.times) && sch.times.length ? sch.times.join(', ') : '07:00');
+        setSchedTz(sch.localTimeZoneId || 'UTC');
+        setSchedNotify(sch.notifyOption === 'MailOnFailure' ? 'MailOnFailure' : 'NoNotification');
+        setSchedUpdatedAt(sch.updatedAt || '');
+      } else {
+        setSchedEnabled(false); setSchedDays([]); setSchedTimes('07:00'); setSchedTz('UTC'); setSchedNotify('NoNotification'); setSchedUpdatedAt('');
+      }
+    } catch { /* leave defaults */ }
+  }, []);
+
+  useEffect(() => { loadDatabases(); }, [loadDatabases]);
+  useEffect(() => { if (dbName) { loadRefreshes(dbName); loadSchedule(dbName); } }, [dbName, loadRefreshes, loadSchedule]);
+
+  const refreshNow = useCallback(async () => {
+    if (!dbName) return;
+    setRefreshing(true); setRefreshMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh?dbName=${encodeURIComponent(dbName)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'automatic' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRefreshMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setRefreshMsg({ ok: true, text: `Refresh queued — id ${String(j.refreshId).slice(0, 8)}…` });
+      setTimeout(() => loadRefreshes(dbName), 1500);
+    } catch (e: any) { setRefreshMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setRefreshing(false); }
+  }, [dbName, loadRefreshes]);
+
+  const toggleSchedDay = useCallback((day: string) => {
+    setSchedDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
+  }, []);
+
+  const saveSchedule = useCallback(async () => {
+    if (!dbName) return;
+    setSchedBusy(true); setSchedMsg(null);
+    const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh-schedule`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      const sch: AasScheduleLite = j.schedule;
+      setSchedUpdatedAt(sch?.updatedAt || '');
+      setSchedMsg({ ok: true, text: 'Scheduled refresh saved to the AAS server (loom-refresh-schedule tag).' });
+    } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSchedBusy(false); }
+  }, [dbName, schedEnabled, schedDays, schedTimes, schedTz, schedNotify]);
+
+  const current = databases.find((d) => d.name === dbName);
+  const storageLabel = (mode?: string): string => {
+    if (mode === 'InMemory') return 'Import (in-memory)';
+    if (mode === 'DirectQuery') return 'DirectQuery';
+    if (mode === 'Hybrid') return 'Hybrid';
+    return mode || 'Import (in-memory)';
+  };
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Source', actions: [
+        { label: refreshing ? 'Queuing…' : 'Refresh now', onClick: dbName ? refreshNow : undefined, disabled: !dbName || refreshing, title: !dbName ? 'select a database first' : 'Queue an asynchronous refresh via the AAS REST API' },
+      ]},
+      { label: 'Schedule', actions: [
+        { label: 'Scheduled refresh', onClick: dbName ? () => setTab('refresh') : undefined, disabled: !dbName, title: 'Configure days / times / time zone' },
+      ]},
+    ]},
+  ], [refreshing, dbName, refreshNow]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Semantic model</Badge>
+            <Badge appearance="outline" color="informative">Azure Analysis Services</Badge>
+            {serverName && <Caption1>Server: <strong>{serverName}</strong></Caption1>}
+            <Field label="" style={{ minWidth: 240 }}>
+              <Select value={dbName} onChange={(_, d) => setDbName(d.value)} disabled={loading || databases.length === 0} aria-label="AAS database">
+                {databases.length === 0 && <option value="">(no databases)</option>}
+                {databases.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
+              </Select>
+            </Field>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadDatabases} disabled={loading}>Reload</Button>
+            <Button
+              appearance="primary"
+              icon={<Play20Regular />}
+              disabled={!dbName || refreshing}
+              onClick={refreshNow}
+              style={{ marginLeft: 'auto' }}
+            >
+              {refreshing ? 'Queuing…' : 'Refresh now'}
+            </Button>
+          </div>
+
+          {loading && <Spinner size="small" label="Loading Azure Analysis Services databases…" labelPosition="after" />}
+
+          {gate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>
+                {gate} — set <code>LOOM_AAS_SERVER_NAME</code> and <code>LOOM_AAS_REGION</code> on the Console Container App.
+                The AAS Standard server is deployed by <code>platform/fiab/bicep/modules/admin-plane/aas.bicep</code>; the Console
+                managed identity is added as a server administrator there. No Microsoft Fabric / Power BI workspace is required.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
+
+          {!gate && !loading && databases.length === 0 && (
+            <Caption1>No tabular databases on this AAS server yet. Deploy a model via the XMLA endpoint (SSMS / Tabular Editor) or the AAS REST <code>createOrReplace</code> TMSL command.</Caption1>
+          )}
+
+          {dbName && (
+            <>
+              <div className={s.tabBar}>
+                <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
+                  <Tab value="storage">Storage mode</Tab>
+                  <Tab value="refresh">Refresh ({refreshes.length})</Tab>
+                </TabList>
+              </div>
+
+              {tab === 'storage' && (
+                <div style={{ marginTop: 12 }}>
+                  <Subtitle2>Storage mode</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                    Sourced from <code>GET …/Microsoft.AnalysisServices/servers/{serverName || '{name}'}/databases/{dbName}</code> (api-version 2017-08-01,
+                    <code> properties.model.storageMode</code>). Changing the storage mode is a model operation — use the XMLA endpoint
+                    (SSMS / Tabular Editor) or the AAS REST <code>createOrReplace</code> TMSL command.
+                  </Caption1>
+                  <div style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Badge appearance="filled" color={current?.storageMode === 'InMemory' || !current?.storageMode ? 'brand' : 'informative'} size="large">
+                      {storageLabel(current?.storageMode)}
+                    </Badge>
+                    <Caption1>Processing state: <strong>{current?.state || '—'}</strong></Caption1>
+                    {typeof current?.compatibilityLevel === 'number' && (
+                      <Caption1>Compatibility level: <strong>{current.compatibilityLevel}</strong></Caption1>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {tab === 'refresh' && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div>
+                    <Subtitle2>Scheduled refresh</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                      Stored as the <code>loom-refresh-schedule</code> tag on the AAS server resource (visible in the Azure portal).
+                      A scheduler invokes the AAS async-refresh REST API at the configured times. AAS has no 30-minute-boundary
+                      constraint, so any <code>HH:MM</code> is allowed.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 560 }}>
+                      <Switch label="Enable scheduled refresh" checked={schedEnabled} onChange={(_, d) => setSchedEnabled(d.checked)} />
+                      <div>
+                        <Caption1>Refresh days</Caption1>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {AAS_DAYS.map((day) => (
+                            <Button key={day} size="small" appearance={schedDays.includes(day) ? 'primary' : 'outline'} onClick={() => toggleSchedDay(day)}>{day.slice(0, 3)}</Button>
+                          ))}
+                        </div>
+                      </div>
+                      <Field label="Time(s) — HH:MM (24h), comma-separated">
+                        <Input value={schedTimes} onChange={(_, d) => setSchedTimes(d.value)} placeholder="07:00, 12:15" />
+                      </Field>
+                      <Field label="Time zone">
+                        <Input value={schedTz} onChange={(_, d) => setSchedTz(d.value)} placeholder="UTC" />
+                      </Field>
+                      <Field label="On failure">
+                        <Select value={schedNotify} onChange={(_, d) => setSchedNotify(d.value as 'NoNotification' | 'MailOnFailure')}>
+                          <option value="NoNotification">No notification</option>
+                          <option value="MailOnFailure">Email on failure</option>
+                        </Select>
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Button appearance="primary" icon={<Save20Regular />} disabled={schedBusy} onClick={saveSchedule}>{schedBusy ? 'Saving…' : 'Apply'}</Button>
+                        {schedUpdatedAt && <Caption1>Last saved: {schedUpdatedAt}</Caption1>}
+                      </div>
+                      {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Subtitle2>Refresh history</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                      Last 30 days from <code>GET …/models/{dbName}/refreshes</code> (AAS async-refresh REST API), newest first.
+                    </Caption1>
+                    <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                      <Table aria-label="AAS refresh history" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Refresh ID</TableHeaderCell>
+                          <TableHeaderCell>Type</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Start</TableHeaderCell>
+                          <TableHeaderCell>End</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {refreshes.length === 0 && <TableRow><TableCell colSpan={5}>No refresh history.</TableCell></TableRow>}
+                          {refreshes.map((r, i) => (
+                            <TableRow key={r.refreshId || i}>
+                              <TableCell className={s.cell}>{r.refreshId?.slice(0, 8) || '—'}</TableCell>
+                              <TableCell>{r.type || '—'}</TableCell>
+                              <TableCell>{r.status || '—'}</TableCell>
+                              <TableCell className={s.cell}>{r.startTime || '—'}</TableCell>
+                              <TableCell className={s.cell}>{r.endTime || '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+// ---- Security (RLS/OLS) tab shared types + presentational component --------
+type SmSecColPerm = { name: string; metadataPermission: 'read' | 'none' };
+type SmSecTablePerm = {
+  name: string;
+  filterExpression?: string;
+  metadataPermission?: 'read' | 'none';
+  columnPermissions?: SmSecColPerm[];
+};
+type SmSecRole = {
+  name: string;
+  modelPermission: 'read';
+  tablePermissions: SmSecTablePerm[];
+  members?: Array<{ memberName: string }>;
+};
+
+interface SecurityTabProps {
+  s: Record<string, string>;
+  tables: TableLite[];
+  roles: SmSecRole[] | null;
+  busy: boolean;
+  saving: boolean;
+  err: string | null;
+  gate: { missing: string; detail: string } | null;
+  saveMsg: { ok: boolean; text: string } | null;
+  selectedRole: string;
+  olsTable: string;
+  testUpn: string;
+  testQuery: string;
+  testBusy: boolean;
+  testResult: { rows: Array<Record<string, unknown>>; rowCount: number } | null;
+  testErr: string | null;
+  onReload: () => void;
+  onAddRole: () => void;
+  onDeleteRole: (name: string) => void;
+  onRenameRole: (oldName: string, newName: string) => void;
+  onSelectRole: (name: string) => void;
+  onSetFilter: (roleName: string, table: string, expr: string) => void;
+  onSetTableOls: (roleName: string, table: string, perm: 'read' | 'none') => void;
+  onSetColumnOls: (roleName: string, table: string, column: string, perm: 'read' | 'none') => void;
+  onSetMembers: (roleName: string, members: string[]) => void;
+  onChangeOlsTable: (table: string) => void;
+  onSave: () => void;
+  onTestUpn: (v: string) => void;
+  onTestQuery: (v: string) => void;
+  onRunTest: () => void;
+}
+
+/**
+ * SemanticModelSecurityTab — the RLS + OLS authoring surface, one-for-one with
+ * Power BI's "Manage roles" experience (Tabular model security): a roles grid,
+ * per-role row-filter DAX editor, an OLS table/column visibility matrix, role
+ * membership, and a Test-as-role probe (the receipt). All writes go through the
+ * Analysis-Services XMLA TMSL endpoint via the parent's BFF callbacks.
+ */
+function SemanticModelSecurityTab(props: SecurityTabProps) {
+  const {
+    s, tables, roles, busy, saving, err, gate, saveMsg, selectedRole, olsTable,
+    testUpn, testQuery, testBusy, testResult, testErr,
+    onReload, onAddRole, onDeleteRole, onRenameRole, onSelectRole,
+    onSetFilter, onSetTableOls, onSetColumnOls, onSetMembers, onChangeOlsTable,
+    onSave, onTestUpn, onTestQuery, onRunTest,
+  } = props;
+
+  const role = (roles || []).find((r) => r.name === selectedRole) || null;
+  const tablePerm = (table: string): SmSecTablePerm | undefined =>
+    role?.tablePermissions.find((tp) => tp.name === table);
+  const olsTableObj = tables.find((t) => t.name === olsTable);
+  const filterValidation = (expr?: string) =>
+    expr && expr.trim() ? validateRlsDax(expr) : { ok: true as const };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Configure an Analysis-Services tabular engine to author roles</MessageBarTitle>
+            {gate.detail} <em>(missing: <code>{gate.missing}</code>)</em>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+      {/* Section 1 — Roles grid */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Subtitle2>Model roles</Subtitle2>
+          <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={onReload} disabled={busy}>{busy ? 'Loading…' : 'Reload'}</Button>
+          <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={onAddRole} disabled={!!gate}>Add role</Button>
+          <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !!gate || !roles || roles.length === 0} style={{ marginLeft: 'auto' }}>{saving ? 'Saving…' : 'Save roles (TMSL)'}</Button>
+        </div>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Each role applies a row filter (RLS) and/or hides tables &amp; columns (OLS). Saving deploys the full role set to the model via XMLA <code>createOrReplace</code>.
+        </Caption1>
+        {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'} style={{ marginTop: 6 }}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
+        <div className={s.tableWrap} style={{ marginTop: 8 }}>
+          <Table aria-label="Roles" size="small">
+            <TableHeader><TableRow>
+              <TableHeaderCell>Role</TableHeaderCell>
+              <TableHeaderCell>Members</TableHeaderCell>
+              <TableHeaderCell>Row filters</TableHeaderCell>
+              <TableHeaderCell>Hidden objects (OLS)</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(roles || []).length === 0 && (
+                <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{busy ? 'Loading roles…' : 'No roles yet. Add one to define RLS filters and OLS permissions.'}</Caption1></TableCell></TableRow>
+              )}
+              {(roles || []).map((r) => {
+                const filters = r.tablePermissions.filter((tp) => tp.filterExpression && tp.filterExpression.trim()).length;
+                const hidden = r.tablePermissions.filter((tp) => tp.metadataPermission === 'none').length
+                  + r.tablePermissions.reduce((n, tp) => n + (tp.columnPermissions || []).filter((c) => c.metadataPermission === 'none').length, 0);
+                return (
+                  <TableRow key={r.name} style={r.name === selectedRole ? { background: tokens.colorNeutralBackground1Selected } : undefined}>
+                    <TableCell>{r.name}</TableCell>
+                    <TableCell className={s.cell}>{(r.members || []).map((m) => m.memberName).join(', ') || '—'}</TableCell>
+                    <TableCell>{filters || 0}</TableCell>
+                    <TableCell>{hidden || 0}</TableCell>
+                    <TableCell>
+                      <Button size="small" appearance="outline" icon={<Eye20Regular />} onClick={() => onSelectRole(r.name)}>Edit</Button>
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => onDeleteRole(r.name)} aria-label={`Delete role ${r.name}`} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+
+      {/* Sections 2 + 3 — per-role RLS DAX + OLS matrix */}
+      {role && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Subtitle2>Editing role:</Subtitle2>
+            <Input value={role.name} onChange={(_, d) => onRenameRole(role.name, d.value)} style={{ maxWidth: 240 }} aria-label="Role name" />
+          </div>
+
+          <Field label="Members (Entra UPN or group object id, comma-separated)">
+            <Input
+              value={(role.members || []).map((m) => m.memberName).join(', ')}
+              onChange={(_, d) => onSetMembers(role.name, d.value.split(',').map((x) => x.trim()).filter(Boolean))}
+              placeholder="alice@contoso.com, group-object-id"
+            />
+          </Field>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: -8 }}>
+            Service principals cannot be added as role members (Power BI/AAS restriction) — use real users or Entra security groups.
+          </Caption1>
+
+          {/* Section 2 — Row-level security (DAX filter) */}
+          <div>
+            <Subtitle2>Row-level security (DAX filter)</Subtitle2>
+            <div className={s.tableWrap} style={{ marginTop: 8 }}>
+              <Table aria-label="Row filters" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Table</TableHeaderCell>
+                  <TableHeaderCell>Filter DAX (boolean; empty = full access)</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {tables.map((t) => {
+                    const tp = tablePerm(t.name);
+                    const v = filterValidation(tp?.filterExpression);
+                    return (
+                      <TableRow key={t.name}>
+                        <TableCell style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{t.name}</TableCell>
+                        <TableCell>
+                          <Textarea
+                            value={tp?.filterExpression || ''}
+                            onChange={(_, d) => onSetFilter(role.name, t.name, d.value)}
+                            placeholder={`[Region] = "East"   —or—   USERPRINCIPALNAME() = '${t.name}'[UserEmail]`}
+                            resize="vertical"
+                            style={{ width: '100%', minHeight: 44, fontFamily: 'monospace' }}
+                          />
+                          {!v.ok && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{v.error}</Caption1>}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          {/* Section 3 — Object-level security matrix */}
+          <div>
+            <Subtitle2>Object-level security (table &amp; column visibility)</Subtitle2>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Hide a whole table or specific columns from this role. A table set to <strong>None</strong> hides all of its columns (column rows below are disabled).
+            </Caption1>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {tables.map((t) => {
+                const tp = tablePerm(t.name);
+                const tableHidden = tp?.metadataPermission === 'none';
+                return (
+                  <div key={t.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, padding: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Label weight="semibold" style={{ minWidth: 160 }}>{t.name}</Label>
+                      <Field label="Table" orientation="horizontal">
+                        <Select
+                          value={tableHidden ? 'none' : 'read'}
+                          onChange={(_, d) => onSetTableOls(role.name, t.name, d.value as 'read' | 'none')}
+                          aria-label={`Table ${t.name} permission`}
+                        >
+                          <option value="read">Read</option>
+                          <option value="none">None (hidden)</option>
+                        </Select>
+                      </Field>
+                    </div>
+                    {(t.columns || []).length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, opacity: tableHidden ? 0.4 : 1 }}>
+                        {(t.columns || []).map((c) => {
+                          const cp = (tp?.columnPermissions || []).find((x) => x.name === c.name);
+                          return (
+                            <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <Caption1>{c.name}</Caption1>
+                              <Select
+                                value={cp?.metadataPermission === 'none' ? 'none' : 'read'}
+                                disabled={tableHidden}
+                                onChange={(_, d) => onSetColumnOls(role.name, t.name, c.name, d.value as 'read' | 'none')}
+                                aria-label={`Column ${t.name}.${c.name} permission`}
+                                style={{ minWidth: 90 }}
+                              >
+                                <option value="read">Read</option>
+                                <option value="none">None</option>
+                              </Select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section 4 — Test as role (receipt) */}
+      <div style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+        <Subtitle2>Test as role</Subtitle2>
+        <MessageBar intent="info" style={{ marginTop: 6 }}>
+          <MessageBarBody>
+            Runs a DAX query impersonating a role via the XMLA <code>EffectiveUserName</code> + <code>Roles</code> connection properties. The named user must exist in the tenant and hold Read access on the model. The result table is your receipt: a restricted role returns only filtered rows, and OLS-hidden columns are absent from the output.
+          </MessageBarBody>
+        </MessageBar>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 720 }}>
+          <Field label="Effective user (Entra UPN to impersonate)">
+            <Input value={testUpn} onChange={(_, d) => onTestUpn(d.value)} placeholder="alice@contoso.com" />
+          </Field>
+          <Field label="Role">
+            <Select value={selectedRole} onChange={(_, d) => onSelectRole(d.value)} aria-label="Role to test">
+              <option value="">Select a role…</option>
+              {(roles || []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="DAX query">
+            <Textarea value={testQuery} onChange={(_, d) => onTestQuery(d.value)} resize="vertical" style={{ minHeight: 60, fontFamily: 'monospace' }} />
+          </Field>
+          <div>
+            <Button appearance="primary" icon={<Play20Regular />} onClick={onRunTest} disabled={testBusy || !!gate || !selectedRole || !testUpn.trim() || !testQuery.trim()}>{testBusy ? 'Running…' : 'Run test'}</Button>
+          </div>
+          {testErr && <MessageBar intent="error"><MessageBarBody>{testErr}</MessageBarBody></MessageBar>}
+          {testResult && (
+            <div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{testResult.rowCount} row(s) returned as role <strong>{selectedRole}</strong>.</Caption1>
+              <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                <Table aria-label="Test-as-role result" size="small">
+                  <TableHeader><TableRow>
+                    {Object.keys(testResult.rows[0] || {}).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
+                    {testResult.rows.length === 0 && <TableHeaderCell>result</TableHeaderCell>}
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {testResult.rows.length === 0 && (
+                      <TableRow><TableCell><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rows visible to this role (filter excludes all rows).</Caption1></TableCell></TableRow>
+                    )}
+                    {testResult.rows.slice(0, 50).map((row, i) => (
+                      <TableRow key={i}>
+                        {Object.keys(testResult.rows[0] || {}).map((k) => <TableCell key={k} className={s.cell}>{String((row as any)[k] ?? '')}</TableCell>)}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+// "Get data" starter mashup — a self-contained inline table so the wizard runs
+// end-to-end with zero external connection config; the source picker replaces
+// the Source step when a connector is chosen.
+const INGEST_STARTER_M = `section Section1;
+
+shared IngestQuery = let
+    Source = #table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}}),
+    Filtered = Table.SelectRows(Source, each [value] > 0)
+in
+    Filtered;`;
+
+// Source picker connectors. Each emits a real Power Query M `Source =`
+// expression. Connectors that reach an external system reference an ADF linked
+// service / account the operator already configured (no secrets in the UI).
+const INGEST_SOURCES: Array<{ key: string; label: string; hint: string; m: string }> = [
+  { key: 'inline', label: 'Sample table (inline)', hint: 'A literal #table — runs with no connection config.',
+    m: '#table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}})' },
+  { key: 'adls-csv', label: 'ADLS Gen2 — CSV', hint: 'Delimited file in your data lake.',
+    m: 'Csv.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv])' },
+  { key: 'adls-parquet', label: 'ADLS Gen2 — Parquet', hint: 'Parquet file/folder in your data lake.',
+    m: 'Parquet.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.parquet"))' },
+  { key: 'azuresql', label: 'Azure SQL Database', hint: 'A table or view over your Azure SQL server.',
+    m: 'Sql.Database("<server>.database.windows.net", "<database>"){[Schema="dbo", Item="<table>"]}[Data]' },
+  { key: 'odata', label: 'REST / OData feed', hint: 'An OData v4 endpoint.',
+    m: 'OData.Feed("https://<host>/<service>/", null, [Implementation="2.0"])' },
+];
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Azure-native default (no-fabric-dependency.md): when the AAS backend is the
+  // active BI backend (bicep sets NEXT_PUBLIC_LOOM_BI_BACKEND=aas when aas.bicep
+  // is deployed), render the AAS Storage-mode + Refresh surface. Power BI stays
+  // behind NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (opt-in).
+  if (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas') {
+    return <AasSemanticModelPanel item={item} id={id} />;
+  }
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
   // or the embed-token / list calls return 404 PowerBIEntityNotFound.
   const ws = usePowerBiWorkspaces();
@@ -9087,7 +9818,20 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource'>('tables');
+  // --- Calculation groups + field parameters (calc-group / field-param editor)
+  // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
+  // at provision time. AAS / Fabric backends persist to a live model (opt-in).
+  type CgItem = { name: string; expression: string; formatStringDefinition?: string; ordinal?: number };
+  type CgGroup = { name: string; precedence: number; items: CgItem[] };
+  type FpField = { displayName: string; fieldRef: string; order: number };
+  type FpParam = { name: string; fields: FpField[] };
+  const [calcGroups, setCalcGroups] = useState<CgGroup[]>([]);
+  const [cgBusy, setCgBusy] = useState(false);
+  const [cgMsg, setCgMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [fieldParams, setFieldParams] = useState<FpParam[]>([]);
+  const [fpBusy, setFpBusy] = useState(false);
+  const [fpMsg, setFpMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
@@ -9117,6 +9861,69 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [daxExpr, setDaxExpr] = useState('SUM(\'Sales\'[Amount])');
   const [daxBusy, setDaxBusy] = useState(false);
   const [daxResult, setDaxResult] = useState<{ ok: boolean; value?: unknown; error?: string } | null>(null);
+  // Format string + display folder + XMLA persistence (analysis-services backend).
+  const [formatString, setFormatString] = useState('');
+  const [displayFolder, setDisplayFolder] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ ok: boolean; text: string; remediation?: string; link?: string } | null>(null);
+  const [xmlaPersistence, setXmlaPersistence] = useState<boolean | null>(null);
+
+  // DAX Copilot (Loom-native NL2DAX / explain / optimize / auto-describe). Posts
+  // to /api/copilot/dax (Synapse-backed; zero Power BI on this path) and streams
+  // SSE steps. A generated measure auto-inserts into the DAX editor above.
+  const [daxCopilotPrompt, setDaxCopilotPrompt] = useState('');
+  const [daxCopilotBusy, setDaxCopilotBusy] = useState(false);
+  const [daxCopilotResult, setDaxCopilotResult] = useState<string | null>(null);
+  const [daxCopilotErr, setDaxCopilotErr] = useState<string | null>(null);
+
+  const askDaxCopilot = useCallback(async () => {
+    const q = daxCopilotPrompt.trim();
+    if (!q) return;
+    setDaxCopilotBusy(true); setDaxCopilotResult(null); setDaxCopilotErr(null);
+    try {
+      const res = await fetch('/api/copilot/dax', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: q, itemId: id, itemType: item.slug || 'semantic-model' }),
+      });
+      if (!res.ok && !res.body) {
+        let msg = `HTTP ${res.status}`;
+        try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* keep status */ }
+        setDaxCopilotErr(msg); return;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) { setDaxCopilotErr('No response stream.'); return; }
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalText: string | null = null;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const frames = buf.split('\n\n');
+        buf = frames.pop() ?? '';
+        for (const frame of frames) {
+          const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+          if (!dataLine) continue;
+          let step: any;
+          try { step = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+          if (step.kind === 'final') finalText = step.content || '';
+          if (step.kind === 'error') setDaxCopilotErr(step.error || 'DAX Copilot error');
+          if (step.kind === 'tool_result' && step.name === 'dax_nl2measure' && step.result?.daxExpression) {
+            setDaxExpr(step.result.daxExpression); // auto-insert generated DAX
+          }
+          if (step.kind === 'tool_result' && step.name === 'dax_optimize' && step.result?.optimizedExpression) {
+            setDaxExpr(step.result.optimizedExpression);
+          }
+        }
+      }
+      if (finalText) setDaxCopilotResult(finalText);
+    } catch (e: any) {
+      setDaxCopilotErr(e?.message || String(e));
+    } finally {
+      setDaxCopilotBusy(false);
+    }
+  }, [daxCopilotPrompt, id, item.slug]);
 
   // Scheduled-refresh editor (config tab) — mirrors the Power BI service
   // "Scheduled refresh" pane. Writes via PATCH /datasets/{id}/refreshSchedule.
@@ -9129,6 +9936,509 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [schedBusy, setSchedBusy] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+
+  // --- XMLA column-metadata editor (Tables tab) -------------------------
+  // Reads + writes the tabular model via the Azure-native XMLA backend
+  // (Azure Analysis Services by default, or Power BI Premium XMLA opt-in)
+  // through GET/PATCH /api/items/semantic-model/[id]/model. No Fabric / PBI
+  // workspace required (no-fabric-dependency.md). When no XMLA endpoint is
+  // configured the route returns an honest gate which we surface below.
+  const [modelTables, setModelTables] = useState<SmTable[] | null>(null);
+  const [modelBackend, setModelBackend] = useState<string>('');
+  const [modelGate, setModelGate] = useState<{ missing: string; detail: string } | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [selectedTableName, setSelectedTableName] = useState('');
+  const [editCol, setEditCol] = useState<{ tableName: string; col: SmColumn } | null>(null);
+  const [colPatch, setColPatch] = useState<Partial<SmColumn>>({});
+  const [patchBusy, setPatchBusy] = useState(false);
+  const [patchMsg, setPatchMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [calcColDlgOpen, setCalcColDlgOpen] = useState(false);
+  const [calcColName, setCalcColName] = useState('');
+  const [calcColExpr, setCalcColExpr] = useState('[Revenue] - [Cost]');
+  const [calcColType, setCalcColType] = useState('double');
+  const [calcColCat, setCalcColCat] = useState('');
+  const [calcColFolder, setCalcColFolder] = useState('');
+  const [calcTableDlgOpen, setCalcTableDlgOpen] = useState(false);
+  const [calcTableName, setCalcTableName] = useState('');
+  const [calcTableExpr, setCalcTableExpr] = useState('CALENDAR(DATE(2020,1,1), DATE(2025,12,31))');
+  const [calcBusy, setCalcBusy] = useState(false);
+  const [calcMsg, setCalcMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadModel = useCallback(async () => {
+    if (!datasetId) return;
+    setModelLoading(true); setModelGate(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok && j.gate) { setModelGate(j.gate); setModelTables(null); return; }
+      if (!j.ok) { setModelGate({ missing: 'error', detail: j.error || `HTTP ${r.status}` }); setModelTables(null); return; }
+      setModelTables(j.tables || []);
+      setModelBackend(j.backend || '');
+      setSelectedTableName((prev) => prev || (j.tables?.[0]?.name ?? ''));
+    } catch (e: any) {
+      setModelGate({ missing: 'error', detail: e?.message || String(e) });
+    } finally { setModelLoading(false); }
+  }, [datasetId, workspaceId]);
+
+  // Lazy-load the XMLA model the first time the Tables tab is opened for a
+  // dataset. Re-fetches when the dataset changes.
+  useEffect(() => { setModelTables(null); setSelectedTableName(''); setEditCol(null); }, [datasetId]);
+  useEffect(() => {
+    if (tab === 'tables' && datasetId && modelTables === null && !modelGate && !modelLoading) loadModel();
+  }, [tab, datasetId, modelTables, modelGate, modelLoading, loadModel]);
+
+  const patchColumn = useCallback(async () => {
+    if (!editCol || !datasetId) return;
+    setPatchBusy(true); setPatchMsg(null);
+    // Merge current column with the user's edits → COMPLETE column object
+    // (TMSL Alter requires every read-write property, not a partial patch).
+    const full: SmColumn = { ...editCol.col, ...colPatch };
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'alter-column', tableName: editCol.tableName, columnName: editCol.col.name, column: full }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setPatchMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setPatchMsg({ ok: true, text: `Column "${full.name}" updated.` });
+      setEditCol(null); setColPatch({});
+      setModelTables(null); await loadModel();
+    } catch (e: any) { setPatchMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setPatchBusy(false); }
+  }, [editCol, colPatch, datasetId, workspaceId, loadModel]);
+
+  const addCalcColumn = useCallback(async () => {
+    if (!datasetId || !selectedTableName || !calcColName.trim() || !calcColExpr.trim()) return;
+    setCalcBusy(true); setCalcMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          op: 'add-calculated-column', tableName: selectedTableName,
+          column: { name: calcColName.trim(), dataType: calcColType, expression: calcColExpr.trim(), dataCategory: calcColCat || undefined, displayFolder: calcColFolder || undefined },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCalcMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setCalcMsg({ ok: true, text: `Calculated column "${calcColName}" added to ${selectedTableName}.` });
+      setModelTables(null); await loadModel();
+      setTimeout(() => { setCalcColDlgOpen(false); setCalcMsg(null); }, 1200);
+    } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCalcBusy(false); }
+  }, [datasetId, workspaceId, selectedTableName, calcColName, calcColExpr, calcColType, calcColCat, calcColFolder, loadModel]);
+
+  const addCalcTable = useCallback(async () => {
+    if (!datasetId || !calcTableName.trim() || !calcTableExpr.trim()) return;
+    setCalcBusy(true); setCalcMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'add-calculated-table', tableName: calcTableName.trim(), expression: calcTableExpr.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCalcMsg({ ok: false, text: j.error || (j.gate?.detail) || `HTTP ${r.status}` }); return; }
+      setCalcMsg({ ok: true, text: `Calculated table "${calcTableName}" created.` });
+      setSelectedTableName(calcTableName.trim());
+      setModelTables(null); await loadModel();
+      setTimeout(() => { setCalcTableDlgOpen(false); setCalcMsg(null); }, 1200);
+    } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCalcBusy(false); }
+  }, [datasetId, workspaceId, calcTableName, calcTableExpr, loadModel]);
+
+  // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
+  // Mirrors the Power BI Desktop "Incremental refresh and real-time data" dialog:
+  // archive (keep) range, incremental refresh range, real-time DirectQuery toggle,
+  // detect-changes column. Writes via PUT /refresh-policy → aas-incremental-refresh
+  // (TMSL Alter + Refresh applyRefreshPolicy). Opt-in AAS backend; default stays
+  // loom-native.
+  const GRAINS = ['day', 'month', 'quarter', 'year'] as const;
+  type Grain = typeof GRAINS[number];
+  const [irTableName, setIrTableName] = useState('');
+  const [irRollingWindowPeriods, setIrRollingWindowPeriods] = useState(3);
+  const [irRollingWindowGranularity, setIrRollingWindowGranularity] = useState<Grain>('year');
+  const [irIncrementalPeriods, setIrIncrementalPeriods] = useState(10);
+  const [irIncrementalGranularity, setIrIncrementalGranularity] = useState<Grain>('day');
+  const [irEnableHybrid, setIrEnableHybrid] = useState(false);
+  const [irPollingExpression, setIrPollingExpression] = useState('');
+  const [irEffectiveDate, setIrEffectiveDate] = useState('');
+  const [irBusy, setIrBusy] = useState(false);
+  const [irMsg, setIrMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [irPartitions, setIrPartitions] = useState<Array<{ name: string; storageMode: string; queryDefinition?: string }>>([]);
+  const [irGate, setIrGate] = useState<string | null>(null);
+  // Enhanced refresh (apply-policy + targeted) controls.
+  const [enhBusy, setEnhBusy] = useState(false);
+  const [enhMsg, setEnhMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [enhApplyPolicy, setEnhApplyPolicy] = useState(true);
+  const [enhEffectiveDate, setEnhEffectiveDate] = useState('');
+  const [enhCommitMode, setEnhCommitMode] = useState<'transactional' | 'partialBatch'>('transactional');
+
+
+  // --- Security tab (RLS row filters + OLS object permissions) -------------
+  // Authors model roles through the Analysis-Services XMLA endpoint (Azure
+  // Analysis Services by default, or an opt-in Power BI Premium / Fabric
+  // capacity). GET/PUT /api/items/semantic-model/[id]/roles; POST ?action=test
+  // runs a test-as-role DAX probe (the receipt). See aas-client.ts.
+  type SecColPerm = { name: string; metadataPermission: 'read' | 'none' };
+  type SecTablePerm = {
+    name: string;
+    filterExpression?: string;
+    metadataPermission?: 'read' | 'none';
+    columnPermissions?: SecColPerm[];
+  };
+  type SecRole = {
+    name: string;
+    modelPermission: 'read';
+    tablePermissions: SecTablePerm[];
+    members?: Array<{ memberName: string }>;
+  };
+  const [secRoles, setSecRoles] = useState<SecRole[] | null>(null);
+  const [secErr, setSecErr] = useState<string | null>(null);
+  const [secGate, setSecGate] = useState<{ missing: string; detail: string } | null>(null);
+  const [secBusy, setSecBusy] = useState(false);
+  const [secSaving, setSecSaving] = useState(false);
+  const [secSaveMsg, setSecSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [secSelectedRole, setSecSelectedRole] = useState<string>('');
+  const [secOlsTable, setSecOlsTable] = useState<string>('');
+  const [testRoleUpn, setTestRoleUpn] = useState('');
+  const [testQuery, setTestQuery] = useState('EVALUATE TOPN(10, Sales)');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<{ rows: Array<Record<string, unknown>>; rowCount: number } | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+
+  const loadRoles = useCallback(async (dsId: string, wsId: string) => {
+    setSecBusy(true); setSecErr(null); setSecGate(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/roles?workspaceId=${encodeURIComponent(wsId)}&catalog=${encodeURIComponent(dsId)}`);
+      const j = await r.json();
+      if (r.status === 501 && j.gate) { setSecGate(j.gate); setSecRoles([]); return; }
+      if (!j.ok) { setSecErr(j.error || `HTTP ${r.status}`); setSecRoles([]); return; }
+      setSecRoles(Array.isArray(j.roles) ? j.roles : []);
+    } catch (e: any) { setSecErr(e?.message || String(e)); setSecRoles([]); }
+    finally { setSecBusy(false); }
+  }, []);
+
+  const saveRoles = useCallback(async () => {
+    if (!datasetId || !secRoles) return;
+    // Client-side DAX validation before the round-trip.
+    for (const role of secRoles) {
+      for (const tp of role.tablePermissions) {
+        if (tp.filterExpression && tp.filterExpression.trim()) {
+          const v = validateRlsDax(tp.filterExpression);
+          if (!v.ok) { setSecSaveMsg({ ok: false, text: `Role "${role.name}" / ${tp.name}: ${v.error}` }); return; }
+        }
+      }
+    }
+    setSecSaving(true); setSecSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roles: secRoles }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSecSaveMsg({ ok: false, text: j.error || j.gate?.detail || `HTTP ${r.status}` }); return; }
+      setSecSaveMsg({ ok: true, text: `Saved ${j.roleCount} role(s) to the model via XMLA TMSL.` });
+    } catch (e: any) { setSecSaveMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSecSaving(false); }
+  }, [datasetId, workspaceId, secRoles]);
+
+  const runTestRole = useCallback(async () => {
+    if (!datasetId || !secSelectedRole || !testRoleUpn.trim() || !testQuery.trim()) return;
+    setTestBusy(true); setTestErr(null); setTestResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roleName: secSelectedRole, effectiveUserName: testRoleUpn.trim(), daxQuery: testQuery }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestErr(j.error || j.gate?.detail || `HTTP ${r.status}`); return; }
+      setTestResult({ rows: j.rows || [], rowCount: j.rowCount ?? (j.rows?.length || 0) });
+    } catch (e: any) { setTestErr(e?.message || String(e)); }
+    finally { setTestBusy(false); }
+  }, [datasetId, workspaceId, secSelectedRole, testRoleUpn, testQuery]);
+
+  // Mutate a single role in place (immutable update for setSecRoles).
+  const updateRole = useCallback((roleName: string, mut: (r: SecRole) => SecRole) => {
+    setSecRoles((prev) => (prev || []).map((r) => (r.name === roleName ? mut(r) : r)));
+  }, []);
+
+  // matching queries to the small agg table and falls through to the DirectQuery
+  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
+  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
+  const AGG_SUMMARIZATIONS = ['GroupBy', 'Sum', 'Count', 'Min', 'Max'] as const;
+  const AGG_DATATYPES = ['int64', 'double', 'decimal', 'dateTime', 'string', 'boolean'] as const;
+  type AggSummarization = typeof AGG_SUMMARIZATIONS[number];
+  type AltMap = { aggColumn: string; dataType: typeof AGG_DATATYPES[number]; summarization: AggSummarization; detailTable: string; detailColumn: string };
+  const [aggTableName, setAggTableName] = useState('');
+  const [aggPartitionExpr, setAggPartitionExpr] = useState('');
+  const [aggAltMaps, setAggAltMaps] = useState<AltMap[]>([]);
+  const [aggProbeQuery, setAggProbeQuery] = useState('');
+  const [aggBusy, setAggBusy] = useState(false);
+  const [aggMsg, setAggMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [aggProbeResult, setAggProbeResult] = useState<Array<Record<string, unknown>> | null>(null);
+
+  const addAltMap = useCallback(() => {
+    setAggAltMaps((prev) => [...prev, { aggColumn: '', dataType: 'double', summarization: 'Sum', detailTable: detail?.tables?.[0]?.name || '', detailColumn: '' }]);
+  }, [detail?.tables]);
+  const updateAltMap = useCallback((i: number, patch: Partial<AltMap>) => {
+    setAggAltMaps((prev) => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m));
+  }, []);
+  const removeAltMap = useCallback((i: number) => {
+    setAggAltMaps((prev) => prev.filter((_, idx) => idx !== i));
+  }, []);
+
+  // Seed a starter set of mappings from the first table's columns: numeric
+  // columns → Sum, the first column → GroupBy grain. A UI convenience only —
+  // every value stays editable; nothing is applied until Create is clicked.
+  const seedAltMapsFromTable = useCallback(() => {
+    const t = detail?.tables?.[0];
+    if (!t) return;
+    const cols = t.columns || [];
+    const numeric = (dt?: string) => /int|double|decimal|number|currency/i.test(dt || '');
+    const seeded: AltMap[] = [];
+    cols.forEach((c, idx) => {
+      const isNum = numeric(c.dataType);
+      seeded.push({
+        aggColumn: c.name,
+        dataType: isNum ? 'double' : 'string',
+        summarization: (idx === 0 || !isNum) ? 'GroupBy' : 'Sum',
+        detailTable: t.name,
+        detailColumn: c.name,
+      });
+    });
+    setAggAltMaps(seeded);
+    if (!aggTableName) setAggTableName(`${t.name}_Agg`);
+  }, [detail?.tables, aggTableName]);
+
+  const createAggregation = useCallback(async () => {
+    if (!workspaceId || !datasetId || !aggTableName.trim() || aggAltMaps.length === 0) return;
+    setAggBusy(true); setAggMsg(null); setAggProbeResult(null);
+    try {
+      const r = await fetch(
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'aggregation',
+            aggTableName: aggTableName.trim(),
+            partitionExpression: aggPartitionExpr.trim(),
+            altMaps: aggAltMaps.map((m) => ({
+              aggColumn: m.aggColumn.trim(), dataType: m.dataType, summarization: m.summarization,
+              detailTable: m.detailTable.trim(), detailColumn: m.detailColumn.trim() || undefined,
+            })),
+            probeQuery: aggProbeQuery.trim() || undefined,
+          }),
+        },
+      );
+      const j = await r.json();
+      if (j.xmlaUnavailable) {
+        setAggMsg({ ok: false, text: `XMLA endpoint not configured. ${j.detail || 'Set LOOM_POWERBI_XMLA_ENDPOINT to enable aggregation authoring.'}` });
+        return;
+      }
+      if (!j.ok) { setAggMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      const probeNote = j.probeError ? ` Probe query failed: ${j.probeError}` : (j.probeResult ? ' Probe query returned data — the engine answers the agg-grain query.' : '');
+      setAggMsg({ ok: true, text: `Aggregation table "${aggTableName.trim()}" registered on model "${j.catalog}".${probeNote}` });
+      if (j.probeResult?.rows) setAggProbeResult(j.probeResult.rows);
+    } catch (e: any) { setAggMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setAggBusy(false); }
+  }, [workspaceId, datasetId, aggTableName, aggPartitionExpr, aggAltMaps, aggProbeQuery]);
+
+  // --- Automatic aggregations builder (XMLA TMSL alternateOf) --------------
+  // Defines a hidden, Import-mode aggregation table whose columns each carry an
+  // alternateOf (BaseTable/BaseColumn + Summarization) so the AS engine routes
+  // matching queries to the small agg table and falls through to the DirectQuery
+  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
+  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
+  // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
+  // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
+  // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
+  // same Gold Delta files are queried via Synapse Serverless OPENROWSET — the
+  // Azure-native analog of Fabric "Direct Lake on SQL" DirectQuery fallback.
+  interface DlQueryResult {
+    ok: boolean;
+    servingFrom?: 'warm-cache' | 'serverless-fallback';
+    columns?: string[];
+    rows?: unknown[][];
+    rowCount?: number;
+    executionMs?: number;
+    truncated?: boolean;
+    endpoint?: string;
+    deltaPath?: string;
+    lastRefreshedAt?: string | null;
+    cacheTtlSeconds?: number;
+    error?: string;
+  }
+  const [dlTable, setDlTable] = useState('');
+  const [dlMaxRows, setDlMaxRows] = useState(1000);
+  const [dlqLoading, setDlqLoading] = useState(false);
+  const [dlResult, setDlResult] = useState<DlQueryResult | null>(null);
+
+  // --- Direct Lake (shim) tab -------------------------------------------------
+  // Azure-native parity for Fabric Direct Lake: the shim keeps a warm AAS
+  // (Power BI Premium XMLA) cache fresh from an ADLS Gen2 Delta source, driven
+  // by _delta_log Event Grid notifications. Config persists to the shim's
+  // Cosmos store via PUT /api/items/semantic-model/{id}/direct-lake.
+  type DlPolicy = 'Partition' | 'Full' | 'DirectQueryFallback' | 'Composite';
+  type DlTableRow = { tableName: string; policy: DlPolicy; partitionColumn: string };
+  interface DlShimRun { requestId: string; refreshType?: string; status?: string; startTime?: string; endTime?: string; durationMs?: number; error?: string }
+  interface DlEventGrid { systemTopic: string; topicState: string; subscriptionName: string; subscriptionState: string; destinationQueueId?: string }
+  const DL_SLA_OPTIONS = [
+    { value: 300, label: '5 minutes' },
+    { value: 900, label: '15 minutes' },
+    { value: 3600, label: '1 hour' },
+    { value: -1, label: 'On change (Event Grid trigger)' },
+  ];
+  const DL_POLICIES: Array<{ value: DlPolicy; label: string }> = [
+    { value: 'Partition', label: 'Partition (incremental — Direct Lake sweet spot)' },
+    { value: 'Full', label: 'Full table refresh' },
+    { value: 'DirectQueryFallback', label: 'DirectQuery (always live)' },
+    { value: 'Composite', label: 'Composite (Import + DirectQuery)' },
+  ];
+  const [dlEnabled, setDlEnabled] = useState<boolean | null>(null); // null = unknown until first load
+  const [dlHint, setDlHint] = useState<string>('');
+  const [dlDeltaPath, setDlDeltaPath] = useState('');
+  const [dlSla, setDlSla] = useState<number>(300);
+  const [dlTables, setDlTables] = useState<DlTableRow[]>([]);
+  const [dlRuns, setDlRuns] = useState<DlShimRun[]>([]);
+  const [dlEventGrid, setDlEventGrid] = useState<DlEventGrid | null>(null);
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlLoading, setDlLoading] = useState(false);
+  const [dlMsg, setDlMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const DEFAULT_DL_PATH_HINT = 'abfss://gold@<account>.dfs.core.windows.net/<delta-table-path>';
+
+  const loadDirectLake = useCallback(async (dsId: string, wsId: string) => {
+    if (!dsId) return;
+    setDlLoading(true); setDlMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      const j = await r.json();
+      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); setDlEnabled(true); return; }
+      setDlEnabled(!!j.shimEnabled);
+      setDlHint(j.hint || '');
+      setDlRuns(Array.isArray(j.runs) ? j.runs : []);
+      setDlEventGrid(j.eventGrid || null);
+      if (j.config) {
+        setDlDeltaPath(j.config.deltaSourcePath || '');
+        setDlSla(typeof j.config.freshnessSlaSeconds === 'number' ? j.config.freshnessSlaSeconds : 300);
+        const rows: DlTableRow[] = Object.values(j.config.tables || {}).map((t: any) => ({
+          tableName: t.tableName || '', policy: (t.policy as DlPolicy) || 'Partition', partitionColumn: t.partitionColumn || '',
+        }));
+        if (rows.length) setDlTables(rows);
+      }
+    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); setDlEnabled(true); }
+    finally { setDlLoading(false); }
+  }, []);
+
+  // Seed the per-table policy grid from the model's tables when none is loaded
+  // yet, so the operator sees one row per table to configure.
+  useEffect(() => {
+    if (tab !== 'direct-lake') return;
+    setDlTables((prev) => {
+      if (prev.length) return prev;
+      const fromModel = (detail?.tables || []).map((t) => ({ tableName: t.name, policy: 'Partition' as DlPolicy, partitionColumn: '' }));
+      return fromModel;
+    });
+  }, [tab, detail?.tables]);
+
+  useEffect(() => {
+    if (tab === 'direct-lake' && datasetId) loadDirectLake(datasetId, workspaceId);
+  }, [tab, datasetId, workspaceId, loadDirectLake]);
+
+  const setDlTablePolicy = useCallback((idx: number, policy: DlPolicy) => {
+    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, policy } : row)));
+  }, []);
+  const setDlTablePartCol = useCallback((idx: number, partitionColumn: string) => {
+    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, partitionColumn } : row)));
+  }, []);
+
+  const saveDirectLake = useCallback(async () => {
+    if (!datasetId || !workspaceId || !dlDeltaPath.trim()) {
+      setDlMsg({ ok: false, text: 'Select a workspace + dataset and enter the ADLS Gen2 Delta source path first.' });
+      return;
+    }
+    setDlBusy(true); setDlMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/direct-lake`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          deltaSourcePath: dlDeltaPath.trim(),
+          freshnessSlaSeconds: dlSla,
+          workspaceId,
+          datasetId,
+          tables: dlTables.filter((t) => t.tableName.trim()).map((t) => ({
+            tableName: t.tableName.trim(), policy: t.policy,
+            ...(t.partitionColumn.trim() ? { partitionColumn: t.partitionColumn.trim() } : {}),
+          })),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setDlEventGrid(j.eventGrid || null);
+      setDlMsg({ ok: true, text: j.eventGridNote ? `Saved. Event Grid wiring deferred: ${j.eventGridNote}` : 'Direct Lake (shim) configured. The shim picks up the new policy within ~60 s.' });
+      if (j.config?.deltaSourcePath) setDlDeltaPath(j.config.deltaSourcePath);
+    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setDlBusy(false); }
+  }, [datasetId, workspaceId, dlDeltaPath, dlSla, dlTables]);
+
+  // Composite + Dual per-table storage mode (Tables tab). Each table gets an
+  // Import / DirectQuery / Dual picker so a single model can MIX modes; the
+  // selection is pushed to the BFF datasource route which builds a model.bim
+  // TMSL with a per-partition `mode` and applies it (Fabric updateDefinition)
+  // or returns it as an Invoke-ASCmd receipt. Dual requires Premium/Fabric.
+  const TABLE_STORAGE_MODES = ['import', 'directQuery', 'dual'] as const;
+  type TableStorageMode = typeof TABLE_STORAGE_MODES[number];
+  const [tableModes, setTableModes] = useState<Record<string, TableStorageMode>>({});
+  const [tableSourceQ, setTableSourceQ] = useState<Record<string, string>>({});
+  const [modesBusy, setModesBusy] = useState(false);
+  const [modesMsg, setModesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [tmslReceipt, setTmslReceipt] = useState<string | null>(null);
+
+  // --- Get data (Power Query / M → Delta → semantic layer) ----------------
+  // Source picker → Power Query (M) authoring (PowerQueryHost) → materialise to
+  // Delta in ADLS via ADF/Synapse data flows → refresh the AAS tabular model.
+  // POSTs to /api/items/semantic-model/{id}/ingest (real backends; honest gate).
+  const [getDataOpen, setGetDataOpen] = useState(false);
+  const [ingestTab, setIngestTab] = useState<'source' | 'transform' | 'run'>('source');
+  const [ingestMScript, setIngestMScript] = useState(INGEST_STARTER_M);
+  const [ingestContainer, setIngestContainer] = useState<'bronze' | 'silver' | 'gold'>('silver');
+  const [ingestAasTable, setIngestAasTable] = useState('');
+  const [ingestRunning, setIngestRunning] = useState(false);
+  const [ingestResult, setIngestResult] = useState<{
+    ok: boolean; deltaPath?: string; adfRunId?: string; deltaRunId?: string; deltaBackend?: string;
+    aasRefreshId?: string; warnings?: string[]; error?: string;
+  } | null>(null);
+
+  const insertSource = useCallback((mExpr: string) => {
+    // Append/replace the active query's Source step with the connector's M.
+    setIngestMScript((prev) => {
+      const qs = parseSharedQueries(prev);
+      const target = qs[qs.length - 1];
+      const body = `let\n    Source = ${mExpr}\nin\n    Source`;
+      if (!target) {
+        return `section Section1;\n\nshared IngestQuery = ${body};\n`;
+      }
+      return setQueryBody(prev, target.name, body);
+    });
+    setIngestTab('transform');
+  }, []);
+
+  const runIngest = useCallback(async () => {
+    setIngestRunning(true); setIngestResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mScript: typeof window === 'undefined' ? '' : window.btoa(unescape(encodeURIComponent(ingestMScript))),
+          container: ingestContainer,
+          aasTable: ingestAasTable.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setIngestResult({ ok: false, error: j.error || j.hint || `HTTP ${r.status}`, warnings: j.warnings }); return; }
+      setIngestResult({ ok: true, deltaPath: j.deltaPath, adfRunId: j.adfRunId, deltaRunId: j.deltaRunId, deltaBackend: j.deltaBackend, aasRefreshId: j.aasRefreshId, warnings: j.warnings });
+    } catch (e: any) {
+      setIngestResult({ ok: false, error: e?.message || String(e) });
+    } finally { setIngestRunning(false); }
+  }, [id, ingestMScript, ingestContainer, ingestAasTable]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -9162,6 +10472,52 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } catch { /* silently keep last */ }
   }, []);
 
+  // Load existing calc groups + field parameters from the model route (Cosmos
+  // content on loom-native, or a live model's TMSL on the fabric backend).
+  const loadModelObjects = useCallback(async (wsId: string, dsId: string) => {
+    try {
+      const q = wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/model${q}`);
+      const j = await r.json();
+      if (j.ok) {
+        if (Array.isArray(j.calculationGroups)) setCalcGroups(j.calculationGroups);
+        if (Array.isArray(j.fieldParameters)) setFieldParams(j.fieldParameters);
+      }
+    } catch { /* keep current in-editor state */ }
+  }, []);
+
+  const saveCalcGroups = useCallback(async () => {
+    if (!datasetId) return;
+    setCgBusy(true); setCgMsg(null);
+    try {
+      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ calculationGroups: calcGroups }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCgMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setCgMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
+    } catch (e: any) { setCgMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setCgBusy(false); }
+  }, [datasetId, workspaceId, calcGroups]);
+
+  const saveFieldParams = useCallback(async () => {
+    if (!datasetId) return;
+    setFpBusy(true); setFpMsg(null);
+    try {
+      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fieldParameters: fieldParams }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setFpMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setFpMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
+    } catch (e: any) { setFpMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setFpBusy(false); }
+  }, [datasetId, workspaceId, fieldParams]);
+
   // Auto-pick the first Power BI workspace once loaded so the list fetch fires
   // and the first dataset auto-selects — enabling New measure / Refresh / Open
   // immediately instead of leaving them disabled behind a manual pick. Matches
@@ -9173,6 +10529,24 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   useEffect(() => {
     if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
   }, [workspaceId, datasetId, loadDetail, loadRefreshes]);
+  useEffect(() => { if (datasetId) loadModelObjects(workspaceId, datasetId); }, [workspaceId, datasetId, loadModelObjects]);
+
+  // Lazy-load roles the first time the Security tab is opened for a dataset.
+  useEffect(() => {
+    if (tab === 'security' && datasetId && secRoles === null && !secBusy) {
+      loadRoles(datasetId, workspaceId);
+    }
+  }, [tab, datasetId, workspaceId, secRoles, secBusy, loadRoles]);
+  // Reset role state when the selected dataset changes.
+  useEffect(() => { setSecRoles(null); setSecSelectedRole(''); setSecSaveMsg(null); setTestResult(null); }, [datasetId]);
+  // Default the test query / OLS table to the first model table once known.
+  useEffect(() => {
+    const first = detail?.tables?.[0]?.name;
+    if (first) {
+      setTestQuery((q) => (q.includes('Sales') && !((detail?.tables || []).some((t) => t.name === 'Sales')) ? `EVALUATE TOPN(10, '${first}')` : q));
+      setSecOlsTable((t) => t || first);
+    }
+  }, [detail?.tables]);
 
   const refreshNow = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
@@ -9235,6 +10609,121 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
 
+  // Load the live partition schema (TMSCHEMA_PARTITIONS via AAS XMLA). Surfaces
+  // the honest AAS config gate when LOOM_SEMANTIC_BACKEND!=analysis-services.
+  const loadIrPolicy = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setIrGate(null); setIrPartitions([]);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
+      const j = await r.json();
+      if (!j.ok) { setIrGate(j.error); return; }
+      setIrPartitions(j.partitions || []);
+    } catch (e: any) { setIrGate(e?.message || String(e)); }
+  }, [workspaceId, datasetId, irTableName]);
+
+  // Apply an incremental refresh policy: TMSL Alter (set policy) + TMSL Refresh
+  // (applyRefreshPolicy:true → historical Import partitions + live DQ partition
+  // when Hybrid). The receipt is the resulting partition list.
+  const saveIrPolicy = useCallback(async () => {
+    if (!workspaceId || !datasetId || !irTableName) return;
+    setIrBusy(true); setIrMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tableName: irTableName,
+          policy: {
+            rollingWindowGranularity: irRollingWindowGranularity,
+            rollingWindowPeriods: irRollingWindowPeriods,
+            incrementalGranularity: irIncrementalGranularity,
+            incrementalPeriods: irIncrementalPeriods,
+            mode: irEnableHybrid ? 'Hybrid' : 'Import',
+            ...(irPollingExpression.trim() ? { pollingExpression: irPollingExpression.trim() } : {}),
+          },
+          ...(irEffectiveDate.trim() ? { effectiveDate: irEffectiveDate.trim() } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setIrMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setIrPartitions(j.partitions || []);
+      const dq = (j.partitions || []).filter((p: any) => p.storageMode === 'DirectQuery').length;
+      setIrMsg({ ok: true, text: `Policy applied. ${j.partitions?.length ?? 0} partition(s)${dq ? `, including ${dq} live DirectQuery partition` : ''}.` });
+    } catch (e: any) { setIrMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setIrBusy(false); }
+  }, [workspaceId, datasetId, irTableName, irRollingWindowGranularity, irRollingWindowPeriods, irIncrementalGranularity, irIncrementalPeriods, irEnableHybrid, irPollingExpression, irEffectiveDate]);
+
+  // Enhanced (async) refresh — POST /refreshes with commitMode + applyRefreshPolicy
+  // + effectiveDate. Refreshes the rolling Import partitions per the policy while
+  // leaving historical + DQ partitions intact.
+  const triggerEnhancedRefresh = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setEnhBusy(true); setEnhMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'full',
+          commitMode: enhCommitMode,
+          applyRefreshPolicy: enhApplyPolicy,
+          ...(enhEffectiveDate.trim() ? { effectiveDate: enhEffectiveDate.trim() } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEnhMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setEnhMsg({ ok: true, text: `Enhanced refresh queued (requestId: ${String(j.requestId || '').slice(0, 8)}…).` });
+      setTimeout(() => loadRefreshes(workspaceId, datasetId), 2000);
+    } catch (e: any) { setEnhMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setEnhBusy(false); }
+  }, [workspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
+
+  // Apply the per-table storage modes: builds a composite model.bim TMSL with a
+  // per-partition `mode` (import/directQuery/dual) and applies it via the
+  // datasource BFF route, then surfaces the live DAX probe + TMSL receipt.
+  const applyModes = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setModesBusy(true); setModesMsg(null); setTmslReceipt(null);
+    try {
+      const tables = (detail?.tables || []).map((t) => {
+        const mode: TableStorageMode = tableModes[t.name] ?? 'import';
+        return {
+          name: t.name,
+          mode,
+          ...(mode !== 'import'
+            ? { sourceQuery: (tableSourceQ[t.name] || `SELECT * FROM [${t.name}]`).trim(), dataSourceName: 'sqlSource' }
+            : {}),
+          columns: (t.columns || []).map((c) => ({ name: c.name, dataType: c.dataType })),
+        };
+      });
+      const rels = relationships
+        .filter((r) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
+        .map((r) => ({
+          name: r.name,
+          fromTable: r.fromTable!, fromColumn: r.fromColumn!,
+          toTable: r.toTable!, toColumn: r.toColumn!,
+          crossFilteringBehavior: (r.crossFilteringBehavior === 'bothDirections' ? 'bothDirections' : 'oneDirection') as 'oneDirection' | 'bothDirections',
+        }));
+      const r = await fetch(
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: detail?.dataset?.name || 'CompositeModel', tables, relationships: rels }),
+        },
+      );
+      const j = await r.json();
+      if (!j.ok) { setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null); setModesMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setTmslReceipt(typeof j.tmsl === 'string' ? j.tmsl : null);
+      const probe = j.probe ? ` Query probe (first rows): ${j.probe}` : '';
+      setModesMsg({
+        ok: true,
+        text: j.applied
+          ? `Composite TMSL applied in-place via Fabric.${probe}`
+          : `Composite TMSL built (apply offline via Invoke-ASCmd, or opt into a Fabric/Premium backend). See receipt below.${probe}`,
+      });
+    } catch (e: any) { setModesMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setModesBusy(false); }
+  }, [workspaceId, datasetId, detail?.tables, detail?.dataset?.name, tableModes, tableSourceQ, relationships]);
+
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
   // and evaluates a probe row — invalid DAX returns the engine's real
@@ -9256,11 +10745,82 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     finally { setDaxBusy(false); }
   }, [workspaceId, datasetId, measureName, measureTable, daxExpr]);
 
+  // Probe the model route once a dataset is selected so the Measures tab can
+  // show the Save-to-model button when LOOM_SEMANTIC_BACKEND=analysis-services
+  // + LOOM_AAS_SERVER are wired (vs an honest infra-gate otherwise).
+  useEffect(() => {
+    if (!datasetId) { setXmlaPersistence(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model`);
+        const j = await r.json();
+        if (!cancelled) setXmlaPersistence(!!j?.xmlaPersistence);
+      } catch { if (!cancelled) setXmlaPersistence(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [datasetId]);
+
+  // Persist the measure (DAX + format string + display folder) into the model
+  // via TMSL createOrReplace over the AAS XMLA endpoint. The route evaluates
+  // the saved measure server-side so success reflects a real computed value —
+  // not a fake toast (no-vaporware.md). When AAS isn't wired the route returns
+  // an honest 501 gate we surface verbatim.
+  const saveMeasure = useCallback(async () => {
+    if (!datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
+    setSaveBusy(true); setSaveResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tableName: measureTable.trim(),
+          measureName: measureName.trim(),
+          expression: daxExpr,
+          formatString: formatString.trim() || undefined,
+          displayFolder: displayFolder.trim() || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setSaveResult({ ok: false, text: j.error || `HTTP ${r.status}`, remediation: j.remediation, link: j.link });
+        return;
+      }
+      const evalNote = j?.evaluate ? ` Evaluated value: ${j.evaluate.value === null || j.evaluate.value === undefined ? 'NULL' : String(j.evaluate.value)}.` : '';
+      setSaveResult({ ok: true, text: `Measure "${measureName.trim()}" saved to the model via TMSL createOrReplace.${evalNote}` });
+      if (workspaceId && datasetId) loadDetail(workspaceId, datasetId);
+    } catch (e: any) { setSaveResult({ ok: false, text: e?.message || String(e) }); }
+    finally { setSaveBusy(false); }
+  }, [datasetId, workspaceId, measureName, measureTable, daxExpr, formatString, displayFolder, loadDetail]);
+
   const focusNewMeasure = useCallback(() => {
     setTab('measures');
     if (!measureTable && detail?.tables?.[0]?.name) setMeasureTable(detail.tables[0].name);
     if (!measureName) setMeasureName('MyMeasure');
   }, [measureTable, measureName, detail?.tables]);
+
+  // Direct Lake query: POST to the BFF, which serves from the warm Power BI
+  // cache when fresh and transparently falls back to Synapse Serverless
+  // OPENROWSET over the Gold Delta files when the cache is stale/unbuilt.
+  // datasetId is optional here — the Serverless fallback only needs the table
+  // name and LOOM_GOLD_URL, so the query works with no Power BI workspace bound.
+  const executeDlQuery = useCallback(async () => {
+    if (!dlTable) return;
+    setDlqLoading(true); setDlResult(null);
+    try {
+      const dsPath = datasetId ? encodeURIComponent(datasetId) : '_';
+      const r = await fetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, table: dlTable, maxRows: dlMaxRows }),
+      });
+      const j: DlQueryResult = await r.json();
+      setDlResult(j);
+    } catch (e: any) {
+      setDlResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDlqLoading(false);
+    }
+  }, [workspaceId, datasetId, dlTable, dlMaxRows]);
 
   // Build a REAL new semantic model (push dataset) via the Power BI Push
   // Datasets REST API. After a successful build we refresh the dataset list
@@ -9295,7 +10855,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!bModelName) setBModelName('My semantic model');
   }, [bModelName]);
 
+  const focusModel = useCallback(() => setTab('model'), []);
+
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  // DirectQuery models are live against the source — never refreshable (the
+  // Power BI REST `isRefreshable` already returns false for DQ datasets). When
+  // the model is in DirectQuery storage mode we surface the Source binder tab
+  // and disable Refresh with an honest "no data to import" reason.
+  const isDqMode = (detail?.dataset?.targetStorageMode || '').toLowerCase() === 'directquery';
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
       window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
@@ -9307,22 +10874,41 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Get data', onClick: () => { setGetDataOpen(true); setIngestTab('source'); }, title: 'Ingest data with Power Query (M) → Delta in ADLS → refresh the semantic layer (Azure-native, no Fabric required)' },
+      ]},
       { label: 'Model', actions: [
         { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
+        { label: 'Model view', onClick: datasetId ? focusModel : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Interactive relationship diagram (cardinality, cross-filter, active/inactive) + drill-hierarchy editor; writes TMSL' },
       ]},
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
+        { label: saveBusy ? 'Saving…' : 'Save to model (XMLA)', onClick: datasetId ? () => { setTab('measures'); saveMeasure(); } : undefined, disabled: !datasetId || saveBusy, title: !datasetId ? 'select a dataset first' : 'Persist the measure (DAX + format string + display folder) via TMSL createOrReplace (requires LOOM_SEMANTIC_BACKEND=analysis-services + LOOM_AAS_SERVER)' },
+      ]},
+      { label: 'Aggregations', actions: [
+        { label: 'Manage aggregations', onClick: datasetId ? () => setTab('aggregations') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Define an automatic-aggregation table (alternateOf) so the engine routes matching queries to a small pre-aggregated cache' },
+      ]},
+      { label: 'Advanced', actions: [
+        { label: 'Calc groups', onClick: datasetId ? () => setTab('calcGroups') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Author calculation groups (SELECTEDMEASURE patterns) — switch a visual’s aggregation via a slicer' },
+        { label: 'Field parameters', onClick: datasetId ? () => setTab('fieldParams') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Build field-parameter calculated tables (NAMEOF) — swap a visual’s measure via a slicer' },
+      ]},
+      { label: 'Columns', actions: [
+        { label: 'Edit columns', onClick: datasetId ? () => setTab('tables') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Tables tab to edit column metadata (data category, format, summarize-by, display folder, sort-by, hidden) via XMLA' },
+        { label: 'Add calc. column', onClick: (datasetId && modelTables && selectedTableName) ? () => { setCalcMsg(null); setCalcColDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables || !selectedTableName, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated columns' : 'Add a calculated column (DAX)' },
+        { label: 'Add calc. table', onClick: (datasetId && modelTables) ? () => { setCalcMsg(null); setCalcTableDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated tables' : 'Create a calculated table (DAX)' },
       ]},
       { label: 'Source', actions: [
-        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
+        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: (canRefresh && !isDqMode) ? refreshNow : undefined, disabled: !canRefresh || isDqMode, title: isDqMode ? 'DirectQuery model is live — no data to import. Use the DirectQuery source tab to rebind.' : (detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined)) },
+        { label: 'DirectQuery source', onClick: isDqMode ? () => setTab('datasource') : undefined, disabled: !isDqMode, title: isDqMode ? 'Bind a live Azure source for this DirectQuery model' : 'available for DirectQuery storage-mode models' },
       ]},
       { label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
 
   return (
+    <>
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <PowerBiTree
@@ -9339,6 +10925,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.pad}>
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
+              <Button appearance="outline" icon={<DatabaseLink20Regular />} onClick={() => { setGetDataOpen(true); setIngestTab('source'); }} title="Power Query (M) → Delta in ADLS → semantic layer (Azure-native, no Fabric required)">Get data</Button>
               {powerBiConfigured && (
                 <>
                   <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
@@ -9356,6 +10943,117 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
             </div>
+
+            {/* Get data — Power Query (M) → Delta → semantic layer ingest wizard */}
+            <Dialog open={getDataOpen} onOpenChange={(_, d) => setGetDataOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: '1080px', width: '94vw' }}>
+                <DialogBody>
+                  <DialogTitle>Get data — Power Query (M) ingest</DialogTitle>
+                  <DialogContent>
+                    <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Azure-native, no Fabric required</MessageBarTitle>
+                        Author a Power Query (M) mashup, then <strong>Run ingest</strong>: Loom compiles it into an ADF
+                        WranglingDataFlow (M → Parquet), a Mapping Data Flow lands the result as <strong>Delta</strong> in
+                        ADLS Gen2, and the Azure Analysis Services tabular model is refreshed so the table is queryable.
+                        Set <code>LOOM_SYNAPSE_WORKSPACE</code> to run the Delta step on Synapse instead. In Government
+                        clouds (no AAS) the Delta is queryable via Synapse Serverless <code>OPENROWSET</code>.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div className={s.tabBar}>
+                      <TabList selectedValue={ingestTab} onTabSelect={(_: unknown, d: any) => setIngestTab(d.value)}>
+                        <Tab value="source">1 · Source</Tab>
+                        <Tab value="transform">2 · Transform (M)</Tab>
+                        <Tab value="run">3 · Run</Tab>
+                      </TabList>
+                    </div>
+
+                    {ingestTab === 'source' && (
+                      <div style={{ marginTop: 12 }}>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
+                          details on the next tab. External connectors reference a server / account you already configured.
+                        </Caption1>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12, marginTop: 12 }}>
+                          {INGEST_SOURCES.map((src) => (
+                            <div key={src.key} className={s.card} style={{ cursor: 'pointer' }} role="button" tabIndex={0}
+                              onClick={() => insertSource(src.m)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') insertSource(src.m); }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Database20Regular />
+                                <span style={{ fontWeight: 600 }}>{src.label}</span>
+                              </div>
+                              <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>{src.hint}</Caption1>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {ingestTab === 'transform' && (
+                      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+                        <PowerQueryHost mScript={ingestMScript} onChange={setIngestMScript} />
+                      </div>
+                    )}
+
+                    {ingestTab === 'run' && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          <Field label="Delta destination (ADLS zone)" style={{ minWidth: 220 }}>
+                            <Select value={ingestContainer} onChange={(_, d) => setIngestContainer(d.value as 'bronze' | 'silver' | 'gold')}>
+                              <option value="bronze">bronze</option>
+                              <option value="silver">silver</option>
+                              <option value="gold">gold</option>
+                            </Select>
+                          </Field>
+                          <Field label="AAS table to refresh (optional)" style={{ minWidth: 260 }} hint="Defaults to the output query name. The AAS model's partition source must point at the Delta path.">
+                            <Input value={ingestAasTable} onChange={(_, d) => setIngestAasTable(d.value)} placeholder="(output query name)" />
+                          </Field>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                          <Button appearance="primary" icon={<Play20Regular />} disabled={ingestRunning} onClick={runIngest}>
+                            {ingestRunning ? 'Running ingest…' : 'Run ingest'}
+                          </Button>
+                          {ingestRunning && <Spinner size="tiny" />}
+                        </div>
+                        {ingestResult?.ok && (
+                          <MessageBar intent="success" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest dispatched</MessageBarTitle>
+                              Delta landing at <code>{ingestResult.deltaPath}</code> — ADF run <code>{ingestResult.adfRunId}</code>
+                              {ingestResult.deltaRunId ? <> → Delta run <code>{ingestResult.deltaRunId}</code> ({ingestResult.deltaBackend})</> : null}
+                              {ingestResult.aasRefreshId ? <>. AAS refresh <code>{ingestResult.aasRefreshId}</code> queued.</> : '.'}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {ingestResult && !ingestResult.ok && (
+                          <MessageBar intent="error" style={{ marginTop: 12 }}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Ingest failed</MessageBarTitle>
+                              {ingestResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+                        {(ingestResult?.warnings || []).map((w, i) => (
+                          <MessageBar key={i} intent="warning" style={{ marginTop: 8 }}>
+                            <MessageBarBody>{w}</MessageBarBody>
+                          </MessageBar>
+                        ))}
+                      </div>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    {ingestTab !== 'run' && (
+                      <Button appearance="primary" onClick={() => setIngestTab(ingestTab === 'source' ? 'transform' : 'run')}>Next</Button>
+                    )}
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="secondary">Close</Button>
+                    </DialogTrigger>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
@@ -9381,35 +11079,290 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
+                  <Tab value="model">Model view</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
+                  <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
+                  <Tab value="aggregations">Aggregations ({aggAltMaps.length})</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
+                  {isDqMode && <Tab value="datasource">DirectQuery source</Tab>}
+                  <Tab value="incremental">Incremental refresh</Tab>
                   <Tab value="config">Configuration</Tab>
+                  <Tab value="security">Security (RLS/OLS)</Tab>
+                  <Tab value="direct-lake">Direct Lake (shim)</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
+                  <Tab value="direct-lake-query">Direct Lake query</Tab>
                   {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
                 </TabList>
               </div>
               <div className={s.pad}>
                 {tab === 'tables' && (
-                  <div className={s.tableWrap}>
-                    <Table aria-label="Tables" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Table</TableHeaderCell>
-                        <TableHeaderCell>Columns</TableHeaderCell>
-                        <TableHeaderCell>Measures</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {(detail?.tables || []).map((t) => (
-                          <TableRow key={t.name}>
-                            <TableCell>{t.name}</TableCell>
-                            <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
-                            <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                  <>
+                    {modelLoading && <Spinner size="tiny" label="Loading column metadata via XMLA…" style={{ justifyContent: 'flex-start', marginBottom: 8 }} />}
+                    {modelGate && (
+                      <MessageBar intent={modelGate.missing === 'error' ? 'error' : 'warning'} style={{ marginBottom: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{modelGate.missing === 'error' ? 'Column metadata load failed' : 'Column editor not configured'}</MessageBarTitle>
+                          {modelGate.detail}
+                          {modelGate.missing !== 'error' && (
+                            <> Showing read-only table structure below. Deploy <code>analysis-services.bicep</code> (<code>loomSemanticBackend=analysis-services</code>) and set <code>LOOM_AAS_SERVER_URL</code> to enable data category, format string, summarize-by, display folder, sort-by, hidden, and calculated columns/tables.</>
+                          )}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {modelBackend && (
+                      <div style={{ marginBottom: 8 }}>
+                        <Badge appearance="tint" color="brand">XMLA backend: {modelBackend === 'analysis-services' ? 'Azure Analysis Services' : 'Power BI Premium XMLA'}</Badge>
+                      </div>
+                    )}
+                    {/* Table selector + add actions */}
+                    {(modelTables || detail?.tables) && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                        <Field label="Table" style={{ minWidth: 220 }}>
+                          <Select value={selectedTableName} onChange={(_, d) => { setSelectedTableName(d.value); setEditCol(null); setColPatch({}); }}>
+                            {(modelTables ?? (detail?.tables as any[]) ?? []).map((t: { name: string; isCalculatedTable?: boolean }) => (
+                              <option key={t.name} value={t.name}>{t.name}{t.isCalculatedTable ? ' (calc)' : ''}</option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setCalcMsg(null); setCalcColDlgOpen(true); }}
+                          disabled={!selectedTableName || !modelTables}
+                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated columns' : 'Add a calculated column (DAX)'}>
+                          Add calculated column
+                        </Button>
+                        <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setCalcMsg(null); setCalcTableDlgOpen(true); }}
+                          disabled={!modelTables}
+                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated tables' : 'Create a calculated table (DAX)'}>
+                          Add calculated table
+                        </Button>
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} style={{ marginTop: 22 }}
+                          onClick={() => { setModelTables(null); setModelGate(null); loadModel(); }}
+                          disabled={!datasetId || modelLoading}>
+                          Reload
+                        </Button>
+                      </div>
+                    )}
+                    {/* Column grid for the selected table */}
+                    {(() => {
+                      const tbl: SmTable | undefined =
+                        (modelTables?.find((t) => t.name === selectedTableName)) ??
+                        (detail?.tables?.find((t) => t.name === selectedTableName) as any);
+                      if (!tbl) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No table selected.</Caption1>;
+                      const cols: SmColumn[] = (tbl.columns as SmColumn[]) ?? [];
+                      return (
+                        <div className={s.tableWrap}>
+                          <Table aria-label={`Columns of ${tbl.name}`} size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Column</TableHeaderCell>
+                              <TableHeaderCell>Type</TableHeaderCell>
+                              <TableHeaderCell>Data type</TableHeaderCell>
+                              <TableHeaderCell>Category</TableHeaderCell>
+                              <TableHeaderCell>Format</TableHeaderCell>
+                              <TableHeaderCell>Summarize</TableHeaderCell>
+                              <TableHeaderCell>Display folder</TableHeaderCell>
+                              <TableHeaderCell>Hidden</TableHeaderCell>
+                              {modelTables && <TableHeaderCell>Edit</TableHeaderCell>}
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {cols.length === 0 && (
+                                <TableRow><TableCell>—</TableCell><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell />{modelTables && <TableCell />}</TableRow>
+                              )}
+                              {cols.map((c) => (
+                                <TableRow key={c.name} aria-label={c.name}>
+                                  <TableCell>
+                                    {c.name}
+                                    {c.type === 'calculated' && <Badge appearance="outline" size="small" color="brand" style={{ marginLeft: 4 }}>calc</Badge>}
+                                  </TableCell>
+                                  <TableCell>{c.type ?? 'data'}</TableCell>
+                                  <TableCell>{c.dataType ?? '—'}</TableCell>
+                                  <TableCell>{c.dataCategory || '—'}</TableCell>
+                                  <TableCell className={s.cell}>{c.formatString || '—'}</TableCell>
+                                  <TableCell>{c.summarizeBy || '—'}</TableCell>
+                                  <TableCell>{c.displayFolder || '—'}</TableCell>
+                                  <TableCell>{c.isHidden ? 'hidden' : '—'}</TableCell>
+                                  {modelTables && (
+                                    <TableCell>
+                                      <Button size="small" appearance="subtle" icon={<Wrench16Regular />} aria-label={`Edit ${c.name}`}
+                                        onClick={() => { setEditCol({ tableName: tbl.name, col: c }); setColPatch({}); setPatchMsg(null); }}>
+                                        Edit
+                                      </Button>
+                                    </TableCell>
+                                  )}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      );
+                    })()}
+                    {/* Column edit panel — full metadata surface */}
+                    {editCol && (
+                      <div className={s.card} style={{ marginTop: 12 }}>
+                        <Subtitle2>Edit column: {editCol.tableName}[{editCol.col.name}]</Subtitle2>
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                          <Field label="Data category" style={{ minWidth: 180 }}>
+                            <Select value={colPatch.dataCategory ?? editCol.col.dataCategory ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, dataCategory: d.value || undefined }))}>
+                              <option value="">— none —</option>
+                              {SM_DATA_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Summarize by" style={{ minWidth: 160 }}>
+                            <Select value={colPatch.summarizeBy ?? editCol.col.summarizeBy ?? 'default'}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, summarizeBy: d.value }))}>
+                              {SM_SUMMARIZE.map((v) => <option key={v} value={v}>{v}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Format string" style={{ minWidth: 200 }}>
+                            <Select value={colPatch.formatString ?? editCol.col.formatString ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, formatString: d.value }))}>
+                              {SM_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Display folder" style={{ minWidth: 200 }}>
+                            <Input value={colPatch.displayFolder ?? editCol.col.displayFolder ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, displayFolder: d.value }))}
+                              placeholder={'e.g. Geography or Finance\\KPIs'} />
+                          </Field>
+                          <Field label="Sort by column" style={{ minWidth: 180 }}>
+                            <Select value={colPatch.sortByColumn ?? editCol.col.sortByColumn ?? ''}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, sortByColumn: d.value || undefined }))}>
+                              <option value="">— self (default) —</option>
+                              {(modelTables?.find((t) => t.name === editCol.tableName)?.columns ?? [])
+                                .filter((c) => c.name !== editCol.col.name)
+                                .map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="Hidden">
+                            <Switch checked={colPatch.isHidden ?? editCol.col.isHidden ?? false}
+                              onChange={(_, d) => setColPatch((p) => ({ ...p, isHidden: d.checked }))} />
+                          </Field>
+                        </div>
+                        {editCol.col.type === 'calculated' && (
+                          <div style={{ marginTop: 10 }}>
+                            <Caption1>DAX expression</Caption1>
+                            <MonacoTextarea
+                              value={colPatch.expression ?? editCol.col.expression ?? ''}
+                              onChange={(v) => setColPatch((p) => ({ ...p, expression: v }))}
+                              language="sql" height={120} minHeight={80}
+                              ariaLabel="Calculated column DAX expression" />
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
+                          <Button appearance="primary" icon={<Save20Regular />}
+                            disabled={patchBusy || Object.keys(colPatch).length === 0}
+                            onClick={patchColumn}>
+                            {patchBusy ? 'Saving…' : 'Apply'}
+                          </Button>
+                          <Button appearance="subtle" onClick={() => { setEditCol(null); setColPatch({}); setPatchMsg(null); }}>Cancel</Button>
+                        </div>
+                        {patchMsg && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                      </div>
+                    )}
+                    {patchMsg && !editCol && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                    {/* Read-only measures for the selected table */}
+                    {(() => {
+                      const tbl: SmTable | undefined =
+                        (modelTables?.find((t) => t.name === selectedTableName)) ??
+                        (detail?.tables?.find((t) => t.name === selectedTableName) as any);
+                      if (!tbl?.measures?.length) return null;
+                      return (
+                        <div style={{ marginTop: 12 }}>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Measures in {tbl.name} (read-only — edit via the Measures tab)</Caption1>
+                          <div className={s.cell}>{tbl.measures.map((m) => m.name).join(', ')}</div>
+                        </div>
+                      );
+                    })()}
+                    {/* Composite (per-table storage mode) controls — origin/main integration */}
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 16, marginBottom: 8 }}>
+                      Set a per-table <strong>storage mode</strong> to build a composite model that mixes
+                      Import, DirectQuery, and Dual tables. Apply pushes a <code>model.bim</code> TMSL with a
+                      per-partition mode (Fabric updateDefinition), or returns it as an <code>Invoke-ASCmd</code>
+                      receipt. <strong>Dual</strong> requires Power BI Premium / Fabric capacity.
+                    </Caption1>
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Tables" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Table</TableHeaderCell>
+                          <TableHeaderCell>Columns</TableHeaderCell>
+                          <TableHeaderCell>Measures</TableHeaderCell>
+                          <TableHeaderCell>Storage mode</TableHeaderCell>
+                          <TableHeaderCell>Source query (DQ / Dual)</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(detail?.tables || []).map((t) => {
+                            const mode = tableModes[t.name] ?? 'import';
+                            return (
+                              <TableRow key={t.name}>
+                                <TableCell>{t.name}</TableCell>
+                                <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
+                                <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
+                                <TableCell>
+                                  <Select
+                                    size="small"
+                                    value={mode}
+                                    onChange={(_, d) => setTableModes((prev) => ({ ...prev, [t.name]: d.value as TableStorageMode }))}
+                                    aria-label={`Storage mode for ${t.name}`}
+                                    title={`Storage mode for ${t.name}. 'dual' requires Power BI Premium / Fabric capacity.`}
+                                  >
+                                    {TABLE_STORAGE_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                                  </Select>
+                                </TableCell>
+                                <TableCell>
+                                  {mode === 'import' ? (
+                                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+                                  ) : (
+                                    <Input
+                                      size="small"
+                                      value={tableSourceQ[t.name] ?? `SELECT * FROM [${t.name}]`}
+                                      onChange={(_, d) => setTableSourceQ((prev) => ({ ...prev, [t.name]: d.value }))}
+                                      aria-label={`Source query for ${t.name}`}
+                                      style={{ minWidth: 220 }}
+                                    />
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+                      <Button
+                        appearance="primary"
+                        icon={<ArrowSync20Regular />}
+                        disabled={modesBusy || !datasetId || !powerBiConfigured || (detail?.tables || []).length === 0}
+                        onClick={applyModes}
+                        title={!powerBiConfigured ? 'Power BI / Fabric not configured' : 'Build the composite TMSL with the selected per-table modes and apply via Fabric updateDefinition (or generate the Invoke-ASCmd receipt), then probe the live model'}
+                      >
+                        {modesBusy ? 'Applying…' : 'Apply storage modes'}
+                      </Button>
+                      {!powerBiConfigured && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Power BI / Fabric not configured — storage modes build TMSL only (no live apply).
+                        </Caption1>
+                      )}
+                    </div>
+                    {modesMsg && (
+                      <MessageBar intent={modesMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                        <MessageBarBody>{modesMsg.text}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {tmslReceipt && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary style={{ cursor: 'pointer' }}>
+                          <Caption1>TMSL receipt (apply offline: <code>Invoke-ASCmd -Server &quot;asazure://…&quot; -Query &lt;tmsl&gt;</code>)</Caption1>
+                        </summary>
+                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, marginTop: 4 }}>
+                          {tmslReceipt.slice(0, 4000)}
+                        </pre>
+                      </details>
+                    )}
+                  </>
                 )}
                 {tab === 'relationships' && (
                   <>
@@ -9442,6 +11395,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </div>
                     )}
                   </>
+                )}
+                {tab === 'model' && (
+                  <PbiModelViewPanel
+                    workspaceId={workspaceId || undefined}
+                    datasetId={datasetId}
+                  />
                 )}
                 {tab === 'build' && (
                   <>
@@ -9522,11 +11481,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <>
                     <MessageBar intent="info">
                       <MessageBarBody>
-                        <MessageBarTitle>DAX measure validator (no persistence)</MessageBarTitle>
-                        Author + validate a candidate DAX expression server-side via Power BI <code>executeQueries</code>.
-                        Persistence into the model requires the <strong>XMLA endpoint</strong> (Premium / Fabric capacity)
-                        or Power BI Desktop / Tabular Editor. The validator surfaces the engine's real syntax + semantic
-                        errors so you can iterate before opening the model in Desktop.
+                        <MessageBarTitle>DAX measure editor</MessageBarTitle>
+                        <strong>Validate</strong> runs the expression server-side via Power BI <code>executeQueries</code> — the engine returns its real syntax + semantic errors, not a mock.{' '}
+                        <strong>Save to model</strong> persists the measure (with its format string + display folder) via TMSL <code>createOrReplace</code> over the XMLA endpoint, then evaluates it so the result reflects a real computed value.{' '}
+                        Save requires <code>LOOM_SEMANTIC_BACKEND=analysis-services</code> plus <code>LOOM_AAS_SERVER</code> / <code>LOOM_AAS_DATABASE</code>.{' '}
+                        For Power BI Premium XMLA, use Power BI Desktop or Tabular Editor — that endpoint speaks the analysis-services protocol over <code>powerbi://</code>, not plain HTTP.
+                        {xmlaPersistence === false && <> {' '}<Badge appearance="tint" color="warning">XMLA persistence not wired</Badge></>}
+                        {xmlaPersistence === true && <> {' '}<Badge appearance="tint" color="success">XMLA persistence ready</Badge></>}
                       </MessageBarBody>
                     </MessageBar>
                     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
@@ -9539,12 +11500,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <Field label="Measure name" style={{ minWidth: 200 }}>
                         <Input value={measureName} onChange={(_, d) => setMeasureName(d.value)} placeholder="TotalSales" />
                       </Field>
+                      <Field label="Format string" hint="TMSL formatString — e.g. $#,0.00 currency, 0.00% percent, #,0 integer" style={{ minWidth: 200 }}>
+                        <Input value={formatString} onChange={(_, d) => setFormatString(d.value)} placeholder="$#,0.00;($#,0.00);$#,0.00" />
+                      </Field>
+                      <Field label="Display folder" hint="Organizes the measure in reporting tools (backslash-separated)" style={{ minWidth: 200 }}>
+                        <Input value={displayFolder} onChange={(_, d) => setDisplayFolder(d.value)} placeholder={'Finance\\KPIs'} />
+                      </Field>
                     </div>
                     <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
                     <MonacoTextarea
                       value={daxExpr}
                       onChange={setDaxExpr}
-                      language="sql"
+                      language="dax"
                       height={140}
                       minHeight={100}
                       ariaLabel="DAX expression editor"
@@ -9555,8 +11522,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         icon={<Play20Regular />}
                         disabled={daxBusy || !workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
                         onClick={validateDax}
+                        title={!workspaceId ? 'Validate uses the Power BI executeQueries REST endpoint — select a Power BI workspace first' : undefined}
                       >
                         {daxBusy ? 'Validating…' : 'Validate DAX'}
+                      </Button>
+                      <Button
+                        appearance="outline"
+                        icon={<Save20Regular />}
+                        disabled={saveBusy || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
+                        onClick={saveMeasure}
+                        title="Persist this measure (DAX + format string + display folder) via TMSL createOrReplace to Azure Analysis Services (requires LOOM_SEMANTIC_BACKEND=analysis-services + LOOM_AAS_SERVER)"
+                      >
+                        {saveBusy ? 'Saving…' : 'Save to model (XMLA)'}
                       </Button>
                       {daxResult?.ok && (
                         <Badge appearance="filled" color="success">valid · probe value: <code style={{ marginLeft: 4 }}>{daxResult.value === null || daxResult.value === undefined ? 'NULL' : String(daxResult.value)}</code></Badge>
@@ -9570,6 +11547,55 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         </MessageBarBody>
                       </MessageBar>
                     )}
+                    {saveResult && (
+                      <MessageBar intent={saveResult.ok ? 'success' : 'warning'} style={{ marginTop: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{saveResult.ok ? 'Saved to model' : 'Not persisted'}</MessageBarTitle>
+                          {saveResult.text}
+                          {saveResult.remediation && <> {saveResult.remediation}</>}
+                          {saveResult.link && <> <a href={saveResult.link} target="_blank" rel="noreferrer">Learn more</a>.</>}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    {/* DAX Copilot — Loom-native NL2DAX / explain / optimize / describe.
+                        Synapse-backed; no Power BI on this path. */}
+                    <Subtitle2 style={{ marginTop: 20 }}>DAX Copilot</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Generate, explain, or optimize DAX against this Loom-native model. Grounded on the model
+                      schema and evaluated via Synapse — no Power BI workspace required. A generated measure
+                      auto-inserts into the editor above.
+                    </Caption1>
+                    <div className={s.assistBar} style={{ marginTop: 8, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                      <Sparkle16Regular />
+                      <Input
+                        value={daxCopilotPrompt}
+                        onChange={(_, d) => setDaxCopilotPrompt(d.value)}
+                        placeholder="Ask DAX Copilot (e.g. 'create a YoY revenue measure', 'explain this', 'make it faster')"
+                        style={{ flex: 1 }}
+                        disabled={daxCopilotBusy}
+                        onKeyDown={(e) => { if (e.key === 'Enter') askDaxCopilot(); }}
+                      />
+                      <Button
+                        size="small"
+                        appearance="primary"
+                        icon={daxCopilotBusy ? <Spinner size="tiny" /> : <Sparkle16Regular />}
+                        disabled={daxCopilotBusy || !daxCopilotPrompt.trim()}
+                        onClick={askDaxCopilot}
+                      >
+                        {daxCopilotBusy ? 'Working…' : 'Ask'}
+                      </Button>
+                    </div>
+                    {daxCopilotErr && (
+                      <MessageBar intent="error" style={{ marginTop: 8 }}>
+                        <MessageBarBody><MessageBarTitle>DAX Copilot</MessageBarTitle>{daxCopilotErr}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {daxCopilotResult && (
+                      <div className={s.card} style={{ marginTop: 8 }}>
+                        <pre className={s.assistResult}>{daxCopilotResult}</pre>
+                      </div>
+                    )}
 
                     <Subtitle2 style={{ marginTop: 16 }}>Existing measures</Subtitle2>
                     {(detail?.tables || []).flatMap((t) => (t.measures || []).map((m) => (
@@ -9582,6 +11608,123 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (
                       <Caption1>No DAX measures returned (or the dataset hasn't exposed its model definition).</Caption1>
                     )}
+                  </>
+                )}
+                {tab === 'aggregations' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Automatic aggregations</MessageBarTitle>
+                        Define a hidden, Import-mode <strong>aggregation table</strong> whose columns each map (via
+                        <code> alternateOf</code>) to a column in a DirectQuery <strong>detail table</strong> with a
+                        summarization (GroupBy for grain keys; Sum / Count / Min / Max for measures). The Analysis Services
+                        engine then automatically rewrites queries that match the agg grain to this small table and falls
+                        through to the detail table otherwise. Requires the model at compatibility level 1460+ and an XMLA
+                        endpoint (<code>LOOM_POWERBI_XMLA_ENDPOINT</code> — Azure Analysis Services by default; a Power BI
+                        Premium / Fabric capacity XMLA endpoint is opt-in by URL). Verify a query-plan hit with SQL Profiler /
+                        SSMS XEvents → the <strong>Aggregate Table Rewrite Query</strong> event reports
+                        <code> matchingResult=matchFound</code>.
+                      </MessageBarBody>
+                    </MessageBar>
+                    {detail?.dataset?.targetStorageMode === 'Push' && (
+                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Push datasets do not support XMLA aggregations</MessageBarTitle>
+                          This model is a push dataset; aggregation tables are written over the XMLA endpoint, which push
+                          datasets don&rsquo;t expose. Build the model in Import / DirectQuery mode to author aggregations.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12, maxWidth: 920 }}>
+                      <Field label="Aggregation table name" required style={{ maxWidth: 420 }}>
+                        <Input value={aggTableName} onChange={(_, d) => setAggTableName(d.value)} placeholder="Sales_Agg" />
+                      </Field>
+                      <Field label="Partition source (Power Query / M expression)" hint='The query that produces the pre-aggregated rows, e.g. Value.NativeQuery over a "SELECT CustomerKey, SUM(SalesAmount) AS SalesAmount FROM FactSales GROUP BY CustomerKey". Import-mode partition.'>
+                        <MonacoTextarea value={aggPartitionExpr} onChange={setAggPartitionExpr} language="plaintext" height={120} ariaLabel="Aggregation partition M expression" />
+                      </Field>
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Subtitle2>Column mappings ({aggAltMaps.length})</Subtitle2>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <Button size="small" appearance="outline" onClick={seedAltMapsFromTable} disabled={!detail?.tables?.length} title="seed starter mappings from the first table's columns (editable)">Seed from first table</Button>
+                          <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addAltMap}>Add mapping</Button>
+                        </div>
+                      </div>
+                      {aggAltMaps.length === 0 ? (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No mappings yet. Add a GroupBy mapping for each grain key and a Sum/Count/Min/Max mapping for each measure.</Caption1>
+                      ) : (
+                        <div className={s.tableWrap}>
+                          <Table aria-label="Aggregation column mappings" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Agg column</TableHeaderCell>
+                              <TableHeaderCell>Data type</TableHeaderCell>
+                              <TableHeaderCell>Summarization</TableHeaderCell>
+                              <TableHeaderCell>Detail table</TableHeaderCell>
+                              <TableHeaderCell>Detail column</TableHeaderCell>
+                              <TableHeaderCell />
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {aggAltMaps.map((m, i) => (
+                                <TableRow key={i}>
+                                  <TableCell><Input size="small" value={m.aggColumn} onChange={(_, d) => updateAltMap(i, { aggColumn: d.value })} placeholder="SalesAmount" /></TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.dataType} onChange={(_, d) => updateAltMap(i, { dataType: d.value as AltMap['dataType'] })}>
+                                      {AGG_DATATYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.summarization} onChange={(_, d) => updateAltMap(i, { summarization: d.value as AggSummarization })}>
+                                      {AGG_SUMMARIZATIONS.map((su) => <option key={su} value={su}>{su}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Select size="small" value={m.detailTable} onChange={(_, d) => updateAltMap(i, { detailTable: d.value })}>
+                                      <option value="">— select —</option>
+                                      {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Input size="small" value={m.detailColumn} onChange={(_, d) => updateAltMap(i, { detailColumn: d.value })} placeholder={m.summarization === 'Count' ? '(rows — optional)' : 'SalesAmount'} />
+                                  </TableCell>
+                                  <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeAltMap(i)} title="remove mapping" /></TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      <Field label="Probe DAX (optional)" hint={'Runs after the agg table is applied to prove the engine answers a query at the agg grain, e.g. EVALUATE SUMMARIZECOLUMNS(\'FactSales\'[CustomerKey], "Total", SUM(\'FactSales\'[SalesAmount])). Confirm the actual query-plan hit in SQL Profiler’s Aggregate Table Rewrite Query event.'}>
+                        <MonacoTextarea value={aggProbeQuery} onChange={setAggProbeQuery} language="sql" height={90} ariaLabel="Probe DAX query" />
+                      </Field>
+
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Button appearance="primary" icon={<Save20Regular />}
+                          onClick={createAggregation}
+                          disabled={aggBusy || !datasetId || !aggTableName.trim() || !aggPartitionExpr.trim() || aggAltMaps.length === 0 || detail?.dataset?.targetStorageMode === 'Push'}>
+                          {aggBusy ? 'Applying…' : 'Create aggregation table'}
+                        </Button>
+                        {!datasetId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Select a model first.</Caption1>}
+                      </div>
+                      {aggMsg && <MessageBar intent={aggMsg.ok ? 'success' : (aggMsg.text.includes('XMLA endpoint not configured') ? 'warning' : 'error')}><MessageBarBody>{aggMsg.text}</MessageBarBody></MessageBar>}
+                      {aggProbeResult && aggProbeResult.length > 0 && (
+                        <div className={s.tableWrap}>
+                          <Subtitle2 style={{ marginBottom: 4 }}>Probe result ({aggProbeResult.length} row{aggProbeResult.length === 1 ? '' : 's'})</Subtitle2>
+                          <Table aria-label="Probe result" size="small">
+                            <TableHeader><TableRow>
+                              {Object.keys(aggProbeResult[0]).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {aggProbeResult.slice(0, 20).map((row, ri) => (
+                                <TableRow key={ri}>
+                                  {Object.keys(aggProbeResult[0]).map((k) => <TableCell key={k} className={s.cell}>{String(row[k] ?? '')}</TableCell>)}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
                 {tab === 'refresh' && (
@@ -9610,6 +11753,134 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </TableBody>
                     </Table>
                   </div>
+                )}
+                {tab === 'incremental' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Incremental refresh + hybrid table (current-period DirectQuery)</MessageBarTitle>
+                        Sets a <code>refreshPolicy</code> on a table (TMSL Alter over the Azure Analysis Services XMLA
+                        endpoint), then applies it (TMSL Refresh, <code>applyRefreshPolicy:true</code>) to create historical
+                        Import partitions and — when <em>real-time DirectQuery partition</em> is enabled — a live
+                        DirectQuery partition for the current period. Requires <code>LOOM_SEMANTIC_BACKEND=analysis-services</code>{' '}
+                        and <code>LOOM_AAS_XMLA_ENDPOINT</code> (compatibility level 1565+ for Hybrid mode). AAS is an
+                        Azure-native PaaS — no Microsoft Fabric or Power BI workspace required.{' '}
+                        <a href="https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {irGate && (
+                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                        <MessageBarBody><MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>{irGate}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12, maxWidth: 580 }}>
+                      <Field label="Table" required>
+                        <Select value={irTableName} onChange={(_, d) => setIrTableName(d.value)}>
+                          <option value="">(select a table)</option>
+                          {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                        </Select>
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <Field label="Archive data starting (keep)" style={{ flex: 1 }}>
+                          <SpinButton min={1} value={irRollingWindowPeriods} onChange={(_, d) => setIrRollingWindowPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irRollingWindowPeriods)))} />
+                        </Field>
+                        <Field label="Unit" style={{ minWidth: 120 }}>
+                          <Select value={irRollingWindowGranularity} onChange={(_, d) => setIrRollingWindowGranularity(d.value as Grain)}>
+                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
+                          </Select>
+                        </Field>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <Field label="Incrementally refresh data in the last" style={{ flex: 1 }}>
+                          <SpinButton min={1} value={irIncrementalPeriods} onChange={(_, d) => setIrIncrementalPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irIncrementalPeriods)))} />
+                        </Field>
+                        <Field label="Unit" style={{ minWidth: 120 }}>
+                          <Select value={irIncrementalGranularity} onChange={(_, d) => setIrIncrementalGranularity(d.value as Grain)}>
+                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
+                          </Select>
+                        </Field>
+                      </div>
+                      <Switch
+                        label="Get the latest data in real time with DirectQuery (hybrid table — adds a live current-period partition)"
+                        checked={irEnableHybrid}
+                        onChange={(_, d) => setIrEnableHybrid(d.checked)}
+                      />
+                      <Field label="Detect data changes — column expression (optional M, e.g. Table.Max(FactSales, &quot;LastModified&quot;)[LastModified])">
+                        <Input value={irPollingExpression} onChange={(_, d) => setIrPollingExpression(d.value)} placeholder='Table.Max(FactSales, "LastModified")[LastModified]' />
+                      </Field>
+                      <Field label="Effective date override (ISO, optional — overrides &quot;today&quot; for the rolling window)">
+                        <Input value={irEffectiveDate} onChange={(_, d) => setIrEffectiveDate(d.value)} placeholder="2025-06-08" />
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Button appearance="primary" icon={<Save20Regular />} disabled={irBusy || !workspaceId || !datasetId || !irTableName} onClick={saveIrPolicy}>
+                          {irBusy ? 'Applying…' : 'Apply refresh policy'}
+                        </Button>
+                        <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={!workspaceId || !datasetId} onClick={loadIrPolicy}>
+                          Load partitions
+                        </Button>
+                      </div>
+                      {irMsg && <MessageBar intent={irMsg.ok ? 'success' : 'error'}><MessageBarBody>{irMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    {irPartitions.length > 0 && (
+                      <>
+                        <Subtitle2 style={{ marginTop: 18 }}>Partition receipt ({irPartitions.length})</Subtitle2>
+                        <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                          <Table aria-label="Partitions" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Partition</TableHeaderCell>
+                              <TableHeaderCell>Storage mode</TableHeaderCell>
+                              <TableHeaderCell>Query / source</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {irPartitions.map((p) => (
+                                <TableRow key={p.name} style={p.storageMode === 'DirectQuery' ? { background: tokens.colorBrandBackground2 } : undefined}>
+                                  <TableCell>{p.name}</TableCell>
+                                  <TableCell>
+                                    <Badge appearance={p.storageMode === 'DirectQuery' ? 'filled' : 'outline'} color={p.storageMode === 'DirectQuery' ? 'brand' : 'informative'}>{p.storageMode}</Badge>
+                                  </TableCell>
+                                  <TableCell className={s.cell}><code style={{ fontSize: 11 }}>{p.queryDefinition?.slice(0, 140) || '—'}</code></TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </>
+                    )}
+
+                    <Subtitle2 style={{ marginTop: 22 }}>Enhanced refresh (apply policy)</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      POST /refreshes with <code>commitMode</code>, <code>applyRefreshPolicy</code> and <code>effectiveDate</code>.
+                      Refreshes the rolling Import partitions per the policy; the historical and live DirectQuery partitions stay intact.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, maxWidth: 580 }}>
+                      <Switch label="Apply refresh policy (creates / reshuffles partitions)" checked={enhApplyPolicy} onChange={(_, d) => setEnhApplyPolicy(d.checked)} />
+                      <Field label="Commit mode">
+                        <Select value={enhCommitMode} onChange={(_, d) => setEnhCommitMode(d.value as 'transactional' | 'partialBatch')}>
+                          <option value="transactional">transactional (all-or-nothing)</option>
+                          <option value="partialBatch" disabled={enhApplyPolicy}>partialBatch (per-partition commit — not valid with applyRefreshPolicy)</option>
+                        </Select>
+                      </Field>
+                      <Field label="Effective date override (ISO, optional)">
+                        <Input value={enhEffectiveDate} onChange={(_, d) => setEnhEffectiveDate(d.value)} placeholder="2025-06-08" />
+                      </Field>
+                      <Button appearance="primary" icon={<Play20Regular />} disabled={enhBusy || !workspaceId || !datasetId} onClick={triggerEnhancedRefresh}>
+                        {enhBusy ? 'Queuing…' : 'Run enhanced refresh'}
+                      </Button>
+                      {enhMsg && <MessageBar intent={enhMsg.ok ? 'success' : 'error'}><MessageBarBody>{enhMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    <MessageBar intent="info" style={{ marginTop: 18 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Scheduled refresh trigger</MessageBarTitle>
+                        To run this enhanced refresh on a timer, author a Synapse / ADF ScheduleTrigger with a Web Activity
+                        that POSTs to this dataset&apos;s refresh endpoint (the <strong>Data pipeline</strong> editor wires the
+                        pipeline; <code>synapse-dev-client.upsertTrigger()</code> creates the trigger when
+                        <code>LOOM_SYNAPSE_WORKSPACE</code> is configured). The daily run refreshes only the rolling Import
+                        partitions — current-period rows already arrive live through the DirectQuery partition, no full refresh needed.
+                      </MessageBarBody>
+                    </MessageBar>
+                  </>
                 )}
                 {tab === 'config' && (
                   <>
@@ -9646,20 +11917,217 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 20 }}>Row-level security (RLS) roles</Subtitle2>
-                    <MessageBar intent="warning" style={{ marginTop: 6 }}>
+                    <Subtitle2 style={{ marginTop: 20 }}>Row-level &amp; object-level security</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      RLS role filters and OLS table/column permissions are authored on the dedicated <strong>Security (RLS/OLS)</strong> tab, which deploys real TMSL roles through the Analysis-Services XMLA endpoint and includes a Test-as-role probe.
+                    </Caption1>
+                  </>
+                )}
+                {tab === 'security' && datasetId && (
+                  <SemanticModelSecurityTab
+                    s={s}
+                    tables={detail?.tables || []}
+                    roles={secRoles}
+                    busy={secBusy}
+                    saving={secSaving}
+                    err={secErr}
+                    gate={secGate}
+                    saveMsg={secSaveMsg}
+                    selectedRole={secSelectedRole}
+                    olsTable={secOlsTable}
+                    testUpn={testRoleUpn}
+                    testQuery={testQuery}
+                    testBusy={testBusy}
+                    testResult={testResult}
+                    testErr={testErr}
+                    onReload={() => loadRoles(datasetId, workspaceId)}
+                    onAddRole={() => {
+                      const base = 'NewRole';
+                      const existing = new Set((secRoles || []).map((r) => r.name));
+                      let name = base; let i = 1;
+                      while (existing.has(name)) { name = `${base}${i++}`; }
+                      setSecRoles([...(secRoles || []), { name, modelPermission: 'read', tablePermissions: [], members: [] }]);
+                      setSecSelectedRole(name);
+                    }}
+                    onDeleteRole={(name) => {
+                      setSecRoles((secRoles || []).filter((r) => r.name !== name));
+                      if (secSelectedRole === name) setSecSelectedRole('');
+                    }}
+                    onRenameRole={(oldName, newName) => updateRole(oldName, (r) => ({ ...r, name: newName }))}
+                    onSelectRole={setSecSelectedRole}
+                    onSetFilter={(roleName, table, expr) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      const idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx >= 0) tps[idx] = { ...tps[idx], filterExpression: expr };
+                      else tps.push({ name: table, filterExpression: expr, metadataPermission: 'read' });
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetTableOls={(roleName, table, perm) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      const idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx >= 0) tps[idx] = { ...tps[idx], metadataPermission: perm };
+                      else tps.push({ name: table, metadataPermission: perm });
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetColumnOls={(roleName, table, column, perm) => updateRole(roleName, (r) => {
+                      const tps = [...r.tablePermissions];
+                      let idx = tps.findIndex((tp) => tp.name === table);
+                      if (idx < 0) { tps.push({ name: table, metadataPermission: 'read', columnPermissions: [] }); idx = tps.length - 1; }
+                      const cols = [...(tps[idx].columnPermissions || [])];
+                      const cidx = cols.findIndex((c) => c.name === column);
+                      if (cidx >= 0) cols[cidx] = { name: column, metadataPermission: perm };
+                      else cols.push({ name: column, metadataPermission: perm });
+                      tps[idx] = { ...tps[idx], columnPermissions: cols };
+                      return { ...r, tablePermissions: tps };
+                    })}
+                    onSetMembers={(roleName, members) => updateRole(roleName, (r) => ({ ...r, members: members.map((m) => ({ memberName: m })) }))}
+                    onChangeOlsTable={setSecOlsTable}
+                    onSave={saveRoles}
+                    onTestUpn={setTestRoleUpn}
+                    onTestQuery={setTestQuery}
+                    onRunTest={runTestRole}
+                  />
+                )}
+                {tab === 'direct-lake' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820 }}>
+                    <div>
+                      <Subtitle2>Direct Lake (shim)</Subtitle2>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>
+                        Azure-native parity for Fabric Direct Lake. The shim keeps a warm AAS (Power BI Premium XMLA)
+                        cache fresh from an ADLS Gen2 Delta source — triggered by <code>_delta_log</code> Event Grid
+                        notifications — so the model reflects new Delta rows within the freshness SLA.
+                      </Caption1>
+                    </div>
+
+                    {/* Honest, always-on disclosure — cloud-invariant. */}
+                    <MessageBar intent="warning">
                       <MessageBarBody>
-                        <MessageBarTitle>RLS role authoring is XMLA / Desktop only</MessageBarTitle>
-                        The Power BI REST API does not expose create/edit of RLS roles or their DAX filters — roles are defined
-                        through the <strong>XMLA endpoint</strong> (Premium / Fabric capacity; set <code>LOOM_POWERBI_XMLA_ENDPOINT</code>
-                        and use Tabular Editor / a TMSL deploy) or <strong>Power BI Desktop</strong>. Member assignment to existing
-                        roles is done in the service. Use <strong>Open in Power BI</strong> above to manage RLS.
-                        {detail?.dataset?.isEffectiveIdentityRolesRequired
-                          ? ' This dataset requires effective-identity roles for embedding.'
-                          : ''}
+                        <MessageBarTitle>This is an AAS incremental-refresh shim, not a Fabric F-SKU</MessageBarTitle>
+                        True Direct Lake sub-second freshness requires a Fabric F-SKU (unavailable in Gov). This shim
+                        achieves 5–30 s via AAS incremental refresh via Power BI Premium XMLA. Set
+                        {' '}<code>LOOM_DIRECT_LAKE_SHIM_ENABLED=true</code> to activate.
                       </MessageBarBody>
                     </MessageBar>
-                  </>
+
+                    {dlEnabled === false ? (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          <MessageBarTitle>Direct Lake (shim) is not enabled in this deployment</MessageBarTitle>
+                          {dlHint || 'Set LOOM_DIRECT_LAKE_SHIM_ENABLED=true to activate the shim.'} Deploy the shim
+                          container app, its Service Bus queue, and the Event Grid system topic via
+                          {' '}<code>platform/fiab/bicep/modules/admin-plane/aas.bicep</code>.
+                        </MessageBarBody>
+                      </MessageBar>
+                    ) : (
+                      <>
+                        {dlEventGrid && (
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <Badge appearance="filled" color={dlEventGrid.subscriptionState === 'Succeeded' ? 'success' : 'warning'}>
+                              Event Grid: {dlEventGrid.subscriptionState}
+                            </Badge>
+                            <Caption1>Topic: <strong>{dlEventGrid.systemTopic}</strong> ({dlEventGrid.topicState})</Caption1>
+                          </div>
+                        )}
+
+                        <Field label="ADLS Gen2 Delta source path" hint="abfss://container@account.dfs… or https://account.dfs…/container/… — populated from the lakehouse the model is built on.">
+                          <Input value={dlDeltaPath} onChange={(_, d) => setDlDeltaPath(d.value)} placeholder={DEFAULT_DL_PATH_HINT} disabled={dlBusy} />
+                        </Field>
+
+                        <Field label="Freshness SLA">
+                          <Select value={String(dlSla)} onChange={(_, d) => setDlSla(parseInt(d.value, 10))} disabled={dlBusy}>
+                            {DL_SLA_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </Select>
+                        </Field>
+
+                        <div>
+                          <Caption1 style={{ fontWeight: 600 }}>Per-table refresh policy</Caption1>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2, marginBottom: 6 }}>
+                            One row per table in the model. Partition is the incremental Direct-Lake sweet spot — set the
+                            partition column the Delta directory layout encodes (e.g. <code>event_date</code>).
+                          </Caption1>
+                          <div className={s.tableWrap}>
+                            <Table aria-label="Per-table refresh policy" size="small">
+                              <TableHeader><TableRow>
+                                <TableHeaderCell>Table</TableHeaderCell>
+                                <TableHeaderCell>Refresh policy</TableHeaderCell>
+                                <TableHeaderCell>Partition column</TableHeaderCell>
+                              </TableRow></TableHeader>
+                              <TableBody>
+                                {dlTables.length === 0 && (
+                                  <TableRow><TableCell colSpan={3}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No tables loaded yet — open the Tables tab to load the model schema.</Caption1></TableCell></TableRow>
+                                )}
+                                {dlTables.map((row, idx) => (
+                                  <TableRow key={row.tableName || idx}>
+                                    <TableCell>{row.tableName}</TableCell>
+                                    <TableCell>
+                                      <Select value={row.policy} onChange={(_, d) => setDlTablePolicy(idx, d.value as DlPolicy)} disabled={dlBusy}>
+                                        {DL_POLICIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Input
+                                        value={row.partitionColumn}
+                                        onChange={(_, d) => setDlTablePartCol(idx, d.value)}
+                                        placeholder={row.policy === 'Partition' ? 'event_date' : '—'}
+                                        disabled={dlBusy || row.policy !== 'Partition'}
+                                        size="small"
+                                      />
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <Button appearance="primary" icon={<Save20Regular />} disabled={dlBusy || dlLoading} onClick={saveDirectLake}>
+                            {dlBusy ? 'Saving…' : 'Configure shim'}
+                          </Button>
+                          <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={dlLoading || !datasetId} onClick={() => loadDirectLake(datasetId, workspaceId)}>
+                            {dlLoading ? 'Loading…' : 'Refresh status'}
+                          </Button>
+                        </div>
+                        {dlMsg && <MessageBar intent={dlMsg.ok ? 'success' : 'error'}><MessageBarBody>{dlMsg.text}</MessageBarBody></MessageBar>}
+
+                        <div>
+                          <Caption1 style={{ fontWeight: 600 }}>Shim run log (last {dlRuns.length})</Caption1>
+                          <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                            <Table aria-label="Shim refresh runs" size="small">
+                              <TableHeader><TableRow>
+                                <TableHeaderCell>Request</TableHeaderCell>
+                                <TableHeaderCell>Type</TableHeaderCell>
+                                <TableHeaderCell>Status</TableHeaderCell>
+                                <TableHeaderCell>Start</TableHeaderCell>
+                                <TableHeaderCell>Duration</TableHeaderCell>
+                              </TableRow></TableHeader>
+                              <TableBody>
+                                {dlRuns.length === 0 && (
+                                  <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No refresh runs yet. Write new Delta rows to the source to trigger the shim.</Caption1></TableCell></TableRow>
+                                )}
+                                {dlRuns.map((run, i) => (
+                                  <TableRow key={run.requestId || i}>
+                                    <TableCell><span style={{ fontFamily: 'monospace' }}>{(run.requestId || '—').slice(0, 8)}</span></TableCell>
+                                    <TableCell>{run.refreshType || '—'}</TableCell>
+                                    <TableCell>
+                                      <Badge appearance="outline" color={run.status === 'Completed' ? 'success' : run.status === 'Failed' ? 'danger' : 'informative'}>
+                                        {run.status || 'Unknown'}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell>{run.startTime ? new Date(run.startTime).toLocaleString() : '—'}</TableCell>
+                                    <TableCell>{typeof run.durationMs === 'number' ? `${(run.durationMs / 1000).toFixed(1)} s` : '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {tab === 'datasource' && isDqMode && datasetId && (
+                  <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -9681,12 +12149,314 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBarBody>
                   </MessageBar>
                 )}
+                {tab === 'calcGroups' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Calculation groups</MessageBarTitle>
+                        Author calculation items with <code>SELECTEDMEASURE()</code>. Each group becomes a slicer; selecting an item changes how the visual&rsquo;s measure is aggregated (YTD, MTD, prior year, % of total&hellip;). Saved to this model and emitted in TMSL at provision time on the Loom-native default; set <code>LOOM_SEMANTIC_BACKEND=aas</code> or <code>=fabric</code> to push to a live model.{' '}
+                        <a href="https://learn.microsoft.com/analysis-services/tabular-models/calculation-groups" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {calcGroups.map((cg, gi) => (
+                      <div key={gi} className={s.card}>
+                        <div className={s.toolbar}>
+                          <Field label="Group name" style={{ minWidth: 220 }}>
+                            <Input value={cg.name} placeholder="Time Intelligence"
+                              onChange={(_, d) => setCalcGroups((prev) => prev.map((g, i) => i === gi ? { ...g, name: d.value } : g))} />
+                          </Field>
+                          <Field label="Precedence">
+                            <SpinButton value={cg.precedence} min={0} max={9999}
+                              onChange={(_, d) => setCalcGroups((prev) => prev.map((g, i) => i === gi ? { ...g, precedence: Number(d.value ?? d.displayValue ?? 0) || 0 } : g))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} title="Remove group"
+                            onClick={() => setCalcGroups((prev) => prev.filter((_, i) => i !== gi))} />
+                        </div>
+                        {cg.items.map((ci, ii) => (
+                          <div key={ii} className={s.card} style={{ marginTop: 8 }}>
+                            <div className={s.toolbar}>
+                              <Field label="Item name" style={{ minWidth: 180 }}>
+                                <Input value={ci.name} placeholder="YTD"
+                                  onChange={(_, d) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, name: d.value } : it) }))} />
+                              </Field>
+                              <Field label="Ordinal">
+                                <SpinButton value={ci.ordinal ?? -1} min={-1} max={999}
+                                  onChange={(_, d) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, ordinal: Number(d.value ?? d.displayValue ?? -1) } : it) }))} />
+                              </Field>
+                              <Button appearance="subtle" icon={<Delete20Regular />} title="Remove item"
+                                onClick={() => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.filter((_, j) => j !== ii) }))} />
+                            </div>
+                            <Caption1>DAX expression — use <code>SELECTEDMEASURE()</code></Caption1>
+                            <MonacoTextarea value={ci.expression} language="sql" height={80} minHeight={60} ariaLabel="Calculation item DAX"
+                              onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, expression: v } : it) }))} />
+                            <Caption1 style={{ marginTop: 4 }}>Dynamic format string (optional DAX — e.g. <code>SELECTEDMEASUREFORMATSTRING()</code>)</Caption1>
+                            <MonacoTextarea value={ci.formatStringDefinition || ''} language="sql" height={50} minHeight={40} ariaLabel="Format string DAX"
+                              onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, formatStringDefinition: v || undefined } : it) }))} />
+                          </div>
+                        ))}
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                          onClick={() => setCalcGroups((prev) => prev.map((g, i) => i !== gi ? g : { ...g, items: [...g.items, { name: 'New item', expression: 'SELECTEDMEASURE()' }] }))}>Add item</Button>
+                      </div>
+                    ))}
+                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                      <Button icon={<Add20Regular />}
+                        onClick={() => setCalcGroups((prev) => [...prev, { name: 'New group', precedence: 10, items: [{ name: 'Current', expression: 'SELECTEDMEASURE()' }] }])}>Add group</Button>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={cgBusy || calcGroups.length === 0 || !datasetId}
+                        onClick={saveCalcGroups}>{cgBusy ? 'Saving…' : 'Save calc groups'}</Button>
+                    </div>
+                    {cgMsg && <MessageBar intent={cgMsg.ok ? 'success' : 'error'}><MessageBarBody>{cgMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                )}
+                {tab === 'fieldParams' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Field parameters</MessageBarTitle>
+                        Build a <code>NAMEOF()</code> calculated table that lets report readers swap the measure or dimension a visual shows via a slicer. Pick the fields below; the generated DAX is shown live. Saved to this model and emitted in TMSL at provision time on the Loom-native default.{' '}
+                        <a href="https://learn.microsoft.com/power-bi/create-reports/power-bi-field-parameters" target="_blank" rel="noreferrer">Docs</a>
+                      </MessageBarBody>
+                    </MessageBar>
+                    {fieldParams.map((fp, fi) => (
+                      <div key={fi} className={s.card}>
+                        <div className={s.toolbar}>
+                          <Field label="Parameter name" style={{ minWidth: 220 }}>
+                            <Input value={fp.name} placeholder="Metric Selector"
+                              onChange={(_, d) => setFieldParams((prev) => prev.map((p, i) => i === fi ? { ...p, name: d.value } : p))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} title="Remove parameter"
+                            onClick={() => setFieldParams((prev) => prev.filter((_, i) => i !== fi))} />
+                        </div>
+                        {fp.fields.map((f, fj) => (
+                          <div key={fj} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 6, flexWrap: 'wrap' }}>
+                            <Field label="Display name" style={{ minWidth: 160 }}>
+                              <Input value={f.displayName} placeholder="Total Sales"
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, displayName: d.value } : ff) }))} />
+                            </Field>
+                            <Field label="NAMEOF reference" style={{ flex: 1, minWidth: 200 }}>
+                              <Input value={f.fieldRef} placeholder="'Sales'[Amount]"
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, fieldRef: d.value } : ff) }))} />
+                            </Field>
+                            <Field label="Order">
+                              <SpinButton value={f.order} min={0} max={999}
+                                onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, order: Number(d.value ?? d.displayValue ?? 0) || 0 } : ff) }))} />
+                            </Field>
+                            <Button appearance="subtle" icon={<Delete20Regular />} title="Remove field"
+                              onClick={() => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.filter((_, j) => j !== fj) }))} />
+                          </div>
+                        ))}
+                        <Caption1 style={{ marginTop: 8 }}>Generated DAX</Caption1>
+                        <pre className={s.assistResult} style={{ marginTop: 4, padding: '6px 8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+{`${fp.name} = {\n${fp.fields.map((f, i) => `\t("${f.displayName}", NAMEOF(${f.fieldRef}), ${typeof f.order === 'number' ? f.order : i})`).join(',\n')}\n}`}
+                        </pre>
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                          onClick={() => setFieldParams((prev) => prev.map((p, i) => i !== fi ? p : { ...p, fields: [...p.fields, { displayName: 'New field', fieldRef: "'Table'[Column]", order: p.fields.length }] }))}>Add field</Button>
+                      </div>
+                    ))}
+                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                      <Button icon={<Add20Regular />}
+                        onClick={() => setFieldParams((prev) => [...prev, { name: 'New Parameter', fields: [{ displayName: 'Field 1', fieldRef: "'Table'[Column]", order: 0 }] }])}>Add parameter</Button>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={fpBusy || fieldParams.length === 0 || !datasetId}
+                        onClick={saveFieldParams}>{fpBusy ? 'Saving…' : 'Save field parameters'}</Button>
+                    </div>
+                    {fpMsg && <MessageBar intent={fpMsg.ok ? 'success' : 'error'}><MessageBarBody>{fpMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                )}
+
+                {tab === 'direct-lake-query' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Direct Lake query with transparent Serverless fallback</MessageBarTitle>
+                        When the warm cache (last model refresh) is within{' '}
+                        <code>LOOM_DL_CACHE_TTL_SECONDS</code>, rows are served from the Power BI
+                        in-memory VertiPaq cache. When stale or unbuilt, the same Gold Delta files
+                        are queried transparently via Synapse Serverless <code>OPENROWSET</code> —
+                        the Azure-native analog of Fabric Direct Lake on SQL DirectQuery fallback.
+                        No Fabric capacity required.
+                      </MessageBarBody>
+                    </MessageBar>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-table-picker">Table</Label>
+                        {(detail?.tables && detail.tables.length > 0) ? (
+                          <Dropdown
+                            id="dl-table-picker"
+                            placeholder="Select table"
+                            value={dlTable}
+                            selectedOptions={dlTable ? [dlTable] : []}
+                            onOptionSelect={(_, d) => setDlTable((d.optionValue as string) || '')}
+                            style={{ minWidth: 200 }}
+                          >
+                            {detail.tables.map((t) => (
+                              <Option key={t.name} value={t.name}>{t.name}</Option>
+                            ))}
+                          </Dropdown>
+                        ) : (
+                          <Input
+                            id="dl-table-picker"
+                            placeholder="Gold Delta table name (e.g. fact_sales)"
+                            value={dlTable}
+                            onChange={(_, d) => setDlTable(d.value)}
+                            style={{ minWidth: 240 }}
+                          />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Label htmlFor="dl-max-rows">Max rows</Label>
+                        <Input
+                          id="dl-max-rows"
+                          type="number"
+                          value={String(dlMaxRows)}
+                          onChange={(_, d) => setDlMaxRows(Math.min(5000, Math.max(1, parseInt(d.value, 10) || 1000)))}
+                          style={{ width: 100 }}
+                        />
+                      </div>
+                      <Button
+                        appearance="primary"
+                        icon={<Play20Regular />}
+                        disabled={!dlTable || dlqLoading}
+                        onClick={executeDlQuery}
+                      >
+                        Run
+                      </Button>
+                    </div>
+
+                    {dlqLoading && <Spinner size="small" label="Querying…" labelPosition="after" />}
+
+                    {dlResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {dlResult.servingFrom === 'warm-cache' && (
+                            <Badge appearance="filled" color="success">Serving from: warm cache</Badge>
+                          )}
+                          {dlResult.servingFrom === 'serverless-fallback' && (
+                            <Badge appearance="filled" color="warning">Serving from: fallback (Serverless)</Badge>
+                          )}
+                          {dlResult.executionMs !== undefined && (
+                            <Caption1>{dlResult.executionMs} ms</Caption1>
+                          )}
+                          {dlResult.rowCount !== undefined && (
+                            <Badge appearance="outline">{dlResult.rowCount} rows</Badge>
+                          )}
+                          {dlResult.truncated && <Badge color="warning">Truncated</Badge>}
+                        </div>
+
+                        {dlResult.servingFrom === 'serverless-fallback' && dlResult.endpoint && (
+                          <Caption1>
+                            Serverless endpoint: <code>{dlResult.endpoint}</code>
+                            {dlResult.deltaPath && <> · Delta path: <code>{dlResult.deltaPath}</code></>}
+                          </Caption1>
+                        )}
+                        {dlResult.lastRefreshedAt && (
+                          <Caption1>
+                            Last successful model refresh: {new Date(dlResult.lastRefreshedAt).toLocaleString()}
+                            {dlResult.cacheTtlSeconds !== undefined && <> (TTL {dlResult.cacheTtlSeconds}s)</>}
+                          </Caption1>
+                        )}
+
+                        {!dlResult.ok && (
+                          <MessageBar intent="error">
+                            <MessageBarBody>
+                              <MessageBarTitle>Query failed</MessageBarTitle>
+                              {dlResult.error}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
+
+                        {dlResult.ok && dlResult.columns && dlResult.rows && (
+                          <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                              <thead>
+                                <tr>
+                                  {dlResult.columns.map((c) => (
+                                    <th key={c} style={{ padding: '4px 8px', background: tokens.colorNeutralBackground2, textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0 }}>{c}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dlResult.rows.slice(0, 200).map((row, ri) => (
+                                  <tr key={ri}>
+                                    {(row as unknown[]).map((cell, ci) => (
+                                      <td key={ci} style={{ padding: '3px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
+                                        {cell === null || cell === undefined ? <em style={{ opacity: 0.5 }}>null</em> : String(cell)}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
         </>
       }
     />
+    {/* Add calculated column (DAX) dialog */}
+    <Dialog open={calcColDlgOpen} onOpenChange={(_, d) => { setCalcColDlgOpen(d.open); if (!d.open) setCalcMsg(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Add calculated column — {selectedTableName}</DialogTitle>
+          <DialogContent>
+            <Field label="Column name" required>
+              <Input value={calcColName} onChange={(_, d) => setCalcColName(d.value)} placeholder="Margin" />
+            </Field>
+            <Field label="Data type" style={{ marginTop: 8 }}>
+              <Select value={calcColType} onChange={(_, d) => setCalcColType(d.value)}>
+                {SM_DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </Select>
+            </Field>
+            <Field label="Data category" style={{ marginTop: 8 }}>
+              <Select value={calcColCat} onChange={(_, d) => setCalcColCat(d.value)}>
+                <option value="">— none —</option>
+                {SM_DATA_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </Field>
+            <Field label="Display folder" style={{ marginTop: 8 }}>
+              <Input value={calcColFolder} onChange={(_, d) => setCalcColFolder(d.value)} placeholder="e.g. Finance" />
+            </Field>
+            <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
+            <MonacoTextarea value={calcColExpr} onChange={setCalcColExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated column DAX" />
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" disabled={calcBusy || !calcColName.trim() || !calcColExpr.trim()} onClick={addCalcColumn}>
+              {calcBusy ? 'Creating…' : 'Create'}
+            </Button>
+            <DialogTrigger disableButtonEnhancement><Button appearance="subtle">Cancel</Button></DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+    {/* Add calculated table (DAX) dialog */}
+    <Dialog open={calcTableDlgOpen} onOpenChange={(_, d) => { setCalcTableDlgOpen(d.open); if (!d.open) setCalcMsg(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Add calculated table</DialogTitle>
+          <DialogContent>
+            <Field label="Table name" required>
+              <Input value={calcTableName} onChange={(_, d) => setCalcTableName(d.value)} placeholder="DimDate" />
+            </Field>
+            <Caption1 style={{ marginTop: 8 }}>DAX table expression</Caption1>
+            <MonacoTextarea value={calcTableExpr} onChange={setCalcTableExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated table DAX" />
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" disabled={calcBusy || !calcTableName.trim() || !calcTableExpr.trim()} onClick={addCalcTable}>
+              {calcBusy ? 'Creating…' : 'Create'}
+            </Button>
+            <DialogTrigger disableButtonEnhancement><Button appearance="subtle">Cancel</Button></DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+    </>
   );
 }
 
@@ -9699,9 +12469,264 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 // in-Desktop launcher. Each editor (Report, Dashboard, Scorecard) builds
 // an honest inline ribbon (no decorative disabled buttons) below.
 
+/**
+ * Built-in Power BI report themes (parity with the Power BI service
+ * "View → Themes" gallery). Each entry is a valid Power BI report-theme JSON
+ * object — applied at runtime via `report.applyTheme({ themeJson })` and at
+ * load time via the embed config `theme`. Kept as TypeScript constants (not a
+ * freeform JSON config file) per loom-no-freeform-config: the user picks a
+ * named preset from a dropdown, or pastes a custom theme into the editor.
+ * Format reference: https://learn.microsoft.com/power-bi/create-reports/desktop-report-themes#report-theme-json-file-format
+ */
+const PRESET_THEMES: Array<{ key: string; label: string; theme: Record<string, unknown> }> = [
+  {
+    key: 'loom-light', label: 'Loom Light',
+    theme: {
+      name: 'Loom Light',
+      dataColors: ['#0F6CBD', '#13A10E', '#C19C00', '#D13438', '#8764B8', '#038387', '#CA5010', '#5C2E91'],
+      background: '#FFFFFF', foreground: '#242424', tableAccent: '#0F6CBD',
+    },
+  },
+  {
+    key: 'loom-dark', label: 'Loom Dark',
+    theme: {
+      name: 'Loom Dark',
+      dataColors: ['#479EF5', '#54B054', '#E6B400', '#F1707B', '#B393E0', '#3FC5C9', '#F08A4B', '#A47BD4'],
+      background: '#1B1A19', foreground: '#F3F2F1', tableAccent: '#479EF5',
+      visualStyles: { '*': { '*': { background: [{ color: { solid: { color: '#252423' } } }] } } },
+    },
+  },
+  {
+    key: 'high-contrast', label: 'High Contrast',
+    theme: {
+      name: 'High Contrast',
+      dataColors: ['#000000', '#FFFFFF', '#FFFF00', '#00FFFF', '#FF00FF', '#00FF00', '#FF0000', '#0000FF'],
+      background: '#000000', foreground: '#FFFFFF', tableAccent: '#FFFF00',
+    },
+  },
+];
+
 interface ReportLite {
   id: string; name: string; embedUrl?: string; webUrl?: string; datasetId?: string;
   modifiedDateTime?: string; modifiedBy?: string; reportType?: string;
+}
+
+// ── Report Copilot ────────────────────────────────────────────────────────
+// Narrative-summary + suggest-visuals over the Loom tabular semantic layer
+// (Synapse Dedicated SQL pool) — NO Power BI dependency (no-fabric-dependency.md).
+// Streams from POST /api/items/report/copilot; an approved visual is POSTed to
+// /api/items/report/<id>/visual which writes it to the report's state.content
+// where the Loom-native viewer renders it.
+
+type CopilotStep =
+  | { kind: 'thought'; content: string }
+  | { kind: 'tool_call'; name: string; args: unknown; callId: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: any; error?: string }
+  | { kind: 'final'; content: string }
+  | { kind: 'error'; error: string };
+
+interface PendingVisual {
+  visualType: string; title: string; field: string; sql: string;
+  position?: { x: number; y: number; width: number; height: number };
+}
+
+interface LoomVisualEntry { type: string; title: string; field?: string; config?: any }
+interface LoomPageEntry { name: string; displayName?: string; visuals?: LoomVisualEntry[] }
+
+/**
+ * ReportCopilotPanel — bound to the report item's Cosmos id (`reportId`).
+ * Grounds its narrative on real Synapse aggregates and lets the user approve a
+ * suggested visual, which is written to the report's Loom-native content.
+ */
+function ReportCopilotPanel({ reportId, reportName }: { reportId: string; reportName?: string }) {
+  const s = useStyles();
+  const [prompt, setPrompt] = useState('');
+  const [running, setRunning] = useState(false);
+  const [steps, setSteps] = useState<CopilotStep[]>([]);
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingVisual | null>(null);
+  const [aoaiGate, setAoaiGate] = useState<string | null>(null);
+  const [topError, setTopError] = useState<string | null>(null);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pages, setPages] = useState<LoomPageEntry[]>([]);
+
+  // Load the report's Loom-native content (pages + visuals) so newly-added
+  // visuals are visible immediately. Reads state.content via the loom: pages route.
+  const loadLoomContent = useCallback(async () => {
+    if (!reportId) return;
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent('loom:' + reportId)}/pages?workspaceId=loom-native`);
+      const j = await r.json();
+      setPages(j.ok && Array.isArray(j.pages) ? j.pages : []);
+    } catch { setPages([]); }
+  }, [reportId]);
+  useEffect(() => { loadLoomContent(); }, [loadLoomContent]);
+
+  const run = useCallback(async () => {
+    const p = prompt.trim();
+    if (!p || running) return;
+    setRunning(true); setSteps([]); setNarrative(null); setPending(null);
+    setAoaiGate(null); setTopError(null); setApplyMsg(null);
+    try {
+      const res = await fetch('/api/items/report/copilot', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: p, reportId }),
+      });
+      if (res.status === 503) {
+        const j = await res.json().catch(() => ({}));
+        setAoaiGate(j.error || 'No AOAI deployment wired to the Foundry hub.');
+        setRunning(false); return;
+      }
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}));
+        setTopError(j.error || `HTTP ${res.status}`); setRunning(false); return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = ''; let currentEvent = 'message';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) currentEvent = line.slice(6).trim();
+          else if (line.startsWith('data:')) {
+            const data = line.slice(5).trim();
+            if (!data) continue;
+            try {
+              const parsed = JSON.parse(data);
+              if (currentEvent === 'step') {
+                const step = parsed as CopilotStep;
+                setSteps((prev) => [...prev, step]);
+                if (step.kind === 'final') setNarrative(step.content || '');
+                if (step.kind === 'tool_result' && step.name === 'report_suggest_visual' && step.result?.ok && step.result?.suggestion) {
+                  setPending(step.result.suggestion as PendingVisual);
+                }
+              }
+            } catch { /* skip malformed SSE line */ }
+          }
+        }
+      }
+    } catch (e: any) {
+      setTopError(e?.message || String(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [prompt, running, reportId]);
+
+  const addVisual = useCallback(async () => {
+    if (!pending || !reportId) return;
+    setApplyBusy(true); setApplyMsg(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/visual`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: pending }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setApplyMsg({ ok: true, text: `Added "${j.visual?.title}" to ${j.pageName || 'the report'} (${j.backend}).` });
+        setPending(null);
+        await loadLoomContent();
+      } else {
+        setApplyMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) {
+      setApplyMsg({ ok: false, text: e?.message || String(e) });
+    } finally {
+      setApplyBusy(false);
+    }
+  }, [pending, reportId, loadLoomContent]);
+
+  const totalVisuals = pages.reduce((n, p) => n + (p.visuals?.length || 0), 0);
+
+  return (
+    <div className={s.card} style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <Sparkle16Regular />
+        <Subtitle2>Report Copilot</Subtitle2>
+        <Badge appearance="tint" color="brand">Loom-native · Synapse</Badge>
+      </div>
+      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+        Generate a narrative summary of {reportName ? `“${reportName}”` : 'this report'} grounded on real aggregates from the bound
+        CSA Loom semantic model (Synapse Dedicated SQL pool), and get a suggested visual you can add to the report. No Power BI required.
+      </Caption1>
+      <Textarea
+        placeholder='e.g. "Summarize total revenue by product category and suggest a chart."'
+        value={prompt}
+        onChange={(_e, d) => setPrompt(d.value)}
+        rows={2}
+        disabled={running}
+      />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <Button appearance="primary" icon={running ? <Spinner size="tiny" /> : <Sparkle16Regular />} disabled={running || !prompt.trim()} onClick={run}>
+          {running ? 'Working…' : 'Generate narrative & visual'}
+        </Button>
+      </div>
+
+      {aoaiGate && (
+        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Copilot model not deployed</MessageBarTitle>
+            {aoaiGate} Deploy a gpt-4o / gpt-4.1 class model in Azure AI Foundry, then set it under Admin → Tenant settings → Copilot &amp; Agents.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {topError && (
+        <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{topError}</MessageBarBody></MessageBar>
+      )}
+
+      {narrative && (
+        <div className={s.card} style={{ marginTop: 8, backgroundColor: tokens.colorNeutralBackground2 }}>
+          <Subtitle2 style={{ display: 'block', marginBottom: 4 }}>Narrative summary</Subtitle2>
+          <Body1 style={{ whiteSpace: 'pre-wrap' }}>{narrative}</Body1>
+        </div>
+      )}
+
+      {pending && (
+        <MessageBar intent="info" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Suggested visual</MessageBarTitle>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+              <Badge appearance="filled" color="brand">{pending.visualType}</Badge>
+              <span><strong>{pending.title}</strong></span>
+              <Caption1>field: {pending.field}</Caption1>
+            </div>
+            <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'var(--loom-font-mono, ui-monospace, monospace)' }}>{pending.sql}</Caption1>
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="primary" icon={applyBusy ? <Spinner size="tiny" /> : <Add20Regular />} disabled={applyBusy} onClick={addVisual}>
+              {applyBusy ? 'Adding…' : 'Add to report'}
+            </Button>
+            <Button appearance="subtle" disabled={applyBusy} onClick={() => setPending(null)}>Dismiss</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+      {applyMsg && (
+        <MessageBar intent={applyMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{applyMsg.text}</MessageBarBody></MessageBar>
+      )}
+
+      <div className={s.card} style={{ marginTop: 8 }}>
+        <Subtitle2 style={{ display: 'block', marginBottom: 6 }}>Report content (Loom-native) · {totalVisuals} visual{totalVisuals === 1 ? '' : 's'}</Subtitle2>
+        {pages.length === 0 && <Caption1>No Loom-native visuals yet. Generate one above to add the first.</Caption1>}
+        {pages.map((p, i) => (
+          <div key={p.name || i} style={{ marginBottom: 6 }}>
+            <Caption1><strong>{p.displayName || p.name}</strong></Caption1>
+            {(p.visuals || []).length === 0 && <div><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>— no visuals</Caption1></div>}
+            {(p.visuals || []).map((v, j) => (
+              <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0' }}>
+                <Badge appearance="outline" color="brand">{v.type}</Badge>
+                <span>{v.title}</span>
+                {v.field && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {v.field}</Caption1>}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ReportLikeEditor({
@@ -9731,10 +12756,29 @@ function ReportLikeEditor({
   const [bookmarks, setBookmarks] = useState<Array<{ name: string; displayName: string }>>([]);
   const [editMode, setEditMode] = useState(false);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
+  // Drill-through / cross-highlight / theme / format-pane state (Power BI
+  // report viewer parity). drillContext = the filter context carried onto the
+  // active page after a drill-through navigation; lastSelection = the most
+  // recent cross-highlight / hierarchy drill selection from the embed.
+  const [drillContext, setDrillContext] = useState<any[] | null>(null);
+  const [lastSelection, setLastSelection] = useState<{ visualName?: string; pageDisplayName?: string; filterCount: number; pointCount: number } | null>(null);
+  const [showThemeDialog, setShowThemeDialog] = useState(false);
+  const [themePreset, setThemePreset] = useState<string>(PRESET_THEMES[0].key);
+  const [themeJson, setThemeJson] = useState(() => JSON.stringify(PRESET_THEMES[0].theme, null, 2));
+  const [themeApplying, setThemeApplying] = useState(false);
+  const [themeErr, setThemeErr] = useState<string | null>(null);
+  const [themeMsg, setThemeMsg] = useState<string | null>(null);
+  const [showFormatPane, setShowFormatPane] = useState(false);
   const embedRef = useRef<any>(null);
   // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
   // metadata by default; expose embed/refresh/export only when configured.
   const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
+  // Report main view: the in-Loom Visual designer (build visuals over the
+  // model with Fields/Format/Filters panes) vs the live Power BI embed.
+  const [reportView, setReportView] = useState<'design' | 'view'>('design');
+  // Report Copilot (narrative + suggest-visuals) — Loom-native, bound to this
+  // report item's Cosmos id (the editor `id` prop). Works with or without PBI.
+  const [copilotOpen, setCopilotOpen] = useState(kind === 'report');
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -9911,14 +12955,86 @@ function ReportLikeEditor({
     catch (e: any) { setViewerErr(e?.message || String(e)); }
   }, [editMode]);
 
-  // Mirror the active page when the user navigates inside the embed.
+  // Apply a Power BI report theme at runtime (parity with the service
+  // "View → Themes" picker). Real powerbi-client API: report.applyTheme.
+  // Accepts a preset key, a raw JSON string, or a theme object.
+  const applyTheme = useCallback(async (input: string | object) => {
+    setThemeErr(null); setThemeMsg(null); setThemeApplying(true);
+    try {
+      let themeObj: any;
+      if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!trimmed) throw new Error('Paste a Power BI theme JSON or pick a preset.');
+        themeObj = JSON.parse(trimmed);
+      } else { themeObj = input; }
+      await embedRef.current?.applyTheme?.({ themeJson: themeObj });
+      setThemeMsg(`Applied theme "${themeObj?.name || 'custom'}".`);
+    } catch (e: any) { setThemeErr(e?.message || String(e)); }
+    finally { setThemeApplying(false); }
+  }, []);
+
+  // Reset the report to its authored theme (report.resetTheme).
+  const resetTheme = useCallback(async () => {
+    setThemeErr(null); setThemeMsg(null);
+    try { await embedRef.current?.resetTheme?.(); setThemeMsg('Reset to the report’s authored theme.'); }
+    catch (e: any) { setThemeErr(e?.message || String(e)); }
+  }, []);
+
+  // Show/hide the Power BI visualizations + fields panes (parity with the
+  // service edit-mode formatting pane). Real API: report.updateSettings.
+  const toggleFormatPane = useCallback(async () => {
+    const next = !showFormatPane;
+    setShowFormatPane(next); setViewerErr(null);
+    try {
+      await embedRef.current?.updateSettings?.({
+        panes: {
+          visualizations: { visible: next, expanded: next },
+          fields: { visible: next, expanded: false },
+          filters: { visible: true, expanded: false },
+        },
+      });
+    } catch (e: any) { setViewerErr(e?.message || String(e)); setShowFormatPane(!next); }
+  }, [showFormatPane]);
+
+  // Mirror the active page when the user navigates inside the embed, and read
+  // the drill-through filter context carried onto the newly-active page.
   const onEmbedded = useCallback((embed: any) => {
     embedRef.current = embed;
     try {
       embed?.on?.('loaded', () => { reloadBookmarks(); });
-      embed?.on?.('pageChanged', (ev: any) => {
+      embed?.on?.('pageChanged', async (ev: any) => {
         const name = ev?.detail?.newPage?.name;
         if (name) setActivePage(name);
+        // Drill-through carries source-page filters onto the target page; read
+        // them off the now-active page so the viewer can show what arrived.
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          const filters = await pg?.getFilters?.();
+          setDrillContext(Array.isArray(filters) && filters.length ? filters : null);
+        } catch { setDrillContext(null); }
+      });
+      // Native bookmarks pane / programmatic apply → re-sync the Loom list +
+      // the active page (a bookmark can navigate pages).
+      embed?.on?.('bookmarkApplied', async () => {
+        reloadBookmarks();
+        try {
+          const pg = await embedRef.current?.getActivePage?.();
+          if (pg?.name) setActivePage(pg.name);
+        } catch { /* best-effort */ }
+      });
+      // Cross-highlight + hierarchy drill selection surface (dataSelected fires
+      // on visual selection and drill-down node clicks).
+      embed?.on?.('dataSelected', (ev: any) => {
+        const d = ev?.detail || {};
+        const filters = Array.isArray(d.filters) ? d.filters : [];
+        const dataPoints = Array.isArray(d.dataPoints) ? d.dataPoints : [];
+        if (!dataPoints.length && !filters.length) { setLastSelection(null); return; }
+        setLastSelection({
+          visualName: d?.visual?.name,
+          pageDisplayName: d?.page?.displayName,
+          filterCount: filters.length,
+          pointCount: dataPoints.length,
+        });
       });
     } catch { /* event wiring best-effort */ }
   }, [reloadBookmarks]);
@@ -9944,9 +13060,17 @@ function ReportLikeEditor({
         { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
         { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
         { label: slideshow ? 'Stop slideshow' : 'Play bookmarks', onClick: hasReport ? toggleSlideshow : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'play the report bookmarks as a slideshow (bookmarksManager.play)' },
+        { label: showFormatPane ? 'Hide format pane' : 'Show format pane', onClick: hasReport && editMode ? toggleFormatPane : undefined, disabled: !hasReport || !editMode, title: !hasReport ? 'select a report first' : (!editMode ? 'switch to Edit mode first to author visuals' : 'show/hide the Power BI visualizations + fields panes (report.updateSettings)') },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'Theme', actions: [
+        { label: 'Apply theme', onClick: hasReport ? () => setShowThemeDialog(true) : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'apply a built-in or custom JSON theme to the embedded report (report.applyTheme)' },
+        { label: 'Reset theme', onClick: hasReport ? resetTheme : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reset the report to its authored theme (report.resetTheme)' },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'Copilot', actions: [
+        { label: copilotOpen ? 'Hide Report Copilot' : 'Report Copilot', onClick: () => setCopilotOpen((v) => !v), title: 'narrative summary + suggested visuals over the bound Loom semantic model (no Power BI required)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme, copilotOpen]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -10014,6 +13138,7 @@ function ReportLikeEditor({
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
           {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
+          {kind === 'report' && copilotOpen && <ReportCopilotPanel reportId={id} reportName={report?.name} />}
           {!powerBiConfigured && (
             <MessageBar intent="info" style={{ marginBottom: 12 }}>
               <MessageBarBody>
@@ -10022,18 +13147,37 @@ function ReportLikeEditor({
               </MessageBarBody>
             </MessageBar>
           )}
-          {powerBiConfigured && (
-            <MessageBar intent="info">
+          {powerBiConfigured && kind !== 'paginated' && (
+            <TabList selectedValue={reportView} onTabSelect={(_, d) => setReportView(d.value as 'design' | 'view')} style={{ marginBottom: 8 }}>
+              <Tab value="design" icon={<DataBarVertical20Regular />}>Visual designer</Tab>
+              <Tab value="view" icon={<Eye20Regular />}>Live embed</Tab>
+            </TabList>
+          )}
+          {powerBiConfigured && kind !== 'paginated' && reportView === 'design' && report && report.datasetId && (
+            <div className={s.card} style={{ marginBottom: 8 }}>
+              <ReportVisualDesigner workspaceId={workspaceId} datasetId={report.datasetId} reportId={reportId} />
+            </div>
+          )}
+          {powerBiConfigured && kind !== 'paginated' && reportView === 'design' && report && !report.datasetId && (
+            <MessageBar intent="warning">
               <MessageBarBody>
-                <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
-                Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
-                Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
-                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
-                Power BI REST API. Use <strong>Open in Power BI</strong> to author.
+                <MessageBarTitle>No bound semantic model</MessageBarTitle>
+                This report has no dataset bound, so there are no model fields to build visuals over.
+                Select a report backed by a semantic model, or use the <strong>Live embed</strong> tab.
               </MessageBarBody>
             </MessageBar>
           )}
-          {report && (
+          {powerBiConfigured && (kind === 'paginated' || reportView === 'view') && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Live Power BI embed</MessageBarTitle>
+                This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
+                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+                Power BI REST API. To build visuals inside Loom over the model, switch to the <strong>Visual designer</strong> tab.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {report && (!powerBiConfigured || kind === 'paginated' || reportView === 'view') && (
             <>
               <div className={s.card}>
                 <Subtitle2>{report.name}</Subtitle2>
@@ -10049,6 +13193,16 @@ function ReportLikeEditor({
               <div className={s.card} style={{ marginTop: 8 }}>
                 <ManageAccessPanel workspaceId={workspaceId} />
               </div>
+              {kind !== 'paginated' && reportId && (
+                <div className={s.card} style={{ marginTop: 8 }}>
+                  <ReportSubscriptionsPanel
+                    reportId={reportId}
+                    workspaceId={workspaceId}
+                    reportName={report?.name}
+                    itemId={id}
+                  />
+                </div>
+              )}
               {!powerBiConfigured ? (
                 <div className={s.card}>
                   <Subtitle2 style={{ marginBottom: 12 }}>Report metadata (Loom-native view)</Subtitle2>
@@ -10106,9 +13260,44 @@ function ReportLikeEditor({
                         <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
                       </div>
                     </div>
+                    <div className={s.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Subtitle2>Selection</Subtitle2>
+                        <Button size="small" appearance="outline" onClick={() => setShowThemeDialog(true)} title="apply a report theme (report.applyTheme)">Theme…</Button>
+                      </div>
+                      {lastSelection ? (
+                        <>
+                          <Caption1 style={{ display: 'block' }}>
+                            Cross-highlight: <strong>{lastSelection.visualName || 'visual'}</strong>
+                            {lastSelection.pageDisplayName ? ` on ${lastSelection.pageDisplayName}` : ''}
+                          </Caption1>
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                            {lastSelection.pointCount} point(s){lastSelection.filterCount > 0 ? ` · ${lastSelection.filterCount} filter(s)` : ''}
+                          </Caption1>
+                          <Button size="small" appearance="subtle" onClick={() => setLastSelection(null)} style={{ marginTop: 4 }}>Clear</Button>
+                        </>
+                      ) : (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a data point to cross-highlight; use a hierarchy axis to drill down/up.</Caption1>
+                      )}
+                    </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                     {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    {drillContext && drillContext.length > 0 && (
+                      <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Drill-through context · {drillContext.length} filter{drillContext.length > 1 ? 's' : ''} carried</MessageBarTitle>
+                          {drillContext.slice(0, 6).map((f: any, i: number) => (
+                            <Caption1 key={i} style={{ display: 'block' }}>
+                              {(f?.target?.table ?? '?')}.{(f?.target?.column ?? f?.target?.hierarchy ?? f?.target?.measure ?? '?')}: {JSON.stringify(f?.values ?? f?.conditions ?? f?.operator ?? '—')}
+                            </Caption1>
+                          ))}
+                        </MessageBarBody>
+                        <MessageBarActions>
+                          <Button size="small" appearance="subtle" onClick={() => setDrillContext(null)}>Dismiss</Button>
+                        </MessageBarActions>
+                      </MessageBar>
+                    )}
                     <PowerBIEmbedFrame
                       embedType="report"
                       id={embed.reportId}
@@ -10118,6 +13307,7 @@ function ReportLikeEditor({
                       edit={editMode}
                       pageName={activePage || undefined}
                       onEmbedded={onEmbedded}
+                      paneOverrides={{ bookmarks: { visible: true }, selection: { visible: true } }}
                     />
                   </div>
                 </div>
@@ -10126,6 +13316,244 @@ function ReportLikeEditor({
               )}
             </>
           )}
+          <Dialog open={showThemeDialog} onOpenChange={(_, d) => setShowThemeDialog(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Apply report theme</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>
+                      Pick a built-in Loom theme or paste a Power BI theme JSON. Applied live to the embedded
+                      report via <code>report.applyTheme</code> — the same engine the Power BI service uses.
+                    </Caption1>
+                    <Field label="Preset theme">
+                      <Dropdown
+                        value={PRESET_THEMES.find((t) => t.key === themePreset)?.label || 'Custom'}
+                        selectedOptions={[themePreset]}
+                        onOptionSelect={(_, d) => {
+                          const key = d.optionValue || '';
+                          setThemePreset(key);
+                          const preset = PRESET_THEMES.find((t) => t.key === key);
+                          if (preset) setThemeJson(JSON.stringify(preset.theme, null, 2));
+                        }}
+                      >
+                        {PRESET_THEMES.map((t) => <Option key={t.key} value={t.key} text={t.label}>{t.label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Theme JSON (editable)" hint="leave as a preset, or paste a custom Power BI report-theme JSON">
+                      <Textarea
+                        value={themeJson}
+                        onChange={(_, d) => setThemeJson(d.value)}
+                        placeholder={'{\n  "name": "My theme",\n  "dataColors": ["#0F6CBD", "#13A10E"]\n}'}
+                        rows={12}
+                        style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                      />
+                    </Field>
+                    {themeErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Theme failed to apply</MessageBarTitle>{themeErr}</MessageBarBody></MessageBar>}
+                    {themeMsg && <MessageBar intent="success"><MessageBarBody>{themeMsg}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={resetTheme}>Reset to authored</Button>
+                  <Button
+                    appearance="primary"
+                    disabled={themeApplying}
+                    onClick={() => {
+                      const preset = PRESET_THEMES.find((t) => t.key === themePreset);
+                      const src = themeJson.trim() ? themeJson : (preset ? JSON.stringify(preset.theme) : '');
+                      applyTheme(src);
+                    }}
+                  >{themeApplying ? 'Applying…' : 'Apply theme'}</Button>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button appearance="subtle">Close</Button>
+                  </DialogTrigger>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
+  );
+}
+
+// ── Loom-native report renderer (Azure Analysis Services, default backend) ──
+//
+// no-fabric-dependency.md: the Report editor's DEFAULT path renders visuals by
+// querying the bound AAS tabular model with DAX (POST /query) — NO Power BI /
+// Fabric workspace required. Power BI embed is strictly opt-in via
+// NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (see ReportEditor below).
+type LoomVisualDef = { type: string; title?: string; field?: string; config?: any };
+type LoomReportPage = { name: string; displayName?: string; order?: number; visuals?: LoomVisualDef[] };
+type LoomReportDetail = {
+  report: { id: string; name: string; reportType?: string };
+  aasServer: string | null;
+  aasDatabase: string | null;
+  pages: LoomReportPage[];
+};
+type VisualState = { rows: Array<Record<string, unknown>>; loading: boolean; err: string | null };
+
+/** Render a single visual's AAS query result (card = big value, else table). */
+function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualState }) {
+  if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
+  if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
+  const rows = state.rows;
+  if (visual.type === 'card' && rows.length >= 1) {
+    const val = Object.values(rows[0])[0];
+    return (
+      <div>
+        <Caption1>{visual.title || '(untitled)'}</Caption1>
+        <div style={{ fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold }}>
+          {val == null ? '—' : String(val)}
+        </div>
+      </div>
+    );
+  }
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
+      {visual.type !== 'table' && visual.type !== 'card' && (
+        <MessageBar intent="info" style={{ margin: '4px 0' }}>
+          <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
+        </MessageBar>
+      )}
+      {rows.length === 0 ? <Caption1>No rows returned.</Caption1> : (
+        <Table size="small">
+          <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+          <TableBody>
+            {rows.slice(0, 100).map((row, ri) => (
+              <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{row[c] == null ? '—' : String(row[c])}</TableCell>)}</TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+/** Config-only visual preview shown when no AAS model is bound yet. */
+function LoomVisualDefinition({ visual }: { visual: LoomVisualDef }) {
+  return (
+    <div>
+      <Caption1><strong>{visual.title || '(untitled visual)'}</strong></Caption1>
+      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+        type: {visual.type} · field: {visual.field || '—'}
+      </Caption1>
+    </div>
+  );
+}
+
+function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [detail, setDetail] = useState<LoomReportDetail | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activePage, setActivePage] = useState(0);
+  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true); setDetailErr(null); setVisualRows({});
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.ok) {
+        setDetail({ report: j.report, aasServer: j.aasServer ?? null, aasDatabase: j.aasDatabase ?? null, pages: j.pages || [] });
+        setActivePage(0);
+      } else setDetailErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  const bound = !!(detail?.aasServer && detail?.aasDatabase);
+  const pages = useMemo(() => detail?.pages || [], [detail]);
+  const page = pages[activePage];
+
+  const runVisual = useCallback(async (key: string, visual: LoomVisualDef) => {
+    if (!visual.field) { setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: 'visual has no field binding' } })); return; }
+    setVisualRows((p) => ({ ...p, [key]: { rows: p[key]?.rows || [], loading: true, err: null } }));
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ visual: { type: visual.type, field: visual.field } }),
+      });
+      const j = await r.json();
+      if (j.ok) setVisualRows((p) => ({ ...p, [key]: { rows: j.rows || [], loading: false, err: null } }));
+      else setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+    } catch (e: any) {
+      setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: e?.message || String(e) } }));
+    }
+  }, [id]);
+
+  // When the bound page changes, fire a DAX query per visual (real AAS rows).
+  useEffect(() => {
+    if (!bound || !page) return;
+    (page.visuals || []).forEach((v, i) => { runVisual(`${activePage}:${i}`, v); });
+  }, [bound, activePage, page, runVisual]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Data', actions: [
+        { label: 'Refresh', onClick: loadDetail, title: 'reload the report definition and re-run all visual queries' },
+      ]},
+      { label: 'View', actions: pages.map((p, i) => ({
+        label: p.displayName || p.name, onClick: () => setActivePage(i), title: 'show this report page',
+      })) },
+    ]},
+  ], [loadDetail, pages]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Pages ({pages.length})</Subtitle2>
+          {pages.length === 0 && !loading && <Caption1>No pages defined.</Caption1>}
+          <Tree aria-label="Report pages">
+            {pages.map((p, i) => (
+              <TreeItem key={p.name || i} itemType="leaf" value={String(i)} onClick={() => setActivePage(i)}>
+                <TreeItemLayout>{activePage === i ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Report · Loom-native (Azure Analysis Services)</Badge>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadDetail}>Refresh</Button>
+          </div>
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {loading && <Spinner label="Loading report…" />}
+          {!bound && detail && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Bind an Azure Analysis Services model</MessageBarTitle>
+                This report renders visuals by querying a bound AAS tabular model with DAX — no Power BI workspace required.
+                Set <strong>state.aasServer</strong> (XMLA URI, e.g. <code>asazure://eastus2.asazure.windows.net/my-server</code>)
+                and <strong>state.aasDatabase</strong> on this item, or configure <strong>LOOM_AAS_SERVER</strong> + <strong>LOOM_AAS_DATABASE</strong>
+                {' '}(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detail && page && (
+            <div className={s.card}>
+              <Subtitle2 style={{ marginBottom: 8 }}>{page.displayName || page.name}</Subtitle2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+                {(page.visuals || []).map((v, i) => (
+                  <div key={i} className={s.card}>
+                    {bound
+                      ? <LoomVisual visual={v} state={visualRows[`${activePage}:${i}`]} />
+                      : <LoomVisualDefinition visual={v} />}
+                  </div>
+                ))}
+                {(page.visuals || []).length === 0 && <Caption1>This page has no visuals.</Caption1>}
+              </div>
+            </div>
+          )}
+          {detail && pages.length === 0 && !loading && <Caption1>This report has no pages defined.</Caption1>}
         </div>
       }
     />
@@ -10133,15 +13561,759 @@ function ReportLikeEditor({
 }
 
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  // no-fabric-dependency.md: Loom-native AAS renderer is the DEFAULT. Power BI
+  // embed is opt-in only via NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi.
+  const biBackend = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase();
+  if (biBackend === 'powerbi') {
+    return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  }
+  return <LoomNativeReportEditor item={item} id={id} />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
+  return <PaginatedReportDesigner item={item} id={id} />;
 }
 
 // ============================================================
-// Dashboard (Power BI)
+// Paginated report (RDL) designer — Azure-native, no Fabric/Power BI.
+//
+// Loom-native parity with a Power BI Paginated Report (.rdl): author data
+// sources + dataset SQL + a tablix (columns / row groups / expressions) +
+// parameters + page setup, then export to PDF / Excel / Word via the
+// paginated-report-renderer Azure Function. The whole surface works with
+// LOOM_DEFAULT_FABRIC_WORKSPACE UNSET (no-fabric-dependency.md). Export is the
+// only honest-gated control (LOOM_PAGINATED_RENDER_URL); authoring is always on.
 // ============================================================
+
+const RDL_DS_TYPES: RdlDataSourceType[] = ['AzureSQL', 'Synapse', 'Cosmos', 'ADLS'];
+const RDL_FIELD_TYPES: RdlField['type'][] = ['String', 'Int', 'Decimal', 'DateTime', 'Boolean'];
+const RDL_PARAM_TYPES: RdlParameter['type'][] = ['String', 'Int', 'Boolean', 'DateTime'];
+const RDL_AGGS = ['', 'Sum', 'Count', 'Avg', 'Max', 'Min'] as const;
+
+function rdlId(prefix: string): string {
+  const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID().slice(0, 8) : Math.random().toString(16).slice(2, 10);
+  return `${prefix}_${rnd}`;
+}
+
+/** Build a default detail-row cell expression for a field. */
+function fieldExpr(field: string): string { return `Fields!${field}.Value`; }
+/** Build an aggregate expression token. */
+function aggExpr(agg: string, field: string): string { return agg ? `=${agg}(Fields!${field}.Value)` : fieldExpr(field); }
+/** Parse {agg, field} back out of a stored cell expression (for the picker). */
+function parseExpr(expr: string): { agg: string; field: string } {
+  const m = /^=(\w+)\(Fields!(.+?)\.Value\)$/.exec(expr);
+  if (m) return { agg: m[1], field: m[2] };
+  const f = /^Fields!(.+?)\.Value$/.exec(expr);
+  return { agg: '', field: f ? f[1] : '' };
+}
+
+function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [def, setDef] = useState<RdlReportDefinition | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const [renderDeployed, setRenderDeployed] = useState(false);
+  const [exportBusy, setExportBusy] = useState<RdlExportFormat | null>(null);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+  const [exportHint, setExportHint] = useState<NotConfiguredHint | undefined>(undefined);
+
+  // Dialogs
+  const [dsDialog, setDsDialog] = useState<{ open: boolean; editing?: RdlDataSource }>(() => ({ open: false }));
+  const [dsetDialog, setDsetDialog] = useState<{ open: boolean; editing?: RdlDataset }>(() => ({ open: false }));
+  const [tablixWizard, setTablixWizard] = useState(false);
+  const [paramDialog, setParamDialog] = useState<{ open: boolean; editing?: RdlParameter }>(() => ({ open: false }));
+  const [selectedTablix, setSelectedTablix] = useState<string>('');
+
+  const isNew = id === 'new';
+
+  // Resolve the owning Loom workspace (partition key) from the item.
+  useEffect(() => {
+    if (isNew) { setLoadErr(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const it = await getItem(item.slug, id);
+        if (!cancelled) setWorkspaceId(it.workspaceId);
+      } catch (e: any) { if (!cancelled) setLoadErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+  }, [item.slug, id, isNew]);
+
+  // Load the RDL definition once the workspace is known.
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) { setDef(j.definition); setSelectedTablix(j.definition.tablixes?.[0]?.id || ''); setIsDirty(false); }
+        else setLoadErr(j.error || `HTTP ${r.status}`);
+      } catch (e: any) { if (!cancelled) setLoadErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, id]);
+
+  // Renderer capability probe (pre-disable Export with the exact remediation).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/paginated-report/capabilities');
+        const j = await r.json();
+        if (!cancelled && j.ok) setRenderDeployed(!!j.renderDeployed);
+      } catch { /* leave disabled */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const patch = useCallback((mut: (d: RdlReportDefinition) => RdlReportDefinition) => {
+    setDef((prev) => (prev ? mut(structuredClone(prev)) : prev));
+    setIsDirty(true);
+    setSaveMsg(null);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!def) return;
+    setSaveBusy(true); setSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(def),
+      });
+      const j = await r.json();
+      if (j.ok) { setDef(j.definition); setIsDirty(false); setSaveMsg({ ok: true, text: 'Report saved.' }); }
+      else setSaveMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setSaveMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSaveBusy(false); }
+  }, [def, id]);
+
+  const doExport = useCallback(async (format: RdlExportFormat) => {
+    if (!def || !workspaceId) return;
+    setExportBusy(format); setExportErr(null); setExportHint(undefined);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/render`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, format }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setExportErr(j.error || `render failed (HTTP ${r.status})`);
+        if (j.hint) setExportHint(j.hint);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(def.name || 'report').replace(/[^A-Za-z0-9._-]+/g, '_')}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e: any) { setExportErr(e?.message || String(e)); }
+    finally { setExportBusy(null); }
+  }, [def, workspaceId, id]);
+
+  if (isNew) {
+    return (
+      <NewItemCreateGate item={item} createLabel="New paginated report"
+        intro="Author a Loom-native paginated (RDL) report — data sources, dataset queries, a tablix, and parameters — then export to PDF, Excel, or Word. No Microsoft Fabric or Power BI workspace required." />
+    );
+  }
+
+  const hasDefinition = !!def && def.tablixes.length > 0;
+  const exportDisabledReason = !renderDeployed
+    ? 'Set LOOM_PAGINATED_RENDER_URL to enable export'
+    : !hasDefinition ? 'Add a tablix first' : isDirty ? 'Save the report first' : undefined;
+
+  const ribbon: RibbonTab[] = [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Report', actions: [
+        { label: saveBusy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: def ? handleSave : undefined, disabled: !def || saveBusy || !isDirty },
+      ]},
+      { label: 'Data', actions: [
+        { label: 'Add data source', icon: <Database20Regular />, onClick: () => setDsDialog({ open: true }), disabled: !def },
+        { label: 'Add dataset', icon: <DocumentTable20Regular />, onClick: () => setDsetDialog({ open: true }), disabled: !def || (def?.dataSources.length ?? 0) === 0,
+          title: (def?.dataSources.length ?? 0) === 0 ? 'Add a data source first' : undefined },
+      ]},
+      { label: 'Design', actions: [
+        { label: 'Add tablix', icon: <Table20Regular />, onClick: () => setTablixWizard(true), disabled: !def || (def?.datasets.length ?? 0) === 0,
+          title: (def?.datasets.length ?? 0) === 0 ? 'Add a dataset first' : undefined },
+        { label: 'Add parameter', icon: <Form20Regular />, onClick: () => setParamDialog({ open: true }), disabled: !def },
+      ]},
+      { label: 'Export', actions: [
+        { label: exportBusy === 'pdf' ? 'Exporting…' : 'Export PDF', onClick: () => doExport('pdf'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+        { label: exportBusy === 'xlsx' ? 'Exporting…' : 'Export Excel', onClick: () => doExport('xlsx'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+        { label: exportBusy === 'docx' ? 'Exporting…' : 'Export Word', onClick: () => doExport('docx'),
+          disabled: !!exportDisabledReason || !!exportBusy, title: exportDisabledReason },
+      ]},
+    ]},
+  ];
+
+  const selTablix = def?.tablixes.find((t) => t.id === selectedTablix) || null;
+
+  const leftPanel = def ? (
+    <div className={s.treePad}>
+      <Tree aria-label="Paginated report objects" defaultOpenItems={['ds', 'dsets', 'items', 'params']}>
+        <TreeItem itemType="branch" value="ds">
+          <TreeItemLayout iconBefore={<Database20Regular />}>Data sources ({def.dataSources.length})</TreeItemLayout>
+          <Tree>
+            {def.dataSources.map((ds) => (
+              <TreeItem key={ds.id} itemType="leaf" value={ds.id}>
+                <TreeItemLayout onClick={() => setDsDialog({ open: true, editing: ds })}>{ds.name} · {ds.type}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.dataSources.length === 0 && <TreeItem itemType="leaf" value="ds-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="dsets">
+          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>Datasets ({def.datasets.length})</TreeItemLayout>
+          <Tree>
+            {def.datasets.map((d) => (
+              <TreeItem key={d.id} itemType="leaf" value={d.id}>
+                <TreeItemLayout onClick={() => setDsetDialog({ open: true, editing: d })}>{d.name} ({d.fields.length} fields)</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.datasets.length === 0 && <TreeItem itemType="leaf" value="dset-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="items">
+          <TreeItemLayout iconBefore={<Table20Regular />}>Report items ({def.tablixes.length})</TreeItemLayout>
+          <Tree>
+            {def.tablixes.map((t) => (
+              <TreeItem key={t.id} itemType="leaf" value={t.id}>
+                <TreeItemLayout onClick={() => setSelectedTablix(t.id)}
+                  style={t.id === selectedTablix ? { fontWeight: 600 } : undefined}>{t.name}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.tablixes.length === 0 && <TreeItem itemType="leaf" value="tbx-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+        <TreeItem itemType="branch" value="params">
+          <TreeItemLayout iconBefore={<Form20Regular />}>Parameters ({def.parameters.length})</TreeItemLayout>
+          <Tree>
+            {def.parameters.map((p) => (
+              <TreeItem key={p.name} itemType="leaf" value={p.name}>
+                <TreeItemLayout onClick={() => setParamDialog({ open: true, editing: p })}>{p.name} · {p.type}</TreeItemLayout>
+              </TreeItem>
+            ))}
+            {def.parameters.length === 0 && <TreeItem itemType="leaf" value="param-empty"><TreeItemLayout><Caption1>none yet</Caption1></TreeItemLayout></TreeItem>}
+          </Tree>
+        </TreeItem>
+      </Tree>
+    </div>
+  ) : undefined;
+
+  const main = (
+    <div className={s.pad}>
+      {loadErr && (
+        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not load report</MessageBarTitle>{loadErr}</MessageBarBody></MessageBar>
+      )}
+      {saveMsg && (
+        <MessageBar intent={saveMsg.ok ? 'success' : 'error'}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>
+      )}
+      {exportErr && (
+        <NotConfiguredBar surface="Paginated report export" hint={exportHint} rawError={exportErr} />
+      )}
+      {!renderDeployed && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Export renderer not wired in this deployment</MessageBarTitle>
+          Authoring works fully. To enable PDF / Excel / Word export, deploy{' '}
+          <code>azure-functions/paginated-report-renderer/deploy/main.bicep</code> and set{' '}
+          <code>LOOM_PAGINATED_RENDER_URL</code> on the Console.
+        </MessageBarBody></MessageBar>
+      )}
+
+      {def && (
+        <>
+          {/* Report + page setup */}
+          <div className={s.card}>
+            <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Report</Subtitle2>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+              <Field label="Name" style={{ minWidth: 260 }}>
+                <Input value={def.name} onChange={(_, d) => patch((x) => ({ ...x, name: d.value }))} />
+              </Field>
+              <Field label="Page size" style={{ minWidth: 130 }}>
+                <Dropdown selectedOptions={[def.pageSize]} value={def.pageSize}
+                  onOptionSelect={(_, d) => patch((x) => ({ ...x, pageSize: (d.optionValue as RdlReportDefinition['pageSize']) || x.pageSize }))}>
+                  {['Letter', 'A4', 'Legal'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Orientation" style={{ minWidth: 140 }}>
+                <Dropdown selectedOptions={[def.pageOrientation]} value={def.pageOrientation}
+                  onOptionSelect={(_, d) => patch((x) => ({ ...x, pageOrientation: (d.optionValue as RdlReportDefinition['pageOrientation']) || x.pageOrientation }))}>
+                  {['Portrait', 'Landscape'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                </Dropdown>
+              </Field>
+            </div>
+          </div>
+
+          {/* Selected tablix designer */}
+          {selTablix ? (
+            <TablixDesignSurface
+              tablix={selTablix}
+              dataset={def.datasets.find((d) => d.id === selTablix.datasetId) || null}
+              onChange={(next) => patch((x) => ({ ...x, tablixes: x.tablixes.map((t) => (t.id === next.id ? next : t)) }))}
+              onDelete={() => { patch((x) => ({ ...x, tablixes: x.tablixes.filter((t) => t.id !== selTablix.id) })); setSelectedTablix(''); }}
+            />
+          ) : (
+            <div className={s.card}>
+              <Caption1>
+                No report item selected. Use <strong>Add data source → Add dataset → Add tablix</strong> to design a paginated report,
+                then <strong>Export PDF / Excel / Word</strong>.
+              </Caption1>
+            </div>
+          )}
+        </>
+      )}
+      {!def && !loadErr && <Spinner label="Loading report…" />}
+    </div>
+  );
+
+  return (
+    <>
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={main} />
+      {def && (
+        <>
+          <DataSourceDialog
+            open={dsDialog.open}
+            editing={dsDialog.editing}
+            onClose={() => setDsDialog({ open: false })}
+            onSave={(ds) => {
+              patch((x) => {
+                const exists = x.dataSources.some((d) => d.id === ds.id);
+                return { ...x, dataSources: exists ? x.dataSources.map((d) => (d.id === ds.id ? ds : d)) : [...x.dataSources, ds] };
+              });
+              setDsDialog({ open: false });
+            }}
+            onDelete={dsDialog.editing ? (dsId) => { patch((x) => ({ ...x, dataSources: x.dataSources.filter((d) => d.id !== dsId) })); setDsDialog({ open: false }); } : undefined}
+          />
+          <DatasetDialog
+            open={dsetDialog.open}
+            editing={dsetDialog.editing}
+            dataSources={def.dataSources}
+            reportId={id}
+            onClose={() => setDsetDialog({ open: false })}
+            onSave={(d) => {
+              patch((x) => {
+                const exists = x.datasets.some((q) => q.id === d.id);
+                return { ...x, datasets: exists ? x.datasets.map((q) => (q.id === d.id ? d : q)) : [...x.datasets, d] };
+              });
+              setDsetDialog({ open: false });
+            }}
+            onDelete={dsetDialog.editing ? (dId) => { patch((x) => ({ ...x, datasets: x.datasets.filter((q) => q.id !== dId) })); setDsetDialog({ open: false }); } : undefined}
+          />
+          <AddTablixWizard
+            open={tablixWizard}
+            datasets={def.datasets}
+            onClose={() => setTablixWizard(false)}
+            onCreate={(t) => { patch((x) => ({ ...x, tablixes: [...x.tablixes, t] })); setSelectedTablix(t.id); setTablixWizard(false); }}
+          />
+          <ParameterDialog
+            open={paramDialog.open}
+            editing={paramDialog.editing}
+            onClose={() => setParamDialog({ open: false })}
+            onSave={(p) => {
+              patch((x) => {
+                const exists = x.parameters.some((q) => q.name === p.name);
+                return { ...x, parameters: exists ? x.parameters.map((q) => (q.name === p.name ? p : q)) : [...x.parameters, p] };
+              });
+              setParamDialog({ open: false });
+            }}
+            onDelete={paramDialog.editing ? (name) => { patch((x) => ({ ...x, parameters: x.parameters.filter((q) => q.name !== name) })); setParamDialog({ open: false }); } : undefined}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+// --- Tablix design surface: header labels + per-column expression picker ---
+function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
+  tablix: RdlTablix; dataset: RdlDataset | null;
+  onChange: (t: RdlTablix) => void; onDelete: () => void;
+}) {
+  const s = useStyles();
+  const fieldNames = dataset?.fields.map((f) => f.name) ?? [];
+  const detailRow = tablix.cells[0] ?? [];
+
+  const setHeader = (ci: number, label: string) => {
+    const headerRow = [...tablix.headerRow]; headerRow[ci] = label;
+    onChange({ ...tablix, headerRow });
+  };
+  const setExpr = (ci: number, expr: string) => {
+    const cells = tablix.cells.map((r) => [...r]);
+    if (!cells[0]) cells[0] = [];
+    cells[0][ci] = { ...(cells[0][ci] || { expression: '' }), expression: expr };
+    onChange({ ...tablix, cells });
+  };
+
+  return (
+    <div className={s.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Subtitle2>Tablix · {tablix.name}</Subtitle2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Switch label="Column headers" checked={tablix.showColumnHeaders}
+            onChange={(_, d) => onChange({ ...tablix, showColumnHeaders: d.checked })} />
+          <Switch label="Page break" checked={tablix.pageBreak}
+            onChange={(_, d) => onChange({ ...tablix, pageBreak: d.checked })} />
+          <Button appearance="subtle" icon={<Delete20Regular />} onClick={onDelete}>Delete tablix</Button>
+        </div>
+      </div>
+      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+        Dataset: {dataset?.name || '—'} · row groups: {tablix.rowGroups.length ? tablix.rowGroups.join(', ') : 'none'}
+      </Caption1>
+      <div className={s.tableWrap}>
+        <Table size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell style={{ width: 120 }}>Field</TableHeaderCell>
+              <TableHeaderCell>Header label</TableHeaderCell>
+              <TableHeaderCell style={{ width: 360 }}>Cell expression</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {tablix.columns.map((col, ci) => {
+              const parsed = parseExpr(detailRow[ci]?.expression || fieldExpr(col));
+              return (
+                <TableRow key={col}>
+                  <TableCell><Badge appearance="outline">{col}</Badge></TableCell>
+                  <TableCell>
+                    <Input size="small" value={tablix.headerRow[ci] ?? col} onChange={(_, d) => setHeader(ci, d.value)} />
+                  </TableCell>
+                  <TableCell>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <Dropdown size="small" style={{ minWidth: 110 }}
+                        selectedOptions={[parsed.agg]} value={parsed.agg || '(value)'}
+                        onOptionSelect={(_, d) => setExpr(ci, aggExpr(d.optionValue || '', parsed.field || col))}>
+                        {RDL_AGGS.map((a) => <Option key={a || 'none'} value={a}>{a || '(value)'}</Option>)}
+                      </Dropdown>
+                      <Dropdown size="small" style={{ minWidth: 140 }}
+                        selectedOptions={[parsed.field || col]} value={parsed.field || col}
+                        onOptionSelect={(_, d) => setExpr(ci, aggExpr(parsed.agg, d.optionValue || col))}>
+                        {(fieldNames.length ? fieldNames : [col]).map((f) => <Option key={f} value={f}>{f}</Option>)}
+                      </Dropdown>
+                      <Caption1 style={{ fontFamily: 'Consolas, monospace' }}>{detailRow[ci]?.expression || fieldExpr(col)}</Caption1>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// --- Data source dialog ---
+function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlDataSource;
+  onClose: () => void; onSave: (ds: RdlDataSource) => void; onDelete?: (id: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<RdlDataSourceType>('AzureSQL');
+  const [server, setServer] = useState('');
+  const [database, setDatabase] = useState('');
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setType(editing?.type || 'AzureSQL');
+      setServer(editing?.server || '');
+      setDatabase(editing?.database || '');
+    }
+  }, [open, editing]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit data source' : 'Add data source'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Type">
+                <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlDataSourceType) || 'AzureSQL')}>
+                  {RDL_DS_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Server / host" hint="e.g. myserver.database.windows.net (AzureSQL) or ws-ondemand.sql.azuresynapse.net (Synapse)">
+                <Input value={server} onChange={(_, d) => setServer(d.value)} />
+              </Field>
+              <Field label="Database / pool"><Input value={database} onChange={(_, d) => setDatabase(d.value)} /></Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.id)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim()}
+              onClick={() => onSave({ id: editing?.id || rdlId('ds'), name: name.trim(), type, server: server.trim() || undefined, database: database.trim() || undefined })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Dataset dialog (Monaco SQL + Run preview → fields/sampleRows) ---
+function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlDataset; dataSources: RdlDataSource[]; reportId: string;
+  onClose: () => void; onSave: (d: RdlDataset) => void; onDelete?: (id: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [dataSourceId, setDataSourceId] = useState('');
+  const [query, setQuery] = useState('');
+  const [fields, setFields] = useState<RdlField[]>([]);
+  const [sampleRows, setSampleRows] = useState<Array<Record<string, unknown>>>([]);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewMsg, setPreviewMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setDataSourceId(editing?.dataSourceId || dataSources[0]?.id || '');
+      setQuery(editing?.query || 'SELECT TOP 50 * FROM dbo.YourTable');
+      setFields(editing?.fields || []);
+      setSampleRows(editing?.sampleRows || []);
+      setPreviewMsg(null);
+    }
+  }, [open, editing, dataSources]);
+
+  const runPreview = useCallback(async () => {
+    const ds = dataSources.find((d) => d.id === dataSourceId);
+    if (!ds) { setPreviewMsg({ ok: false, text: 'pick a data source first' }); return; }
+    setPreviewBusy(true); setPreviewMsg(null);
+    try {
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(reportId)}/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dataSource: { type: ds.type, server: ds.server, database: ds.database }, query }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setFields(j.fields);
+        setSampleRows(j.sampleRows);
+        setPreviewMsg({ ok: true, text: `${j.fields.length} fields · ${j.sampleRows.length} sample rows captured${j.truncated ? ' (truncated)' : ''}` });
+      } else setPreviewMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setPreviewMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setPreviewBusy(false); }
+  }, [dataSources, dataSourceId, query, reportId]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit dataset' : 'Add dataset'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Data source">
+                <Dropdown selectedOptions={[dataSourceId]} value={dataSources.find((d) => d.id === dataSourceId)?.name || ''}
+                  onOptionSelect={(_, d) => setDataSourceId(d.optionValue || '')}>
+                  {dataSources.map((d) => <Option key={d.id} value={d.id}>{d.name} ({d.type})</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Query (T-SQL)">
+                <MonacoTextarea value={query} onChange={setQuery} language="sql" minHeight={160} />
+              </Field>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button appearance="secondary" icon={<Play20Regular />} onClick={runPreview} disabled={previewBusy || !dataSourceId}>
+                  {previewBusy ? 'Running…' : 'Run preview'}
+                </Button>
+                {previewMsg && <Caption1 style={{ color: previewMsg.ok ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>{previewMsg.text}</Caption1>}
+              </div>
+              {fields.length > 0 && (
+                <Field label={`Fields (${fields.length})`}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {fields.map((f) => <Badge key={f.name} appearance="outline">{f.name}: {f.type}</Badge>)}
+                  </div>
+                </Field>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.id)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim() || !dataSourceId || fields.length === 0}
+              title={fields.length === 0 ? 'Run preview to capture fields first' : undefined}
+              onClick={() => onSave({ id: editing?.id || rdlId('dset'), name: name.trim(), dataSourceId, query, fields, sampleRows })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Add tablix wizard: dataset → columns → row groups → headers ---
+function AddTablixWizard({ open, datasets, onClose, onCreate }: {
+  open: boolean; datasets: RdlDataset[];
+  onClose: () => void; onCreate: (t: RdlTablix) => void;
+}) {
+  const [name, setName] = useState('');
+  const [datasetId, setDatasetId] = useState('');
+  const [columns, setColumns] = useState<string[]>([]);
+  const [rowGroups, setRowGroups] = useState<string[]>([]);
+  const [headers, setHeaders] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (open) {
+      setName(`Table ${Math.floor(Math.random() * 900 + 100)}`);
+      const first = datasets[0];
+      setDatasetId(first?.id || '');
+      setColumns(first?.fields.map((f) => f.name) || []);
+      setRowGroups([]);
+      setHeaders(Object.fromEntries((first?.fields || []).map((f) => [f.name, f.name])));
+    }
+  }, [open, datasets]);
+
+  const ds = datasets.find((d) => d.id === datasetId) || null;
+  const allFields = ds?.fields.map((f) => f.name) ?? [];
+
+  const onPickDataset = (dsetId: string) => {
+    setDatasetId(dsetId);
+    const next = datasets.find((d) => d.id === dsetId);
+    const fns = next?.fields.map((f) => f.name) || [];
+    setColumns(fns);
+    setHeaders(Object.fromEntries(fns.map((f) => [f, f])));
+    setRowGroups([]);
+  };
+
+  const create = () => {
+    if (!ds || columns.length === 0) return;
+    const t: RdlTablix = {
+      id: rdlId('tbx'),
+      name: name.trim() || 'Table',
+      datasetId,
+      columns,
+      rowGroups,
+      headerRow: columns.map((c) => headers[c] || c),
+      cells: [columns.map((c) => ({ expression: fieldExpr(c) }))],
+      showColumnHeaders: true,
+      pageBreak: false,
+    };
+    onCreate(t);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 640 }}>
+        <DialogBody>
+          <DialogTitle>Add tablix</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name"><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Dataset">
+                <Dropdown selectedOptions={[datasetId]} value={ds?.name || ''} onOptionSelect={(_, d) => onPickDataset(d.optionValue || '')}>
+                  {datasets.map((d) => <Option key={d.id} value={d.id}>{d.name}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label={`Columns (${columns.length})`}>
+                <Dropdown multiselect selectedOptions={columns}
+                  value={columns.join(', ')}
+                  onOptionSelect={(_, d) => setColumns(d.selectedOptions)}>
+                  {allFields.map((f) => <Option key={f} value={f}>{f}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Row groups (optional)">
+                <Dropdown multiselect selectedOptions={rowGroups}
+                  value={rowGroups.join(', ')}
+                  onOptionSelect={(_, d) => setRowGroups(d.selectedOptions)}>
+                  {allFields.map((f) => <Option key={f} value={f}>{f}</Option>)}
+                </Dropdown>
+              </Field>
+              {columns.length > 0 && (
+                <Field label="Column headers">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {columns.map((c) => (
+                      <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Badge appearance="outline" style={{ minWidth: 120 }}>{c}</Badge>
+                        <Input size="small" value={headers[c] ?? c} onChange={(_, d) => setHeaders((h) => ({ ...h, [c]: d.value }))} />
+                      </div>
+                    ))}
+                  </div>
+                </Field>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!ds || columns.length === 0} onClick={create}>Add tablix</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// --- Parameter dialog ---
+function ParameterDialog({ open, editing, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlParameter;
+  onClose: () => void; onSave: (p: RdlParameter) => void; onDelete?: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<RdlParameter['type']>('String');
+  const [prompt, setPrompt] = useState('');
+  const [defaultValue, setDefaultValue] = useState('');
+  useEffect(() => {
+    if (open) {
+      setName(editing?.name || '');
+      setType(editing?.type || 'String');
+      setPrompt(editing?.prompt || '');
+      setDefaultValue(editing?.defaultValue || '');
+    }
+  }, [open, editing]);
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{editing ? 'Edit parameter' : 'Add parameter'}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Field label="Name" required><Input value={name} disabled={!!editing} onChange={(_, d) => setName(d.value)} /></Field>
+              <Field label="Type">
+                <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlParameter['type']) || 'String')}>
+                  {RDL_PARAM_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Prompt"><Input value={prompt} onChange={(_, d) => setPrompt(d.value)} /></Field>
+              <Field label="Default value"><Input value={defaultValue} onChange={(_, d) => setDefaultValue(d.value)} /></Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {editing && onDelete && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onDelete(editing.name)}>Delete</Button>}
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!name.trim()}
+              onClick={() => onSave({ name: name.trim(), type, prompt: prompt.trim(), defaultValue: defaultValue.trim() || undefined })}>
+              {editing ? 'Save' : 'Add'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Dashboard (Power BI dashboard viewer + Loom-native tile canvas)
+//
+// Azure-native by default (no-fabric-dependency.md): the Loom canvas tab — pin
+// a DAX tile, add a Copilot Q&A→DAX tile, add a streaming ADX/KQL tile, drag
+// the grid, drill, fullscreen, mobile layout — works with NO Power BI / Fabric
+// workspace bound (streaming tiles run on ADX; DAX tiles run on Azure Analysis
+// Services when LOOM_SEMANTIC_BACKEND=analysis-services). Power BI embed + the
+// "pin from a PBI dashboard" clone path are the opt-in Fabric-family surface.
+// Layout + Loom tiles persist to Cosmos (pbi-dashboard-overlays) via
+// PUT /api/items/dashboard/[id]; tiles execute via .../tile-query.
+// ============================================================
+import type { LoomTile, TileLayout, TileVizKind, LoomTileKind } from '@/lib/azure/dashboard-overlay';
+
 interface DashboardLite { id: string; displayName: string; webUrl?: string; embedUrl?: string; isReadOnly?: boolean; }
 interface TileLite { id: string; title?: string; subTitle?: string; reportId?: string; datasetId?: string; embedUrl?: string; rowSpan?: number; colSpan?: number; }
 
@@ -10154,10 +14326,29 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
   const [dashId, setDashId] = useState('');
   const [tiles, setTiles] = useState<TileLite[]>([]);
-  const [selectedTile, setSelectedTile] = useState<TileLite | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [embed, setEmbed] = useState<{ token: string; embedUrl: string; dashboardId: string } | null>(null);
   const [embedErr, setEmbedErr] = useState<string | null>(null);
+  const [tab, setTab] = useState<'canvas' | 'pbi'>('canvas');
+
+  // ---- Loom overlay (Azure-native tiles + grid layout, persisted to Cosmos) --
+  const [loomTiles, setLoomTiles] = useState<LoomTile[]>([]);
+  const [layout, setLayout] = useState<Record<string, TileLayout>>({});
+  const [loomResults, setLoomResults] = useState<Record<string, KqlResult>>({});
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [addDialog, setAddDialog] = useState<'pin' | 'qa' | 'streaming' | null>(null);
+  const [fullscreenTile, setFullscreenTile] = useState<string | null>(null);
+
+  // Responsive: collapse the 12-col grid to a single column on narrow viewports.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const onResize = () => setNarrow(typeof window !== 'undefined' && window.innerWidth < 720);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const selectedDash = (dashboards || []).find((d) => d.id === dashId);
 
@@ -10172,25 +14363,32 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setDashboards([]); setErr(e?.message || String(e)); }
   }, []);
 
-  const loadDetail = useCallback(async (wsId: string, dId: string) => {
-    setSelectedTile(null);
+  // Load the Loom overlay (always — Azure-native, no PBI workspace required).
+  const loadOverlay = useCallback(async (wsId: string, dId: string) => {
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const qs = wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : '';
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dId || id)}${qs}`);
       const j = await r.json();
-      if (j.ok) setTiles(j.tiles || []); else setErr(j.error);
+      if (j.ok) {
+        if (wsId && dId) setTiles(j.tiles || []);
+        setLoomTiles(j.overlay?.loomTiles || []);
+        setLayout(j.overlay?.layout || {});
+        setDirty(false);
+      } else if (wsId) { setErr(j.error); }
     } catch (e: any) { setErr(e?.message || String(e)); }
-  }, []);
+  }, [id]);
 
-  // Auto-pick the first Power BI workspace so the list loads and the first
-  // dashboard auto-selects — embed enables on load instead of behind a pick.
+  // Auto-pick the first Power BI workspace so the PBI list loads. The Loom
+  // canvas does NOT depend on this — it loads its overlay by the Loom item id.
   useEffect(() => {
     if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
   }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
-  useEffect(() => { if (workspaceId && dashId) loadDetail(workspaceId, dashId); }, [workspaceId, dashId, loadDetail]);
+  // Overlay loads against the Loom item id regardless of PBI selection.
+  useEffect(() => { loadOverlay(workspaceId, dashId); }, [workspaceId, dashId, loadOverlay]);
 
   useEffect(() => {
-    if (!workspaceId || !dashId) { setEmbed(null); return; }
+    if (!workspaceId || !dashId || tab !== 'pbi') { return; }
     let cancelled = false;
     (async () => {
       setEmbedErr(null);
@@ -10209,36 +14407,128 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
       }
     })();
     return () => { cancelled = true; };
-  }, [workspaceId, dashId]);
+  }, [workspaceId, dashId, tab]);
+
+  // ---- Tile execution (real backend per tile kind) -------------------------
+  const runLoomTile = useCallback(async (tile: LoomTile) => {
+    setLoomResults((prev) => ({ ...prev, [tile.id]: { ok: true, rows: prev[tile.id]?.rows, columns: prev[tile.id]?.columns } as KqlResult }));
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(id)}/tile-query`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: tile.kind,
+          query: tile.query,
+          workspaceId: tile.workspaceId,
+          datasetId: tile.datasetId,
+          database: tile.database,
+        }),
+      });
+      const j = await r.json();
+      setLoomResults((prev) => ({
+        ...prev,
+        [tile.id]: j.ok
+          ? { ok: true, columns: j.columns || [], rows: j.rows || [], rowCount: j.rowCount, executionMs: j.executionMs, truncated: j.truncated }
+          : { ok: false, error: j.hint ? `${j.error} — ${j.hint}` : j.error },
+      }));
+    } catch (e: any) {
+      setLoomResults((prev) => ({ ...prev, [tile.id]: { ok: false, error: e?.message || String(e) } }));
+    }
+  }, [id]);
+
+  // Run every tile once on load / when the tile set changes.
+  useEffect(() => {
+    loomTiles.forEach((t) => { if (!loomResults[t.id]) runLoomTile(t); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loomTiles]);
+
+  // Auto-refresh streaming tiles on their configured interval.
+  useEffect(() => {
+    const timers = loomTiles
+      .filter((t) => t.kind === 'streaming-adx' && t.autoRefreshMs && t.autoRefreshMs >= 5000)
+      .map((t) => setInterval(() => runLoomTile(t), t.autoRefreshMs));
+    return () => timers.forEach(clearInterval);
+  }, [loomTiles, runLoomTile]);
+
+  const saveOverlay = useCallback(async () => {
+    setSaving(true); setSaveErr(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pbiWorkspaceId: workspaceId, pbiDashboardId: dashId, loomTiles, layout }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSaveErr(j.error || 'save failed'); return; }
+      setDirty(false);
+    } catch (e: any) { setSaveErr(e?.message || String(e)); }
+    finally { setSaving(false); }
+  }, [id, workspaceId, dashId, loomTiles, layout]);
+
+  const addLoomTile = useCallback((tile: LoomTile) => {
+    setLoomTiles((prev) => [...prev, tile]);
+    setDirty(true);
+    setAddDialog(null);
+    runLoomTile(tile);
+  }, [runLoomTile]);
+
+  const removeLoomTile = useCallback((tileId: string) => {
+    setLoomTiles((prev) => prev.filter((t) => t.id !== tileId));
+    setLayout((prev) => { const n = { ...prev }; delete n[tileId]; return n; });
+    setLoomResults((prev) => { const n = { ...prev }; delete n[tileId]; return n; });
+    setDirty(true);
+  }, []);
+
+  // Auto-arrange: pack tiles left-to-right in a 12-col grid (3-wide default).
+  const autoArrange = useCallback(() => {
+    const next: Record<string, TileLayout> = {};
+    let col = 0, row = 0;
+    const place = (tileId: string, w: number, h: number) => {
+      if (col + w > 12) { col = 0; row += 2; }
+      next[tileId] = { col, row, w, h };
+      col += w;
+    };
+    tiles.forEach((t) => place(t.id, t.colSpan || 3, t.rowSpan || 2));
+    loomTiles.forEach((t) => place(t.id, t.w || 4, t.h || 2));
+    setLayout(next);
+    setDirty(true);
+  }, [tiles, loomTiles]);
 
   const refreshDash = useCallback(() => {
     if (workspaceId) loadList(workspaceId);
-    if (workspaceId && dashId) loadDetail(workspaceId, dashId);
-  }, [workspaceId, dashId, loadList, loadDetail]);
+    loadOverlay(workspaceId, dashId);
+  }, [workspaceId, dashId, loadList, loadOverlay]);
   const openDashInPbi = useCallback(() => {
     if (selectedDash?.webUrl) window.open(selectedDash.webUrl, '_blank', 'noreferrer');
   }, [selectedDash?.webUrl]);
-  const copyDashLink = useCallback(async () => {
-    if (selectedDash?.webUrl) { try { await navigator.clipboard.writeText(selectedDash.webUrl); } catch { /* ignore */ } }
-  }, [selectedDash?.webUrl]);
+
   const dashRibbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Open', actions: [
-        { label: 'Open in Power BI', onClick: selectedDash?.webUrl ? openDashInPbi : undefined, disabled: !selectedDash?.webUrl, title: !selectedDash?.webUrl ? 'select a dashboard first' : 'opens Power BI Web — use Edit there to author' },
-        { label: 'Copy link', onClick: selectedDash?.webUrl ? copyDashLink : undefined, disabled: !selectedDash?.webUrl, title: !selectedDash?.webUrl ? 'select a dashboard first' : 'copy the dashboard URL to clipboard' },
+      { label: 'Add tile', actions: [
+        { label: 'Pin from report', icon: <Pin20Regular />, onClick: () => setAddDialog('pin'), title: 'clone an already-pinned Power BI tile onto this dashboard' },
+        { label: 'Q&A tile (Copilot → DAX)', icon: <Sparkle20Regular />, onClick: () => setAddDialog('qa'), title: 'ask a question in natural language → Copilot generates + runs DAX' },
+        { label: 'Streaming tile (ADX/KQL)', icon: <Flash20Regular />, onClick: () => setAddDialog('streaming'), title: 'live tile over Azure Data Explorer — Azure-native, no Power BI needed' },
+      ]},
+      { label: 'Layout', actions: [
+        { label: saving ? 'Saving…' : 'Save layout', icon: <Save20Regular />, onClick: dirty && !saving ? saveOverlay : undefined, disabled: !dirty || saving, title: dirty ? 'persist tiles + grid to Cosmos' : 'no unsaved changes' },
+        { label: 'Auto-arrange', icon: <DataBarVertical20Regular />, onClick: (tiles.length + loomTiles.length) > 0 ? autoArrange : undefined, disabled: (tiles.length + loomTiles.length) === 0 },
       ]},
       { label: 'Metadata', actions: [
-        { label: 'Refresh', onClick: workspaceId ? refreshDash : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected dashboard tiles' },
+        { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refreshDash, title: 'reload tiles + overlay' },
+        { label: 'Open in Power BI', icon: <Open20Regular />, onClick: selectedDash?.webUrl ? openDashInPbi : undefined, disabled: !selectedDash?.webUrl, title: !selectedDash?.webUrl ? 'select a Power BI dashboard first' : 'open Power BI Web to pin new visuals' },
       ]},
     ]},
-  ], [selectedDash?.webUrl, workspaceId, openDashInPbi, copyDashLink, refreshDash]);
+  ], [dirty, saving, tiles.length, loomTiles.length, selectedDash?.webUrl, saveOverlay, autoArrange, refreshDash, openDashInPbi]);
+
+  const span = (w?: number) => narrow ? '1 / -1' : `span ${Math.max(1, Math.min(12, w ?? 4))}`;
+  const fsTile = loomTiles.find((t) => t.id === fullscreenTile);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={dashRibbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Dashboards</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          <Subtitle2 style={{ marginBottom: 8 }}>Power BI dashboards</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace to link a Power BI dashboard (optional).</Caption1>}
           {dashboards && dashboards.length === 0 && <Caption1>No dashboards in this workspace.</Caption1>}
           <Tree aria-label="Dashboards">
             {(dashboards || []).map((d) => (
@@ -10252,72 +14542,151 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Power BI dashboard</Badge>
+            <Badge appearance="filled" color="brand">Dashboard</Badge>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'canvas' | 'pbi')}>
+              <Tab value="canvas">Tiles ({tiles.length + loomTiles.length})</Tab>
+              <Tab value="pbi">Power BI view</Tab>
+            </TabList>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-            {selectedDash?.webUrl && <Button appearance="primary" onClick={openDashInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Loom is a metadata + viewer surface for Power BI dashboards</MessageBarTitle>
-              Authoring (pin visual, new tile, dashboard theme) lives in <strong>Power BI Web</strong>. The Loom
-              editor lists dashboards, shows tile metadata, refreshes the cache, and embeds the dashboard read-only
-              for preview. Use <strong>Open in Power BI</strong> to author or pin new tiles.
-            </MessageBarBody>
-          </MessageBar>
-          {embedErr ? (
-            <MessageBar intent="error">
-              <MessageBarBody>
-                <MessageBarTitle>Could not mint embed token</MessageBarTitle>
-                {embedErr}. Confirm the Console UAMI is added to this workspace and that "Service principals can use Fabric APIs" is enabled.
-              </MessageBarBody>
-            </MessageBar>
-          ) : embed ? (
-            <PowerBIEmbedFrame
-              embedType="dashboard"
-              id={embed.dashboardId}
-              embedUrl={embed.embedUrl}
-              accessToken={embed.token}
-              height={620}
-            />
-          ) : (
-            dashId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+          {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
+
+          {tab === 'canvas' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Azure-native dashboard canvas</MessageBarTitle>
+                  Streaming tiles run on <strong>Azure Data Explorer</strong> and Q&amp;A tiles run DAX on
+                  Azure Analysis Services / Power BI — no Microsoft Fabric capacity required. Add tiles from the
+                  ribbon, drag to arrange, then <strong>Save layout</strong> to persist to Cosmos.
+                </MessageBarBody>
+              </MessageBar>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: narrow ? '1fr' : 'repeat(12, 1fr)',
+                gap: 12, paddingTop: 12,
+              }}>
+                {/* Pinned Power BI tiles (single-tile embed) */}
+                {tiles.map((t) => {
+                  const pos = layout[t.id];
+                  return (
+                    <div key={t.id} style={{
+                      gridColumn: span(pos?.w ?? t.colSpan ?? 4),
+                      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+                      overflow: 'hidden', minHeight: 220, position: 'relative', background: tokens.colorNeutralBackground1,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                        <Pin20Regular />
+                        <Caption1 style={{ fontWeight: 600, flex: 1 }}>{t.title || t.subTitle || 'Power BI tile'}</Caption1>
+                        {t.reportId && (
+                          <Tooltip content="Drill to the source report in Power BI" relationship="label">
+                            <Button size="small" appearance="subtle" icon={<Open20Regular />} onClick={() => {
+                              if (!workspaceId || !t.reportId) return;
+                              try { window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(t.reportId)}`, '_blank', 'noreferrer'); } catch { /* popup */ }
+                            }} />
+                          </Tooltip>
+                        )}
+                      </div>
+                      <PinnedPbiTile workspaceId={workspaceId} dashboardId={dashId} tile={t} />
+                    </div>
+                  );
+                })}
+
+                {/* Loom-native tiles (DAX / KQL / streaming) */}
+                {loomTiles.map((t) => {
+                  const pos = layout[t.id];
+                  return (
+                    <div key={t.id} style={{ gridColumn: span(pos?.w ?? t.w ?? 4) }}>
+                      <LoomTileCard
+                        tile={t}
+                        result={loomResults[t.id]}
+                        onRefresh={() => runLoomTile(t)}
+                        onFullscreen={() => setFullscreenTile(t.id)}
+                        onRemove={() => removeLoomTile(t.id)}
+                      />
+                    </div>
+                  );
+                })}
+
+                {(tiles.length + loomTiles.length) === 0 && (
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      No tiles yet. Use <strong>Add tile</strong> in the ribbon to pin a visual, add a Copilot Q&amp;A tile, or add a streaming ADX tile.
+                    </Caption1>
+                  </div>
+                )}
+              </div>
+            </>
           )}
-          <Subtitle2>Tiles ({tiles.length})</Subtitle2>
-          <div className={s.cardGrid}>
-            {tiles.map((t) => (
-              <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: selectedTile?.id === t.id ? tokens.colorBrandStroke1 : undefined }} onClick={() => setSelectedTile(t)}>
-                <Caption1>{t.subTitle || 'tile'}</Caption1>
-                <div style={{ fontWeight: 600 }}>{t.title || t.id}</div>
-                <Caption1>{t.rowSpan && t.colSpan ? `${t.colSpan}×${t.rowSpan}` : ''}</Caption1>
-              </div>
-            ))}
-            {tiles.length === 0 && dashId && <Caption1>Dashboard has no tiles.</Caption1>}
-          </div>
-          {selectedTile && (
-            <div className={s.card}>
-              <Subtitle2>Tile detail</Subtitle2>
-              <Caption1>id: <code>{selectedTile.id}</code></Caption1>
-              <Caption1>reportId: <code>{selectedTile.reportId || '—'}</code></Caption1>
-              <Caption1>datasetId: <code>{selectedTile.datasetId || '—'}</code></Caption1>
-              <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{selectedTile.embedUrl || '—'}</code></Caption1>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <Button
-                  size="small"
-                  appearance="primary"
-                  disabled={!selectedTile.reportId || !workspaceId}
-                  title={selectedTile.reportId ? 'open the report this tile drills to in Power BI' : 'this tile is not backed by a report'}
-                  onClick={() => {
-                    if (!selectedTile.reportId || !workspaceId) return;
-                    const url = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(selectedTile.reportId)}`;
-                    try { window.open(url, '_blank', 'noreferrer'); } catch { /* popup blocked */ }
-                  }}
-                >
-                  Drill to report
-                </Button>
-              </div>
-            </div>
+
+          {tab === 'pbi' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Power BI dashboard embed (read-only)</MessageBarTitle>
+                  Authoring (pin visual, dashboard theme) lives in <strong>Power BI Web</strong>. This tab embeds
+                  the selected Power BI dashboard. The opt-in path requires a Power BI workspace; the Loom canvas
+                  tab is fully functional without one.
+                </MessageBarBody>
+              </MessageBar>
+              {!workspaceId && <Caption1>Select a Power BI workspace to embed a dashboard.</Caption1>}
+              {embedErr ? (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <MessageBarTitle>Could not mint embed token</MessageBarTitle>
+                    {embedErr}. Confirm the Console UAMI is added to this workspace and that "Service principals can use Fabric APIs" is enabled.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : embed ? (
+                <PowerBIEmbedFrame embedType="dashboard" id={embed.dashboardId} embedUrl={embed.embedUrl} accessToken={embed.token} height={620} />
+              ) : (
+                dashId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+              )}
+            </>
+          )}
+
+          {/* ---- Fullscreen a Loom tile ---- */}
+          <Dialog open={!!fsTile} onOpenChange={(_, d) => { if (!d.open) setFullscreenTile(null); }}>
+            <DialogSurface style={{ maxWidth: '92vw', width: '92vw' }}>
+              <DialogBody>
+                <DialogTitle>{fsTile?.title}</DialogTitle>
+                <DialogContent>
+                  {fsTile && <LoomTileBody tile={fsTile} result={loomResults[fsTile.id]} large />}
+                </DialogContent>
+                <DialogActions>
+                  {fsTile && <Button appearance="secondary" icon={<ArrowSync20Regular />} onClick={() => runLoomTile(fsTile)}>Refresh</Button>}
+                  <Button appearance="primary" onClick={() => setFullscreenTile(null)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* ---- Add-tile dialogs ---- */}
+          {addDialog === 'pin' && (
+            <PinTileDialog
+              dashboardItemId={id}
+              workspaceId={workspaceId}
+              dashboards={dashboards || []}
+              selectedDashWebUrl={selectedDash?.webUrl}
+              onClose={() => setAddDialog(null)}
+              onPinned={() => { setAddDialog(null); refreshDash(); }}
+            />
+          )}
+          {addDialog === 'qa' && (
+            <QaTileDialog
+              dashboardItemId={id}
+              workspaceId={workspaceId}
+              onClose={() => setAddDialog(null)}
+              onAdd={addLoomTile}
+            />
+          )}
+          {addDialog === 'streaming' && (
+            <StreamingTileDialog
+              dashboardItemId={id}
+              onClose={() => setAddDialog(null)}
+              onAdd={addLoomTile}
+            />
           )}
         </div>
       }
@@ -10325,11 +14694,539 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   );
 }
 
+/** Renders a single Loom tile result (table / chart / stat) with drill support. */
+function LoomTileBody({ tile, result, large }: { tile: LoomTile; result?: KqlResult; large?: boolean }) {
+  if (!result) return <Spinner size="tiny" label="Running…" />;
+  if (!result.ok) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody><MessageBarTitle>Tile gated</MessageBarTitle>{result.error}</MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (!result.rows || result.rows.length === 0) return <Caption1>No rows.</Caption1>;
+  return (
+    <div style={{ maxHeight: large ? '70vh' : 220, overflow: 'auto' }}>
+      <TileVisual
+        viz={(tile.viz as TileViz) || 'table'}
+        result={result}
+      />
+    </div>
+  );
+}
+
+/** Loom tile card: header (kind badge + actions) + body. */
+function LoomTileCard({ tile, result, onRefresh, onFullscreen, onRemove }: {
+  tile: LoomTile; result?: KqlResult;
+  onRefresh: () => void; onFullscreen: () => void; onRemove: () => void;
+}) {
+  const kindLabel: Record<LoomTileKind, string> = { dax: 'DAX', kusto: 'KQL', 'streaming-adx': 'Streaming' };
+  const kindIcon: Record<LoomTileKind, JSX.Element> = {
+    dax: <Sparkle20Regular />, kusto: <Database20Regular />, 'streaming-adx': <Flash20Regular />,
+  };
+  return (
+    <div style={{
+      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+      background: tokens.colorNeutralBackground1, minHeight: 220, display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+        {kindIcon[tile.kind]}
+        <Caption1 style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tile.title}</Caption1>
+        <Badge appearance="tint" size="small">{kindLabel[tile.kind]}</Badge>
+        {tile.kind === 'streaming-adx' && tile.autoRefreshMs ? <Badge appearance="outline" size="small">{Math.round(tile.autoRefreshMs / 1000)}s</Badge> : null}
+        <Tooltip content="Refresh" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={onRefresh} /></Tooltip>
+        <Tooltip content="Fullscreen" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowMaximize20Regular />} onClick={onFullscreen} /></Tooltip>
+        <Tooltip content="Remove tile" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={onRemove} /></Tooltip>
+      </div>
+      <div style={{ padding: 10, flex: 1 }}>
+        <LoomTileBody tile={tile} result={result} />
+      </div>
+    </div>
+  );
+}
+
+/** Single Power BI tile embed (lazy: mints a tile token when scrolled into view). */
+function PinnedPbiTile({ workspaceId, dashboardId, tile }: { workspaceId: string; dashboardId: string; tile: TileLite }) {
+  const [tok, setTok] = useState<{ token: string; embedUrl: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!workspaceId || !dashboardId || !tile.embedUrl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardId)}/tile-embed-token`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId, tileId: tile.id }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token) setTok({ token: j.token, embedUrl: tile.embedUrl! });
+        else setErr(j.error || `HTTP ${r.status}`);
+      } catch (e: any) { if (!cancelled) setErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, dashboardId, tile.id, tile.embedUrl]);
+  if (err) return <div style={{ padding: 10 }}><Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{err}</Caption1></div>;
+  if (!tok) return <div style={{ padding: 10 }}><Spinner size="tiny" label="Embedding tile…" /></div>;
+  return <PowerBIEmbedFrame embedType="tile" id={tile.id} embedUrl={tok.embedUrl} accessToken={tok.token} height={180} />;
+}
+
+/** Pin (clone) an existing Power BI tile onto this dashboard. */
+function PinTileDialog({ dashboardItemId, workspaceId, dashboards, selectedDashWebUrl, onClose, onPinned }: {
+  dashboardItemId: string; workspaceId: string; dashboards: DashboardLite[];
+  selectedDashWebUrl?: string; onClose: () => void; onPinned: () => void;
+}) {
+  const [sourceDash, setSourceDash] = useState('');
+  const [srcTiles, setSrcTiles] = useState<TileLite[]>([]);
+  const [tileId, setTileId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!workspaceId || !sourceDash) { setSrcTiles([]); return; }
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(sourceDash)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        setSrcTiles(j.ok ? (j.tiles || []) : []);
+      } catch { setSrcTiles([]); }
+    })();
+  }, [workspaceId, sourceDash]);
+  const pin = useCallback(async () => {
+    if (!workspaceId || !sourceDash || !tileId) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/pin`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, sourceDashboardId: sourceDash, tileId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : j.error); return; }
+      onPinned();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [dashboardItemId, workspaceId, sourceDash, tileId, onPinned]);
+  return (
+    <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Pin a tile</DialogTitle>
+          <DialogContent>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Pinning a brand-new visual happens in <strong>Power BI Web</strong> (open a report → pin a visual to
+                this dashboard). Below you can <strong>clone an already-pinned tile</strong> from another Power BI
+                dashboard onto this one.
+              </MessageBarBody>
+              {selectedDashWebUrl && (
+                <MessageBarActions>
+                  <Button size="small" icon={<Open20Regular />} onClick={() => window.open(selectedDashWebUrl, '_blank', 'noreferrer')}>Open in Power BI</Button>
+                </MessageBarActions>
+              )}
+            </MessageBar>
+            {!workspaceId && <MessageBar intent="warning"><MessageBarBody>Select a Power BI workspace first (the clone API is a Power BI REST call).</MessageBarBody></MessageBar>}
+            <Field label="Source dashboard" style={{ marginTop: 8 }}>
+              <Select value={sourceDash} onChange={(_, d) => { setSourceDash(d.value); setTileId(''); }}>
+                <option value="">— choose —</option>
+                {dashboards.map((d) => <option key={d.id} value={d.id}>{d.displayName}</option>)}
+              </Select>
+            </Field>
+            <Field label="Tile to clone" style={{ marginTop: 8 }}>
+              <Select value={tileId} onChange={(_, d) => setTileId(d.value)} disabled={srcTiles.length === 0}>
+                <option value="">{srcTiles.length === 0 ? '— pick a source dashboard with tiles —' : '— choose —'}</option>
+                {srcTiles.map((t) => <option key={t.id} value={t.id}>{t.title || t.subTitle || t.id}</option>)}
+              </Select>
+            </Field>
+            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!workspaceId || !sourceDash || !tileId || busy} onClick={pin} icon={busy ? <Spinner size="tiny" /> : <Pin20Regular />}>Pin tile</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/** Q&A tile: Copilot generates DAX from a natural-language question, runs it. */
+function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
+  dashboardItemId: string; workspaceId: string; onClose: () => void; onAdd: (t: LoomTile) => void;
+}) {
+  const [datasets, setDatasets] = useState<{ id: string; name: string }[]>([]);
+  const [datasetId, setDatasetId] = useState('');
+  const [nl, setNl] = useState('');
+  const [title, setTitle] = useState('');
+  const [dax, setDax] = useState('');
+  const [result, setResult] = useState<KqlResult | null>(null);
+  const [viz, setViz] = useState<TileVizKind>('table');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const semanticBackend = (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND || '')) || '';
+  const aasMode = semanticBackend.toLowerCase() === 'analysis-services';
+
+  useEffect(() => {
+    if (aasMode || !workspaceId) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        if (j.ok) setDatasets((j.datasets || []).filter((d: any) => d.id && d.name).map((d: any) => ({ id: d.id, name: d.name })));
+      } catch { /* honest gate shown on run */ }
+    })();
+  }, [workspaceId, aasMode]);
+
+  const ask = useCallback(async () => {
+    if (!nl.trim()) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'dax', nlPrompt: nl, workspaceId, datasetId: aasMode ? undefined : datasetId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : j.error); return; }
+      setDax(j.generatedQuery || '');
+      setResult({ ok: true, columns: j.columns || [], rows: j.rows || [] });
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [dashboardItemId, nl, workspaceId, datasetId, aasMode]);
+
+  const runEdited = useCallback(async () => {
+    if (!dax.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'dax', query: dax, workspaceId, datasetId: aasMode ? undefined : datasetId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : j.error); return; }
+      setResult({ ok: true, columns: j.columns || [], rows: j.rows || [] });
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [dashboardItemId, dax, workspaceId, datasetId, aasMode]);
+
+  const add = useCallback(() => {
+    onAdd({
+      id: randomTileId(), kind: 'dax', title: title.trim() || nl.trim().slice(0, 60) || 'Q&A tile',
+      query: dax, viz, workspaceId: aasMode ? undefined : workspaceId, datasetId: aasMode ? undefined : datasetId, w: 4, h: 2,
+    });
+  }, [onAdd, title, nl, dax, viz, workspaceId, datasetId, aasMode]);
+
+  return (
+    <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>Q&amp;A tile — Copilot → DAX</DialogTitle>
+          <DialogContent>
+            <MessageBar intent="info"><MessageBarBody>
+              Ask in natural language; Copilot (Azure OpenAI) writes the DAX and runs it on
+              {aasMode ? ' Azure Analysis Services' : ' the selected Power BI semantic model'}. Edit the DAX before adding if needed.
+            </MessageBarBody></MessageBar>
+            {!aasMode && (
+              <Field label="Semantic model (dataset)" style={{ marginTop: 8 }}>
+                <Select value={datasetId} onChange={(_, d) => setDatasetId(d.value)}>
+                  <option value="">{datasets.length === 0 ? '— select a Power BI workspace with datasets —' : '— choose —'}</option>
+                  {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </Select>
+              </Field>
+            )}
+            <Field label="Question" style={{ marginTop: 8 }}>
+              <Textarea value={nl} onChange={(_, d) => setNl(d.value)} placeholder="e.g. Show total sales by region for the last 12 months" rows={2} />
+            </Field>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={!nl.trim() || busy} onClick={ask} style={{ marginTop: 8 }}>Ask Copilot</Button>
+            {dax && (
+              <>
+                <Field label="Generated DAX (editable)" style={{ marginTop: 12 }}>
+                  <Textarea value={dax} onChange={(_, d) => setDax(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                </Field>
+                <Button appearance="secondary" icon={<Play20Regular />} onClick={runEdited} disabled={busy} style={{ marginTop: 8 }}>Run DAX</Button>
+              </>
+            )}
+            {err && <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {result && result.ok && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <Label>Visual</Label>
+                  <Select value={viz} onChange={(_, d) => setViz(d.value as TileVizKind)}>
+                    {(['table', 'stat', 'bar', 'column', 'line', 'pie'] as TileVizKind[]).map((v) => <option key={v} value={v}>{v}</option>)}
+                  </Select>
+                  <Field label="Tile title" style={{ flex: 1 }}>
+                    <Input value={title} onChange={(_, d) => setTitle(d.value)} placeholder="optional" />
+                  </Field>
+                </div>
+                <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, maxHeight: 240, overflow: 'auto' }}>
+                  <TileVisual viz={viz as TileViz} result={result} />
+                </div>
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!result?.ok || !dax.trim()} onClick={add} icon={<Add20Regular />}>Add to dashboard</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/** Streaming tile: live ADX/KQL query with auto-refresh. Azure-native. */
+function StreamingTileDialog({ dashboardItemId, onClose, onAdd }: {
+  dashboardItemId: string; onClose: () => void; onAdd: (t: LoomTile) => void;
+}) {
+  const [kql, setKql] = useState('');
+  const [database, setDatabase] = useState('');
+  const [title, setTitle] = useState('');
+  const [refreshSec, setRefreshSec] = useState(30);
+  const [viz, setViz] = useState<TileVizKind>('timechart');
+  const [result, setResult] = useState<KqlResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const test = useCallback(async () => {
+    if (!kql.trim()) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'streaming-adx', query: kql, database }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : j.error); return; }
+      setResult({ ok: true, columns: j.columns || [], rows: j.rows || [] });
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [dashboardItemId, kql, database]);
+
+  const add = useCallback(() => {
+    onAdd({
+      id: randomTileId(), kind: 'streaming-adx', title: title.trim() || 'Streaming tile',
+      query: kql, database: database.trim() || undefined, viz,
+      autoRefreshMs: Math.max(5, Math.min(300, refreshSec)) * 1000, w: 6, h: 2,
+    });
+  }, [onAdd, title, kql, database, viz, refreshSec]);
+
+  return (
+    <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>Streaming tile — Azure Data Explorer (KQL)</DialogTitle>
+          <DialogContent>
+            <MessageBar intent="info"><MessageBarBody>
+              Event Hub AMQP receive is not exposed via the Loom HTTPS-only data plane. Instead, query the
+              <strong> ADX table</strong> that the Event Hub data connection ingests into — the tile auto-refreshes on
+              your interval. Fully Azure-native (no Power BI / Fabric).
+            </MessageBarBody></MessageBar>
+            <Field label="KQL query" style={{ marginTop: 8 }}>
+              <Textarea value={kql} onChange={(_, d) => setKql(d.value)} rows={4}
+                placeholder={'Events\n| where Timestamp > ago(1h)\n| summarize count() by bin(Timestamp, 1m)\n| render timechart'}
+                style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+            </Field>
+            <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+              <Field label="Database (blank = default)">
+                <Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="ADX database" />
+              </Field>
+              <Field label="Auto-refresh (seconds)">
+                <SpinButton value={refreshSec} min={5} max={300} onChange={(_, d) => setRefreshSec(Number(d.value ?? d.displayValue ?? 30) || 30)} />
+              </Field>
+              <Field label="Visual">
+                <Select value={viz} onChange={(_, d) => setViz(d.value as TileVizKind)}>
+                  {(['timechart', 'line', 'column', 'bar', 'table', 'stat', 'pie'] as TileVizKind[]).map((v) => <option key={v} value={v}>{v}</option>)}
+                </Select>
+              </Field>
+              <Field label="Tile title" style={{ flex: 1 }}>
+                <Input value={title} onChange={(_, d) => setTitle(d.value)} placeholder="optional" />
+              </Field>
+            </div>
+            <Button appearance="secondary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} onClick={test} disabled={!kql.trim() || busy} style={{ marginTop: 8 }}>Test query</Button>
+            {err && <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {result?.ok && (
+              <div style={{ marginTop: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, maxHeight: 240, overflow: 'auto' }}>
+                <TileVisual viz={viz as TileViz} result={result} />
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={!kql.trim()} onClick={add} icon={<Add20Regular />}>Add tile</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function randomTileId(): string {
+  try { return (globalThis.crypto as Crypto).randomUUID(); }
+  catch { return `tile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
+}
+
 // ============================================================
 // Scorecard (Fabric)
 // ============================================================
 interface ScorecardLite { id: string; displayName: string; description?: string; }
-interface GoalLite { id?: string; name?: string; description?: string; currentValue?: number; targetValue?: number; }
+type ScorecardGoalStatusUi = 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
+interface ConnectedMetricUi { workspaceId: string; datasetId: string; daxExpression: string; lastValue?: number; lastRefreshed?: string; }
+interface GoalLite {
+  id?: string;
+  name?: string;
+  description?: string;
+  currentValue?: number;
+  /** Rollup-computed value (parent goals) — overrides currentValue for display + status. */
+  computedValue?: number;
+  targetValue?: number;
+  /** Resolved status color from the BFF rollup engine. */
+  status?: StatusColor;
+  /** Editor-only UI status band (notStarted/onTrack/atRisk/…), kept distinct from the rollup-engine StatusColor. */
+  statusUi?: ScorecardGoalStatusUi;
+  owner?: string;
+  dueDate?: string;
+  subGoalIds?: string[];
+  connectedMetric?: ConnectedMetricUi;
+  parentId?: string;
+  rollupMethod?: RollupMethod;
+  statusRules?: StatusRule[];
+  otherwiseStatus?: StatusColor;
+}
+interface CheckInRow { id: string; value: number; status?: string; note?: string; checkInDate?: string; recordedAt: string; source?: string; }
+interface DatasetLite { id: string; name?: string; displayName?: string; }
+
+const SC_STATUS_OPTIONS: { value: ScorecardGoalStatusUi; label: string }[] = [
+  { value: 'notStarted', label: 'Not started' },
+  { value: 'onTrack', label: 'On track' },
+  { value: 'atRisk', label: 'At risk' },
+  { value: 'behindGoal', label: 'Behind' },
+  { value: 'aheadOfGoal', label: 'Ahead' },
+  { value: 'completed', label: 'Completed' },
+];
+function scStatusColor(st?: string): 'success' | 'warning' | 'danger' | 'informative' | 'brand' {
+  switch (st) {
+    case 'onTrack': case 'completed': return 'success';
+    case 'aheadOfGoal': return 'brand';
+    case 'atRisk': return 'warning';
+    case 'behindGoal': return 'danger';
+    default: return 'informative';
+  }
+}
+function scStatusLabel(st?: string): string {
+  return SC_STATUS_OPTIONS.find((o) => o.value === st)?.label || (st ? String(st) : '—');
+}
+
+const SC_STATUS_LABEL: Record<StatusColor, string> = {
+  'on-track': 'On Track',
+  'at-risk': 'At Risk',
+  'behind': 'Behind',
+  'completed': 'Completed',
+  'not-started': 'Not Started',
+};
+const SC_STATUS_BADGE_COLOR: Record<StatusColor, 'success' | 'warning' | 'danger' | 'informative' | 'subtle'> = {
+  'on-track': 'success',
+  'at-risk': 'warning',
+  'behind': 'danger',
+  'completed': 'informative',
+  'not-started': 'subtle',
+};
+const SC_STATUS_COLORS: StatusColor[] = ['on-track', 'at-risk', 'behind', 'completed', 'not-started'];
+const SC_ROLLUP_METHODS: { value: RollupMethod; label: string }[] = [
+  { value: 'sum', label: 'Sum' },
+  { value: 'avg', label: 'Average' },
+  { value: 'min', label: 'Min (Worst child)' },
+  { value: 'max', label: 'Max' },
+];
+const SC_OPERATORS: StatusOperator[] = ['>=', '<=', '>', '<', '='];
+const SC_METRIC_KINDS: { value: StatusMetricKind; label: string }[] = [
+  { value: 'value', label: 'Value' },
+  { value: 'percent-of-target', label: '% of target' },
+];
+
+function ScStatusBadge({ status }: { status?: StatusColor }) {
+  if (!status) return null;
+  return (
+    <Badge appearance="filled" color={SC_STATUS_BADGE_COLOR[status] ?? 'subtle'}>
+      {SC_STATUS_LABEL[status] ?? status}
+    </Badge>
+  );
+}
+
+/**
+ * No-freeform rollup + status-rule config editor for one goal. All inputs are
+ * fixed-enum dropdowns / numeric fields (mirrors ConditionalFormattingEditor).
+ * Stateless — all values come from props + onChange.
+ */
+function ScRollupEditor({ goal, childCount, onChange }: {
+  goal: GoalLite;
+  childCount: number;
+  onChange: (patch: Partial<GoalLite>) => void;
+}) {
+  const rules = goal.statusRules || [];
+  const updateRule = (idx: number, patch: Partial<StatusRule>) =>
+    onChange({ statusRules: rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)) });
+  const addRule = () =>
+    onChange({ statusRules: [...rules, { operator: '>=', threshold: 0, metricKind: 'value', status: 'on-track' }] });
+  const removeRule = (idx: number) =>
+    onChange({ statusRules: rules.filter((_, i) => i !== idx) });
+  const fieldRow: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' };
+  return (
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Caption1 style={{ fontWeight: 600 }}>{goal.name || goal.id}</Caption1>
+        {childCount > 0 && <Badge appearance="outline" color="brand">Parent · {childCount} {childCount === 1 ? 'child' : 'children'}</Badge>}
+        <ScStatusBadge status={goal.status} />
+      </div>
+      {childCount > 0 && (
+        <div style={fieldRow}>
+          <Label size="small">Rollup method</Label>
+          <Select size="small" value={goal.rollupMethod || ''} aria-label={`${goal.name || goal.id} rollup method`}
+            onChange={(_: unknown, d: any) => onChange({ rollupMethod: (d.value || undefined) as RollupMethod | undefined })}>
+            <option value="">None (use own value)</option>
+            {SC_ROLLUP_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </Select>
+          {goal.computedValue !== undefined && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>rolled-up value: <strong>{goal.computedValue}</strong></Caption1>
+          )}
+        </div>
+      )}
+      <div>
+        <Caption1 style={{ fontWeight: 600 }}>Status rules</Caption1>
+        {rules.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block' }}>No rules — goal uses the Otherwise status. Add a rule to color by threshold.</Caption1>
+        )}
+      </div>
+      {rules.map((r, ri) => (
+        <div key={ri} style={fieldRow}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 36 }}>{ri === 0 ? 'If' : 'else if'}</Caption1>
+          <Select size="small" value={r.metricKind} aria-label={`Rule ${ri + 1} metric`}
+            onChange={(_: unknown, d: any) => updateRule(ri, { metricKind: d.value as StatusMetricKind })}>
+            {SC_METRIC_KINDS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </Select>
+          <Select size="small" value={r.operator} aria-label={`Rule ${ri + 1} operator`}
+            onChange={(_: unknown, d: any) => updateRule(ri, { operator: d.value as StatusOperator })}>
+            {SC_OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
+          </Select>
+          <Input size="small" type="number" style={{ width: 90 }} value={String(r.threshold)} aria-label={`Rule ${ri + 1} threshold`}
+            onChange={(_: unknown, d: any) => updateRule(ri, { threshold: Number(d.value) || 0 })} />
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>→</Caption1>
+          <Select size="small" value={r.status} aria-label={`Rule ${ri + 1} status`}
+            onChange={(_: unknown, d: any) => updateRule(ri, { status: d.value as StatusColor })}>
+            {SC_STATUS_COLORS.map((c) => <option key={c} value={c}>{SC_STATUS_LABEL[c]}</option>)}
+          </Select>
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete rule ${ri + 1}`} onClick={() => removeRule(ri)} />
+        </div>
+      ))}
+      <div style={fieldRow}>
+        <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
+        <Label size="small" style={{ marginLeft: 12 }}>Otherwise</Label>
+        <Select size="small" value={goal.otherwiseStatus || ''} aria-label={`${goal.name || goal.id} otherwise status`}
+          onChange={(_: unknown, d: any) => onChange({ otherwiseStatus: (d.value || undefined) as StatusColor | undefined })}>
+          <option value="">Not Started (default)</option>
+          {SC_STATUS_COLORS.map((c) => <option key={c} value={c}>{SC_STATUS_LABEL[c]}</option>)}
+        </Select>
+      </div>
+    </div>
+  );
+}
+
 
 export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -10341,12 +15238,47 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   const [scorecardId, setScorecardId] = useState('');
   const [goals, setGoals] = useState<GoalLite[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+
+  // Check-in flyout (value + status + note + date).
   const [entryOpen, setEntryOpen] = useState<{ goalId: string } | null>(null);
   const [entryValue, setEntryValue] = useState('');
   const [entryTarget, setEntryTarget] = useState('');
   const [entryNote, setEntryNote] = useState('');
+  const [entryStatus, setEntryStatus] = useState<ScorecardGoalStatusUi | ''>('');
+  const [entryDate, setEntryDate] = useState('');
   const [entryBusy, setEntryBusy] = useState(false);
   const [entryErr, setEntryErr] = useState<string | null>(null);
+  // Rollup + status-rule config (Configure rollups panel).
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configBusy, setConfigBusy] = useState(false);
+  const [configErr, setConfigErr] = useState<string | null>(null);
+  const [configNote, setConfigNote] = useState<string | null>(null);
+  // Editable draft of the goals' config, synced from the loaded goals.
+  const [draft, setDraft] = useState<GoalLite[]>([]);
+
+  // "Open in Power BI" portal host — cloud-correct for Gov when
+  // NEXT_PUBLIC_LOOM_POWERBI_PORTAL is set; empty string hides the link
+  // (GCC-High / IL5 where Power BI isn't reachable).
+  const pbiPortal = process.env.NEXT_PUBLIC_LOOM_POWERBI_PORTAL ?? 'https://app.powerbi.com';
+
+  // Connected-metric binder flyout.
+  const [bindOpen, setBindOpen] = useState<{ goalId: string } | null>(null);
+  const [bindDatasets, setBindDatasets] = useState<DatasetLite[]>([]);
+  const [bindDatasetId, setBindDatasetId] = useState('');
+  const [bindDax, setBindDax] = useState('');
+  const [bindBusy, setBindBusy] = useState(false);
+  const [bindTestValue, setBindTestValue] = useState<number | null | undefined>(undefined);
+  const [bindErr, setBindErr] = useState<string | null>(null);
+
+  // Live metric pull (per-goal, from the grid).
+  const [metricBusy, setMetricBusy] = useState<string | null>(null);
+  const [metricValues, setMetricValues] = useState<Record<string, number | null>>({});
+
+  // Check-in history flyout.
+  const [historyOpen, setHistoryOpen] = useState<{ goalId: string } | null>(null);
+  const [historyRows, setHistoryRows] = useState<CheckInRow[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -10363,7 +15295,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     try {
       const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
-      if (j.ok) setGoals(j.goals || []); else setErr(j.error);
+      if (j.ok) { setGoals(j.goals || []); setDraft(j.goals || []); } else setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, []);
 
@@ -10384,35 +15316,174 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ goalId: entryOpen.goalId, value, targetValue: entryTarget ? Number(entryTarget) : undefined, noteText: entryNote || undefined }),
+        body: JSON.stringify({
+          goalId: entryOpen.goalId,
+          value,
+          targetValue: entryTarget ? Number(entryTarget) : undefined,
+          noteText: entryNote || undefined,
+          status: entryStatus || undefined,
+          goalValueDate: entryDate || undefined,
+        }),
       });
       const j = await r.json();
       if (!j.ok) { setEntryErr(j.error || 'submit failed'); return; }
-      setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote('');
+      setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote(''); setEntryStatus(''); setEntryDate('');
       loadGoals(workspaceId, scorecardId);
-    } finally { setEntryBusy(false); }
-  }, [entryOpen, entryValue, entryTarget, entryNote, workspaceId, scorecardId, loadGoals]);
+    } catch (e: any) { setEntryErr(e?.message || String(e)); } finally { setEntryBusy(false); }
+  }, [entryOpen, entryValue, entryTarget, entryNote, entryStatus, entryDate, workspaceId, scorecardId, loadGoals]);
+
+  // Open the connected-metric binder for a goal and load candidate datasets.
+  const openBinder = useCallback(async (goalId: string) => {
+    const goal = goals.find((g) => g.id === goalId);
+    setBindOpen({ goalId });
+    setBindDatasetId(goal?.connectedMetric?.datasetId || '');
+    setBindDax(goal?.connectedMetric?.daxExpression || '');
+    setBindTestValue(undefined); setBindErr(null); setBindDatasets([]);
+    if (!workspaceId) return;
+    try {
+      const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok) setBindDatasets(j.datasets || []);
+    } catch { /* dataset list is best-effort; the binder still works by saving */ }
+  }, [goals, workspaceId]);
+
+  // Test a candidate DAX expression — pulls a live scalar via the metric route
+  // after a transient save (binds, then evaluates). We bind first so the
+  // metric-value route can read the binding from Cosmos.
+  const testMetric = useCallback(async () => {
+    if (!bindOpen || !workspaceId || !scorecardId) return;
+    if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
+    setBindBusy(true); setBindErr(null); setBindTestValue(undefined);
+    try {
+      const put = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
+      });
+      const pj = await put.json();
+      if (!pj.ok) { setBindErr(pj.error || 'bind failed'); return; }
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(bindOpen.goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (!j.ok) { setBindErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`); return; }
+      setBindTestValue(j.value);
+    } catch (e: any) { setBindErr(e?.message || String(e)); } finally { setBindBusy(false); }
+  }, [bindOpen, bindDatasetId, bindDax, workspaceId, scorecardId]);
+
+  // Persist the binding and close.
+  const saveMetric = useCallback(async () => {
+    if (!bindOpen || !workspaceId || !scorecardId) return;
+    if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
+    setBindBusy(true); setBindErr(null);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setBindErr(j.error || 'save failed'); return; }
+      setBindOpen(null);
+      loadGoals(workspaceId, scorecardId);
+    } catch (e: any) { setBindErr(e?.message || String(e)); } finally { setBindBusy(false); }
+  }, [bindOpen, bindDatasetId, bindDax, workspaceId, scorecardId, loadGoals]);
+
+  // Pull the live value for a bound goal directly from the grid.
+  const pullMetric = useCallback(async (goalId: string) => {
+    if (!workspaceId || !scorecardId) return;
+    setMetricBusy(goalId);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok) setMetricValues((m) => ({ ...m, [goalId]: j.value }));
+      else setErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setMetricBusy(null); }
+  }, [workspaceId, scorecardId]);
+
+  // Open + load the check-in history flyout for a goal.
+  const openHistory = useCallback(async (goalId: string) => {
+    if (!workspaceId || !scorecardId) return;
+    setHistoryOpen({ goalId }); setHistoryRows([]); setHistoryBusy(true);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}&history=${encodeURIComponent(goalId)}`);
+      const j = await r.json();
+      if (j.ok) setHistoryRows(j.checkIns || []); else setErr(j.error);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setHistoryBusy(false); }
+  }, [workspaceId, scorecardId]);
 
   const refreshScorecard = useCallback(() => {
     if (workspaceId) loadList(workspaceId);
     if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId);
   }, [workspaceId, scorecardId, loadList, loadGoals]);
   const openScorecardInPbi = useCallback(() => {
-    if (workspaceId && scorecardId) {
-      const url = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/scorecards/${encodeURIComponent(scorecardId)}`;
+    if (workspaceId && scorecardId && pbiPortal) {
+      const url = `${pbiPortal}/groups/${encodeURIComponent(workspaceId)}/scorecards/${encodeURIComponent(scorecardId)}`;
       window.open(url, '_blank', 'noreferrer');
     }
-  }, [workspaceId, scorecardId]);
+  }, [workspaceId, scorecardId, pbiPortal]);
+  const openCheckIn = useCallback((goalId: string) => {
+    const g = goals.find((x) => x.id === goalId);
+    setEntryOpen({ goalId });
+    setEntryValue(''); setEntryNote('');
+    setEntryTarget(g?.targetValue?.toString() || '');
+    setEntryStatus(g?.statusUi || '');
+    setEntryDate(new Date().toISOString().slice(0, 10));
+  }, [goals]);
+
+  // Patch one goal's config draft in place.
+  const patchDraft = useCallback((goalId: string, patch: Partial<GoalLite>) => {
+    setDraft((prev) => prev.map((g) => (g.id === goalId ? { ...g, ...patch } : g)));
+  }, []);
+
+  // Count children (draft goals whose parentId === this goal id).
+  const childCountOf = useCallback((goalId?: string) => {
+    if (!goalId) return 0;
+    return draft.filter((g) => g.parentId === goalId).length;
+  }, [draft]);
+
+  // Persist the rollup + status-rule config, then reload to show computed status.
+  const saveConfig = useCallback(async () => {
+    if (!workspaceId || !scorecardId) return;
+    setConfigBusy(true); setConfigErr(null); setConfigNote(null);
+    try {
+      const payload = draft.map((g) => ({
+        goalId: g.id,
+        parentId: g.parentId,
+        rollupMethod: g.rollupMethod,
+        statusRules: g.statusRules,
+        otherwiseStatus: g.otherwiseStatus,
+      }));
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/config?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goals: payload }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setConfigErr(j.error || 'save failed'); return; }
+      if (j.note) setConfigNote(j.note);
+      loadGoals(workspaceId, scorecardId);
+    } catch (e: any) {
+      setConfigErr(e?.message || String(e));
+    } finally { setConfigBusy(false); }
+  }, [draft, workspaceId, scorecardId, loadGoals]);
+
   const scRibbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Open', actions: [
-        { label: 'Open in Power BI', onClick: scorecardId ? openScorecardInPbi : undefined, disabled: !scorecardId, title: !scorecardId ? 'select a scorecard first' : 'opens Power BI Web — Fabric scorecard authoring lives there' },
+        { label: 'Open in Power BI', onClick: scorecardId && pbiPortal ? openScorecardInPbi : undefined, disabled: !scorecardId || !pbiPortal, title: !pbiPortal ? 'Power BI is not reachable in this cloud' : (!scorecardId ? 'select a scorecard first' : 'opens Power BI Web — Fabric scorecard authoring lives there') },
+      ]},
+      { label: 'Goal', actions: [
+        { label: 'Check in', icon: <Add20Regular />, onClick: selectedGoalId ? () => openCheckIn(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'record a goal value + status + note' },
+        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source' },
+        { label: 'History', icon: <List20Regular />, onClick: selectedGoalId ? () => openHistory(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'view this goal’s check-in history' },
       ]},
       { label: 'Metadata', actions: [
         { label: 'Refresh', onClick: workspaceId ? refreshScorecard : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected scorecard goals' },
       ]},
+      { label: 'Rollup', actions: [
+        { label: configOpen ? 'Hide config' : 'Configure rollups', onClick: scorecardId ? () => setConfigOpen((v) => !v) : undefined, disabled: !scorecardId, title: !scorecardId ? 'select a scorecard first' : 'edit rollup aggregation + status rules' },
+      ]},
     ]},
-  ], [scorecardId, workspaceId, openScorecardInPbi, refreshScorecard]);
+  ], [scorecardId, workspaceId, selectedGoalId, pbiPortal, openScorecardInPbi, refreshScorecard, openCheckIn, openBinder, openHistory, configOpen]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
@@ -10436,23 +15507,27 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="filled" color="brand">Scorecard</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-            {scorecardId && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
+            {scorecardId && pbiPortal && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Fabric Scorecard preview surface</MessageBarTitle>
-              Scorecard authoring (goals, connections, hierarchy, status rules) lives in <strong>Power BI Web</strong>.
-              The Loom editor lists scorecards in the workspace, surfaces goals + current/target values, and lets
-              you record a goal value via the inline <em>Add value</em> dialog (Fabric scorecards REST is preview).
-              Use <strong>Open in Power BI</strong> to author.
+              <MessageBarTitle>Scorecard goals + rollups + connected metrics</MessageBarTitle>
+              Track goals with <strong>current / target / status / owner / due</strong>, bind a goal to a live
+              <strong> DAX measure</strong> in a Power BI or Azure Analysis Services model (the goal value is pulled
+              live via <em>executeQueries</em> — no Fabric capacity required), and record <strong>check-ins</strong>
+              (value + status + note) with full history. Goals roll up from their children and color by status
+              entirely in Loom (Azure-native — no Fabric dependency). Use <strong>Configure rollups</strong> to
+              set each goal's rollup aggregation (Sum / Average / Min&nbsp;= worst-child / Max) and ordered status
+              rules (threshold → color). <strong>Open in Power BI</strong> opens the Fabric scorecard canvas
+              when one is bound.
             </MessageBarBody>
           </MessageBar>
           {scorecardId && (
             <>
               <Subtitle2>Goals ({goals.length})</Subtitle2>
               {goals.length === 0 ? (
-                <Caption1>No goals on this scorecard (or the Fabric scorecard preview API is not enabled in this tenant).</Caption1>
+                <Caption1>No goals on this scorecard yet. Install a scorecard app bundle or author goals in Power BI, then refresh.</Caption1>
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Goals" size="small">
@@ -10460,42 +15535,216 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                       <TableHeaderCell>Goal</TableHeaderCell>
                       <TableHeaderCell>Current</TableHeaderCell>
                       <TableHeaderCell>Target</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Owner</TableHeaderCell>
+                      <TableHeaderCell>Due</TableHeaderCell>
+                      <TableHeaderCell>Actions</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {goals.map((g, i) => (
-                        <TableRow key={g.id || i}>
-                          <TableCell>{g.name || g.id || '—'}</TableCell>
-                          <TableCell>{g.currentValue ?? '—'}</TableCell>
-                          <TableCell>{g.targetValue ?? '—'}</TableCell>
-                          <TableCell>
-                            {g.id && <Button size="small" appearance="subtle" onClick={() => { setEntryOpen({ goalId: g.id! }); setEntryTarget(g.targetValue?.toString() || ''); }}>Add value</Button>}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {goals.map((g, i) => {
+                        const isSub = !!g.id && goals.some((o) => (o.subGoalIds || []).includes(g.id!));
+                        const live = g.id && g.id in metricValues ? metricValues[g.id] : undefined;
+                        const current = live !== undefined ? live : (g.currentValue ?? g.connectedMetric?.lastValue);
+                        const selected = selectedGoalId === g.id;
+                        return (
+                          <TableRow
+                            key={g.id || i}
+                            appearance={selected ? 'brand' : undefined}
+                            onClick={() => g.id && setSelectedGoalId(g.id)}
+                            style={{ cursor: g.id ? 'pointer' : 'default' }}
+                          >
+                            <TableCell>
+                              <span style={{ paddingLeft: isSub ? 20 : 0 }}>
+                                {isSub && <span style={{ color: tokens.colorNeutralForeground3, marginRight: 4 }}>↳</span>}
+                                {g.name || g.id || '—'}
+                                {g.connectedMetric && <DatabaseLink20Regular style={{ marginLeft: 6, verticalAlign: 'middle' }} title="connected metric" />}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              {g.computedValue !== undefined ? (
+                                <span title={`rolled up from children (${g.rollupMethod ?? 'rollup'}): ${g.computedValue}`}>
+                                  {g.computedValue} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(rollup)</Caption1>
+                                </span>
+                              ) : (current ?? '—')}
+                              {g.id && g.connectedMetric && (
+                                <Tooltip content="pull the live value from the connected DAX metric" relationship="label">
+                                  <Button
+                                    size="small" appearance="subtle" icon={<ArrowSync20Regular />}
+                                    disabled={metricBusy === g.id}
+                                    onClick={(e) => { e.stopPropagation(); pullMetric(g.id!); }}
+                                  />
+                                </Tooltip>
+                              )}
+                            </TableCell>
+                            <TableCell>{g.targetValue ?? '—'}</TableCell>
+                            <TableCell>
+                              {g.status ? (
+                                <ScStatusBadge status={g.status} />
+                              ) : (
+                                <Badge appearance="filled" color={scStatusColor(g.statusUi)}>{scStatusLabel(g.statusUi)}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>{g.owner || '—'}</TableCell>
+                            <TableCell>{g.dueDate || '—'}</TableCell>
+                            <TableCell>
+                              {g.id && (
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
+                                  <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
+                                  <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
+                                </div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
+                </div>
+              )}
+
+              {configOpen && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Subtitle2>Rollup &amp; status rules</Subtitle2>
+                    <Button size="small" appearance="primary" disabled={configBusy || draft.length === 0} onClick={saveConfig}>
+                      {configBusy ? 'Saving…' : 'Save config'}
+                    </Button>
+                    <Button size="small" appearance="subtle" onClick={() => setConfigOpen(false)}>Close</Button>
+                  </div>
+                  {configErr && <MessageBar intent="error"><MessageBarBody>{configErr}</MessageBarBody></MessageBar>}
+                  {configNote && <MessageBar intent="warning"><MessageBarBody>{configNote}</MessageBarBody></MessageBar>}
+                  {draft.length === 0 ? (
+                    <Caption1>No goals to configure.</Caption1>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {draft.map((g, i) => (
+                        <ScRollupEditor
+                          key={g.id || i}
+                          goal={g}
+                          childCount={childCountOf(g.id)}
+                          onChange={(patch) => g.id && patchDraft(g.id, patch)}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </>
           )}
 
+          {/* Check-in flyout — value + status + note + date */}
           <Dialog open={!!entryOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setEntryOpen(null); }}>
             <DialogSurface>
               <DialogBody>
-                <DialogTitle>Add goal value</DialogTitle>
+                <DialogTitle>Check in</DialogTitle>
                 <DialogContent>
-                  <Caption1>value</Caption1>
-                  <Input value={entryValue} onChange={(_: unknown, d: any) => setEntryValue(d.value)} type="number" style={{ width: '100%' }} />
-                  <Caption1 style={{ marginTop: 8 }}>target (optional)</Caption1>
-                  <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
-                  <Caption1 style={{ marginTop: 8 }}>note (optional)</Caption1>
-                  <Input value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  <Field label="Value" required>
+                    <SpinButton value={Number(entryValue) || 0} onChange={(_: unknown, d: any) => setEntryValue(String(d.value ?? (d.displayValue ?? '')))} style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Target (optional)" style={{ marginTop: 8 }}>
+                    <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Status" style={{ marginTop: 8 }}>
+                    <Select value={entryStatus} onChange={(_: unknown, d: any) => setEntryStatus(d.value as ScorecardGoalStatusUi | '')}>
+                      <option value="">(unchanged)</option>
+                      {SC_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Check-in date" style={{ marginTop: 8 }}>
+                    <Input value={entryDate} onChange={(_: unknown, d: any) => setEntryDate(d.value)} type="date" style={{ width: '100%' }} />
+                  </Field>
+                  <Field label="Note (optional)" style={{ marginTop: 8 }}>
+                    <Textarea value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  </Field>
                   {entryErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setEntryOpen(null)}>Cancel</Button>
-                  <Button appearance="primary" disabled={entryBusy || !entryValue} onClick={submitValue}>{entryBusy ? 'Saving…' : 'Save'}</Button>
+                  <Button appearance="primary" disabled={entryBusy || entryValue === ''} onClick={submitValue}>{entryBusy ? 'Saving…' : 'Record check-in'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Connected-metric binder flyout */}
+          <Dialog open={!!bindOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setBindOpen(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Bind connected metric</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    The goal&apos;s current value is pulled live from a DAX measure in a Power BI / Azure Analysis
+                    Services semantic model. No Fabric capacity required — evaluation runs via Power BI executeQueries.
+                  </Caption1>
+                  <Field label="Semantic model (dataset)" required style={{ marginTop: 8 }}>
+                    {bindDatasets.length > 0 ? (
+                      <Dropdown
+                        selectedOptions={bindDatasetId ? [bindDatasetId] : []}
+                        value={bindDatasets.find((d) => d.id === bindDatasetId)?.name || bindDatasets.find((d) => d.id === bindDatasetId)?.displayName || ''}
+                        onOptionSelect={(_: unknown, d: any) => setBindDatasetId(d.optionValue)}
+                        placeholder="Select a dataset"
+                      >
+                        {bindDatasets.map((d) => <Option key={d.id} value={d.id}>{d.name || d.displayName || d.id}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input value={bindDatasetId} onChange={(_: unknown, d: any) => setBindDatasetId(d.value)} placeholder="Power BI dataset id (GUID)" style={{ width: '100%' }} />
+                    )}
+                  </Field>
+                  <Field label="DAX expression" required style={{ marginTop: 8 }} hint="a measure reference like [Total Revenue] or an inline scalar like SUM(Sales[Amount])">
+                    <MonacoTextarea value={bindDax} onChange={setBindDax} language="plaintext" minHeight={80} />
+                  </Field>
+                  {bindTestValue !== undefined && (
+                    <MessageBar intent="success" style={{ marginTop: 8 }}>
+                      <MessageBarBody>Live value: <strong>{bindTestValue === null ? '(null)' : bindTestValue}</strong></MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {bindErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{bindErr}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setBindOpen(null)}>Cancel</Button>
+                  <Button appearance="outline" disabled={bindBusy || !bindDatasetId || !bindDax.trim()} onClick={testMetric}>{bindBusy ? 'Testing…' : 'Test'}</Button>
+                  <Button appearance="primary" disabled={bindBusy || !bindDatasetId || !bindDax.trim()} onClick={saveMetric}>Save binding</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Check-in history flyout */}
+          <Dialog open={!!historyOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setHistoryOpen(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Check-in history</DialogTitle>
+                <DialogContent>
+                  {historyBusy ? <Spinner size="tiny" label="Loading…" /> : historyRows.length === 0 ? (
+                    <Caption1>No check-ins recorded for this goal yet.</Caption1>
+                  ) : (
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Check-in history" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Date</TableHeaderCell>
+                          <TableHeaderCell>Value</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Note</TableHeaderCell>
+                          <TableHeaderCell>Source</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {historyRows.map((h) => (
+                            <TableRow key={h.id}>
+                              <TableCell>{h.checkInDate || h.recordedAt?.slice(0, 10) || '—'}</TableCell>
+                              <TableCell>{h.value}</TableCell>
+                              <TableCell><Badge appearance="filled" color={scStatusColor(h.status)}>{scStatusLabel(h.status)}</Badge></TableCell>
+                              <TableCell>{h.note || '—'}</TableCell>
+                              <TableCell>{h.source || 'manual'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setHistoryOpen(null)}>Close</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -10503,5 +15752,205 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
         </div>
       }
     />
+  );
+}
+
+// ============================================================
+// Datamart (DEPRECATED) — migration assistant
+// ============================================================
+//
+// Power BI datamarts are deprecated. There is NO create path: id === 'new'
+// renders a permanent deprecation notice with no authoring surface. An existing
+// datamart shows a Fluent MessageBar intent="warning" with a Migrate button
+// that POSTs /api/items/datamart/migrate — provisioning a Synapse Serverless
+// database + an Azure Analysis Services server (real backends, no Fabric).
+// Once migrated, the receipt (Synapse DB, AAS server, AAS connection URI) is
+// surfaced from the Cosmos item's state.migration.
+
+interface DatamartMigration {
+  status?: string;
+  migratedAt?: string;
+  synapseDatabase?: string;
+  serverlessEndpoint?: string;
+  aasServer?: string;
+  aasConnectionUri?: string;
+  aasProvisioningState?: string;
+  aasAdminWarning?: string;
+}
+
+interface DatamartMigrateResult {
+  ok: boolean;
+  synapseDatabase?: string;
+  serverlessEndpoint?: string;
+  aasServer?: string;
+  aasConnectionUri?: string;
+  aasProvisioningState?: string;
+  migratedAt?: string;
+  aasAdminWarning?: string;
+  error?: string;
+  code?: string;
+}
+
+export function DatamartEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  // Datamarts are deprecated — `new` is a hard no-create surface.
+  const isNew = id === 'new';
+
+  const [detail, setDetail] = useState<{ displayName?: string; migration?: DatamartMigration } | null>(null);
+  const [migrateResult, setMigrateResult] = useState<DatamartMigrateResult | null>(null);
+  const [migrating, setMigrating] = useState(false);
+
+  const loadDetail = useCallback(async () => {
+    if (isNew) return;
+    try {
+      const r = await fetch(`/api/cosmos-items/datamart/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      // GET returns the item record directly (not wrapped).
+      if (r.ok && j?.id) {
+        setDetail({ displayName: j.displayName, migration: (j.state as any)?.migration });
+      }
+    } catch { /* honest empty state below */ }
+  }, [id, isNew]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  const migrate = useCallback(async () => {
+    if (isNew || migrating) return;
+    setMigrating(true); setMigrateResult(null);
+    try {
+      const r = await fetch('/api/items/datamart/migrate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ datamartId: id }),
+      });
+      const j = (await r.json()) as DatamartMigrateResult;
+      setMigrateResult(j);
+      if (j.ok) loadDetail();
+    } catch (e: any) {
+      setMigrateResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setMigrating(false);
+    }
+  }, [id, isNew, migrating, loadDetail]);
+
+  const alreadyMigrated = detail?.migration?.status === 'migrated' || !!migrateResult?.ok;
+  const migrateDisabled = isNew || migrating || alreadyMigrated;
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Migration', actions: [
+        {
+          label: migrating ? 'Migrating…' : alreadyMigrated ? 'Migrated' : 'Migrate to Synapse + AAS',
+          icon: <ArrowSync20Regular />,
+          onClick: migrateDisabled ? undefined : migrate,
+          disabled: migrateDisabled,
+          title: isNew
+            ? 'Datamarts are deprecated — no new items can be created.'
+            : alreadyMigrated
+              ? 'This datamart has already been migrated.'
+              : 'Provision a Synapse Serverless database + Azure Analysis Services server.',
+        },
+      ]},
+    ]},
+  ], [isNew, migrating, alreadyMigrated, migrateDisabled, migrate]);
+
+  const liveMigration = detail?.migration?.status === 'migrated' ? detail.migration : undefined;
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+      <div className={s.pad}>
+        {/* Always-visible deprecation banner */}
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Datamarts are deprecated.</MessageBarTitle>
+            Migrate to a Synapse Serverless warehouse + semantic model.
+          </MessageBarBody>
+          {!isNew && !alreadyMigrated && (
+            <MessageBarActions>
+              <Button appearance="primary" size="small" onClick={migrate} disabled={migrating}>
+                {migrating ? 'Migrating…' : 'Migrate'}
+              </Button>
+            </MessageBarActions>
+          )}
+        </MessageBar>
+
+        {/* No-create gate */}
+        {isNew && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>No new datamarts.</MessageBarTitle>
+              Power BI datamarts are deprecated and cannot be created in Loom. Create a
+              {' '}<strong>Warehouse</strong> (Synapse) or a <strong>Semantic model</strong> (Azure Analysis Services)
+              instead, both available from the New item dialog.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {/* Existing item header */}
+        {!isNew && detail && (
+          <div className={s.card}>
+            <div className={s.toolbar}>
+              <Subtitle2>{detail.displayName || item.displayName}</Subtitle2>
+              <Badge appearance="outline" color="warning">Deprecated</Badge>
+              {alreadyMigrated && <Badge appearance="filled" color="success">Migrated</Badge>}
+            </div>
+            <Caption1>
+              Migration provisions a Synapse Serverless database (<code>CREATE DATABASE</code>) and an Azure
+              Analysis Services tabular server. No Fabric or Power BI capacity is required.
+            </Caption1>
+          </div>
+        )}
+
+        {/* In-progress */}
+        {migrating && (
+          <Spinner size="small" labelPosition="after"
+            label="Provisioning Synapse Serverless DB + Azure Analysis Services server…" />
+        )}
+
+        {/* Fresh migration receipt */}
+        {migrateResult?.ok && (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Migration complete</MessageBarTitle>
+              Synapse database <strong>{migrateResult.synapseDatabase}</strong> on{' '}
+              <code>{migrateResult.serverlessEndpoint}</code>.<br />
+              AAS server <strong>{migrateResult.aasServer}</strong> ({migrateResult.aasProvisioningState}).<br />
+              Connection: <code>{migrateResult.aasConnectionUri}</code><br />
+              Migrated at {migrateResult.migratedAt}.
+              {migrateResult.aasAdminWarning && (
+                <><br /><em>{migrateResult.aasAdminWarning}</em></>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {/* Migration error */}
+        {migrateResult && !migrateResult.ok && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Migration failed{migrateResult.code ? ` (${migrateResult.code})` : ''}</MessageBarTitle>
+              {migrateResult.error}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {/* Persisted receipt from Cosmos (when not showing a fresh one) */}
+        {!migrating && !migrateResult && liveMigration && (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Already migrated{liveMigration.migratedAt ? ` (${liveMigration.migratedAt})` : ''}</MessageBarTitle>
+              Synapse database <strong>{liveMigration.synapseDatabase}</strong>
+              {liveMigration.serverlessEndpoint && <> on <code>{liveMigration.serverlessEndpoint}</code></>}.<br />
+              AAS server <strong>{liveMigration.aasServer}</strong>
+              {liveMigration.aasProvisioningState ? ` (${liveMigration.aasProvisioningState})` : ''}.<br />
+              Connection: <code>{liveMigration.aasConnectionUri}</code>
+              {liveMigration.aasAdminWarning && (
+                <><br /><em>{liveMigration.aasAdminWarning}</em></>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+      </div>
+    } />
   );
 }

@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Dropdown, Option, Field, Input, Spinner, Badge,
+  Button, Dropdown, Option, Field, Input, Spinner, Badge, Switch,
   MessageBar, MessageBarBody, MessageBarTitle,
   Caption1, Body1, makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -320,6 +320,39 @@ export function CopilotAgentsConfig() {
             {indexes.map((i) => <Option key={i.name} value={i.name} text={i.name}>{i.name}</Option>)}
           </Dropdown>
         </Field>
+
+        {/* ── Fabric / Power BI Copilot opt-in (default OFF → Azure-native) ── */}
+        <Field
+          className={s.full}
+          label="Fabric / Power BI Copilot (opt-in)"
+          hint={
+            'OFF (default): the cross-item Copilot runs 100% on Azure OpenAI — no Fabric workspace required, ' +
+            'no Fabric/Power BI call. ON: the orchestrator validates the bound Fabric workspace via ' +
+            'api.fabric.microsoft.com before each session and prefers Fabric-native tools; LLM inference still ' +
+            'runs on Azure OpenAI (Fabric Copilot has no public invocation API). Requires F2+ capacity and ' +
+            '"Service principals can use Fabric APIs" in the Fabric admin portal. Not available in GCC-High / IL5 / DoD.'
+          }
+        >
+          <Switch
+            checked={!!config.fabricCopilotBackend}
+            label={config.fabricCopilotBackend ? 'Fabric path enabled' : 'Azure-native (default)'}
+            onChange={(_, d) => set({ fabricCopilotBackend: d.checked || undefined })}
+          />
+        </Field>
+
+        {config.fabricCopilotBackend && (
+          <Field
+            className={s.full}
+            label="Fabric workspace id"
+            hint="Workspace on F2+ capacity. The Console UAMI must be added as Member or Contributor. When empty, the orchestrator stays on the Azure-native path."
+          >
+            <Input
+              value={config.fabricCopilotWorkspaceId || ''}
+              placeholder="00000000-0000-0000-0000-000000000000"
+              onChange={(_, d) => set({ fabricCopilotWorkspaceId: d.value || undefined })}
+            />
+          </Field>
+        )}
       </div>
 
       {deploymentsError && (

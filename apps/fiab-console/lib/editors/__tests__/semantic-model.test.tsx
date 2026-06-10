@@ -27,4 +27,17 @@ describe('SemanticModelEditor', () => {
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
+
+  it('exposes a "Model view" ribbon action for the relationship diagram + hierarchies', async () => {
+    let err: unknown = null;
+    try {
+      render(<SemanticModelEditor item={makeItem('semantic-model', 'Semantic model')} id="new" />);
+      await waitFor(() => expect(screen.getByTestId('ribbon')).toBeInTheDocument(), { timeout: 5000 });
+      const ribbon = screen.getByTestId('ribbon');
+      const hasModelView = Array.from(ribbon.querySelectorAll('button'))
+        .some((b) => /model view/i.test(b.textContent || ''));
+      expect(hasModelView).toBe(true);
+    } catch (e) { err = e; }
+    if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
+  });
 });

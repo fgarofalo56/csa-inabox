@@ -248,6 +248,13 @@ async function provisionLoomNativeReport(input: any, steps: string[]): Promise<P
   const visuals = pages.reduce((n, p) => n + (Array.isArray(p?.visuals) ? p.visuals.length : 0), 0);
   const model = content?.semanticModel || content?.datasetName || content?.model || 'its semantic model';
   steps.push(`Loom-native report: ${pages.length || 1} page(s), ${visuals} visual(s), bound to ${typeof model === 'string' ? model : 'its semantic model'}. Renders in the Loom report viewer over the warehouse via SQL — no Power BI / Fabric workspace required.`);
+  // Optional server-side rendering (PDF / image export) via the BI render
+  // Function (LOOM_BI_RENDER_FUNCTION_NAME, deployed alongside the BI stack).
+  // When unset the report still renders interactively client-side in the viewer.
+  const renderFn = process.env.LOOM_BI_RENDER_FUNCTION_NAME;
+  steps.push(renderFn
+    ? `Server-side render/export available via Function "${renderFn}".`
+    : 'Server-side render/export not configured (LOOM_BI_RENDER_FUNCTION_NAME unset) — interactive viewer only.');
   return {
     status: 'created',
     resourceId: input.cosmosItemId,

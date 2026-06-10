@@ -116,6 +116,9 @@ jobs:
           - app: loom-direct-lake-shim
             context: ./apps/fiab-direct-lake-shim
             dockerfile: Dockerfile
+          - app: loom-copilot-maf
+            context: ./apps/copilot-maf
+            dockerfile: Dockerfile
     steps:
       - uses: actions/checkout@v4
 

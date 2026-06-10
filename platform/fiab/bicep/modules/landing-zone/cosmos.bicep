@@ -96,20 +96,43 @@ var databases = [
 
 // NOTE: The Loom Console creates additional containers lazily at runtime via
 // apps/fiab-console/lib/azure/cosmos-client.ts `ensure()` (createIfNotExists),
-// in the `loom` database (id = LOOM_COSMOS_DATABASE || 'loom'). These do not
-// need ARM provisioning here; they only require the Console UAMI to hold the
-// Cosmos DB Built-in Data Contributor role at account scope (data-plane, not
-// ARM RBAC — bootstrapped by scripts/csa-loom/grant-cosmos-rbac.sh). Current
-// lazily-created containers (PK /tenantId unless noted):
+// in the `loom` database (id = LOOM_COSMOS_DATABASE || 'loom'). The foundation
+// admin containers (loom-workspaces, workspace-folders, task-flows, embed-codes,
+// org-visuals, azure-connections) are ALSO ARM-provisioned below so a fresh
+// environment has them before the Console starts; the createIfNotExists calls
+// remain the idempotent fallback for hotfix deploys that skip bicep. The rest
+// only require the Console UAMI to hold the Cosmos DB Built-in Data Contributor
+// role at account scope (data-plane, not ARM RBAC — bootstrapped by
+// scripts/csa-loom/grant-cosmos-rbac.sh). Other lazily-created containers
+// (PK /tenantId unless noted):
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
 //   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
+//   folders           ← F10 nested folder hierarchy (PK /workspaceId)
+//   task-flows        ← F11 task-flow visual step sequences (PK /workspaceId).
+//     Loom-native (Fabric workspace "task flow" parity, no Fabric dependency).
 //   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
 //     registry (Azure-native, no Fabric). Internal shortcuts need no extra
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
 //     medallion ADLS account; external (s3/gcs/dataverse/delta_sharing) targets
 //     resolve a Key Vault credentialRef via the flat /api/lakehouse/shortcuts.
+//
+// NOTE (F6 — admin Workspaces list & govern): GET /api/admin/workspaces does a
+//   CROSS-PARTITION scan of the lazily-created `loom/workspaces` container
+//   (SELECT * FROM c — NO partitionKey filter). This is required because each
+//   workspace's tenantId = the CREATOR's OID (not a shared tenant GUID), so a
+//   single-partition query would only ever return the admin's own workspaces.
+//   The same Cosmos DB Built-in Data Contributor role at account scope (above)
+//   authorises the fan-out; no extra RBAC grant is needed for the admin route.
+//   copilot-sessions (PK /sessionId, defaultTtl=2419200 — 28-day TTL set by
+//     cosmos-client.ts ensure() on create AND via a one-time container
+//     replace() upgrade for pre-existing containers; chat sessions expire
+//     automatically so "Clear chat" + the 28-day retention need no purge job)
+//   copilot-feedback (PK /sessionId, NO TTL)  ← permanent audit log of the
+//     per-message thumbs up/down written by PATCH /api/copilot/sessions/[id]
+//     (Feedback + clear-chat + history feature). No extra RBAC beyond the
+//     UAMI's existing Cosmos DB Built-in Data Contributor at account scope.
 
 
 // Databases — one per workload
@@ -119,6 +142,44 @@ resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-prev
   properties: {
     resource: { id: db.name }
     options: { autoscaleSettings: { maxThroughput: 4000 } }
+  }
+}]
+
+// Loom Console BFF database + foundation admin containers — provisioned at ARM
+// deploy time so a fresh environment has the `loom` database and its core admin
+// containers before the Console starts. cosmos-client.ts `ensure()` calls
+// createIfNotExists for these (idempotent) on every cold start, so hotfix
+// deploys that skip bicep still converge. Partition keys MUST match
+// cosmos-client.ts exactly.
+var loomDatabase = 'loom'
+
+var loomContainers = [
+  { name: 'loom-workspaces',   partitionKey: '/tenantId' }
+  { name: 'workspace-folders', partitionKey: '/workspaceId' }
+  { name: 'task-flows',        partitionKey: '/workspaceId' }
+  { name: 'embed-codes',       partitionKey: '/tenantId' }
+  { name: 'org-visuals',       partitionKey: '/tenantId' }
+  { name: 'azure-connections', partitionKey: '/tenantId' }
+]
+
+resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
+  parent: account
+  name: loomDatabase
+  properties: {
+    resource: { id: loomDatabase }
+    options: { autoscaleSettings: { maxThroughput: 4000 } }
+  }
+}
+
+resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in loomContainers: {
+  parent: loomDb
+  name: c.name
+  properties: {
+    resource: {
+      id: c.name
+      partitionKey: { paths: [c.partitionKey], kind: 'Hash' }
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
   }
 }]
 

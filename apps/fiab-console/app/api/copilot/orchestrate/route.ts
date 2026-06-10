@@ -26,13 +26,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
 
-  let body: { prompt?: string; sessionId?: string } = {};
+  let body: { prompt?: string; sessionId?: string; persona?: string; personaContext?: Record<string, unknown> } = {};
   try { body = await req.json(); } catch {}
   const prompt = (body.prompt || '').trim();
   if (!prompt) {
     return NextResponse.json({ ok: false, error: 'prompt is required' }, { status: 400 });
   }
   const sessionId = body.sessionId || `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Copilot surface tag for per-persona usage metering (App Insights). Defaults
+  // to the cross-item orchestrator; resolvePersona() narrows the tool set when
+  // the tag matches a registered persona, otherwise the full cross-item Copilot
+  // is used. personaContext is injected as extra editor context.
+  const persona = (body.persona || 'cross-item').slice(0, 64);
+  const personaContext = body.personaContext && typeof body.personaContext === 'object' ? body.personaContext : null;
 
   // Tenant admin-selected Copilot config (account + chat deployment). Falls
   // back to env / Foundry-hub discovery inside resolveAoaiTarget.
@@ -78,7 +84,7 @@ export async function POST(req: NextRequest) {
       };
       send('session', { sessionId });
       try {
-        for await (const step of orchestrate({ prompt, sessionId, userOid, tenantConfig })) {
+        for await (const step of orchestrate({ prompt, sessionId, userOid, tenantConfig, persona, personaContext })) {
           send('step', step);
           if (step.kind === 'final' || step.kind === 'error') break;
         }

@@ -1,0 +1,22 @@
+{
+  "name": "fiab-report-subscriptions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CSA Loom — report subscriptions timer Function. On the LOOM schedule it reads enabled report subscriptions from Cosmos, renders each report via the real Power BI ExportTo REST job (PDF/PPTX/PNG), archives the file to ADLS, emails it via the report-subscription delivery Logic App, and writes a delivery-log row. Azure-native parity with Fabric/Power BI report subscriptions — no Microsoft Fabric dependency.",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "vitest run",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.1.1",
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  }
+}

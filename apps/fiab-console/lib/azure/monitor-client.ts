@@ -438,6 +438,89 @@ export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQuery
 }
 
 // ----------------------------------------------------------------------------
+// 4b) Loom-application audit events — Log Analytics (F19 Audit logs)
+// ----------------------------------------------------------------------------
+
+export interface LoomAppAuditEvent {
+  at: string;      // TimeGenerated ISO
+  who: string;     // customDimensions.userId or empty
+  kind: string;    // customDimensions.eventType
+  itemId: string;  // customDimensions.itemId or empty
+  message: string; // Message
+  source: 'loganalytics';
+}
+
+/**
+ * Query Log Analytics for Loom-application audit events (F19 Audit logs).
+ *
+ * Primary table: AppTraces (Application Insights workspace-based). Loom's
+ * Container App emits structured audit events when
+ * APPLICATIONINSIGHTS_CONNECTION_STRING is configured; each event carries
+ * customDimensions { source: 'loom-audit', eventType, userId, itemId }.
+ *
+ * Honest gate: MonitorNotConfiguredError when LOOM_LOG_ANALYTICS_WORKSPACE_ID
+ * is unset. Returns [] (not an error) when the table is empty (no structured
+ * events shipped yet) so the audit grid still renders Cosmos/Purview rows.
+ */
+export async function queryLoomAppEvents(opts: {
+  startTime?: string;
+  endTime?: string;
+  user?: string;
+  eventType?: string;
+  itemId?: string;
+  limit?: number;
+}): Promise<LoomAppAuditEvent[]> {
+  // Throws MonitorNotConfiguredError when the workspace ID is unset.
+  const workspaceId = logAnalyticsWorkspaceId();
+  if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+
+  const lim = Math.min(1000, Math.max(1, opts.limit ?? 500));
+  // ISO time-range duration for the queryLogs `timespan` param.
+  const timespanParam = opts.startTime
+    ? `${opts.startTime}/${opts.endTime ?? new Date().toISOString()}`
+    : 'P7D';
+
+  // Post-projection filters (applied to the extended columns). JSON.stringify
+  // safely double-quotes the KQL string literal, so user input cannot break out.
+  const userClause = opts.user      ? `| where who contains ${JSON.stringify(opts.user)}`     : '';
+  const typeClause = opts.eventType ? `| where kind == ${JSON.stringify(opts.eventType)}`      : '';
+  const itemClause = opts.itemId    ? `| where itemId contains ${JSON.stringify(opts.itemId)}` : '';
+
+  const kql = `
+AppTraces
+| where customDimensions.source == "loom-audit"
+| extend
+    who    = tostring(customDimensions.userId),
+    kind   = tostring(customDimensions.eventType),
+    itemId = tostring(customDimensions.itemId)
+${userClause}
+${typeClause}
+${itemClause}
+| project TimeGenerated, who, kind, itemId, Message
+| order by TimeGenerated desc
+| take ${lim}
+`.trim();
+
+  const result = await queryLogs(kql, timespanParam);
+
+  const colIdx = (name: string) => result.columns.indexOf(name);
+  const tIdx   = colIdx('TimeGenerated');
+  const whoIdx = colIdx('who');
+  const kIdx   = colIdx('kind');
+  const iIdx   = colIdx('itemId');
+  const mIdx   = colIdx('Message');
+
+  return result.rows.map((row): LoomAppAuditEvent => ({
+    at:      tIdx   >= 0 ? String(row[tIdx]   ?? '') : '',
+    who:     whoIdx >= 0 ? String(row[whoIdx] ?? '') : '',
+    kind:    kIdx   >= 0 ? String(row[kIdx]   ?? '') : '',
+    itemId:  iIdx   >= 0 ? String(row[iIdx]   ?? '') : '',
+    message: mIdx   >= 0 ? String(row[mIdx]   ?? '') : '',
+    source:  'loganalytics',
+  }));
+}
+
+// ----------------------------------------------------------------------------
 // 5) Activity log — ARM Activity Log REST
 // ----------------------------------------------------------------------------
 

@@ -12,10 +12,13 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Folder24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Folder24Regular, Add24Regular, Settings20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { WorkspaceCreateWizard } from '@/lib/wizards/workspace-create';
+import { WorkspaceSettingsPane } from '@/lib/panes/workspace-settings';
+import { AzureConnectionsPane } from '@/lib/panes/azure-connections';
 
 interface Workspace {
   id: string; name: string; description?: string;
@@ -43,6 +46,9 @@ export default function AdminWorkspacesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [settingsTarget, setSettingsTarget] = useState<Workspace | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -57,6 +63,37 @@ export default function AdminWorkspacesPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // F7 → open the create wizard; F8 → open settings for the selected (or first) row.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (typing) return;
+      if (e.key === 'F7') { e.preventDefault(); setWizardOpen(true); }
+      else if (e.key === 'F8') {
+        e.preventDefault();
+        const list = workspaces || [];
+        const target = list.find((w) => w.id === selectedId) || list[0];
+        if (target) setSettingsTarget(target);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [workspaces, selectedId]);
+
+  const onCreated = useCallback((ws: { id: string; name: string; description?: string; capacity?: string; domain?: string; createdBy?: string; createdAt?: string; updatedAt?: string }) => {
+    setWorkspaces((prev) => [
+      {
+        id: ws.id, name: ws.name, description: ws.description,
+        capacity: ws.capacity, domain: ws.domain, createdBy: ws.createdBy,
+        createdAt: ws.createdAt, updatedAt: ws.updatedAt,
+        itemCount: 0, lastActivity: ws.updatedAt, state: 'Active',
+      },
+      ...(prev || []),
+    ]);
+    setWizardOpen(false);
+  }, []);
 
   const filtered = useMemo(() => {
     const f = q.toLowerCase().trim();
@@ -110,11 +147,31 @@ export default function AdminWorkspacesPage() {
       ),
     },
     {
+      key: 'connections', label: 'Connections', width: 150, sortable: false, filterable: false,
+      render: (w) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <AzureConnectionsPane workspaceId={w.id} />
+        </span>
+      ),
+    },
+    {
       key: 'open', label: 'Open', width: 100, sortable: false, filterable: false,
       render: (w) => (
         <a href={`/workspaces/${w.id}`} className={s.openLink} onClick={(e) => e.stopPropagation()}>
           Open <Open16Regular />
         </a>
+      ),
+    },
+    {
+      key: 'settings', label: 'Settings', width: 110, sortable: false, filterable: false,
+      render: (w) => (
+        <Button
+          appearance="subtle" size="small" icon={<Settings20Regular />}
+          aria-label={`Settings for ${w.name}`}
+          onClick={(e) => { e.stopPropagation(); setSettingsTarget(w); }}
+        >
+          Settings
+        </Button>
       ),
     },
   ], [s]);
@@ -141,6 +198,7 @@ export default function AdminWorkspacesPage() {
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
               {filtered.length} workspaces · {totalItems} items total
             </Caption1>
+            <Button appearance="primary" icon={<Add24Regular />} onClick={() => setWizardOpen(true)}>New workspace</Button>
             <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
           </>
         }
@@ -153,11 +211,33 @@ export default function AdminWorkspacesPage() {
             columns={columns}
             rows={filtered}
             getRowId={(w) => w.id}
-            empty={q ? `No workspaces match "${q}".` : 'No workspaces in this tenant yet. Create one from /workspaces.'}
+            onRowClick={(w) => { setSelectedId(w.id); setSettingsTarget(w); }}
+            empty={q ? `No workspaces match "${q}".` : 'No workspaces in this tenant yet. Create one with “New workspace” (or press F7).'}
             ariaLabel="Workspaces"
           />
         )}
       </Section>
+
+      <WorkspaceCreateWizard
+        open={wizardOpen}
+        isAdmin
+        onClose={() => setWizardOpen(false)}
+        onCreated={onCreated}
+      />
+
+      <WorkspaceSettingsPane
+        workspace={settingsTarget ? { id: settingsTarget.id, name: settingsTarget.name } : null}
+        isAdmin
+        onClose={() => setSettingsTarget(null)}
+        onSaved={(updated) => {
+          setWorkspaces((prev) => (prev || []).map((w) => w.id === updated.id ? {
+            ...w,
+            name: updated.name, description: updated.description,
+            capacity: updated.capacity, domain: updated.domain,
+            updatedAt: updated.updatedAt,
+          } : w));
+        }}
+      />
     </AdminShell>
   );
 }

@@ -876,15 +876,22 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             temperature=0.3,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
             stream=True,
+            # Ask AOAI to emit a final usage-only chunk so we get the REAL
+            # prompt/completion split (not just total) for per-persona metering.
+            stream_options={"include_usage": True},
         )
 
         reply_parts: list[str] = []
         total_tokens = 0
+        prompt_tokens = 0
+        completion_tokens = 0
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 reply_parts.append(chunk.choices[0].delta.content)
             if hasattr(chunk, "usage") and chunk.usage:
-                total_tokens = chunk.usage.total_tokens
+                total_tokens = chunk.usage.total_tokens or total_tokens
+                prompt_tokens = chunk.usage.prompt_tokens or prompt_tokens
+                completion_tokens = chunk.usage.completion_tokens or completion_tokens
 
         reply = "".join(reply_parts)
 
@@ -956,6 +963,8 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "conversation_id": conversation_id,
                     "latency_ms": latency_ms,
                     "tokens_used": tokens_used,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
                     "grounding_count": len(grounding_docs),
                     "citation_count": len(cited_sources),
                     "ms_learn_used": ms_learn_used,
@@ -964,6 +973,30 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "uncovered": is_uncovered,
                     "page_url": str(page_context.get("url", ""))[:500],
                     "page_title": str(page_context.get("title", ""))[:200],
+                },
+            )
+
+            # Per-persona usage receipt for the Admin → Copilot usage panel.
+            # Same `copilot.usage` event name + property schema the Console
+            # orchestrator emits, so a single KQL query rolls both personas up.
+            # Tokens are the REAL prompt/completion split from the AOAI
+            # usage-only chunk (stream_options.include_usage); when the model
+            # didn't return a usage chunk they are 0 and the panel shows the
+            # call under total-only. persona="help-chat" distinguishes the
+            # help widget from the cross-item orchestrator.
+            telemetry.track_event(
+                "copilot.usage",
+                {
+                    "persona": "help-chat",
+                    "model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens or tokens_used,
+                    "aoai_calls": 1,
+                    "tool_calls": 0,
+                    "user_oid_hash": ip_hashed,
+                    "session_id": session_id,
+                    "boundary": os.environ.get("CSA_LOOM_BOUNDARY", "Commercial"),
                 },
             )
 
@@ -1128,6 +1161,82 @@ def feedback(req: func.HttpRequest) -> func.HttpResponse:
             conversation_id=conversation_id,
             actor=ip_hashed,
             source="chat-feedback",
+        )
+
+    return _json_response({"ok": True, "stored": stored}, headers)
+
+
+# ── Loom Console Feedback Endpoint ────────────────────────────────────────
+# Called by the Loom Console BFF (PATCH /api/copilot/sessions/[id] →
+# mirrorToFunctionFeedback) so thumbs feedback from the in-console copilot pane
+# lands in the SAME feedback pipeline as the docs-site widget. Auth: Azure
+# Functions host-level key (x-functions-key header / ?code=). No origin check —
+# the caller is the trusted BFF, not a browser — and no per-IP rate limiting,
+# since the BFF is a single server-side caller.
+
+
+@app.route(route="loom/feedback", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.FUNCTION)
+def loom_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    """Accept thumbs up/down from the Loom Console copilot pane (BFF-keyed)."""
+    headers = _cors_headers(req)
+
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=204, headers=headers)
+
+    try:
+        body = req.get_json()
+    except ValueError:
+        return _error_response("Invalid request format.", 400, headers)
+    if not isinstance(body, dict):
+        return _error_response("Invalid request format.", 400, headers)
+
+    rating = (body.get("rating") or "").strip().lower()
+    if rating not in ("up", "down"):
+        return _error_response("rating must be 'up' or 'down'.", 400, headers)
+
+    session_id = _safe_id(body.get("session_id"), "sess")
+    conversation_id = _safe_id(body.get("conversation_id") or body.get("session_id"), "conv")
+
+    improvement = (body.get("improvement") or "").strip()
+    if not isinstance(improvement, str):
+        improvement = ""
+    improvement = improvement[:MAX_FEEDBACK_TEXT_LENGTH]
+    improvement_redacted = (
+        redaction.redact(improvement, max_length=MAX_FEEDBACK_TEXT_LENGTH) if improvement else ""
+    )
+    actor = str(body.get("actor_hashed") or "loom-bff")[:64]
+
+    telemetry.track_event(
+        "chat.feedback",
+        {
+            "actor": actor,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "source": "loom-console",
+            "rating": rating,
+            "has_improvement": bool(improvement_redacted),
+        },
+    )
+
+    stored = storage.write_feedback(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        actor=actor,
+        rating=rating,
+        improvement=improvement_redacted,
+        source="loom-console",
+    )
+
+    # Mirror qualitative thumbs-down to the backlog drain, same as the widget.
+    if rating == "down" and improvement_redacted:
+        storage.write_backlog(
+            kind="bug",
+            title=f"Loom Console thumbs-down: {improvement_redacted[:80]}",
+            description=improvement_redacted,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            actor=actor,
+            source="loom-console-feedback",
         )
 
     return _json_response({"ok": True, "stored": stored}, headers)
