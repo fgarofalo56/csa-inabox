@@ -35,6 +35,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Pin16Regular, PinOff16Regular, Search16Regular, ZoomIn16Regular,
+  DataLine20Regular,
 } from '@fluentui/react-icons';
 import {
   parseSeries, zoomWindow, fmtVal, fmtX,
@@ -61,6 +62,16 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     userSelect: 'none',
+    transitionProperty: 'background-color, border-color, box-shadow',
+    transitionDuration: tokens.durationFaster,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      borderColor: tokens.colorNeutralStroke1,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '1px',
+    },
   },
   swatch: { width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0 },
   meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
@@ -70,7 +81,23 @@ const useStyles = makeStyles({
     position: 'relative', flex: 1, height: '22px',
     display: 'flex', alignItems: 'center',
   },
-  empty: { color: tokens.colorNeutralForeground3, fontSize: '12px', padding: '8px 0' },
+  // Static rail behind the two thumbs + the highlighted selected window.
+  zoomRail: {
+    position: 'absolute', left: 0, right: 0, height: '4px', borderRadius: '2px',
+    backgroundColor: tokens.colorNeutralStroke2, pointerEvents: 'none',
+  },
+  zoomFill: {
+    position: 'absolute', height: '4px', borderRadius: '2px',
+    backgroundColor: tokens.colorBrandBackground, pointerEvents: 'none',
+  },
+  empty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+    color: tokens.colorNeutralForeground3, fontSize: '12px',
+    padding: '24px 8px', textAlign: 'center',
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: '6px',
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  emptyIcon: { color: tokens.colorNeutralForeground4 },
 });
 
 export interface TimeSeriesChartProps {
@@ -203,7 +230,15 @@ export function TimeSeriesChart({ columns, rows, columnTypes, large }: TimeSerie
   const [zoomHi, setZoomHi] = useState(1000);
 
   if (!parsed) {
-    return <div className={s.empty}>No time-series columns to chart. Switch to the table view.</div>;
+    return (
+      <div className={s.empty} role="status">
+        <DataLine20Regular className={s.emptyIcon} />
+        <Text size={200} weight="semibold">No time-series columns to chart</Text>
+        <Caption1 className={s.meta}>
+          This result has no numeric series over a time/category axis. Switch the tile to the table view, or shape the query as <code>summarize … by bin(t)</code>.
+        </Caption1>
+      </div>
+    );
   }
   const { axis, series } = parsed;
   const axisN = axis.length;
@@ -322,20 +357,43 @@ export function TimeSeriesChart({ columns, rows, columnTypes, large }: TimeSerie
         </Tooltip>
         <Text className={s.meta} style={{ minWidth: 120 }}>{fmtX(axis[start].label)}</Text>
         <div className={s.zoomTrack}>
-          {/* Two overlaid native range inputs form the dual-thumb brush. */}
+          {/* Static rail + highlighted selected window behind the thumbs. */}
+          <div className={s.zoomRail} />
+          <div
+            className={s.zoomFill}
+            style={{ left: `${zoomLo / 10}%`, width: `${Math.max(0, (zoomHi - zoomLo) / 10)}%` }}
+          />
+          {/* Two overlaid native range inputs form the dual-thumb brush. The
+              tracks are transparent and only the thumbs take pointer events, so
+              both handles stay grabbable across their whole range (no overlap
+              steal). */}
           <input
             type="range" min={0} max={1000} step={1} value={zoomLo}
             aria-label="Zoom window start"
             aria-describedby={sliderId}
+            aria-valuetext={fmtX(axis[start].label)}
             onChange={(e) => setZoomLo(Math.min(Number(e.target.value), zoomHi - 1))}
-            style={{ position: 'absolute', width: '100%', pointerEvents: 'auto', accentColor: tokens.colorBrandBackground }}
+            className="loom-range-thumb"
+            style={{ position: 'absolute', width: '100%', accentColor: tokens.colorBrandBackground }}
           />
           <input
             type="range" min={0} max={1000} step={1} value={zoomHi}
             aria-label="Zoom window end"
+            aria-valuetext={fmtX(axis[end].label)}
             onChange={(e) => setZoomHi(Math.max(Number(e.target.value), zoomLo + 1))}
-            style={{ position: 'absolute', width: '100%', pointerEvents: 'auto', accentColor: tokens.colorBrandBackground }}
+            className="loom-range-thumb"
+            style={{ position: 'absolute', width: '100%', accentColor: tokens.colorBrandBackground }}
           />
+          <style>{`
+            .loom-range-thumb { -webkit-appearance: none; appearance: none; background: transparent; height: 22px; margin: 0; pointer-events: none; }
+            .loom-range-thumb:focus-visible { outline: none; }
+            .loom-range-thumb::-webkit-slider-runnable-track { background: transparent; height: 4px; }
+            .loom-range-thumb::-moz-range-track { background: transparent; height: 4px; }
+            .loom-range-thumb::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: ${tokens.colorBrandBackground}; border: 2px solid ${tokens.colorNeutralBackground1}; box-shadow: ${tokens.shadow4}; cursor: pointer; margin-top: -5px; }
+            .loom-range-thumb::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: ${tokens.colorBrandBackground}; border: 2px solid ${tokens.colorNeutralBackground1}; box-shadow: ${tokens.shadow4}; cursor: pointer; }
+            .loom-range-thumb:focus-visible::-webkit-slider-thumb { outline: 2px solid ${tokens.colorStrokeFocus2}; outline-offset: 1px; }
+            .loom-range-thumb:focus-visible::-moz-range-thumb { outline: 2px solid ${tokens.colorStrokeFocus2}; outline-offset: 1px; }
+          `}</style>
         </div>
         <Text className={s.meta} style={{ minWidth: 120, textAlign: 'right' }}>{fmtX(axis[end].label)}</Text>
         {zoomed && (
