@@ -4,15 +4,17 @@
  *   GET    /api/databricks/unity-catalog/tables?catalog=&schema=        → { ok, tables, volumes, functions }
  *   GET    /api/databricks/unity-catalog/tables?full_name=c.s.t         → { ok, table } (with columns)
  *   POST   /api/databricks/unity-catalog/tables                         → create table (MANAGED/EXTERNAL)
+ *   PATCH  /api/databricks/unity-catalog/tables                         → change owner / comment
  *   DELETE /api/databricks/unity-catalog/tables?full_name=c.s.t         → drop table
  *
  * Real Databricks Unity Catalog REST (api 2.1):
  *   GET/POST /api/2.1/unity-catalog/tables
- *   GET/DELETE /api/2.1/unity-catalog/tables/{full_name}
+ *   GET/PATCH/DELETE /api/2.1/unity-catalog/tables/{full_name}
  *   GET /api/2.1/unity-catalog/volumes, /functions
  * Learn: https://learn.microsoft.com/azure/databricks/tables/tables-concepts
  *
  * Console UAMI needs `CREATE TABLE` + `USE SCHEMA` + `USE CATALOG` on the parents.
+ * Ownership transfer needs current-owner / metastore-admin / MANAGE.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -20,7 +22,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate,
   listUcTables, listUcVolumes, listUcFunctions,
-  getUcTable, createUcTable, deleteUcTable,
+  getUcTable, createUcTable, deleteUcTable, patchUcTable,
   type UcColumnSpec,
 } from '@/lib/azure/databricks-client';
 
@@ -106,6 +108,29 @@ export async function POST(req: NextRequest) {
       storage_location: body?.storage_location ? String(body.storage_location) : undefined,
       comment: body?.comment ? String(body.comment) : undefined,
     });
+    return NextResponse.json({ ok: true, table });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const g = gate(); if (g) return g;
+  let body: any;
+  try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
+  const fullName = String(body?.full_name || '').trim();
+  if (!fullName || fullName.split('.').length !== 3) {
+    return NextResponse.json({ ok: false, error: 'full_name (catalog.schema.table) is required' }, { status: 400 });
+  }
+  const owner = body?.owner !== undefined ? String(body.owner).trim() : undefined;
+  const comment = body?.comment !== undefined ? String(body.comment) : undefined;
+  if (owner === undefined && comment === undefined) {
+    return NextResponse.json({ ok: false, error: 'provide owner and/or comment to update' }, { status: 400 });
+  }
+  try {
+    const table = await patchUcTable(fullName, { owner, comment });
     return NextResponse.json({ ok: true, table });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

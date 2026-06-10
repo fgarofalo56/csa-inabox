@@ -296,6 +296,45 @@ interface UcWriteDialogsProps {
 
 interface NewColumn { name: string; type_name: string; nullable: boolean; comment: string }
 
+// A key-value tag/property row (UC `properties` map on catalogs/schemas).
+interface KvRow { key: string; value: string }
+function kvToMap(rows: KvRow[]): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const r of rows) { const k = r.key.trim(); if (k) out[k] = r.value; }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Inline key-value editor for UC tags/properties (used by create catalog/schema).
+// Each row has a key + value input and a remove button; "Add tag" appends a row.
+function KvTagEditor({ rows, setRows }: { rows: KvRow[]; setRows: (r: KvRow[]) => void }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Input
+            style={{ flex: 1 }} value={r.key} placeholder="key (e.g. team)"
+            aria-label={`Tag ${i + 1} key`}
+            onChange={(_, d) => setRows(rows.map((x, j) => (j === i ? { ...x, key: d.value } : x)))}
+          />
+          <Input
+            style={{ flex: 1 }} value={r.value} placeholder="value (e.g. analytics)"
+            aria-label={`Tag ${i + 1} value`}
+            onChange={(_, d) => setRows(rows.map((x, j) => (j === i ? { ...x, value: d.value } : x)))}
+          />
+          <Button
+            size="small" appearance="subtle" icon={<Delete20Regular />}
+            aria-label={`Remove tag ${i + 1}`}
+            onClick={() => setRows(rows.filter((_, j) => j !== i))}
+          />
+        </div>
+      ))}
+      <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setRows([...rows, { key: '', value: '' }])}>
+        Add tag
+      </Button>
+    </div>
+  );
+}
+
 function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const s = useStyles();
   const {
@@ -310,29 +349,59 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [catName, setCatName] = useState('');
   const [catComment, setCatComment] = useState('');
   const [catStorage, setCatStorage] = useState('');
+  // Catalog type — Standard (managed) is the default; Foreign wraps a UC
+  // connection; Delta-Sharing mounts a share from a provider.
+  const [catType, setCatType] = useState<'STANDARD' | 'FOREIGN_CATALOG' | 'DELTASHARING_CATALOG'>('STANDARD');
+  const [catConnection, setCatConnection] = useState('');     // FOREIGN: connection_name
+  const [catForeignDb, setCatForeignDb] = useState('');       // FOREIGN: options.database
+  const [catProvider, setCatProvider] = useState('');         // DELTASHARING: provider_name
+  const [catShare, setCatShare] = useState('');               // DELTASHARING: share_name
+  const [catTags, setCatTags] = useState<KvRow[]>([]);        // key-value properties (tags)
   const [catBusy, setCatBusy] = useState(false);
   const [catErr, setCatErr] = useState<string | null>(null);
 
   const createCatalog = useCallback(async () => {
     if (!catName.trim()) return;
+    if (catType === 'FOREIGN_CATALOG' && !catConnection.trim()) { setCatErr('Foreign catalogs require a connection.'); return; }
+    if (catType === 'DELTASHARING_CATALOG' && (!catProvider.trim() || !catShare.trim())) { setCatErr('Delta-Sharing catalogs require a provider and a share.'); return; }
     setCatBusy(true); setCatErr(null);
     try {
+      const payload: Record<string, unknown> = {
+        name: catName.trim(),
+        comment: catComment.trim() || undefined,
+        properties: kvToMap(catTags),
+      };
+      if (catType === 'FOREIGN_CATALOG') {
+        payload.catalog_type = 'FOREIGN_CATALOG';
+        payload.connection_name = catConnection.trim();
+        if (catForeignDb.trim()) payload.options = { database: catForeignDb.trim() };
+      } else if (catType === 'DELTASHARING_CATALOG') {
+        payload.catalog_type = 'DELTASHARING_CATALOG';
+        payload.provider_name = catProvider.trim();
+        payload.share_name = catShare.trim();
+      } else {
+        // Standard managed catalog — storage root applies here only.
+        payload.storage_root = catStorage.trim() || undefined;
+      }
       const r = await fetch('/api/databricks/unity-catalog/catalogs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: catName.trim(), comment: catComment.trim() || undefined, storage_root: catStorage.trim() || undefined }),
+        body: JSON.stringify(payload),
       });
       const j = await r.json();
       if (!j.ok) { setCatErr(j.error || `HTTP ${r.status}`); return; }
-      setCreateCatalogOpen(false); setCatName(''); setCatComment(''); setCatStorage('');
+      setCreateCatalogOpen(false);
+      setCatName(''); setCatComment(''); setCatStorage('');
+      setCatType('STANDARD'); setCatConnection(''); setCatForeignDb(''); setCatProvider(''); setCatShare(''); setCatTags([]);
       onChanged();
     } catch (e: any) { setCatErr(e?.message || String(e)); }
     finally { setCatBusy(false); }
-  }, [catName, catComment, catStorage, onChanged, setCreateCatalogOpen]);
+  }, [catName, catComment, catStorage, catType, catConnection, catForeignDb, catProvider, catShare, catTags, onChanged, setCreateCatalogOpen]);
 
   // ---- Create schema ----
   const [schCatalog, setSchCatalog] = useState(activeCatalog || '');
   const [schName, setSchName] = useState('');
   const [schComment, setSchComment] = useState('');
+  const [schTags, setSchTags] = useState<KvRow[]>([]);
   const [schBusy, setSchBusy] = useState(false);
   const [schErr, setSchErr] = useState<string | null>(null);
   useEffect(() => { if (createSchemaOpen) setSchCatalog(activeCatalog || catalogs[0] || ''); }, [createSchemaOpen, activeCatalog, catalogs]);
@@ -343,15 +412,15 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     try {
       const r = await fetch('/api/databricks/unity-catalog/schemas', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: schName.trim(), catalog_name: schCatalog, comment: schComment.trim() || undefined }),
+        body: JSON.stringify({ name: schName.trim(), catalog_name: schCatalog, comment: schComment.trim() || undefined, properties: kvToMap(schTags) }),
       });
       const j = await r.json();
       if (!j.ok) { setSchErr(j.error || `HTTP ${r.status}`); return; }
-      setCreateSchemaOpen(false); setSchName(''); setSchComment('');
+      setCreateSchemaOpen(false); setSchName(''); setSchComment(''); setSchTags([]);
       onChanged();
     } catch (e: any) { setSchErr(e?.message || String(e)); }
     finally { setSchBusy(false); }
-  }, [schCatalog, schName, schComment, onChanged, setCreateSchemaOpen]);
+  }, [schCatalog, schName, schComment, schTags, onChanged, setCreateSchemaOpen]);
 
   // ---- Create table ----
   const [tblCatalog, setTblCatalog] = useState(activeCatalog || '');
@@ -406,6 +475,33 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [grErr, setGrErr] = useState<string | null>(null);
   const [grPrincipal, setGrPrincipal] = useState('');
   const [grPrivs, setGrPrivs] = useState<Set<string>>(new Set());
+  // Ownership transfer — Catalog Explorer "Change owner" maps to a UC PATCH
+  // with { owner } on the catalog/schema/table URL. Only CATALOG/SCHEMA/TABLE
+  // support a direct owner PATCH; volumes/functions inherit/own differently.
+  const [grOwner, setGrOwner] = useState('');
+  const [grOwnerMsg, setGrOwnerMsg] = useState<string | null>(null);
+  const ownerSupported = grSecurable === 'CATALOG' || grSecurable === 'SCHEMA' || grSecurable === 'TABLE';
+
+  const transferOwner = useCallback(async () => {
+    if (!grOwner.trim() || !grFullName.trim() || !ownerSupported) return;
+    setGrBusy(true); setGrErr(null); setGrOwnerMsg(null);
+    try {
+      const route = grSecurable === 'CATALOG' ? 'catalogs' : grSecurable === 'SCHEMA' ? 'schemas' : 'tables';
+      const body: Record<string, unknown> = { owner: grOwner.trim() };
+      if (grSecurable === 'CATALOG') body.name = grFullName.trim();
+      else body.full_name = grFullName.trim();
+      const r = await fetch(`/api/databricks/unity-catalog/${route}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      const newOwner = j.catalog?.owner || j.schema?.owner || j.table?.owner || grOwner.trim();
+      setGrOwnerMsg(`Owner of ${grFullName.trim()} is now ${newOwner}.`);
+      onChanged();
+    } catch (e: any) { setGrErr(e?.message || String(e)); }
+    finally { setGrBusy(false); }
+  }, [grOwner, grFullName, grSecurable, ownerSupported, onChanged]);
 
   // Seed full_name from the current tree context when the dialog opens.
   useEffect(() => {
@@ -469,11 +565,47 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {catErr && <MessageBar intent="error"><MessageBarBody>{catErr}</MessageBarBody></MessageBar>}
                 <Field label="Catalog name" required><Input value={catName} onChange={(_, d) => setCatName(d.value)} placeholder="sales" /></Field>
-                <Field label="Comment"><Input value={catComment} onChange={(_, d) => setCatComment(d.value)} /></Field>
-                <Field label="Managed storage root (optional)" hint="abfss://container@account.dfs.core.windows.net/path — omit to use the metastore default">
-                  <Input value={catStorage} onChange={(_, d) => setCatStorage(d.value)} placeholder="abfss://…" />
+                <Field label="Type" hint="Standard = managed UC catalog · Foreign = wraps an external DB via a UC connection · Delta Sharing = mounts a provider's share">
+                  <Dropdown
+                    value={catType === 'STANDARD' ? 'Standard' : catType === 'FOREIGN_CATALOG' ? 'Foreign' : 'Delta Sharing'}
+                    selectedOptions={[catType]}
+                    onOptionSelect={(_, d) => d.optionValue && setCatType(d.optionValue as typeof catType)}
+                  >
+                    <Option value="STANDARD" text="Standard">Standard</Option>
+                    <Option value="FOREIGN_CATALOG" text="Foreign">Foreign</Option>
+                    <Option value="DELTASHARING_CATALOG" text="Delta Sharing">Delta Sharing</Option>
+                  </Dropdown>
                 </Field>
-                <Caption1>POST <code>/api/2.1/unity-catalog/catalogs</code> — requires CREATE CATALOG on the metastore.</Caption1>
+                <Field label="Comment"><Input value={catComment} onChange={(_, d) => setCatComment(d.value)} /></Field>
+                {catType === 'STANDARD' && (
+                  <Field label="Managed storage root (optional)" hint="abfss://container@account.dfs.core.windows.net/path — omit to use the metastore default">
+                    <Input value={catStorage} onChange={(_, d) => setCatStorage(d.value)} placeholder="abfss://…" />
+                  </Field>
+                )}
+                {catType === 'FOREIGN_CATALOG' && (
+                  <>
+                    <Field label="Connection" required hint="Name of the UC connection to the foreign database">
+                      <Input value={catConnection} onChange={(_, d) => setCatConnection(d.value)} placeholder="pg_prod_conn" />
+                    </Field>
+                    <Field label="Database (optional)" hint="Source database to mirror (options.database)">
+                      <Input value={catForeignDb} onChange={(_, d) => setCatForeignDb(d.value)} placeholder="sales_db" />
+                    </Field>
+                  </>
+                )}
+                {catType === 'DELTASHARING_CATALOG' && (
+                  <>
+                    <Field label="Provider" required hint="The Delta Sharing provider you accepted">
+                      <Input value={catProvider} onChange={(_, d) => setCatProvider(d.value)} placeholder="contoso_provider" />
+                    </Field>
+                    <Field label="Share" required hint="The share to mount as this catalog">
+                      <Input value={catShare} onChange={(_, d) => setCatShare(d.value)} placeholder="sales_share" />
+                    </Field>
+                  </>
+                )}
+                <Field label="Tags (properties)" hint="Key-value metadata stored on the catalog">
+                  <KvTagEditor rows={catTags} setRows={setCatTags} />
+                </Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/catalogs</code> — requires CREATE CATALOG on the metastore. Foreign needs CREATE FOREIGN CATALOG on the connection; Delta Sharing needs USE PROVIDER on the provider.</Caption1>
               </div>
             </DialogContent>
             <DialogActions>
@@ -499,6 +631,9 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                 </Field>
                 <Field label="Schema name" required><Input value={schName} onChange={(_, d) => setSchName(d.value)} placeholder="bronze" /></Field>
                 <Field label="Comment"><Input value={schComment} onChange={(_, d) => setSchComment(d.value)} /></Field>
+                <Field label="Tags (properties)" hint="Key-value metadata stored on the schema">
+                  <KvTagEditor rows={schTags} setRows={setSchTags} />
+                </Field>
                 <Caption1>POST <code>/api/2.1/unity-catalog/schemas</code> — requires CREATE SCHEMA + USE CATALOG on the parent.</Caption1>
               </div>
             </DialogContent>
@@ -643,6 +778,26 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                       <Button appearance="outline" onClick={() => applyGrant('remove')} disabled={grBusy || !grPrincipal.trim() || grPrivs.size === 0}>Revoke selected</Button>
                     </div>
                     <Caption1>PATCH <code>/api/2.1/unity-catalog/permissions/&#123;type&#125;/&#123;full_name&#125;</code> — requires object ownership / MANAGE / metastore admin.</Caption1>
+
+                    <Divider>Change owner</Divider>
+                    {grOwnerMsg && <MessageBar intent="success"><MessageBarBody>{grOwnerMsg}</MessageBarBody></MessageBar>}
+                    {!ownerSupported ? (
+                      <MessageBar intent="info">
+                        <MessageBarBody>Ownership transfer applies to catalogs, schemas, and tables. Pick one of those securable types above.</MessageBarBody>
+                      </MessageBar>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                          <Field label="New owner" style={{ flex: 1 }} hint="user email, group name, or service-principal applicationId">
+                            <Input value={grOwner} onChange={(_, d) => setGrOwner(d.value)} placeholder="data-platform-admins" />
+                          </Field>
+                          <Button appearance="primary" onClick={transferOwner} disabled={grBusy || !grOwner.trim() || !grFullName.trim()}>
+                            {grBusy ? 'Working…' : 'Transfer ownership'}
+                          </Button>
+                        </div>
+                        <Caption1>PATCH <code>/api/2.1/unity-catalog/{grSecurable === 'CATALOG' ? 'catalogs' : grSecurable === 'SCHEMA' ? 'schemas' : 'tables'}/&#123;full_name&#125;</code> with <code>&#123; owner &#125;</code> — requires current-owner / MANAGE / metastore admin.</Caption1>
+                      </>
+                    )}
                   </>
                 )}
               </div>

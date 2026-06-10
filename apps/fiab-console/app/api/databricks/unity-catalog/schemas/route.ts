@@ -2,22 +2,36 @@
  * Unity Catalog WRITE — schemas.
  *
  *   GET    /api/databricks/unity-catalog/schemas?catalog=main         → { ok, schemas }
- *   POST   /api/databricks/unity-catalog/schemas                      → create schema
+ *   POST   /api/databricks/unity-catalog/schemas                      → create schema (+ tags)
+ *   PATCH  /api/databricks/unity-catalog/schemas                      → change owner / comment
  *   DELETE /api/databricks/unity-catalog/schemas?full_name=main.sales&force= → drop schema
  *
  * Real Databricks Unity Catalog REST (api 2.1):
  *   GET/POST /api/2.1/unity-catalog/schemas
+ *   PATCH    /api/2.1/unity-catalog/schemas/{full_name}
  *   DELETE   /api/2.1/unity-catalog/schemas/{full_name}
  * Learn: https://learn.microsoft.com/azure/databricks/schemas/create-schema
  *
  * Console UAMI needs `CREATE SCHEMA` + `USE CATALOG` on the parent catalog.
+ * Ownership transfer needs current-owner / metastore-admin / MANAGE.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  databricksConfigGate, listUcSchemas, createUcSchema, deleteUcSchema,
+  databricksConfigGate, listUcSchemas, createUcSchema, deleteUcSchema, patchUcSchema,
 } from '@/lib/azure/databricks-client';
+
+// Coerce a free-form object into a Record<string,string> (drops empty keys).
+function toStringMap(v: any): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) {
+    const key = String(k).trim();
+    if (key) out[key] = String(val ?? '');
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +78,31 @@ export async function POST(req: NextRequest) {
       catalog_name,
       comment: body?.comment ? String(body.comment) : undefined,
       storage_root: body?.storage_root ? String(body.storage_root) : undefined,
+      properties: toStringMap(body?.properties),
     });
+    return NextResponse.json({ ok: true, schema });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const g = gate(); if (g) return g;
+  let body: any;
+  try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
+  const fullName = String(body?.full_name || '').trim();
+  if (!fullName || fullName.split('.').length !== 2) {
+    return NextResponse.json({ ok: false, error: 'full_name (catalog.schema) is required' }, { status: 400 });
+  }
+  const owner = body?.owner !== undefined ? String(body.owner).trim() : undefined;
+  const comment = body?.comment !== undefined ? String(body.comment) : undefined;
+  if (owner === undefined && comment === undefined) {
+    return NextResponse.json({ ok: false, error: 'provide owner and/or comment to update' }, { status: 400 });
+  }
+  try {
+    const schema = await patchUcSchema(fullName, { owner, comment });
     return NextResponse.json({ ok: true, schema });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
