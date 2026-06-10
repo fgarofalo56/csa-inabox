@@ -61,6 +61,8 @@ import {
   Wrench16Regular,
   Flash16Regular,
   ChevronDown16Regular,
+  TopSpeed24Regular,
+  ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
 import { WAREHOUSE_PERSONA, type CopilotMode } from '@/lib/azure/copilot-personas-sql';
 
@@ -240,6 +242,51 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-wrap',
     margin: 0,
     overflowX: 'auto',
+  },
+  // --- Warehouse Settings (query acceleration) dialog ---
+  settingsTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  settingsTitleIcon: {
+    display: 'inline-flex',
+    color: tokens.colorBrandForeground1,
+  },
+  settingsBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    paddingTop: tokens.spacingVerticalXS,
+  },
+  settingsBadgeRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  settingsEngine: {
+    color: tokens.colorNeutralForeground3,
+  },
+  // The toggle is wrapped in a subtle card so it reads as a discrete setting,
+  // matching the Fabric/Azure portal "settings row" affordance.
+  settingsCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  settingsLoadRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalL} 0`,
+  },
+  settingsError: {
+    marginTop: tokens.spacingVerticalM,
   },
 });
 
@@ -516,43 +563,62 @@ export function WarehouseSettingsDialog({
     }
   }, [id, desired, onOpenChange]);
 
+  const s = useStyles();
   const caps = data?.capabilities;
   const available = caps?.queryAccelerationAvailable === true;
   const effective = data?.effective.queryAcceleration === true;
   const isNew = id === 'new';
+  const dirty = !!data && desired !== (data.settings.queryAcceleration === true);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
       <DialogSurface style={{ maxWidth: 620 }}>
         <DialogBody>
-          <DialogTitle>Warehouse settings — query acceleration</DialogTitle>
+          <DialogTitle>
+            <span className={s.settingsTitle}>
+              <span className={s.settingsTitleIcon} aria-hidden>
+                <TopSpeed24Regular />
+              </span>
+              Warehouse settings — query acceleration
+            </span>
+          </DialogTitle>
           <DialogContent>
-            {loading && <Spinner size="tiny" label="Loading settings…" labelPosition="after" />}
+            {loading && (
+              <div className={s.settingsLoadRow}>
+                <Spinner size="tiny" label="Loading settings…" labelPosition="after" />
+              </div>
+            )}
             {caps && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div className={s.settingsBody}>
+                <div className={s.settingsBadgeRow}>
                   <Badge appearance="outline" color={caps.backend === 'fabric' ? 'brand' : 'informative'}>
                     Backend: {caps.backendLabel}
                   </Badge>
-                  {effective && <Badge appearance="filled" color="success">Acceleration active</Badge>}
+                  {effective && (
+                    <Badge appearance="filled" color="success" icon={<Flash16Regular />}>
+                      Acceleration active
+                    </Badge>
+                  )}
                 </div>
-                <Caption1>{caps.engine}</Caption1>
+                <Caption1 className={s.settingsEngine}>{caps.engine}</Caption1>
 
-                <Field
-                  label="GPU-accelerated query acceleration"
-                  hint={
-                    available
-                      ? 'Route eligible scans through the Fabric distributed query-execution engine with GPU acceleration.'
-                      : 'Saved now; takes effect automatically once the Fabric backend is bound.'
-                  }
-                >
-                  <Switch
-                    checked={desired}
-                    disabled={isNew || saving}
-                    onChange={(_, d) => setDesired(d.checked)}
-                    label={desired ? 'On' : 'Off'}
-                  />
-                </Field>
+                <div className={s.settingsCard}>
+                  <Field
+                    label="GPU-accelerated query acceleration"
+                    hint={
+                      available
+                        ? 'Route eligible scans through the Fabric distributed query-execution engine with GPU acceleration.'
+                        : 'Saved now; takes effect automatically once the Fabric backend is bound.'
+                    }
+                  >
+                    <Switch
+                      checked={desired}
+                      disabled={isNew || saving}
+                      onChange={(_, d) => setDesired(d.checked)}
+                      label={desired ? 'On' : 'Off'}
+                    />
+                  </Field>
+                </div>
 
                 {!available && caps.queryAccelerationGate && (
                   <MessageBar intent="warning">
@@ -578,11 +644,22 @@ export function WarehouseSettingsDialog({
               </div>
             )}
             {error && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" className={s.settingsError}>
                 <MessageBarBody>
                   <MessageBarTitle>Could not load / save settings</MessageBarTitle>
                   {error}
                 </MessageBarBody>
+                <MessageBarActions>
+                  <Button
+                    appearance="transparent"
+                    size="small"
+                    icon={<ArrowClockwise16Regular />}
+                    onClick={load}
+                    disabled={loading || saving}
+                  >
+                    Retry
+                  </Button>
+                </MessageBarActions>
               </MessageBar>
             )}
           </DialogContent>
@@ -593,7 +670,7 @@ export function WarehouseSettingsDialog({
             <Button
               appearance="primary"
               onClick={save}
-              disabled={isNew || saving || loading || !data}
+              disabled={isNew || saving || loading || !data || !dirty}
             >
               {saving ? 'Saving…' : 'Save'}
             </Button>
