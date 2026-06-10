@@ -18,13 +18,13 @@
  * Factory and works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Badge, Spinner, Caption1, Body1, Subtitle2, Divider,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
-  makeStyles, tokens,
+  makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
 import {
   Play16Regular, Stop16Regular, Delete16Regular, ArrowSync16Regular,
@@ -48,13 +48,26 @@ interface CdcDetail {
 
 const useStyles = makeStyles({
   surface: { maxWidth: '760px', width: '760px' },
-  titleRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  meta: { display: 'flex', gap: 16, flexWrap: 'wrap', margin: '8px 0' },
-  metaItem: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 120 },
+  titleRow: { display: 'flex', alignItems: 'center', gap: '8px' },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3 },
+  meta: {
+    display: 'flex', gap: '16px', flexWrap: 'wrap',
+    marginTop: '12px', marginBottom: '12px',
+    ...shorthands.padding('12px'),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  metaItem: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '120px' },
   metaLabel: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  section: { marginTop: 12 },
-  sectionHead: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 },
-  actions: { display: 'flex', gap: 6, alignItems: 'center' },
+  metaValue: { fontSize: tokens.fontSizeBase300 },
+  desc: { display: 'block', marginBottom: '8px' },
+  section: { marginTop: '16px' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' },
+  sortable: { cursor: 'pointer', userSelect: 'none' },
+  muted: { color: tokens.colorNeutralForeground3 },
+  spinnerWrap: { ...shorthands.padding('16px') },
+  errorBar: { marginBottom: '8px' },
+  leadActions: { display: 'flex', gap: '6px', alignItems: 'center', marginRight: 'auto' },
 });
 
 function statusColor(s: string): 'success' | 'informative' | 'warning' | 'danger' {
@@ -68,6 +81,59 @@ function statusColor(s: string): 'success' | 'informative' | 'warning' | 'danger
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
   try { return text ? JSON.parse(text) : {}; } catch { return { ok: false, error: text || `HTTP ${res.status}` }; }
+}
+
+type ConnSortKey = 'linkedService' | 'connectorType';
+
+/** Sortable source/target connection mapping table (Linked service · Connector · Entities). */
+function ConnTable({ rows, emptyLabel }: { rows: CdcConn[]; emptyLabel: string }) {
+  const s = useStyles();
+  const [sortKey, setSortKey] = useState<ConnSortKey>('linkedService');
+  const [dir, setDir] = useState<'ascending' | 'descending'>('ascending');
+
+  const sorted = useMemo(() => {
+    const out = [...rows];
+    out.sort((a, b) => {
+      const cmp = (a[sortKey] || '').localeCompare(b[sortKey] || '');
+      return dir === 'ascending' ? cmp : -cmp;
+    });
+    return out;
+  }, [rows, sortKey, dir]);
+
+  const onSort = (key: ConnSortKey) => {
+    if (key === sortKey) setDir((d) => (d === 'ascending' ? 'descending' : 'ascending'));
+    else { setSortKey(key); setDir('ascending'); }
+  };
+  const sortProps = (key: ConnSortKey) => ({
+    sortable: true,
+    sortDirection: sortKey === key ? dir : undefined,
+    className: s.sortable,
+    onClick: () => onSort(key),
+    onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort(key); } },
+    tabIndex: 0,
+  });
+
+  if (rows.length === 0) return <Caption1 className={s.muted}>{emptyLabel}</Caption1>;
+  return (
+    <Table size="small" aria-label="CDC connections">
+      <TableHeader>
+        <TableRow>
+          <TableHeaderCell {...sortProps('linkedService')}>Linked service</TableHeaderCell>
+          <TableHeaderCell {...sortProps('connectorType')}>Connector</TableHeaderCell>
+          <TableHeaderCell>Entities</TableHeaderCell>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sorted.map((c, i) => (
+          <TableRow key={`${c.linkedService}-${i}`}>
+            <TableCell>{c.linkedService}</TableCell>
+            <TableCell><Badge size="small" appearance="outline">{c.connectorType}</Badge></TableCell>
+            <TableCell>{c.entities.length ? c.entities.join(', ') : <Caption1 className={s.muted}>auto-discover</Caption1>}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
 }
 
 export interface AdfCdcEditorProps {
@@ -150,29 +216,6 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
   const isRunning = (detail?.status || '').toLowerCase() === 'running';
   const transitioning = ['starting', 'stopping'].includes((detail?.status || '').toLowerCase());
 
-  const connTable = (rows: CdcConn[], emptyLabel: string) => (
-    rows.length === 0 ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{emptyLabel}</Caption1> : (
-      <Table size="small" aria-label="CDC connections">
-        <TableHeader>
-          <TableRow>
-            <TableHeaderCell>Linked service</TableHeaderCell>
-            <TableHeaderCell>Connector</TableHeaderCell>
-            <TableHeaderCell>Entities</TableHeaderCell>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((c, i) => (
-            <TableRow key={`${c.linkedService}-${i}`}>
-              <TableCell>{c.linkedService}</TableCell>
-              <TableCell><Badge size="small" appearance="outline">{c.connectorType}</Badge></TableCell>
-              <TableCell>{c.entities.length ? c.entities.join(', ') : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>auto-discover</Caption1>}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    )
-  );
-
   return (
     <Dialog open={name !== null} onOpenChange={(_, d) => { if (!d.open) onClose(changed); }}>
       <DialogSurface className={s.surface}>
@@ -198,17 +241,17 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
               </MessageBar>
             )}
 
-            {loading && <div style={{ padding: 16 }}><Spinner size="small" label="Loading CDC resource…" /></div>}
+            {loading && <div className={s.spinnerWrap}><Spinner size="small" label="Loading CDC resource…" /></div>}
 
             {error && (
-              <MessageBar intent="error" style={{ marginBottom: 8 }}>
+              <MessageBar intent="error" className={s.errorBar}>
                 <MessageBarBody><MessageBarTitle>CDC error</MessageBarTitle>{error}</MessageBarBody>
               </MessageBar>
             )}
 
             {detail && !gate && (
               <>
-                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                <Body1 className={s.intro}>
                   Inspect this Change Data Capture resource&apos;s status, latency policy, and source → target
                   mapping before executing it. Start the resource to run an initial load then continuously
                   capture changes into the Delta target; Stop to pause (landed data and the resource remain).
@@ -221,33 +264,33 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
                   </div>
                   <div className={s.metaItem}>
                     <span className={s.metaLabel}>Latency / mode</span>
-                    <span>{detail.mode}{detail.recurrence ? ` · every ${detail.recurrence.interval} ${detail.recurrence.frequency}` : ''}</span>
+                    <span className={s.metaValue}>{detail.mode}{detail.recurrence ? ` · every ${detail.recurrence.interval} ${detail.recurrence.frequency}` : ''}</span>
                   </div>
                   {detail.folder && (
                     <div className={s.metaItem}>
                       <span className={s.metaLabel}>Folder</span>
-                      <span>{detail.folder}</span>
+                      <span className={s.metaValue}>{detail.folder}</span>
                     </div>
                   )}
                 </div>
-                {detail.description && <Caption1 style={{ display: 'block', marginBottom: 8 }}>{detail.description}</Caption1>}
+                {detail.description && <Caption1 className={s.desc}>{detail.description}</Caption1>}
 
                 <Divider />
 
                 <div className={s.section}>
                   <div className={s.sectionHead}><DatabaseLink20Regular /><Subtitle2>Source</Subtitle2></div>
-                  {connTable(detail.sources, 'No source connections configured.')}
+                  <ConnTable rows={detail.sources} emptyLabel="No source connections configured." />
                 </div>
 
                 <div className={s.section}>
                   <div className={s.sectionHead}><DatabaseArrowRight20Regular /><Subtitle2>Target (Delta)</Subtitle2></div>
-                  {connTable(detail.targets, 'No target connections configured.')}
+                  <ConnTable rows={detail.targets} emptyLabel="No target connections configured." />
                 </div>
               </>
             )}
           </DialogContent>
           <DialogActions>
-            <div className={s.actions} style={{ marginRight: 'auto' }}>
+            <div className={s.leadActions}>
               {name && !gate && (
                 <Tooltip content="Refresh" relationship="label">
                   <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} disabled={loading || busy} onClick={() => load(name)} aria-label="Refresh CDC resource" />
