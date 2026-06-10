@@ -32,18 +32,20 @@
  */
 
 import {
-  Subtitle2, Caption1, Body1Strong, Input, Dropdown, Option, Button, Badge, Textarea,
+  Subtitle2, Caption1, Body1Strong, Input, Dropdown, Option, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner, Tooltip,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   ArrowSync16Regular, Dismiss16Regular, Add16Regular, Branch16Regular, Play16Regular,
+  Checkmark16Regular, DataLine20Regular, BranchFork20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -324,6 +326,41 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
 
   const canSave = !busy && dirty;
 
+  // Sortable / filterable run-history columns for LoomDataTable.
+  const runColumns = useMemo<LoomColumn<BatchRun>[]>(() => [
+    { key: 'id', label: 'Batch', width: 90, filterable: false,
+      getValue: (r) => r.id,
+      render: (r) => <span className={styles.mono}>{r.id}</span> },
+    { key: 'state', label: 'State', width: 120, filterType: 'select',
+      getValue: (r) => r.state || '—',
+      render: (r) => <Badge appearance="outline">{r.state || '—'}</Badge> },
+    { key: 'result', label: 'Result', width: 120, filterType: 'select',
+      getValue: (r) => r.result || '—',
+      render: (r) => (
+        <Badge appearance="outline" color={r.result === 'Succeeded' ? 'success' : r.result === 'Failed' ? 'danger' : 'informative'}>
+          {r.result || '—'}
+        </Badge>
+      ) },
+    { key: 'trigger', label: 'Trigger', width: 120, filterType: 'select',
+      getValue: (r) => r.trigger || '—' },
+    { key: 'submittedAt', label: 'Submitted', width: 200, filterType: 'date',
+      getValue: (r) => r.submittedAt || '',
+      render: (r) => fmtTs(r.submittedAt) },
+    { key: 'appId', label: 'Spark app', width: 200, filterable: false,
+      getValue: (r) => r.appId || '—',
+      render: (r) => <span className={styles.mono}>{r.appId || '—'}</span> },
+  ], [styles.mono]);
+
+  // Preview columns are dynamic — one per result column, mono cells.
+  const previewColumns = useMemo<LoomColumn<any[]>[]>(() => {
+    const cols = preview?.columns || [];
+    return cols.map((c, ci) => ({
+      key: String(ci), label: c.name, minWidth: 100, width: 160, filterable: cols.length <= 12,
+      getValue: (row: any[]) => (row[ci] === null || row[ci] === undefined ? '' : String(row[ci])),
+      render: (row: any[]) => <span className={styles.mono}>{row[ci] === null || row[ci] === undefined ? 'NULL' : String(row[ci])}</span>,
+    }));
+  }, [preview, styles.mono]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Refresh', actions: [
@@ -439,7 +476,14 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
             <>
               <Subtitle2>Data-quality constraints</Subtitle2>
               <Caption1>Each constraint is a boolean expression every row must satisfy. FAIL stops the refresh at the first violation; DROP silently removes violating rows.</Caption1>
-              {constraints.length === 0 && <Caption1>No constraints. Add one to enforce quality on every refresh.</Caption1>}
+              {constraints.length === 0 && (
+                <EmptyState
+                  icon={<Checkmark16Regular />}
+                  title="No data-quality constraints"
+                  body="Add a CHECK constraint to enforce row-level quality on every refresh. FAIL aborts the run on the first violation; DROP quietly discards violating rows."
+                  primaryAction={{ label: 'Add constraint', onClick: addConstraint }}
+                />
+              )}
               {constraints.map((c, i) => (
                 <div key={i} className={styles.constraintRow}>
                   <div className={styles.field} style={{ maxWidth: 200 }}>
@@ -463,7 +507,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                   </Tooltip>
                 </div>
               ))}
-              <div><Button icon={<Add16Regular />} onClick={addConstraint}>Add constraint</Button></div>
+              {constraints.length > 0 && <div><Button icon={<Add16Regular />} onClick={addConstraint}>Add constraint</Button></div>}
             </>
           )}
 
@@ -477,7 +521,14 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 <Button icon={<Branch16Regular />} onClick={reDeriveLineage} disabled={busy}>Re-derive from definition</Button>
               </div>
               <div className={styles.lineageBox}>
-                {lineageEdges.length === 0 && <Caption1>No lineage edges yet. Save a definition then Re-derive, or Refresh.</Caption1>}
+                {lineageEdges.length === 0 && (
+                  <EmptyState
+                    icon={<BranchFork20Regular />}
+                    title="No lineage edges yet"
+                    body="Lineage is derived from this view's definition (upstream sources) and any downstream MLVs that read from it. Save a definition then Re-derive, or run a Refresh to record edges."
+                    primaryAction={{ label: 'Re-derive from definition', onClick: busy ? undefined : reDeriveLineage }}
+                  />
+                )}
                 {lineageEdges.map((e, i) => {
                   const from = lineageNodes.find((n) => n.id === e.from);
                   const to = lineageNodes.find((n) => n.id === e.to);
@@ -518,36 +569,20 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
 
               <Body1Strong style={{ marginTop: 8 }}>Run history</Body1Strong>
               {runs.length === 0 ? (
-                <Caption1>No refresh runs yet.</Caption1>
+                <EmptyState
+                  icon={<DataLine20Regular />}
+                  title="No refresh runs yet"
+                  body="Run a full refresh to submit the first Synapse Spark batch. Completed runs — with state, result, and the underlying Spark application — appear here."
+                  primaryAction={{ label: busy ? 'Refreshing…' : 'Run full refresh', onClick: busy ? undefined : doRefresh }}
+                />
               ) : (
-                <Table size="small" aria-label="MLV refresh runs">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell>Batch</TableHeaderCell>
-                      <TableHeaderCell>State</TableHeaderCell>
-                      <TableHeaderCell>Result</TableHeaderCell>
-                      <TableHeaderCell>Trigger</TableHeaderCell>
-                      <TableHeaderCell>Submitted</TableHeaderCell>
-                      <TableHeaderCell>Spark app</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runs.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className={styles.mono}>{r.id}</TableCell>
-                        <TableCell><Badge appearance="outline">{r.state || '—'}</Badge></TableCell>
-                        <TableCell>
-                          <Badge appearance="outline" color={r.result === 'Succeeded' ? 'success' : r.result === 'Failed' ? 'danger' : 'informative'}>
-                            {r.result || '—'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{r.trigger || '—'}</TableCell>
-                        <TableCell>{fmtTs(r.submittedAt)}</TableCell>
-                        <TableCell className={styles.mono}>{r.appId || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <LoomDataTable
+                  ariaLabel="MLV refresh runs"
+                  columns={runColumns}
+                  rows={runs}
+                  getRowId={(r) => String(r.id)}
+                  empty="No runs match the current filters."
+                />
               )}
             </>
           )}
@@ -562,21 +597,23 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 {busy && <Spinner size="tiny" />}
               </div>
               {preview && (preview.rows?.length ? (
-                <Table size="small" aria-label="MLV preview">
-                  <TableHeader>
-                    <TableRow>
-                      {(preview.columns || []).map((c, i) => <TableHeaderCell key={i}>{c.name}</TableHeaderCell>)}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {preview.rows.slice(0, 200).map((row, ri) => (
-                      <TableRow key={ri}>
-                        {row.map((cell, ci) => <TableCell key={ci} className={styles.mono}>{cell === null ? 'NULL' : String(cell)}</TableCell>)}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : <Caption1>Query returned 0 rows.</Caption1>)}
+                <>
+                  <Caption1>{preview.rows.length} row{preview.rows.length === 1 ? '' : 's'} · {previewColumns.length} column{previewColumns.length === 1 ? '' : 's'}. Click a header to sort.</Caption1>
+                  <LoomDataTable
+                    ariaLabel="MLV preview"
+                    columns={previewColumns}
+                    rows={preview.rows.slice(0, 200).map((row, ri) => Object.assign([...row], { __id: ri }))}
+                    getRowId={(row: any) => String(row.__id)}
+                    empty="No rows match the current filters."
+                  />
+                </>
+              ) : (
+                <EmptyState
+                  icon={<Table20Regular />}
+                  title="Query returned 0 rows"
+                  body="The materialized Delta table exists but is currently empty. Run a refresh to (re)populate it, then preview again."
+                />
+              ))}
             </>
           )}
 
