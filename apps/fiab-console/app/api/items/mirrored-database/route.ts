@@ -12,6 +12,24 @@ export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
 
+/**
+ * Normalise the Snowflake-source mirror options ("Include Iceberg tables" + the
+ * external-storage connection) into a stored shape. Returns undefined when no
+ * options were supplied so non-Snowflake mirrors stay clean.
+ */
+function normalizeSnowflake(raw: any): { includeIceberg: boolean; icebergStorageUrl?: string; icebergTables: Array<{ schema: string; table: string; folder?: string }> } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    includeIceberg: !!raw.includeIceberg,
+    icebergStorageUrl: typeof raw.icebergStorageUrl === 'string' && raw.icebergStorageUrl.trim() ? raw.icebergStorageUrl.trim() : undefined,
+    icebergTables: Array.isArray(raw.icebergTables)
+      ? raw.icebergTables
+          .filter((t: any) => t?.schema && t?.table)
+          .map((t: any) => ({ schema: String(t.schema), table: String(t.table), ...(t.folder ? { folder: String(t.folder) } : {}) }))
+      : [],
+  };
+}
+
 async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
   const c = await workspacesContainer();
   try {
@@ -71,6 +89,9 @@ export async function POST(req: NextRequest) {
         database: body?.database || srcProps.database || '',
         connectionId: body?.connectionId || undefined,
         tables: Array.isArray(body?.tables) ? body.tables : [],
+        // Snowflake "Include Iceberg tables" options (only meaningful when
+        // sourceType === 'Snowflake'; harmless to store otherwise).
+        snowflake: normalizeSnowflake(body?.snowflake),
         mirroringStatus: 'NotStarted',
       },
       createdBy: s.claims.upn || s.claims.email || s.claims.oid,

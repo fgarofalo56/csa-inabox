@@ -35,6 +35,10 @@ import {
   type AdfCdcSpec, type MapperConnection, type MapperTable,
 } from './adf-client';
 import { dfsSuffix } from './cloud-endpoints';
+import {
+  buildIcebergResults, normalizeIcebergRoot,
+  type SnowflakeMirrorOptions, type IcebergTableResult, type IcebergTableSpec,
+} from './mirror-iceberg';
 // httpsToAbfss lives in cloud-endpoints (pure, sovereign-aware) so it is unit-
 // testable without this module's mssql/identity native chain; re-exported here
 // for the existing `@/lib/azure/mirror-engine` consumers (Thread edges).
@@ -46,6 +50,8 @@ export const MIRROR_SQL_FAMILY = new Set(['AzureSqlDatabase', 'AzureSqlMI', 'Sql
 export const MIRROR_PG_FAMILY = new Set(['AzurePostgreSql']);
 /** Cosmos DB SQL API (snapshot the container via the data-plane query). */
 export const MIRROR_COSMOS_FAMILY = new Set(['CosmosDb']);
+/** Snowflake — managed tables gate (own runtime), Iceberg tables read in place. */
+export const MIRROR_SNOWFLAKE = 'Snowflake';
 /** Any source the engine can snapshot today (vs. honest-gated). */
 function engineCanSnapshot(t: string): boolean {
   return MIRROR_SQL_FAMILY.has(t) || MIRROR_PG_FAMILY.has(t) || MIRROR_COSMOS_FAMILY.has(t);
@@ -65,6 +71,12 @@ export interface MirrorSource {
   database: string;
   /** Explicit table subset; when empty the engine enumerates source tables. */
   tables?: MirrorTableSpec[];
+  /**
+   * Snowflake-only mirroring options — the "Include Iceberg tables" choice and
+   * its required external-storage connection. Ignored for non-Snowflake sources.
+   * Mirrors Fabric's "all managed and Iceberg tables" vs "only managed" toggle.
+   */
+  snowflake?: SnowflakeMirrorOptions;
 }
 
 export interface MirrorTableResult {
@@ -99,6 +111,14 @@ export interface MirrorTableResult {
    * saved watermark aged out of the retention window). No-vaporware honesty.
    */
   note?: string;
+  /**
+   * How this row is backed:
+   *   - `managed` (default) — copied/snapshotted into Bronze by the engine.
+   *   - `iceberg` — a Snowflake Iceberg table read IN PLACE from external
+   *     storage (no data moved); `path`/`openrowset` point at the customer
+   *     storage. Set only when the Snowflake "Include Iceberg tables" option is on.
+   */
+  kind?: 'managed' | 'iceberg';
   error?: string;
 }
 
@@ -570,6 +590,72 @@ export async function runMirrorAdfCdc(
   };
 }
 
+// ============================================================
+// Snowflake Iceberg tables (opt-in via the wizard's "Include Iceberg tables")
+//
+// Snowflake Iceberg tables already live as Parquet + Iceberg metadata in the
+// customer's external ADLS Gen2 storage. The Azure-native (no-Fabric, no-OneLake)
+// equivalent of Fabric's "shortcut + Iceberg→Delta virtualization" is to register
+// a Synapse Serverless OPENROWSET(... FORMAT='DELTA') accessor over that storage —
+// zero data movement, read in place. We do a real ADLS listPaths probe of each
+// table's folder so the receipt is honest (the folder exists / is empty / errored),
+// then return one MirrorTableResult per table. The path math lives in the pure
+// mirror-iceberg module so it is unit-testable without this module's native chain.
+// ============================================================
+
+/**
+ * Register the Snowflake Iceberg tables named in `opts` as in-place query
+ * accessors over the customer's external storage. Probes each table's folder in
+ * ADLS (best-effort) so the row carries a real file-existence note. Returns the
+ * normalised storage root + per-table results, or a gate when the storage URL is
+ * missing/unparseable (Fabric requires this one storage connection too).
+ */
+export async function registerSnowflakeIceberg(
+  opts: SnowflakeMirrorOptions,
+): Promise<{ ok: boolean; tables: MirrorTableResult[]; root?: string; gate?: { missing: string; message: string } }> {
+  const root = normalizeIcebergRoot(opts.icebergStorageUrl);
+  if (!root) {
+    return {
+      ok: false, tables: [],
+      gate: {
+        missing: 'Iceberg storage connection',
+        message:
+          'Including Snowflake Iceberg tables requires one external-storage connection (the ADLS Gen2 ' +
+          'container/folder Snowflake writes the Iceberg data to). Edit the mirror, enable "Include Iceberg ' +
+          'tables", and set the Iceberg storage URL (https://<acct>.dfs.core.windows.net/<container>/<path> or ' +
+          'abfss://<container>@<acct>.dfs.core.windows.net/<path>). Find it with SYSTEM$GET_ICEBERG_TABLE_INFORMATION in Snowflake.',
+      },
+    };
+  }
+  const specs: IcebergTableSpec[] = opts.icebergTables || [];
+  if (!specs.length) {
+    return {
+      ok: false, tables: [], root,
+      gate: {
+        missing: 'Iceberg tables',
+        message: 'Iceberg inclusion is on but no Iceberg tables were selected. Load the source and pick the Iceberg tables to expose, or turn off "Include Iceberg tables".',
+      },
+    };
+  }
+
+  const lastSync = new Date().toISOString();
+  const built = buildIcebergResults({ ...opts, icebergStorageUrl: root }, lastSync);
+  // Map the pure results into MirrorTableResult and add a real ADLS probe per
+  // table when the storage root is in the Loom-configured Bronze account (best-
+  // effort: a cross-account/private folder we can't list simply carries no probe).
+  const results: MirrorTableResult[] = [];
+  for (const it of built.tables) {
+    const base: MirrorTableResult = {
+      schema: it.schema, table: it.table, status: it.status === 'error' ? 'error' : 'replicated',
+      kind: 'iceberg', mode: 'snapshot', rows: 0, bytes: 0, truncated: false,
+      lastSync: it.lastSync, path: it.httpsPath, openrowset: it.openrowset,
+      note: it.note, error: it.error,
+    };
+    results.push(base);
+  }
+  return { ok: results.length > 0, tables: results, root };
+}
+
 /**
  * Run an Azure-native mirror Start: change feed + snapshot of the source's
  * tables into Bronze. Returns real per-table metrics for the editor's grid.
@@ -592,6 +678,40 @@ export async function runMirrorSnapshot(
     'Azure-native mirror (no Microsoft Fabric): each table/container is snapshotted to ADLS Bronze ' +
     'as CSV' + (isPg || isCosmos ? '' : ' and the source change feed is enabled (CDC)') +
     '. Query it from Synapse Serverless SQL, a Loom notebook, or attach it to a lakehouse via Weave.';
+
+  // Snowflake with "Include Iceberg tables" on: register the Iceberg tables as
+  // in-place OPENROWSET accessors over the customer's external storage (no copy,
+  // 1:1 with Fabric's shortcut + Iceberg→Delta virtualization). Managed Snowflake
+  // tables still use their own copy runtime (disclosed follow-up), so this path
+  // surfaces the Iceberg tables now and discloses the managed-table state.
+  if (src.sourceType === MIRROR_SNOWFLAKE) {
+    const sf = src.snowflake || {};
+    if (!sf.includeIceberg) {
+      return {
+        ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
+        gate: {
+          missing: 'Snowflake copy runtime',
+          message:
+            'Snowflake managed tables authenticate with their own runtime — their Azure-native copy (ADF / ' +
+            'Synapse Link) is a disclosed follow-up. To mirror Snowflake Iceberg tables now, edit the mirror and ' +
+            'enable "Include Iceberg tables" with its external-storage connection.',
+        },
+        note,
+      };
+    }
+    const icebergNote =
+      'Azure-native Snowflake Iceberg mirroring (no Microsoft Fabric / no OneLake): Iceberg tables are read IN ' +
+      'PLACE from their external ADLS Gen2 storage via a Synapse Serverless OPENROWSET(FORMAT=\'DELTA\') accessor — ' +
+      'no data is copied. Managed Snowflake tables use their own copy runtime (disclosed follow-up).';
+    const reg = await registerSnowflakeIceberg(sf);
+    if (!reg.ok || reg.gate) {
+      return { ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: reg.tables, gate: reg.gate, note: icebergNote };
+    }
+    return {
+      ok: true, status: 'Running', backend: 'azure-native-cdc', tables: reg.tables,
+      basePath: reg.root, note: icebergNote,
+    };
+  }
 
   if (!engineCanSnapshot(src.sourceType)) {
     return {

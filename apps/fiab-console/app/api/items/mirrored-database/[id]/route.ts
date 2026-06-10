@@ -12,6 +12,20 @@ export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
 
+/** Normalise the Snowflake "Include Iceberg tables" options for storage. */
+function normalizeSnowflake(raw: any): { includeIceberg: boolean; icebergStorageUrl?: string; icebergTables: Array<{ schema: string; table: string; folder?: string }> } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    includeIceberg: !!raw.includeIceberg,
+    icebergStorageUrl: typeof raw.icebergStorageUrl === 'string' && raw.icebergStorageUrl.trim() ? raw.icebergStorageUrl.trim() : undefined,
+    icebergTables: Array.isArray(raw.icebergTables)
+      ? raw.icebergTables
+          .filter((t: any) => t?.schema && t?.table)
+          .map((t: any) => ({ schema: String(t.schema), table: String(t.table), ...(t.folder ? { folder: String(t.folder) } : {}) }))
+      : [],
+  };
+}
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
@@ -51,6 +65,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
             path: t.path,
             openrowset: t.openrowset,
             truncated: t.truncated,
+            // 'iceberg' = read in place from external storage; else copied/managed.
+            kind: t.kind,
             // Incremental vs full snapshot + the per-table CT watermark / disclosure.
             mode: t.mode,
             syncVersion: t.syncVersion,
@@ -65,7 +81,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       definition: liveDefinition,
       status: { mirroringStatus: st.mirroringStatus || 'NotStarted', error: st.lastRun?.error },
       // Source config so the editor can pre-fill the Edit form + Test connection.
-      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [] },
+      source: { sourceType: st.sourceType, server: st.server, database: st.database, connectionId: st.connectionId, tables: st.tables || [], snowflake: st.snowflake || undefined },
       lastRun: st.lastRun || null,
       tables,
     });
@@ -123,6 +139,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       database: body?.database ?? state.database,
       connectionId: body?.connectionId !== undefined ? body.connectionId : state.connectionId,
       tables,
+      snowflake: body?.snowflake !== undefined ? normalizeSnowflake(body.snowflake) : state.snowflake,
     };
     const next: WorkspaceItem = {
       ...existing,

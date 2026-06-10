@@ -26,11 +26,24 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
   const tables: MirrorTableSpec[] = Array.isArray(state?.tables)
     ? state.tables.filter((t: any) => t?.schema && t?.table).map((t: any) => ({ schema: String(t.schema), table: String(t.table) }))
     : [];
+  // Snowflake "Include Iceberg tables" options (ignored for other sources).
+  const snowflake = state?.snowflake && typeof state.snowflake === 'object'
+    ? {
+        includeIceberg: !!state.snowflake.includeIceberg,
+        icebergStorageUrl: typeof state.snowflake.icebergStorageUrl === 'string' ? state.snowflake.icebergStorageUrl : undefined,
+        icebergTables: Array.isArray(state.snowflake.icebergTables)
+          ? state.snowflake.icebergTables
+              .filter((t: any) => t?.schema && t?.table)
+              .map((t: any) => ({ schema: String(t.schema), table: String(t.table), folder: t.folder ? String(t.folder) : undefined }))
+          : [],
+      }
+    : undefined;
   return {
     sourceType: String(state?.sourceType || state?.definition?.properties?.source?.type || ''),
     server: String(state?.server || def.server || ''),
     database: String(state?.database || def.database || ''),
     tables,
+    snowflake,
   };
 }
 

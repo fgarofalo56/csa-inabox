@@ -23,12 +23,38 @@ Source UI (grounded in Microsoft Learn):
 | Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe) |
 | Enumerate source tables                                      | ✅ built (Load tables) | `/[id]/tables` (credential-aware, KV secretRef) + `/source-tables` (pre-create) |
 | Include/exclude a subset of tables                           | ✅ built (checkbox grid + All/None) | persisted to `state.tables` |
-| Name + review before create                                  | ✅ built (step 4 summary) | POST/PATCH `/api/items/mirrored-database[/id]` |
-| Edit an existing mirror's source/tables                      | ✅ built (Edit → same wizard) | PATCH `/[id]` |
+| **Snowflake: "Mirror all managed and Iceberg tables" vs "only managed"** | ✅ built (Snowflake-only "Include Iceberg tables" Switch in step 3) | persisted to `state.snowflake.includeIceberg` |
+| **Snowflake: storage connection for Iceberg tables** | ✅ built (Iceberg storage URL field, required when Iceberg on) | `state.snowflake.icebergStorageUrl` (normalized to abfss, sovereign-aware) |
+| **Snowflake: pick which Iceberg tables to expose** | ✅ built (per-row Iceberg checkbox column) | `state.snowflake.icebergTables[]` |
+| Name + review before create                                  | ✅ built (step 4 summary incl. Iceberg state) | POST/PATCH `/api/items/mirrored-database[/id]` |
+| Edit an existing mirror's source/tables                      | ✅ built (Edit → same wizard, Iceberg prefilled) | PATCH `/[id]` |
 | Multi-source binding surface                                 | ✅ built (GET/POST `/[id]/sources`) | item state |
 | Start replication → initial load + CDC                       | ✅ built (Start) | ADF CDC → Bronze **Delta** (opt-in) or built-in CSV snapshot engine — both Azure-native |
-| Monitor per-table replication (rows/bytes/last sync)         | ✅ built (replication grid) | `state.tablesStatus` |
-| Snowflake / Open-mirroring continuous CDC                    | ⚠️ honest-gate | engine returns a disclosed follow-up gate (`no-vaporware.md`) |
+| Start → Snowflake Iceberg tables read in place               | ✅ built (Start, Iceberg branch) | `registerSnowflakeIceberg` → Synapse Serverless `OPENROWSET(FORMAT='DELTA')` over external storage — no copy, 1:1 with Fabric shortcut + Iceberg→Delta virtualization |
+| Monitor per-table replication (rows/bytes/last sync)         | ✅ built (replication grid; Iceberg rows badged) | `state.tablesStatus` |
+| Snowflake managed-table continuous CDC                       | ⚠️ honest-gate | disclosed follow-up gate for *managed* tables (Iceberg tables are fully functional now) (`no-vaporware.md`) |
+| Open-mirroring continuous CDC                                | ⚠️ honest-gate | engine returns a disclosed follow-up gate (`no-vaporware.md`) |
+
+### Snowflake Iceberg parity note
+
+Fabric's Snowflake "Configure mirroring" screen offers, under **Mirror all data**,
+the choice to mirror **all managed and Iceberg tables** or **only managed tables
+(skipping Iceberg)**; when Iceberg is included it requires **one storage connection**
+to the external storage that holds the Iceberg data
+(https://learn.microsoft.com/fabric/mirroring/snowflake-tutorial#start-mirroring-process).
+Fabric handles Iceberg by creating a **OneLake shortcut** to that storage and using
+**metadata virtualization** to read the Iceberg table as Delta
+(https://learn.microsoft.com/fabric/onelake/onelake-iceberg-tables).
+
+Loom reproduces this 1:1 with **no Fabric and no OneLake**: the wizard exposes the
+same "Include Iceberg tables" toggle + the one storage connection (Iceberg storage
+URL). On Start, `registerSnowflakeIceberg` registers each selected Iceberg table as a
+Synapse Serverless `OPENROWSET(..., FORMAT='DELTA')` accessor directly over the
+customer's external ADLS Gen2 storage — **zero data movement** (the same in-place
+read Fabric's shortcut gives). Snowflake *managed* tables remain an honest follow-up
+gate (their own copy runtime), exactly as the rest of the engine discloses for
+own-runtime sources. No new env var or bicep resource is required — the Iceberg
+storage URL is per-mirror config captured in the wizard.
 
 ## Backend wiring
 

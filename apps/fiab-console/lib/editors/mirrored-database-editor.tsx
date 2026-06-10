@@ -115,7 +115,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [wizardInitial, setWizardInitial] = useState<
-    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string } | undefined
+    { sourceType?: string; server?: string; database?: string; connectionId?: string; tables?: MirrorTableSpec[]; displayName?: string; snowflake?: any } | undefined
   >(undefined);
 
   const loadList = useCallback(async (wsId: string) => {
@@ -238,6 +238,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       connectionId: sc.connectionId || '',
       tables: Array.isArray(sc.tables) ? sc.tables : [],
       displayName: detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '',
+      snowflake: sc.snowflake || undefined,
     });
     setWizardOpen(true);
   }, [detail, mirrors, mirrorId]);
@@ -579,6 +580,9 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                         <TableCell>{t.sourceTableName || '—'}</TableCell>
                         <TableCell>
                           {t.status || '—'}
+                          {t.kind === 'iceberg' && (
+                            <Badge appearance="tint" color="brand" size="small" style={{ marginLeft: 6 }} title="Iceberg table read in place from external storage (no copy)">Iceberg</Badge>
+                          )}
                           {t.mode && (
                             <Badge
                               appearance="tint"
