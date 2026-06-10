@@ -8,18 +8,22 @@ databases/tables → Connect** onboarding flow, and the Azure portal's
 linked-service + table-selection experience.
 
 Source UI (grounded in Microsoft Learn):
-- Mirroring source picker (Azure SQL DB/MI, SQL Server, Snowflake, Cosmos DB, PostgreSQL) — https://learn.microsoft.com/fabric/mirroring/overview
+- Mirroring source picker (Azure SQL DB/MI, SQL Server, Snowflake, Cosmos DB, PostgreSQL, **Google BigQuery**, **Oracle**) — https://learn.microsoft.com/fabric/mirroring/overview
 - Create + connect + select tables (Azure SQL) — https://learn.microsoft.com/fabric/mirroring/azure-sql-database-tutorial
 - Connection with Key Vault-stored credentials — https://learn.microsoft.com/fabric/data-factory/how-to-use-azure-key-vault-secrets-pipeline-activities
 - ADF Change Data Capture (the no-Fabric backend) — https://learn.microsoft.com/azure/data-factory/concepts-change-data-capture-resource
+- **BigQuery** mirroring connection (Service Account Email + Service Account JSON key, optional OPDG/VNET, project id) — https://learn.microsoft.com/fabric/mirroring/google-bigquery-tutorial
+- **Oracle** mirroring connection (TNS alias / Connect Descriptor / Easy Connect server, Basic auth username+password, **on-premises data gateway** = SHIR, LogMiner + supplemental logging) — https://learn.microsoft.com/fabric/mirroring/oracle-tutorial
 
 ## Azure/Fabric feature inventory → Loom coverage
 
 | Capability (Fabric/Azure)                                    | Loom coverage | Backend per control |
 |--------------------------------------------------------------|---------------|---------------------|
-| Pick a source type from a gallery of connectors              | ✅ built (8 source cards) | client state |
+| Pick a source type from a gallery of connectors              | ✅ built (10 source cards: + Google BigQuery, Oracle) | client state |
 | Create/select a connection (no plaintext creds)              | ✅ built (ConnectionBuilder + dropdown) | `/api/connections` → Key Vault secretRef |
 | Server / database coordinates                                | ✅ built (fields, prefilled from connection) | item state (Cosmos) |
+| **BigQuery** credential form (project id, service-account email, JSON key → KV, optional gateway) | ✅ built (`bigquery` conn type + `service-key` auth) | `/api/connections` (key → Key Vault), wizard maps project id → source.server |
+| **Oracle** credential form (server/TNS, basic username+password → KV, self-hosted IR / data gateway) | ✅ built (`oracle` conn type + `basic` auth + required `dataGateway`) | `/api/connections` (password → Key Vault), gateway persisted on the connection |
 | Test connectivity before create                              | ✅ built (Verify) | `/api/items/mirrored-database/verify` (real TDS probe) |
 | Enumerate source tables                                      | ✅ built (Load tables) | `/[id]/tables` (credential-aware, KV secretRef) + `/source-tables` (pre-create) |
 | Include/exclude a subset of tables                           | ✅ built (checkbox grid + All/None) | persisted to `state.tables` |
@@ -29,6 +33,7 @@ Source UI (grounded in Microsoft Learn):
 | Start replication → initial load + CDC                       | ✅ built (Start) | ADF CDC → Bronze **Delta** (opt-in) or built-in CSV snapshot engine — both Azure-native |
 | Monitor per-table replication (rows/bytes/last sync)         | ✅ built (replication grid) | `state.tablesStatus` |
 | Snowflake / Open-mirroring continuous CDC                    | ⚠️ honest-gate | engine returns a disclosed follow-up gate (`no-vaporware.md`) |
+| BigQuery / Oracle table enumeration + replication            | ⚠️ honest-gate | wizard credential forms fully built; `verify` + `source-tables` return a precise, source-specific disclosure (read at mirror time via the GCP service key / self-hosted-IR ADF connector → ADLS Bronze Delta). No real Fabric. |
 
 ## Backend wiring
 

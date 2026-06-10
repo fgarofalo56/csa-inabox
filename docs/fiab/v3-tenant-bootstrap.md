@@ -477,6 +477,34 @@ az role assignment create --assignee-object-id <console-uami-oid> \
 ```
 (Granted live on kv-loom-… 2026-06-06.)
 
+### Cross-cloud mirror sources (Google BigQuery, Oracle)
+
+The Mirrored Database wizard and the Connections page now expose two cross-cloud
+source types in parity with Fabric's **Mirrored Google BigQuery** and **Mirrored
+Oracle** connectors. Both are 100% Azure-native — no real Fabric/OneLake:
+
+- **Google BigQuery** (`type: bigquery`, auth `service-key`): captures the GCP
+  **project id**, the **service-account email**, and the **service-account JSON
+  key** (the key is written to Key Vault, never stored in Cosmos/UI). An optional
+  **data gateway** (self-hosted IR / OPDG) can be named when BigQuery is reached
+  over a private route. Replication is staged to ADLS Bronze Delta via the Data
+  Factory **Google BigQuery** connector. GCP service account needs
+  `bigquery.tables.getData`, `bigquery.jobs.create`, and read-session permissions.
+- **Oracle** (`type: oracle`, auth `basic`): captures the **server** (TNS alias /
+  Connect Descriptor / Easy Connect), a **basic** username + password (password →
+  Key Vault), and a **required data gateway** (self-hosted IR / on-premises data
+  gateway — the SHIR equivalent) because Oracle is read with **LogMiner** over the
+  gateway. The Oracle DB needs ARCHIVELOG mode + supplemental logging and the sync
+  user needs `CREATE SESSION`, `SELECT_CATALOG_ROLE`, `LOGMINING`. Replication
+  lands as Delta in ADLS Bronze via the Data Factory **Oracle** connector.
+
+No new env var or Azure resource is required: both reuse the existing Loom
+Connections → Key Vault path plus the ADF factory + self-hosted IR that the
+data-integration infra already deploys (a SHIR is provisioned/shared per
+`csa_loom_data_integration_infra`). To reach a non-public BigQuery/Oracle source,
+register the source's network with the existing self-hosted IR and name that IR as
+the connection's **data gateway**.
+
 ## Delta Sharing shortcuts (cross-tenant) {#delta-sharing-shortcuts}
 
 A **Delta Sharing** lakehouse shortcut (Lakehouse editor → Shortcuts → New

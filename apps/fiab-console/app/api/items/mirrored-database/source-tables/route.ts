@@ -27,7 +27,10 @@ export async function POST(req: NextRequest) {
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
 
-  if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
+  // BigQuery (project id only) and Oracle (server/connect string) don't require a
+  // database to reach their honest "enumerated at mirror time" gate below.
+  const dbOptional = sourceType === 'BigQuery' || sourceType === 'Oracle';
+  if (!database && !dbOptional) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
 
   try {
     let tables: Array<{ schema: string; table: string }> = [];
@@ -39,6 +42,16 @@ export async function POST(req: NextRequest) {
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
+    } else if (sourceType === 'BigQuery') {
+      return NextResponse.json(
+        { ok: false, gate: true, error: `BigQuery tables are enumerated through the GCP service-account key at mirror time, not from this console. Leave the table list empty to mirror every table in project '${server}' (dataset '${database || 'all'}'), or type schema.table entries explicitly.` },
+        { status: 200 },
+      );
+    } else if (sourceType === 'Oracle') {
+      return NextResponse.json(
+        { ok: false, gate: true, error: `Oracle tables are enumerated over the self-hosted integration runtime / data gateway at mirror time. Leave the table list empty to mirror everything the connector discovers, or type schema.table entries explicitly.` },
+        { status: 200 },
+      );
     } else {
       return NextResponse.json(
         { ok: false, gate: true, error: `${sourceType || 'This source'} can't be enumerated here — leave the table list empty to mirror everything the engine discovers.` },

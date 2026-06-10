@@ -29,7 +29,7 @@ function err(error: string, status: number) { return NextResponse.json({ ok: fal
 /** Known source types the mirror engine + ADF CDC path can replicate. */
 function knownSource(t: string): boolean {
   return MIRROR_SQL_FAMILY.has(t) || MIRROR_PG_FAMILY.has(t) || MIRROR_COSMOS_FAMILY.has(t)
-    || t === 'Snowflake' || t === 'GenericMirror';
+    || t === 'Snowflake' || t === 'BigQuery' || t === 'Oracle' || t === 'GenericMirror';
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

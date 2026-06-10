@@ -48,8 +48,14 @@ export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTyp
   { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['generic-sql', 'connection-string' as string] },
   { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
+  { id: 'BigQuery', name: 'Google BigQuery', accent: '#4285f4', connTypes: ['bigquery'] },
+  { id: 'Oracle', name: 'Oracle Database', accent: '#c74634', connTypes: ['oracle'] },
   { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
 ];
+
+/** Cross-cloud sources reached over a data gateway / project id rather than a plain server FQDN. */
+const PROJECT_SOURCES = new Set(['BigQuery']);
+const GATEWAY_SOURCES = new Set(['BigQuery', 'Oracle']);
 
 const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
@@ -147,10 +153,16 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
   useEffect(() => {
     if (pickedConn) {
-      if (pickedConn.host) setCreateServer(pickedConn.host);
+      // BigQuery has no server FQDN — its "server" coordinate is the GCP project id,
+      // so the engine/ADF connector knows which project to read. Oracle uses host.
+      const srv = pickedConn.host || pickedConn.projectId;
+      if (srv) setCreateServer(srv);
       if (pickedConn.database) setCreateDb(pickedConn.database);
     }
   }, [pickedConn]);
+
+  const usesProject = PROJECT_SOURCES.has(createSrc);
+  const usesGateway = GATEWAY_SOURCES.has(createSrc);
 
   const loadSourceTables = useCallback(async () => {
     if (!createServer.trim() && createSrc !== 'CosmosDb') { setTablesMsg('Enter the server/host and database first.'); return; }
@@ -278,13 +290,23 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
-                  <Field label="Server / host" style={{ flex: 1 }}>
-                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
+                  <Field label={usesProject ? 'Project id' : 'Server / host'} style={{ flex: 1 }}>
+                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)}
+                      placeholder={usesProject ? 'my-gcp-project' : createSrc === 'Oracle' ? 'host:1521/service' : 'server.database.windows.net'}
+                      disabled={!!(pickedConn?.host || pickedConn?.projectId)} />
                   </Field>
-                  <Field label="Database" style={{ flex: 1 }}>
-                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
+                  <Field label={usesProject ? 'Dataset' : 'Database'} style={{ flex: 1 }}>
+                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }}
+                      placeholder={usesProject ? 'analytics' : createSrc === 'Oracle' ? 'ORCLPDB1' : 'prod'} disabled={!!pickedConn?.database} />
                   </Field>
                 </div>
+                {usesGateway && (
+                  <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                    {createSrc === 'Oracle'
+                      ? `Oracle mirroring reads via LogMiner over a self-hosted integration runtime / on-premises data gateway${pickedConn?.dataGateway ? ` (${pickedConn.dataGateway})` : ' — set it on the connection'}. The Azure-native path lands changes as Delta in ADLS Bronze.`
+                      : `BigQuery is read with a GCP service-account key${pickedConn?.serviceAccountEmail ? ` (${pickedConn.serviceAccountEmail})` : ''}${pickedConn?.dataGateway ? ` over the ${pickedConn.dataGateway} gateway` : ''}. The Azure-native path stages to ADLS Bronze Delta — no real Fabric.`}
+                  </Caption1>
+                )}
                 <div style={{ marginTop: 10 }}>
                   <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
                     {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
@@ -348,8 +370,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <div className={s.summary} style={{ marginTop: 10 }}>
                   <span className={s.sumKey}>Source</span><span>{srcDef.name}</span>
                   <span className={s.sumKey}>Connection</span><span>{pickedConn ? `${pickedConn.name} (${pickedConn.authMethod})` : 'manual / managed identity'}</span>
-                  <span className={s.sumKey}>Server</span><span><code>{createServer || '—'}</code></span>
-                  <span className={s.sumKey}>Database</span><span><code>{createDb || '—'}</code></span>
+                  <span className={s.sumKey}>{usesProject ? 'Project' : 'Server'}</span><span><code>{createServer || '—'}</code></span>
+                  <span className={s.sumKey}>{usesProject ? 'Dataset' : 'Database'}</span><span><code>{createDb || '—'}</code></span>
+                  {usesGateway && pickedConn?.dataGateway && (
+                    <><span className={s.sumKey}>Gateway</span><span><code>{pickedConn.dataGateway}</code></span></>
+                  )}
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>

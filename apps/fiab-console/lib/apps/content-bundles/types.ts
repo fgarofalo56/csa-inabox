@@ -130,7 +130,7 @@ export interface ActivatorContent {
 
 export interface MirroredDatabaseContent {
   kind: 'mirrored-database';
-  source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[] };
+  source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery' | 'oracle'; server?: string; database?: string; tables: string[] };
 }
 
 /**

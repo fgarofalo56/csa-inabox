@@ -260,6 +260,7 @@ function fabricSourceType(kind: string | undefined): string {
     case 'snowflake': return 'Snowflake';
     case 'cosmos': return 'CosmosDb';
     case 'bigquery': return 'GenericMirror';
+    case 'oracle': return 'GenericMirror';
     default: return 'AzureSqlDatabase';
   }
 }

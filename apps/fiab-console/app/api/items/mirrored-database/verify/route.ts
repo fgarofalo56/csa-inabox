@@ -28,8 +28,31 @@ export async function POST(req: NextRequest) {
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
 
-  if (!server || !database) {
-    return NextResponse.json({ ok: false, error: 'server and database are required to verify' }, { status: 400 });
+  // BigQuery's "server" is the GCP project id and its dataset is optional pre-load;
+  // Oracle's server can carry the service in its connect string. Require the
+  // project/server, not necessarily a database, for these two.
+  const projectOnly = sourceType === 'BigQuery';
+  if (!server || (!database && !projectOnly)) {
+    return NextResponse.json(
+      { ok: false, error: projectOnly ? 'project id is required to verify' : 'server and database are required to verify' },
+      { status: 400 },
+    );
+  }
+
+  // Cross-cloud sources (BigQuery service key / Oracle over a gateway) can't be
+  // reached from the BFF here — they authenticate with their own credential at
+  // mirror time. Return an honest, source-specific disclosure (no fake success).
+  if (sourceType === 'BigQuery') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `BigQuery project ${server} uses a GCP service-account key. The connection is validated when the mirror first syncs: the Azure-native path stages the project's tables to ADLS Bronze Delta via the Data Factory Google BigQuery connector. Ensure the service account has bigquery.tables.getData + bigquery.jobs.create on the project.`,
+    });
+  }
+  if (sourceType === 'Oracle') {
+    return NextResponse.json({
+      ok: true, verified: false,
+      detail: `Oracle source ${server} is reached over a self-hosted integration runtime / data gateway and read with LogMiner. The connection is validated when the mirror first syncs (ADF Oracle connector → ADLS Bronze Delta). Ensure ARCHIVELOG mode + supplemental logging are enabled and the user has CREATE SESSION, SELECT_CATALOG_ROLE, and LOGMINING.`,
+    });
   }
 
   if (SQL_FAMILY.has(sourceType)) {

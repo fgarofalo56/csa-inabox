@@ -19,14 +19,20 @@ import type { SessionPayload } from '@/lib/auth/session';
 
 export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
-  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql';
+  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql'
+  // Cross-cloud mirror sources (Fabric parity: Mirrored BigQuery / Mirrored Oracle).
+  // Azure-native default replicates them with ADF's Google BigQuery / Oracle
+  // connectors over a self-hosted integration runtime — no real Fabric.
+  | 'bigquery' | 'oracle';
 
 export type AuthMethod =
   | 'entra-mi'          // the Console managed identity (no secret)
   | 'sql-password'      // SQL/PG username + password (password → KV)
   | 'connection-string' // full connection string → KV
   | 'account-key'       // storage account key → KV
-  | 'service-principal';// Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'service-principal' // Entra SPN: tenantId + clientId + clientSecret (secret → KV)
+  | 'service-key'       // GCP service-account JSON key file contents (key → KV) — BigQuery
+  | 'basic';            // username + password over a data gateway (password → KV) — Oracle
 
 export interface LoomConnection {
   id: string;
@@ -40,6 +46,17 @@ export interface LoomConnection {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
+  /** GCP project id (BigQuery) — the project whose datasets/tables are mirrored. */
+  projectId?: string;
+  /**
+   * On-premises / self-hosted data gateway (integration runtime) name. Required by
+   * Fabric's Oracle mirroring (OPDG) and optional for BigQuery (OPDG/VNET). The
+   * Azure-native ADF path binds this to a self-hosted IR so the connector can reach
+   * a source that isn't publicly routable.
+   */
+  dataGateway?: string;
+  /** Service-account email (BigQuery service-key auth). */
+  serviceAccountEmail?: string;
   /** KV secret name holding the password / connection string / key / SPN secret. */
   secretRef?: string;
   description?: string;
@@ -65,6 +82,9 @@ export interface CreateConnectionInput {
   username?: string;
   spnTenantId?: string;
   spnClientId?: string;
+  projectId?: string;
+  dataGateway?: string;
+  serviceAccountEmail?: string;
   description?: string;
   /** The secret value (password / connection string / key / SPN secret) — written to KV, never stored. */
   secret?: string;
@@ -72,7 +92,8 @@ export interface CreateConnectionInput {
 
 /** Does this auth method require a secret in Key Vault? */
 export function authNeedsSecret(m: AuthMethod): boolean {
-  return m === 'sql-password' || m === 'connection-string' || m === 'account-key' || m === 'service-principal';
+  return m === 'sql-password' || m === 'connection-string' || m === 'account-key'
+    || m === 'service-principal' || m === 'service-key' || m === 'basic';
 }
 
 export async function listConnections(session: SessionPayload): Promise<LoomConnectionView[]> {
@@ -110,6 +131,9 @@ export async function createConnection(session: SessionPayload, input: CreateCon
     username: input.username?.trim() || undefined,
     spnTenantId: input.spnTenantId?.trim() || undefined,
     spnClientId: input.spnClientId?.trim() || undefined,
+    projectId: input.projectId?.trim() || undefined,
+    dataGateway: input.dataGateway?.trim() || undefined,
+    serviceAccountEmail: input.serviceAccountEmail?.trim() || undefined,
     description: input.description?.trim() || undefined,
     secretRef,
     createdBy: session.claims.upn || session.claims.email || tenantId,

@@ -29,10 +29,12 @@ const useStyles = makeStyles({
 const TYPE_LABEL: Record<string, string> = {
   'azure-sql': 'Azure SQL', 'synapse-dedicated': 'Synapse Dedicated', 'synapse-serverless': 'Synapse Serverless',
   'databricks-sql': 'Databricks SQL', 'postgres': 'PostgreSQL', 'storage-adls': 'ADLS / Storage', 'cosmos': 'Cosmos DB', 'generic-sql': 'SQL Server',
+  'bigquery': 'Google BigQuery', 'oracle': 'Oracle Database',
 };
 const METHOD_LABEL: Record<string, string> = {
   'entra-mi': 'Managed identity', 'sql-password': 'SQL password', 'connection-string': 'Connection string',
   'account-key': 'Account key', 'service-principal': 'Service principal',
+  'service-key': 'Service-account key', 'basic': 'Basic auth',
 };
 
 export default function ConnectionsPage() {
