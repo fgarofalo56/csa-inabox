@@ -190,10 +190,18 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusCircular,
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground4,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  compositionSeg: {
+    height: '100%',
+    minWidth: 0,
+    transition: 'filter 120ms ease',
+    ':hover': { filter: 'brightness(1.08)' },
   },
   legend: { display: 'flex', gap: tokens.spacingHorizontalXL, flexWrap: 'wrap' },
   legendRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   legendDot: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0 },
+  legendValue: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold, fontVariantNumeric: 'tabular-nums' },
 
   nameCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   nameIcon: {
@@ -220,6 +228,26 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     color: tokens.colorNeutralForeground2,
     textAlign: 'center',
+  },
+  loadingBox: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: tokens.spacingVerticalXXL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  emptyIcon: {
+    width: '48px',
+    height: '48px',
+    borderRadius: tokens.borderRadiusCircular,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
+    marginBottom: tokens.spacingVerticalXS,
   },
 });
 
@@ -413,7 +441,11 @@ export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
         </MessageBar>
       )}
 
-      {loading && !data && <Spinner label="Walking storage…" />}
+      {loading && !data && (
+        <div className={styles.loadingBox}>
+          <Spinner label="Walking storage…" />
+        </div>
+      )}
 
       {totals && (
         <>
@@ -454,23 +486,42 @@ export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
 
           <div className={styles.panel}>
             <Text weight="semibold">Storage composition</Text>
-            <div className={styles.compositionBar} role="img" aria-label="Storage composition: live, system, soft-deleted">
-              <span style={{ width: `${livePct}%`, backgroundColor: LIVE_COLOR }} />
-              <span style={{ width: `${systemPct}%`, backgroundColor: SYSTEM_COLOR }} />
-              <span style={{ width: `${deletedPct}%`, backgroundColor: DELETED_COLOR }} />
+            <div
+              className={styles.compositionBar}
+              role="img"
+              aria-label={`Storage composition: ${livePct.toFixed(0)}% live data, ${systemPct.toFixed(0)}% system/metadata, ${deletedPct.toFixed(0)}% soft-deleted`}
+            >
+              {livePct > 0 && (
+                <Tooltip content={`Live data — ${fmtBytes(totals.liveBytes - totals.systemBytes)} (${livePct.toFixed(0)}%)`} relationship="label">
+                  <span className={styles.compositionSeg} style={{ width: `${livePct}%`, backgroundColor: LIVE_COLOR }} />
+                </Tooltip>
+              )}
+              {systemPct > 0 && (
+                <Tooltip content={`System / metadata — ${fmtBytes(totals.systemBytes)} (${systemPct.toFixed(0)}%)`} relationship="label">
+                  <span className={styles.compositionSeg} style={{ width: `${systemPct}%`, backgroundColor: SYSTEM_COLOR }} />
+                </Tooltip>
+              )}
+              {deletedPct > 0 && (
+                <Tooltip content={`Soft-deleted — ${fmtBytes(totals.deletedBytes)} (${deletedPct.toFixed(0)}%)`} relationship="label">
+                  <span className={styles.compositionSeg} style={{ width: `${deletedPct}%`, backgroundColor: DELETED_COLOR }} />
+                </Tooltip>
+              )}
             </div>
             <div className={styles.legend}>
               <span className={styles.legendRow}>
                 <span className={styles.legendDot} style={{ backgroundColor: LIVE_COLOR }} aria-hidden />
-                <Caption1>Live data {fmtBytes(totals.liveBytes - totals.systemBytes)}</Caption1>
+                <Caption1>Live data</Caption1>
+                <Caption1 className={styles.legendValue}>{fmtBytes(totals.liveBytes - totals.systemBytes)}</Caption1>
               </span>
               <span className={styles.legendRow}>
                 <span className={styles.legendDot} style={{ backgroundColor: SYSTEM_COLOR }} aria-hidden />
-                <Caption1>System / metadata {fmtBytes(totals.systemBytes)}</Caption1>
+                <Caption1>System / metadata</Caption1>
+                <Caption1 className={styles.legendValue}>{fmtBytes(totals.systemBytes)}</Caption1>
               </span>
               <span className={styles.legendRow}>
                 <span className={styles.legendDot} style={{ backgroundColor: DELETED_COLOR }} aria-hidden />
-                <Caption1>Soft-deleted {fmtBytes(totals.deletedBytes)}</Caption1>
+                <Caption1>Soft-deleted</Caption1>
+                <Caption1 className={styles.legendValue}>{fmtBytes(totals.deletedBytes)}</Caption1>
               </span>
             </div>
             {totals.capped && (
@@ -484,6 +535,9 @@ export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
 
           {items.length === 0 ? (
             <div className={styles.emptyBox}>
+              <span className={styles.emptyIcon} aria-hidden>
+                <Database20Regular style={{ width: 24, height: 24 }} />
+              </span>
               <Text weight="semibold">No OneLake items in scope.</Text>
               <Caption1>Create a lakehouse, warehouse, or mirrored database to see its storage usage here.</Caption1>
             </div>
