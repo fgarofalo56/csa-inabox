@@ -419,6 +419,9 @@ module aasRlsOls 'aas.bicep' = if (enableAas) {
 @description('Provision an Azure Data Factory (v2) in the DLZ. Backs the Loom data-pipeline / dataset / trigger editors.')
 param adfEnabled bool = true
 
+@description('Deploy the "loom-geo-enrich" starter pipeline (enrichH3/reverseGeocode/bufferMeters parameters) in the DLZ factory so the GeoPipeline editor has a ready target. Default true.')
+param deployGeoEnrichPipeline bool = true
+
 module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) {
   name: 'dlz-adf'
   params: {
@@ -435,6 +438,7 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     // "Practice with sample data" copy pipeline) and Dataflow Gen2 Parquet/CSV sinks.
     storageAccountId: storage.outputs.storageAccountId
     adlsAccountName: storage.outputs.storageAccountName
+    deployGeoEnrichPipeline: deployGeoEnrichPipeline
   }
 }
 
