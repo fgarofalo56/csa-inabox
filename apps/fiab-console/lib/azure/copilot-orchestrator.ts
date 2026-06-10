@@ -42,6 +42,7 @@ import {
   detectLoomCloud,
   assertFabricFamilyAvailable,
 } from './cloud-endpoints';
+import { getPanePersona, type PersonaContextPayload } from './copilot-personas';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   isFabricCopilotEnabled,
@@ -321,6 +322,25 @@ export class LoomToolRegistry {
    *  (persona scoping); execution still resolves against the full registry. */
   toAoaiTools(prefixes?: string[]): unknown[] {
     return this.filterByPrefixes(prefixes).map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+  }
+
+  /** OpenAI-compatible tools array filtered to an EXACT-name allowlist — the
+   *  per-pane persona tool catalog (copilot-personas.ts PersonaEntry.toolCatalog).
+   *  A non-empty `allow` restricts the advertised set to those tool names; an
+   *  empty/undefined allowlist returns every tool (the default persona). Unlike
+   *  toAoaiTools(prefixes) this matches whole names, not name prefixes. */
+  toAoaiToolsByName(allow?: readonly string[]): unknown[] {
+    const list = allow && allow.length > 0
+      ? this.list().filter((t) => allow.includes(t.name))
+      : this.list();
+    return list.map((t) => ({
       type: 'function',
       function: {
         name: t.name,
@@ -1023,6 +1043,17 @@ export interface OrchestrateOptions {
   /** Alias of registryOverride — a persona-scoped tool registry (MCP shim NOT
    *  applied). Used by the Report Copilot. */
   registry?: LoomToolRegistry;
+  /** Pane context slug (e.g. 'warehouse', 'notebook'). Selects the per-pane
+   *  persona (system prompt + tool catalog + title) server-side via the persona
+   *  registry (copilot-personas.ts getPanePersona). Unknown / undefined → the
+   *  cross-item 'default' persona. Distinct from `persona` (the CopilotPersonaDef
+   *  id like 'activator'); an explicit `persona`/override takes priority. */
+  contextSlug?: string;
+  /** Raw editor state the per-pane persona's system prompt is composed from
+   *  server-side (active query, schema, workspace id, item id). The persona
+   *  template interpolates these into named slots — no free-form client string is
+   *  concatenated into the system prompt. */
+  contextPayload?: PersonaContextPayload;
 }
 
 interface ChatMessage {
@@ -1033,11 +1064,14 @@ interface ChatMessage {
   name?: string;
 }
 
-const SYSTEM_PROMPT = `You are CSA Loom Copilot — the assistant for CSA Loom, a self-contained data + AI platform that runs on Azure (Synapse, Databricks, ADF, APIM, Azure Data Explorer, AI Foundry, ADLS, Event Hubs, Azure Monitor). CSA Loom is its OWN product, NOT Microsoft Fabric. When you describe a feature, describe it as a CSA Loom feature (e.g. "the CSA Loom Real-Time hub", "a CSA Loom Eventstream", "the CSA Loom lakehouse") — never say "in Microsoft Fabric". You may name the underlying Azure services since those are the real backends.
+/**
+ * Legacy default system prompt. The cross-item ('default') persona in
+ * copilot-personas.ts carries this exact text. Kept exported for backward
+ * compatibility / direct callers; live orchestration now resolves the prompt
+ * per-pane via getPersona(opts.contextSlug).systemPrompt(opts.contextPayload).
+ */
+export const SYSTEM_PROMPT = getPanePersona('default').systemPrompt({});
 
-You decompose user requests into concrete tool calls against the registered CSA Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
-
-If a tool errors, surface the error clearly and either retry with corrected inputs or abandon that branch and explain why.`;
 
 /**
  * True when an AOAI 400 body is the "this model only supports the default
@@ -1442,11 +1476,21 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   }
 
 
+
   // Persona switch: when a known persona id is supplied, override the system
   // prompt and narrow the exposed tool set to the persona's allowedTools (+ any
   // persona-local extraTools). Unknown/absent persona → full cross-item Copilot.
   const persona: CopilotPersonaDef | null = resolvePersona(opts.persona);
   if (persona?.extraTools?.length) for (const t of persona.extraTools) reg.register(t);
+
+  // Per-pane persona (contextSlug → PersonaEntry). Resolves the editor pane's
+  // system prompt (composed server-side from opts.contextPayload) + its
+  // tool catalog + title. Unknown/undefined slug → the 'default' pane persona
+  // (empty toolCatalog = all tools, legacy SYSTEM_PROMPT text). The explicit
+  // CopilotPersonaDef (opts.persona, e.g. 'activator') still takes priority for
+  // both the tool set and the system prompt.
+  const panePersona = getPanePersona(opts.contextSlug);
+
   let tools: unknown[];
   if (persona?.allowedTools?.length) {
     const allow = new Set(persona.allowedTools);
@@ -1454,11 +1498,20 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     tools = reg.list()
       .filter((t) => allow.has(t.name))
       .map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
-  } else {
+  } else if (opts.toolPrefixes && opts.toolPrefixes.length) {
     tools = reg.toAoaiTools(opts.toolPrefixes);
+  } else {
+    // Default path: scope to the pane persona's tool catalog (exact names).
+    // An empty catalog (the 'default' pane) returns every tool, incl. any
+    // MCP-shim tools registered above — identical to the legacy behaviour.
+    tools = reg.toAoaiToolsByName(panePersona.toolCatalog);
   }
 
-  const systemPrompt = persona?.systemPrompt || SYSTEM_PROMPT;
+  // System-prompt precedence: explicit overrides win; then the CopilotPersonaDef
+  // (activator/etc.); then the per-pane persona composed from the context payload
+  // (which for the 'default' pane equals the legacy SYSTEM_PROMPT text).
+  const paneSystemPrompt = panePersona.systemPrompt(opts.contextPayload ?? {});
+  const systemPrompt = persona?.systemPrompt || paneSystemPrompt;
   const messages: ChatMessage[] = [
     { role: 'system', content: opts.systemPromptOverride ?? opts.personaSystemPrompt ?? opts.systemPrompt ?? systemPrompt },
   ];
