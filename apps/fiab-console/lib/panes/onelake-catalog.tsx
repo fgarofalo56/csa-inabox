@@ -14,18 +14,31 @@
  *
  * Azure-native default per .claude/rules/no-fabric-dependency.md — the backing
  * route never touches a Fabric / OneLake REST host on its default path.
+ *
+ * Styled to the Loom design bar (Fluent v9 + Loom tokens): Section cards,
+ * the shared LoomDataTable (sortable / resizable / filterable, real empty +
+ * loading states), a Tile | List view toggle for the item collection, and
+ * chip-iconed metric tiles with coverage bars for the Govern insights.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input,
-  Tab, TabList, Dropdown, Option, Spinner, Link,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  Tree, TreeItem, TreeItemLayout,
+  Subtitle2, Body1, Caption1, Text, Badge, Button, Dropdown, Option,
+  Tab, TabList, Spinner, Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search20Regular, Building20Regular, Database20Regular } from '@fluentui/react-icons';
+import {
+  Building20Regular, Database20Regular, Folder20Regular,
+  Tag20Regular, Ribbon20Regular, Warning20Regular,
+  DismissCircle16Regular, type FluentIcon,
+} from '@fluentui/react-icons';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 
 interface CatalogItem {
   id: string;
@@ -63,46 +76,131 @@ interface GovernPayload {
 
 const ALL_DOMAINS: DomainOption = { id: '', name: '(All)' };
 
+// Loom accent palette (CSS vars with brand fallbacks) — shared with the other
+// admin panes so iconography reads consistently across the console.
+const ACCENT = {
+  teal: 'var(--loom-accent-teal, #14b8a6)',
+  blue: 'var(--loom-accent-blue, #3b82f6)',
+  amber: 'var(--loom-accent-amber, #f59e0b)',
+  violet: 'var(--loom-accent-violet, #8b5cf6)',
+  green: 'var(--loom-accent-green, #22c55e)',
+};
+
 const useStyles = makeStyles({
-  bar: { display: 'flex', gap: '12px', alignItems: 'center', marginBottom: 12 },
-  layout: { display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, minHeight: '50vh' },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '260px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+  },
   side: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4, padding: 12, overflow: 'auto',
+    borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: tokens.shadow2,
+    padding: tokens.spacingVerticalL,
+    position: 'sticky',
+    top: tokens.spacingVerticalM,
+    maxHeight: 'calc(100vh - 160px)',
+    overflow: 'auto',
+    minWidth: 0,
   },
-  main: {
-    backgroundColor: tokens.colorNeutralBackground1,
+  sideHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  treeItemSelected: {
+    backgroundColor: tokens.colorBrandBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  filterBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM,
+  },
+  filterChip: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+  },
+  // ── metric tiles (Govern) ─────────────────────────────────────────────
+  tilesRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+  },
+  tile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4, padding: 12,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2, minWidth: 0,
   },
-  rowHover: { ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' } },
-  rowSelected: { backgroundColor: tokens.colorNeutralBackground2Selected },
-  govCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  centered: { display: 'flex', justifyContent: 'center', padding: 32 },
+  tileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  chip: {
+    flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '36px', height: '36px', borderRadius: tokens.borderRadiusLarge,
+  },
+  tileVal: {
+    fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: 1.1,
+    color: tokens.colorNeutralForeground1,
+  },
+  tileSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  bar: {
+    height: '6px', backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusCircular, overflow: 'hidden', marginTop: tokens.spacingVerticalXS,
+  },
+  barFill: { height: '100%', borderRadius: tokens.borderRadiusCircular },
+  centered: { display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXXL },
+  muted: { color: tokens.colorNeutralForeground3 },
 });
 
 function endorsementBadge(e?: string) {
   if (!e || e === '—') return null;
-  return (
-    <Badge appearance="outline" color={e === 'Certified' ? 'success' : 'brand'}>{e}</Badge>
-  );
+  return <Badge appearance="tint" size="small" color={e === 'Certified' ? 'success' : 'brand'}>{e}</Badge>;
 }
 function sensitivityBadge(v?: string) {
   if (!v) return null;
+  return <Badge appearance="tint" size="small" color={/highly|restricted|secret/i.test(v) ? 'danger' : 'informative'}>{v}</Badge>;
+}
+function fmtDate(iso?: string): string {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleString() : '—';
+}
+
+// ── Metric tile (chip icon + value + sub + optional coverage bar) ─────────
+function GovTile({
+  icon: Icon, color, value, label, sub, pct,
+}: {
+  icon: FluentIcon; color: string; value: string; label: string; sub: string; pct?: number;
+}) {
+  const s = useStyles();
   return (
-    <Badge appearance="outline" color={/highly/i.test(v) ? 'danger' : 'informative'}>{v}</Badge>
+    <div className={s.tile}>
+      <div className={s.tileHead}>
+        <span className={s.chip} style={{ backgroundColor: `${color}1f` }} aria-hidden>
+          <Icon style={{ width: 20, height: 20, color }} />
+        </span>
+        <Text className={s.tileVal}>{value}</Text>
+      </div>
+      <Text className={s.tileSub} weight="semibold" style={{ color: tokens.colorNeutralForeground1 }}>{label}</Text>
+      <Caption1 className={s.tileSub}>{sub}</Caption1>
+      {typeof pct === 'number' && (
+        <div className={s.bar}>
+          <div className={s.barFill} style={{ width: `${Math.max(0, Math.min(100, pct))}%`, backgroundColor: color }} />
+        </div>
+      )}
+    </div>
   );
 }
 
 export function OneLakeCatalogPane() {
   const s = useStyles();
+  const router = useRouter();
   const [tab, setTab] = useState('explore');
 
   // ── Explore state ──────────────────────────────────────────────────────
   const [domainId, setDomainId] = useState(''); // '' = (All)
   const [q, setQ] = useState('');
+  const [view, setView] = useState<LoomView>('list');
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceNode[]>([]);
   const [domains, setDomains] = useState<DomainOption[]>([ALL_DOMAINS]);
@@ -166,173 +264,246 @@ export function OneLakeCatalogPane() {
     [items, selectedWs],
   );
 
-  const selectedDomainName =
-    domains.find((d) => d.id === domainId)?.name ?? '(All)';
+  const selectedDomainName = domains.find((d) => d.id === domainId)?.name ?? '(All)';
+  const selectedWsName = workspaces.find((w) => w.id === selectedWs)?.name;
+
+  const openItem = (i: CatalogItem) => router.push(`/items/${i.itemType}/${i.id}`);
+
+  // ── Explore: catalog item columns for the shared LoomDataTable ──────────
+  const itemColumns = useMemo<LoomColumn<CatalogItem>[]>(() => [
+    {
+      key: 'displayName', label: 'Name', sortable: true, filterable: true, width: 260,
+      getValue: (i) => i.displayName,
+      render: (i) => <Text weight="semibold">{i.displayName}</Text>,
+    },
+    { key: 'itemType', label: 'Type', sortable: true, filterable: true, filterType: 'select', width: 150, getValue: (i) => i.itemType },
+    { key: 'owner', label: 'Owner', sortable: true, filterable: true, width: 180, getValue: (i) => i.owner ?? '', render: (i) => i.owner ?? '—' },
+    { key: 'updatedAt', label: 'Updated', sortable: true, filterable: true, filterType: 'date', width: 180, getValue: (i) => i.updatedAt ?? '', render: (i) => fmtDate(i.updatedAt) },
+    { key: 'workspaceName', label: 'Workspace', sortable: true, filterable: true, filterType: 'select', width: 180, getValue: (i) => i.workspaceName ?? i.workspaceId, render: (i) => i.workspaceName ?? i.workspaceId },
+    { key: 'endorsement', label: 'Endorsement', sortable: true, filterable: true, filterType: 'select', width: 150, getValue: (i) => i.endorsement ?? '', render: (i) => endorsementBadge(i.endorsement) ?? <Text className={s.muted}>—</Text> },
+    { key: 'sensitivity', label: 'Sensitivity', sortable: true, filterable: true, filterType: 'select', width: 160, getValue: (i) => i.sensitivity ?? '', render: (i) => sensitivityBadge(i.sensitivity) ?? <Text className={s.muted}>—</Text> },
+  ], [s.muted]);
+
+  const classColumns = useMemo<LoomColumn<{ classification: string; count: number; purviewAssets?: number }>[]>(() => {
+    const cols: LoomColumn<{ classification: string; count: number; purviewAssets?: number }>[] = [
+      { key: 'classification', label: 'Classification', sortable: true, filterable: true, getValue: (r) => r.classification, render: (r) => <Text weight="semibold">{r.classification}</Text> },
+      { key: 'count', label: 'Items', sortable: true, filterable: false, width: 120, getValue: (r) => r.count },
+    ];
+    if (govern?.purviewConfigured) {
+      cols.push({ key: 'purviewAssets', label: 'Purview assets', sortable: true, filterable: false, width: 160, getValue: (r) => r.purviewAssets ?? 0, render: (r) => String(r.purviewAssets ?? 0) });
+    }
+    return cols;
+  }, [govern?.purviewConfigured]);
+
+  const attentionColumns = useMemo<LoomColumn<AttentionRow>[]>(() => [
+    { key: 'displayName', label: 'Item', sortable: true, filterable: true, width: 240, getValue: (a) => a.displayName, render: (a) => <Text weight="semibold">{a.displayName}</Text> },
+    { key: 'itemType', label: 'Type', sortable: true, filterable: true, filterType: 'select', width: 150, getValue: (a) => a.itemType },
+    { key: 'workspaceName', label: 'Workspace', sortable: true, filterable: true, filterType: 'select', width: 180, getValue: (a) => a.workspaceName },
+    {
+      key: 'issues', label: 'Issues', sortable: false, filterable: false, width: 280,
+      getValue: (a) => a.issues.join(', '),
+      render: (a) => (
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS }}>
+          {a.issues.map((iss) => (
+            <Badge key={iss} appearance="tint" size="small" color="warning">{iss}</Badge>
+          ))}
+        </span>
+      ),
+    },
+  ], []);
 
   return (
     <div>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-        <Tab value="explore">Explore</Tab>
-        <Tab value="govern">Govern</Tab>
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)} size="large" style={{ marginBottom: tokens.spacingVerticalL }}>
+        <Tab value="explore" icon={<Database20Regular />}>Explore</Tab>
+        <Tab value="govern" icon={<Ribbon20Regular />}>Govern</Tab>
       </TabList>
 
-      <div style={{ marginTop: 12 }}>
-        {tab === 'explore' && (
-          <div>
-            {searchGate && (
-              <MessageBar intent="warning" style={{ marginBottom: 8 }}>
-                <MessageBarBody>
-                  <MessageBarTitle>Full-text search + facets unavailable</MessageBarTitle>
-                  Catalog is served from Azure-native Cosmos. Set{' '}
-                  <code>{searchGate.missingEnvVar}</code> (deploy{' '}
-                  <code>{searchGate.bicepModule}</code>) to enable AI Search
-                  full-text search and real facet counts.
-                </MessageBarBody>
-              </MessageBar>
-            )}
-            {error && (
-              <MessageBar intent="error" style={{ marginBottom: 8 }}>
-                <MessageBarBody>Failed to load catalog: {error}</MessageBarBody>
-              </MessageBar>
-            )}
+      {tab === 'explore' && (
+        <div>
+          {searchGate && (
+            <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+              <MessageBarBody>
+                <MessageBarTitle>Full-text search + facets unavailable</MessageBarTitle>
+                Catalog is served from Azure-native Cosmos. Set{' '}
+                <code>{searchGate.missingEnvVar}</code> (deploy{' '}
+                <code>{searchGate.bicepModule}</code>) to enable AI Search
+                full-text search and real facet counts.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {error && (
+            <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
+              <MessageBarBody><MessageBarTitle>Failed to load catalog</MessageBarTitle>{error}</MessageBarBody>
+            </MessageBar>
+          )}
 
-            <div className={s.bar}>
-              <Building20Regular />
-              <Dropdown
-                value={selectedDomainName}
-                selectedOptions={[domainId]}
-                onOptionSelect={(_, d) => setDomainId(d.optionValue ?? '')}
-              >
-                {domains.map((d) => <Option key={d.id || 'all'} value={d.id}>{d.name}</Option>)}
-              </Dropdown>
-              <Input
-                contentBefore={<Search20Regular />}
-                placeholder="Search items"
-                value={q}
-                onChange={(_, d) => setQ(d.value)}
-                style={{ flex: 1 }}
-              />
-              {loading && <Spinner size="tiny" />}
-            </div>
-
-            <div className={s.layout}>
-              <aside className={s.side}>
+          <div className={s.layout}>
+            <aside className={s.side}>
+              <div className={s.sideHead}>
+                <Folder20Regular style={{ color: ACCENT.blue }} />
                 <Subtitle2>Workspaces</Subtitle2>
-                {workspaces.length === 0 && !loading ? (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
-                    No workspaces in this tenant.
-                  </Caption1>
-                ) : (
-                  <Tree aria-label="Workspaces tree">
-                    {workspaces.map((w) => (
-                      <TreeItem
-                        key={w.id}
-                        itemType="leaf"
-                        value={w.id}
-                        onClick={() => setSelectedWs(w.id === selectedWs ? null : w.id)}
+              </div>
+              {workspaces.length === 0 && !loading ? (
+                <Caption1 className={s.muted} style={{ display: 'block', marginTop: tokens.spacingVerticalS }}>
+                  No workspaces in this tenant.
+                </Caption1>
+              ) : (
+                <Tree aria-label="Workspaces tree">
+                  {workspaces.map((w) => (
+                    <TreeItem
+                      key={w.id}
+                      itemType="leaf"
+                      value={w.id}
+                      onClick={() => setSelectedWs(w.id === selectedWs ? null : w.id)}
+                    >
+                      <TreeItemLayout
+                        iconBefore={<Database20Regular style={{ color: w.id === selectedWs ? ACCENT.blue : tokens.colorNeutralForeground3 }} />}
+                        className={w.id === selectedWs ? s.treeItemSelected : undefined}
                       >
-                        <TreeItemLayout
-                          iconBefore={<Database20Regular />}
-                          className={w.id === selectedWs ? s.rowSelected : undefined}
-                        >
-                          {w.name}
-                        </TreeItemLayout>
-                      </TreeItem>
-                    ))}
-                  </Tree>
-                )}
-                {selectedWs && (
-                  <Button appearance="subtle" size="small" style={{ marginTop: 8 }} onClick={() => setSelectedWs(null)}>
-                    Clear filter
-                  </Button>
-                )}
-              </aside>
+                        {w.name}
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              )}
+              {selectedWs && (
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<DismissCircle16Regular />}
+                  style={{ marginTop: tokens.spacingVerticalM }}
+                  onClick={() => setSelectedWs(null)}
+                >
+                  Clear workspace filter
+                </Button>
+              )}
+            </aside>
 
-              <div className={s.main}>
-                <Table aria-label="Catalog items">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell>Name</TableHeaderCell>
-                      <TableHeaderCell>Type</TableHeaderCell>
-                      <TableHeaderCell>Owner</TableHeaderCell>
-                      <TableHeaderCell>Updated</TableHeaderCell>
-                      <TableHeaderCell>Workspace</TableHeaderCell>
-                      <TableHeaderCell>Endorsement</TableHeaderCell>
-                      <TableHeaderCell>Sensitivity</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleItems.map((i) => (
-                      <TableRow key={i.id} className={s.rowHover}>
-                        <TableCell>
-                          <Link href={`/items/${i.itemType}/${i.id}`}>{i.displayName}</Link>
-                        </TableCell>
-                        <TableCell>{i.itemType}</TableCell>
-                        <TableCell>{i.owner ?? '—'}</TableCell>
-                        <TableCell>{i.updatedAt ? new Date(i.updatedAt).toLocaleString() : '—'}</TableCell>
-                        <TableCell>{i.workspaceName ?? i.workspaceId}</TableCell>
-                        <TableCell>{endorsementBadge(i.endorsement) ?? '—'}</TableCell>
-                        <TableCell>{sensitivityBadge(i.sensitivity) ?? '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {visibleItems.length === 0 && !loading && (
-                  <Body1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
-                    No catalog items match the current filters.
-                  </Body1>
-                )}
-                <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8, display: 'block' }}>
+            <Section
+              title="Catalog items"
+              actions={
+                <Caption1 className={s.muted}>
                   {selectedWs
-                    ? `${visibleItems.length} of ${total} items (filtered to workspace)`
+                    ? `${visibleItems.length} of ${total} items · ${selectedWsName}`
                     : `${total} items`}
                   {backend ? ` · source: ${backend}` : ''}
                 </Caption1>
-              </div>
-            </div>
-          </div>
-        )}
+              }
+            >
+              <Toolbar
+                search={q}
+                onSearch={setQ}
+                searchPlaceholder="Search items"
+                actions={
+                  <>
+                    {loading && <Spinner size="tiny" />}
+                    <ViewToggle value={view} onChange={setView} ariaLabel="Switch catalog item view" />
+                  </>
+                }
+              >
+                <span className={s.filterChip}>
+                  <Building20Regular className={s.muted} />
+                  <Dropdown
+                    value={selectedDomainName}
+                    selectedOptions={[domainId]}
+                    aria-label="Filter by domain"
+                    onOptionSelect={(_, d) => setDomainId(d.optionValue ?? '')}
+                    style={{ minWidth: 180 }}
+                  >
+                    {domains.map((d) => <Option key={d.id || 'all'} value={d.id}>{d.name}</Option>)}
+                  </Dropdown>
+                </span>
+              </Toolbar>
 
-        {tab === 'govern' && (
-          <div>
-            <Subtitle2>Insights — tenant-wide</Subtitle2>
-            {governLoading && <div className={s.centered}><Spinner label="Loading governance insights…" /></div>}
-            {governError && (
-              <MessageBar intent="error" style={{ marginTop: 8 }}>
-                <MessageBarBody>Failed to load governance insights: {governError}</MessageBarBody>
-              </MessageBar>
-            )}
-            {govern && (
-              <>
-                <div className={s.govCards} style={{ marginTop: 8 }}>
-                  <GovCard
-                    t="Sensitivity coverage"
-                    v={`${govern.labeledPct}%`}
+              {selectedWs && (
+                <Badge
+                  appearance="tint" color="brand"
+                  style={{ marginBottom: tokens.spacingVerticalM, cursor: 'pointer' }}
+                  onClick={() => setSelectedWs(null)}
+                >
+                  Workspace: {selectedWsName} ✕
+                </Badge>
+              )}
+
+              {view === 'list' ? (
+                <LoomDataTable
+                  columns={itemColumns}
+                  rows={visibleItems}
+                  getRowId={(i) => i.id}
+                  loading={loading && items.length === 0}
+                  onRowClick={openItem}
+                  ariaLabel="Catalog items"
+                  empty="No catalog items match the current filters."
+                />
+              ) : loading && items.length === 0 ? (
+                <div className={s.centered}><Spinner label="Loading catalog…" /></div>
+              ) : visibleItems.length === 0 ? (
+                <Body1 className={s.muted} style={{ display: 'block', padding: tokens.spacingVerticalXL, textAlign: 'center' }}>
+                  No catalog items match the current filters.
+                </Body1>
+              ) : (
+                <TileGrid>
+                  {visibleItems.map((i) => (
+                    <ItemTile
+                      key={i.id}
+                      type={i.itemType}
+                      title={i.displayName}
+                      subtitle={i.itemType}
+                      meta={`${i.workspaceName ?? i.workspaceId} · ${fmtDate(i.updatedAt)}`}
+                      sensitivityLabel={i.sensitivity}
+                      badge={endorsementBadge(i.endorsement) ?? undefined}
+                      footer={i.owner ? <Caption1 className={s.muted}>{i.owner}</Caption1> : undefined}
+                      onClick={() => openItem(i)}
+                    />
+                  ))}
+                </TileGrid>
+              )}
+            </Section>
+          </div>
+        </div>
+      )}
+
+      {tab === 'govern' && (
+        <div>
+          {governLoading && <div className={s.centered}><Spinner label="Loading governance insights…" /></div>}
+          {governError && (
+            <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
+              <MessageBarBody><MessageBarTitle>Failed to load governance insights</MessageBarTitle>{governError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {govern && (
+            <>
+              <Section title="Insights — tenant-wide" actions={<Badge appearance="tint" color="informative">live · Cosmos</Badge>}>
+                <div className={s.tilesRow}>
+                  <GovTile
+                    icon={Tag20Regular} color={ACCENT.violet}
+                    value={`${govern.labeledPct}%`} label="Sensitivity coverage"
                     sub={`${govern.labeled} of ${govern.totalItems} items labeled`}
+                    pct={govern.labeledPct}
                   />
-                  <GovCard
-                    t="Endorsed items"
-                    v={String(govern.endorsed)}
+                  <GovTile
+                    icon={Ribbon20Regular} color={ACCENT.green}
+                    value={String(govern.endorsed)} label="Endorsed items"
                     sub={`${govern.endorsedPct}% of ${govern.totalItems} items`}
+                    pct={govern.endorsedPct}
                   />
-                  <GovCard
-                    t="Classifications"
-                    v={String(govern.classificationTable.length)}
-                    sub={
-                      govern.purviewConfigured && govern.purviewAssetCount !== null
-                        ? `${govern.purviewAssetCount} Purview assets overlaid`
-                        : 'Cosmos item state'
-                    }
+                  <GovTile
+                    icon={Database20Regular} color={ACCENT.blue}
+                    value={String(govern.classificationTable.length)} label="Classifications"
+                    sub={govern.purviewConfigured && govern.purviewAssetCount !== null
+                      ? `${govern.purviewAssetCount} Purview assets overlaid`
+                      : 'Cosmos item state'}
                   />
-                  <GovCard
-                    t="Items needing attention"
-                    v={String(govern.attentionCount)}
+                  <GovTile
+                    icon={Warning20Regular} color={ACCENT.amber}
+                    value={String(govern.attentionCount)} label="Items needing attention"
                     sub={`${govern.ownedPct}% have an owner`}
                   />
                 </div>
 
                 {govern.purviewGate && (
-                  <MessageBar intent="info" style={{ marginTop: 12 }}>
+                  <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalL }}>
                     <MessageBarBody>
                       <MessageBarTitle>Purview classification overlay not configured</MessageBarTitle>
                       {govern.purviewGate.followUp ??
@@ -340,77 +511,45 @@ export function OneLakeCatalogPane() {
                     </MessageBarBody>
                   </MessageBar>
                 )}
+              </Section>
 
-                {govern.classificationTable.length > 0 && (
-                  <>
-                    <Subtitle2 style={{ marginTop: 16, display: 'block' }}>Classifications</Subtitle2>
-                    <Table aria-label="Classification table" style={{ marginTop: 8 }}>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHeaderCell>Classification</TableHeaderCell>
-                          <TableHeaderCell>Items</TableHeaderCell>
-                          {govern.purviewConfigured && <TableHeaderCell>Purview assets</TableHeaderCell>}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {govern.classificationTable.map((c) => (
-                          <TableRow key={c.classification}>
-                            <TableCell>{c.classification}</TableCell>
-                            <TableCell>{c.count}</TableCell>
-                            {govern.purviewConfigured && <TableCell>{c.purviewAssets ?? 0}</TableCell>}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </>
-                )}
+              {govern.classificationTable.length > 0 && (
+                <Section title="Classifications">
+                  <LoomDataTable
+                    columns={classColumns}
+                    rows={govern.classificationTable}
+                    getRowId={(c) => c.classification}
+                    ariaLabel="Classification table"
+                    empty="No classifications recorded yet."
+                  />
+                </Section>
+              )}
 
-                <Subtitle2 style={{ marginTop: 16, display: 'block' }}>Items needing attention</Subtitle2>
+              <Section
+                title="Items needing attention"
+                actions={<Badge appearance="tint" color={govern.attention.length ? 'warning' : 'success'}>{govern.attention.length} flagged</Badge>}
+              >
                 {govern.attention.length === 0 ? (
-                  <Body1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
-                    Every catalog item is labeled, owned, endorsed, and classified.
-                  </Body1>
+                  <div className={s.centered}>
+                    <Body1 className={s.muted}>Every catalog item is labeled, owned, endorsed, and classified.</Body1>
+                  </div>
                 ) : (
-                  <Table aria-label="Items needing attention" style={{ marginTop: 8 }}>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHeaderCell>Item</TableHeaderCell>
-                        <TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Workspace</TableHeaderCell>
-                        <TableHeaderCell>Issues</TableHeaderCell>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {govern.attention.map((a) => (
-                        <TableRow key={a.id} className={s.rowHover}>
-                          <TableCell><Link href={a.href}>{a.displayName}</Link></TableCell>
-                          <TableCell>{a.itemType}</TableCell>
-                          <TableCell>{a.workspaceName}</TableCell>
-                          <TableCell>
-                            {a.issues.map((iss) => (
-                              <Badge key={iss} appearance="outline" color="warning" style={{ marginRight: 4 }}>{iss}</Badge>
-                            ))}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <LoomDataTable
+                    columns={attentionColumns}
+                    rows={govern.attention}
+                    getRowId={(a) => a.id}
+                    onRowClick={(a) => router.push(a.href)}
+                    ariaLabel="Items needing attention"
+                    empty="No items need attention."
+                  />
                 )}
-              </>
-            )}
-          </div>
-        )}
-      </div>
+              </Section>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function GovCard({ t, v, sub }: { t: string; v: string; sub: string }) {
-  return (
-    <div style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t}</Caption1>
-      <div style={{ fontSize: 24, fontWeight: 600 }}>{v}</div>
-      <Caption1>{sub}</Caption1>
-    </div>
-  );
-}
+export default OneLakeCatalogPane;
