@@ -86,25 +86,29 @@ export interface FabricItemType {
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Fabric Apps — Rayfin (Build 2026 preview)
   { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
-    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI.',
+    description: 'Code-first app backend (database, auth, Data APIs, storage) — and model-bound web apps backed by a real semantic model — deployed with the Rayfin SDK + CLI.',
     learnContent: {
-      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace as a Rayfin item — data lands in OneLake (no ETL) and inherits your tenant's Entra identity, security, and governance. In Loom you author the backend spec here and Loom generates the SDK model + the exact CLI commands to deploy; the Rayfin CLI runs on your dev machine.",
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace. Beyond the general code-first case, Build 2026 #28 lets you build a web app backed by a real semantic model — in Loom's Model binding tab you pick a model, select its measures + group-by fields, see a live data preview, and Loom emits a typed read-view connector. The Azure-native default for model binding is Azure Analysis Services, so it works with no Fabric or Power BI workspace. The Rayfin CLI itself runs on your dev machine; Loom authors the spec and emits the SDK model, the connector, and the exact deploy commands.",
       "steps": [
         {
           "title": "Define entities + services",
           "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
         },
         {
-          "title": "Generate the model + commands",
-          "body": "Loom emits a model.ts using @microsoft/rayfin-core decorators (@entity/@text/@boolean/@date) and the exact CLI sequence — copy them into your project."
+          "title": "Bind a semantic model (Build 2026 #28)",
+          "body": "In the Model binding tab, pick a semantic model (Azure Analysis Services tabular models by default — no Fabric needed), select measures + group-by fields, and run a live preview to see the exact data your app would render. Loom emits a typed data connector that issues that DAX."
+        },
+        {
+          "title": "Generate the model + connector + commands",
+          "body": "Loom emits rayfin/model.ts (entities), rayfin/data/model-view.ts (the model-bound read view), and the exact CLI sequence — copy them into your project."
         },
         {
           "title": "Scaffold + deploy",
-          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, then `npx rayfin up` to deploy to Fabric."
+          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, set AAS_SERVER for the bound model, then `npx rayfin up` to deploy."
         },
         {
           "title": "It runs in your tenant",
-          "body": "The deployed Rayfin item runs on Fabric under your identity/network/governance; app data lands in OneLake so it's catalogable and governed alongside your other items."
+          "body": "The deployed Rayfin item runs under your identity/network/governance; app data lands in OneLake and the bound model is read over the AAS data-plane under the app's identity."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/apps/overview"
