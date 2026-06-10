@@ -66,9 +66,26 @@ function queryReturning(resources: any[]) {
   return { query: () => ({ fetchAll: vi.fn().mockResolvedValue({ resources }) }) };
 }
 
+// Items container mock that honors the partition-scoped fan-out: the catalog
+// route now issues one single-partition read per workspace (partitionKey: wsId),
+// so the mock filters COSMOS_ITEMS by the requested partition key.
+function partitionedItemsContainer(allItems: any[]) {
+  return {
+    items: {
+      query: (_spec: any, opts?: { partitionKey?: string }) => ({
+        fetchAll: vi.fn().mockResolvedValue({
+          resources: opts?.partitionKey
+            ? allItems.filter((i) => i.workspaceId === opts.partitionKey)
+            : allItems,
+        }),
+      }),
+    },
+  };
+}
+
 const WORKSPACES = [
-  { id: 'ws-1', name: 'Analytics', domain: 'finance' },
-  { id: 'ws-2', name: 'Sales', domain: undefined },
+  { id: 'ws-1', name: 'Analytics', domain: 'finance', createdBy: 'alice@contoso.com' },
+  { id: 'ws-2', name: 'Sales', domain: undefined, createdBy: 'bob@contoso.com' },
 ];
 const DOMAINS = [{ id: 'finance', name: 'Finance' }, { id: 'sales', name: 'Sales' }];
 
@@ -93,7 +110,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   (getSession as any).mockReturnValue(SESSION);
   (workspacesContainer as any).mockResolvedValue({ items: queryReturning(WORKSPACES) });
-  (itemsContainer as any).mockResolvedValue({ items: queryReturning(COSMOS_ITEMS) });
+  (itemsContainer as any).mockResolvedValue(partitionedItemsContainer(COSMOS_ITEMS));
   (getDomainsStore as any).mockReturnValue({
     listDomains: vi.fn().mockResolvedValue(DOMAINS),
   });
@@ -138,8 +155,12 @@ describe('GET /api/onelake/catalog', () => {
     expect(body.total).toBe(1);
     expect(body.items[0].id).toBe('lh-1');
     expect(body.items[0].owner).toBe('alice@contoso.com');
-    // workspace tree from Cosmos
+    // workspace tree from Cosmos — owner (createdBy) projected for parity
     expect(body.workspaces.map((w: any) => w.id)).toEqual(['ws-1', 'ws-2']);
+    expect(body.workspaces.map((w: any) => w.owner)).toEqual([
+      'alice@contoso.com',
+      'bob@contoso.com',
+    ]);
     // domains from the DomainStore + (All) prepended? No — route returns raw list.
     expect(body.domains.map((d: any) => d.id)).toEqual(['finance', 'sales']);
     expect(body.facets.itemType[0].value).toBe('lakehouse');
@@ -160,10 +181,13 @@ describe('GET /api/onelake/catalog', () => {
     const body = await res.json();
 
     expect(body.backend).toBe('cosmos');
-    // notebook dropped — only lakehouse + warehouse remain
+    // notebook dropped — only lakehouse + warehouse remain (no duplicates from
+    // the per-workspace partition fan-out)
     expect(body.total).toBe(2);
     const ids = body.items.map((i: any) => i.id).sort();
     expect(ids).toEqual(['lh-1', 'wh-1']);
+    // workspace owner projected to the tree on the Cosmos fallback path too
+    expect(body.workspaces.find((w: any) => w.id === 'ws-1').owner).toBe('alice@contoso.com');
     // lakehouse endorsement derived from state
     const lh = body.items.find((i: any) => i.id === 'lh-1');
     expect(lh.endorsement).toBe('Certified');
