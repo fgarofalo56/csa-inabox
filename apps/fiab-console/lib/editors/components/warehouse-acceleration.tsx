@@ -25,11 +25,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Button, Caption1, Body1, Switch, Spinner, Badge, Divider,
+  Button, Caption1, Body1, Switch, Spinner, Badge,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Flash24Regular, Database20Regular } from '@fluentui/react-icons';
+import { Flash24Regular, Database20Regular, Rocket20Regular, History20Regular } from '@fluentui/react-icons';
 
 type WarehouseBackend = 'synapse-dedicated' | 'fabric-warehouse';
 
@@ -56,11 +56,40 @@ interface AccelerationStatus {
 }
 
 const useStyles = makeStyles({
-  section: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px 0' },
-  row: { display: 'flex', alignItems: 'center', gap: '12px' },
   header: { display: 'flex', alignItems: 'center', gap: '8px' },
   hint: { color: tokens.colorNeutralForeground3 },
-  badges: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' },
+  badges: {
+    display: 'flex',
+    gap: '6px',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: '4px',
+  },
+  // Each acceleration tier is a self-contained card so the GPU (opt-in) and
+  // result-set-caching (Azure-native) tiers read as distinct, scannable units.
+  card: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    padding: '14px 16px',
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  cardHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: tokens.colorNeutralForeground1,
+  },
+  cardTitle: { fontWeight: tokens.fontWeightSemibold },
+  row: { display: 'flex', alignItems: 'center', gap: '12px' },
+  cardStack: { display: 'flex', flexDirection: 'column', gap: '12px', paddingTop: '8px' },
+  footnote: {
+    color: tokens.colorNeutralForeground3,
+    display: 'block',
+    paddingTop: '8px',
+  },
 });
 
 export function WarehouseAcceleration({
@@ -181,58 +210,81 @@ export function WarehouseAcceleration({
                   </Badge>
                 </div>
 
-                {/* ---- GPU acceleration tier (Fabric-only; honest gate) ---- */}
-                <div className={s.section}>
-                  <div className={s.row}>
-                    <Switch
-                      checked={gpuAvailable && status.gpu.enabled}
-                      disabled={!gpuAvailable || busy}
-                      onChange={() => { if (gpuAvailable) void requestGpu(); }}
-                      label="GPU-accelerated query execution"
-                      aria-label="Toggle GPU-accelerated query execution"
-                    />
+                <div className={s.cardStack}>
+                  {/* ---- GPU acceleration tier (Fabric-only; honest gate) ---- */}
+                  <div className={s.card}>
+                    <div className={s.cardHeader}>
+                      <Rocket20Regular />
+                      <Body1 className={s.cardTitle}>GPU acceleration</Body1>
+                      <Badge
+                        appearance="tint"
+                        color={gpuAvailable ? 'brand' : 'informative'}
+                        style={{ marginInlineStart: 'auto' }}
+                      >
+                        {gpuAvailable ? 'Fabric engine' : 'Opt-in'}
+                      </Badge>
+                    </div>
+                    <div className={s.row}>
+                      <Switch
+                        checked={gpuAvailable && status.gpu.enabled}
+                        disabled={!gpuAvailable || busy}
+                        onChange={() => { if (gpuAvailable) void requestGpu(); }}
+                        label="GPU-accelerated query execution"
+                        aria-label="Toggle GPU-accelerated query execution"
+                      />
+                      {busy && gpuAvailable && <Spinner size="tiny" />}
+                    </div>
+                    {!gpuAvailable ? (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>GPU acceleration requires the Fabric backend</MessageBarTitle>
+                          {status.gpu.detail}
+                        </MessageBarBody>
+                      </MessageBar>
+                    ) : (
+                      <Caption1 className={s.hint}>{status.gpu.detail}</Caption1>
+                    )}
                   </div>
-                  {!gpuAvailable ? (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>
-                        <MessageBarTitle>GPU acceleration requires the Fabric backend</MessageBarTitle>
-                        {status.gpu.detail}
-                      </MessageBarBody>
-                    </MessageBar>
-                  ) : (
-                    <Caption1 className={s.hint}>{status.gpu.detail}</Caption1>
-                  )}
+
+                  {/* ---- Result-set caching tier (Azure-native, functional) ---- */}
+                  <div className={s.card}>
+                    <div className={s.cardHeader}>
+                      <History20Regular />
+                      <Body1 className={s.cardTitle}>Result-set caching</Body1>
+                      <Badge
+                        appearance="tint"
+                        color={rscEnabled ? 'success' : 'informative'}
+                        style={{ marginInlineStart: 'auto' }}
+                      >
+                        {rscEnabled ? 'On' : 'Azure-native'}
+                      </Badge>
+                    </div>
+                    <div className={s.row}>
+                      <Switch
+                        checked={rscEnabled}
+                        disabled={!status.resultSetCaching.supported || !poolOnline || busy}
+                        onChange={(_, d) => void toggleResultSetCaching(d.checked)}
+                        label="Result-set caching (Azure-native acceleration)"
+                        aria-label="Toggle result-set caching"
+                      />
+                      {busy && <Spinner size="tiny" />}
+                    </div>
+                    <Caption1 className={s.hint}>{status.resultSetCaching.detail}</Caption1>
+                    {!poolOnline && status.resultSetCaching.supported && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          <MessageBarTitle>Warehouse compute is {status.poolState}</MessageBarTitle>
+                          Resume the Synapse Dedicated SQL pool to change result-set caching.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </div>
                 </div>
 
-                <Divider />
-
-                {/* ---- Result-set caching tier (Azure-native, functional) ---- */}
-                <div className={s.section}>
-                  <div className={s.row}>
-                    <Switch
-                      checked={rscEnabled}
-                      disabled={!status.resultSetCaching.supported || !poolOnline || busy}
-                      onChange={(_, d) => void toggleResultSetCaching(d.checked)}
-                      label="Result-set caching (Azure-native acceleration)"
-                      aria-label="Toggle result-set caching"
-                    />
-                    {busy && <Spinner size="tiny" />}
-                  </div>
-                  <Caption1 className={s.hint}>{status.resultSetCaching.detail}</Caption1>
-                  {!poolOnline && status.resultSetCaching.supported && (
-                    <MessageBar intent="info">
-                      <MessageBarBody>
-                        <MessageBarTitle>Warehouse compute is {status.poolState}</MessageBarTitle>
-                        Resume the Synapse Dedicated SQL pool to change result-set caching.
-                      </MessageBarBody>
-                    </MessageBar>
-                  )}
-                </div>
-
-                <Body1 className={s.hint}>
+                <Caption1 className={s.footnote}>
                   GPU acceleration is a Fabric-engine capability. The Azure-native default delivers query
                   acceleration via result-set caching plus the dedicated pool&apos;s batch-mode columnar engine.
-                </Body1>
+                </Caption1>
               </>
             )}
 
