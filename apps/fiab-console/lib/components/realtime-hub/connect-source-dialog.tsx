@@ -27,18 +27,32 @@ import {
 
 const useStyles = makeStyles({
   surface: { maxWidth: '900px', width: '90vw' },
-  layout: { display: 'grid', gridTemplateColumns: '190px 1fr', gap: '16px', minHeight: '440px' },
+  layout: {
+    display: 'grid', gridTemplateColumns: '190px 1fr',
+    gap: tokens.spacingHorizontalL, minHeight: '440px',
+  },
   catList: {
-    display: 'flex', flexDirection: 'column', gap: '2px',
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: '8px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: tokens.spacingHorizontalS,
   },
   catItem: {
-    textAlign: 'left', padding: '8px 12px', borderRadius: '4px', background: 'transparent',
-    border: 'none', cursor: 'pointer', color: tokens.colorNeutralForeground1, fontSize: '14px',
+    textAlign: 'left',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium, background: 'transparent',
+    border: 'none', cursor: 'pointer', color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase300, lineHeight: tokens.lineHeightBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
-  catItemActive: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, fontWeight: 600 },
-  rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
+  catItemActive: {
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  rightCol: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalM, minHeight: 0,
+  },
   grid: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
     gap: tokens.spacingHorizontalS, alignContent: 'start',
@@ -63,10 +77,20 @@ const useStyles = makeStyles({
   cardTags: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
   formHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   emptyGrid: {
-    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL, textAlign: 'center',
+    gridColumn: '1 / -1',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL, textAlign: 'center',
     color: tokens.colorNeutralForeground3,
   },
-  form: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  emptyGridIcon: {
+    width: '40px', height: '40px',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+  },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  backBtn: { alignSelf: 'flex-start' },
 });
 
 interface Props {
@@ -214,7 +238,8 @@ export function ConnectSourceDialog({
           <DialogContent>
             {picked ? (
               <div className={styles.form}>
-                <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={() => { setPicked(null); setSuccess(null); }}>
+                <Button appearance="subtle" className={styles.backBtn} icon={<ArrowLeft20Regular />}
+                  onClick={() => { setPicked(null); setSuccess(null); }}>
                   Back to sources
                 </Button>
                 {(() => {
@@ -317,7 +342,16 @@ export function ConnectSourceDialog({
                       );
                     })}
                     {connectors.length === 0 && (
-                      <Body1 className={styles.emptyGrid}>No sources match &quot;{query}&quot;.</Body1>
+                      <div className={styles.emptyGrid}>
+                        <span className={styles.emptyGridIcon} aria-hidden>
+                          <Search20Regular />
+                        </span>
+                        <Body1>
+                          {query.trim()
+                            ? <>No sources match &quot;{query.trim()}&quot;. Try a different term or pick a category.</>
+                            : 'No sources in this category.'}
+                        </Body1>
+                      </div>
                     )}
                   </div>
                 </div>

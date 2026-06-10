@@ -392,7 +392,13 @@ export function RtiHubView() {
 
       <Section
         title="Unified stream catalog"
-        actions={<Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>}
+        actions={
+          <Button appearance="subtle"
+            icon={loading ? <Spinner size="tiny" /> : <ArrowSync20Regular />}
+            disabled={loading} onClick={load}>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
       >
         <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
           Every streaming source across your subscriptions — Event Hubs, IoT Hub, ADX, and Loom eventstreams —
@@ -416,9 +422,12 @@ export function RtiHubView() {
           </TabList>
         </div>
 
-        {fabricGated && data?.fabricGateReason && tab === 'azureEvents' && (
+        {fabricGated && data?.fabricGateReason && (
           <MessageBar intent="info" style={{ marginBottom: 12 }}>
-            <MessageBarBody>{data.fabricGateReason}</MessageBarBody>
+            <MessageBarBody>
+              <MessageBarTitle>Fabric events are opt-in</MessageBarTitle>
+              {data.fabricGateReason}
+            </MessageBarBody>
           </MessageBar>
         )}
 
@@ -434,7 +443,9 @@ export function RtiHubView() {
             <span className={styles.emptyText}>
               {tab === 'dataStreams'
                 ? 'No streams discovered in scope yet. Provision an Event Hubs namespace, IoT Hub, or ADX cluster — or create a Loom eventstream — and it will appear here.'
-                : 'No connectors in this tab.'}
+                : tab === 'azureEvents'
+                  ? 'No Azure event connectors are available yet. Connectors surface here as Event Grid system topics become discoverable in scope.'
+                  : 'No Fabric event categories to show.'}
             </span>
           </div>
         ) : (
