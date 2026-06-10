@@ -64,8 +64,12 @@ const useStyles = makeStyles({
   schemaRow: { display: 'grid', gridTemplateColumns: '1fr 130px 90px 32px', gap: tokens.spacingHorizontalS, alignItems: 'end', marginBottom: tokens.spacingVerticalS },
   section: { marginBottom: tokens.spacingVerticalL },
   kv: { fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-  payloadGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM },
-  empty: { padding: '28px', borderRadius: '12px', textAlign: 'center', lineHeight: 1.6, fontSize: '14px', border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2 },
+  payloadGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM },
+  empty: { padding: '28px', borderRadius: tokens.borderRadiusXLarge, textAlign: 'center', lineHeight: 1.6, fontSize: '14px', border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2 },
+  tabEmpty: { padding: '24px', borderRadius: tokens.borderRadiusLarge, lineHeight: 1.6, fontSize: '13px', border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2 },
+  drawerTitle: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  drawerChip: { flexShrink: 0, width: '32px', height: '32px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: tokens.borderRadiusMedium, backgroundColor: '#7c3aed1f', color: 'var(--loom-accent-purple, #7c3aed)' },
+  drawerName: { fontWeight: tokens.fontWeightSemibold, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
 
 export function BusinessEventsView() {
@@ -287,7 +291,7 @@ export function BusinessEventsView() {
         <DialogSurface style={{ maxWidth: 640 }}>
           <DialogBody>
             <DialogTitle>New business event</DialogTitle>
-            <DialogContent>
+            <DialogContent style={{ maxHeight: '64vh', overflowY: 'auto' }}>
               <Field label="Name" required hint="Letters, digits, hyphen or underscore. Example: SalesTargetMissed" className={styles.section}>
                 <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="SalesTargetMissed" />
               </Field>
@@ -338,8 +342,11 @@ export function BusinessEventsView() {
       {/* ── Detail drawer ── */}
       <Drawer open={!!detail} position="end" size="large" onOpenChange={(_, d) => { if (!d.open) setDetail(null); }}>
         <DrawerHeader>
-          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setDetail(null)} />}>
-            {detail?.name}
+          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} aria-label="Close" onClick={() => setDetail(null)} />}>
+            <span className={styles.drawerTitle}>
+              <span className={styles.drawerChip} aria-hidden><Flash24Regular style={{ width: 20, height: 20 }} /></span>
+              <span className={styles.drawerName} title={detail?.name}>{detail?.name}</span>
+            </span>
           </DrawerHeaderTitle>
         </DrawerHeader>
         <DrawerBody>
@@ -349,7 +356,7 @@ export function BusinessEventsView() {
                 {detail.schemaSet && <Badge appearance="tint">{detail.schemaSet}</Badge>}
                 <Badge appearance="outline">Hub: {detail.eventHub}</Badge>
                 <div style={{ flex: 1 }} />
-                <Button appearance="subtle" icon={<Delete20Regular />} onClick={deleteEvent}>Delete</Button>
+                <Button appearance="subtle" icon={<Delete20Regular />} onClick={deleteEvent} style={{ color: tokens.colorPaletteRedForeground1 }}>Delete</Button>
               </div>
               {detail.description && <Body1 style={{ display: 'block', marginBottom: 12 }}>{detail.description}</Body1>}
 
@@ -362,7 +369,7 @@ export function BusinessEventsView() {
 
               {detailTab === 'publishers' && (
                 (detail.publishers?.length || 0) === 0
-                  ? <Body1>No publishers yet. Activator rules, eventstreams, or a Data-preview publish will appear here once they publish this signal.</Body1>
+                  ? <div className={styles.tabEmpty}>No publishers yet. Activator rules, eventstreams, or a <b>Data preview</b> publish will appear here once they publish this signal.</div>
                   : (
                     <LoomDataTable<Publisher>
                       ariaLabel="Publishers"
@@ -391,7 +398,7 @@ export function BusinessEventsView() {
                     <Button appearance="primary" icon={<Add20Regular />} disabled={!conName.trim() || conBusy} onClick={addConsumer}>Subscribe</Button>
                   </div>
                   {(detail.consumers?.length || 0) === 0 ? (
-                    <Body1>No consumers subscribed yet.</Body1>
+                    <div className={styles.tabEmpty}>No consumers subscribed yet. Add one above to route this signal to a webhook, Function, Logic App, Activator, or Service Bus subscriber.</div>
                   ) : (
                     <LoomDataTable<Consumer>
                       ariaLabel="Consumers"
@@ -414,6 +421,11 @@ export function BusinessEventsView() {
                     Publish a structured test event. The payload is validated against the schema, wrapped in a CloudEvents-1.0
                     envelope, and sent to Event Hub <code>{detail.eventHub}</code> (capacity-metered).
                   </Caption1>
+                  {detail.schema.length === 0 && (
+                    <div className={styles.tabEmpty} style={{ marginBottom: 12 }}>
+                      This event has no schema properties — publishing will send an empty payload. Add properties from the <b>Schema</b> tab to capture structured data.
+                    </div>
+                  )}
                   <div className={styles.payloadGrid}>
                     {detail.schema.map((p) => (
                       <Field key={p.name} label={`${p.name}${p.required ? ' *' : ''}`} hint={`${p.type}${p.description ? ` — ${p.description}` : ''}`}>
