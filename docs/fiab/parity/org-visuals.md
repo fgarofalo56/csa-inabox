@@ -1,85 +1,60 @@
-# org-visuals — parity with Power BI Organizational visuals + tenant branding
+# org-visuals — parity with Fabric / Power BI Admin "Organizational visuals"
 
-Source UI: Power BI Admin → **Organizational visuals**; tenant theme / branding
-Reference: <https://learn.microsoft.com/power-bi/admin/organizational-visuals>
-Run date: 2026-06-09
+Source UI: Power BI / Fabric Admin portal → **Tenant settings → Organizational
+visuals** (`https://app.powerbi.com/admin-portal/organizationVisuals`). Microsoft
+Learn: [Organizational visuals](https://learn.microsoft.com/power-bi/developer/visuals/power-bi-custom-visuals-organization).
 
-Loom surfaces:
+Azure-native backing (no Fabric / Power BI workspace): each `.pbiviz` bundle is
+stored as a **real Blob** in the DLZ `org-visuals` Blob container; version +
+enabled state live in the Cosmos `org-visuals` container.
 
-- Tenant theme BFF: `app/api/tenant-theme/route.ts` (GET/PUT
-  `{ accent, brandName, logoUrl }`)
-- Theme bridge: `lib/components/tenant-theme-bridge.tsx` → injects CSS vars
-  `--loom-tenant-accent`, `--loom-tenant-brand`, `--loom-indigo-700` on `:root`
-- Domain imagery: `lib/components/domain-image-gallery.tsx` +
-  `lib/components/domain-image-presets.tsx`
-- Store: Cosmos `tenant-themes` (PK `/tenantId`)
+## Fabric/Power BI feature inventory
 
-> **Scope note:** Fabric/Power BI "Organizational visuals" specifically manages
-> custom `.pbiviz` visual packages. Loom's built org-branding surface is
-> **tenant theme + domain imagery** (Loom-native). Custom `.pbiviz` management is
-> a Power-BI-tenant feature and is disclosed as an honest gate.
-
-This surface is **Loom-native** Cosmos state. There is **no dependency on real
-Microsoft Fabric** — branding renders and saves with
-`LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
-
-## Fabric/Azure feature inventory (grounded in Learn)
-
-1. Apply org-wide branding (accent color, name, logo)
-2. Per-domain visual identity (color / icon / image)
-3. Upload + manage custom organizational visuals (`.pbiviz`)
+| # | Capability (real Admin UI) | Notes |
+|---|----------------------------|-------|
+| 1 | **Add / upload** a custom visual (`.pbiviz`) | name + version + file |
+| 2 | List organizational visuals | name, version, last updated, status |
+| 3 | See / set each visual's **version** | semantic version |
+| 4 | **Enable / disable** a visual tenant-wide | toggle |
+| 5 | **Delete** a visual | removes it tenant-wide |
+| 6 | Search / filter the list | by name |
 
 ## Loom coverage
 
-| Capability | Status | Backend |
-|---|---|---|
-| Tenant accent-colour override | ✅ Built | `PUT /api/tenant-theme` body.accent `#RRGGBB` → Cosmos `tenant-themes`; `TenantThemeBridge` injects `--loom-tenant-accent` |
-| Tenant brand-name override | ✅ Built | `PUT …` body.brandName → `--loom-tenant-brand` + `document.title` |
-| Tenant logo-URL override | ✅ Built | `PUT …` body.logoUrl → Cosmos |
-| Domain colour swatches (16 presets) | ✅ Built | `DomainImagePresets` → `PATCH /api/admin/domains?id=` `imageKey="color::#hex"` |
-| Domain icon presets (12 department icons) | ✅ Built | `DomainImagePresets` → `imageKey="icon::<key>"` |
-| Domain custom blob image upload | ✅ Built (⚠️ honest gate) | `GET /api/admin/domains/images` → ADLS data plane; gate names `LOOM_DOMAIN_IMAGE_STORAGE` + Storage Blob Data Reader |
-| Custom org Power BI visuals (`.pbiviz` upload + management) | ⚠️ Honest gate | Not built; Fabric `POST /admin/organizational-visuals` REST not wired. Disclosed as a tracked Power-BI-tenant feature; tenant + domain branding deliver the org-identity parity today. |
+| # | Capability | Status | Loom surface |
+|---|------------|--------|--------------|
+| 1 | Upload `.pbiviz` | ✅ built | hidden file input + name + version + Upload → `POST` multipart |
+| 2 | List visuals | ✅ built | `LoomDataTable` from `GET /api/admin/org-visuals` |
+| 3 | Version | ✅ built | `Badge` version column |
+| 4 | Enable/disable tenant-wide | ✅ built | Fluent `Switch` → `PUT ?id=` `{enabled}` |
+| 5 | Delete | ✅ built | `DELETE ?id=` → removes blob + Cosmos doc |
+| 6 | Search/filter | ✅ built | `Toolbar` search + per-column filter |
+| — | Size column | ✅ built | bundle byte size |
+| — | Honest infra gate | ⚠️ gate | `NotConfiguredBar` names `LOOM_ORG_VISUALS_URL` + `org-visuals-rbac.bicep` |
 
-Zero ❌ rows. The two ⚠️ gates (custom blob images, custom `.pbiviz`) keep the
-full branding surface rendering — preset swatches/icons cover the no-blob case,
-and tenant/domain theming covers the org-identity case, per `no-vaporware.md`.
+Zero ❌. Zero stub banners.
 
 ## Backend per control
 
-- **Tenant theme** — `GET/PUT /api/tenant-theme` read-modify-writes the
-  `tenant-themes` Cosmos doc; `TenantThemeBridge` reads it on mount and injects
-  the accent / brand CSS variables on `:root` plus sets `document.title`.
-- **Domain imagery** — preset colours/icons PATCH the domain doc's `imageKey`
-  (`color::#hex` / `icon::<key>`); custom images come from the ADLS data plane via
-  `GET /api/admin/domains/images`, honest-gated on `LOOM_DOMAIN_IMAGE_STORAGE`.
-- **`.pbiviz`** — not wired; honest gate only.
+| Control | Backend |
+|---------|---------|
+| Upload | `req.formData()` → `adls-client.uploadBlob` (block blob) → Cosmos upsert (enabled=false) |
+| List | Cosmos `org-visuals` query (PK /tenantId) |
+| Enable/disable | Cosmos replace (enabled + enabledAt/By) |
+| Delete | `adls-client.deletePath` (blob) → Cosmos item delete |
 
-## Per-cloud notes
+## Per-cloud
 
-| Cloud | Domain custom-image storage |
-|---|---|
-| Commercial / GCC | `*.dfs.core.windows.net` when `LOOM_DOMAIN_IMAGE_STORAGE` set; presets always |
-| GCC-High / IL5 | `*.dfs.core.usgovcloudapi.net` container inside the boundary; presets always |
-
-Tenant accent / brand / logo are cloud-agnostic Cosmos state.
-
-## Bicep sync
-
-- No new resource — `tenant-themes` Cosmos container via existing init; domain
-  imagery reuses the `loomDomainImageStorage` param + `LOOM_DOMAIN_IMAGE_STORAGE`
-  env already wired for the domains surface.
-- No new role grant beyond the existing Storage Blob Data Reader for the
-  (optional) domain-image storage account.
+| | Commercial | GCC | GCC-High | IL5/DoD |
+|-|-----------|-----|----------|---------|
+| Blob suffix | `blob.core.windows.net` | `blob.core.windows.net` | `blob.core.usgovcloudapi.net` | `blob.core.usgovcloudapi.net` |
+| Block-blob upload | ✅ | ✅ | ✅ | ✅ |
+| Fabric/Power BI dependency | none | none | none | none |
 
 ## Verification
 
-- Default path works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
-- Live walk: open the tenant-theme settings, change the accent colour + brand
-  name + logo URL (real PUT → Cosmos), confirm `--loom-tenant-accent` updates the
-  UI and the document title changes; in a domain's settings pick a colour swatch
-  and an icon preset (PATCH → domain doc), and confirm the custom-image gallery
-  honest-gates when `LOOM_DOMAIN_IMAGE_STORAGE` is unset.
-
-Grade: **B+** — tenant + domain branding fully built on real Cosmos (+ optional
-ADLS images); custom `.pbiviz` management is the single honest deferred gate.
+`npx vitest run lib/clients/__tests__/embed-codes-org-visuals.test.ts` — upload
+stores real bytes + writes `enabled=false`; toggle flips tenant-wide; delete
+removes the blob + metadata. With `LOOM_ORG_VISUALS_URL` unset the route returns
+a 503 + hint and the pane renders `NotConfiguredBar`. No
+`LOOM_DEFAULT_FABRIC_WORKSPACE` required.
