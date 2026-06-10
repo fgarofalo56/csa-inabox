@@ -130,6 +130,7 @@ interface Entry {
 const REGISTRY: Record<string, Entry> = {
   // ── Data Engineering ──────────────────────────────────────────────
   'lakehouse':            { icon: Database24Regular,  family: 'data-eng', label: 'Lakehouse' },
+  'materialized-lake-view': { icon: Layer24Regular,   family: 'data-eng', label: 'Materialized Lake View' },
   'notebook':             { icon: Notebook24Regular,  family: 'data-eng', label: 'Notebook' },
   'spark-job-definition': { icon: CodeBlock24Regular, family: 'data-eng', label: 'Spark Job Definition' },
   'environment':          { icon: Box24Regular,       family: 'data-eng', label: 'Environment' },

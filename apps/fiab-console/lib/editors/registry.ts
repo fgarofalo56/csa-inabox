@@ -26,6 +26,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),
   // Phase 2
   'lakehouse':            reg(() => import('./lakehouse-editor'),         'LakehouseEditor'),
+  'materialized-lake-view': reg(() => import('./materialized-lake-view-editor'), 'MaterializedLakeViewEditor'),
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
   'data-pipeline':        reg(() => import('./data-pipeline-editor'),     'DataPipelineEditor'),
   'dataflow':             reg(() => import('./dataflow-gen2-editor'),     'DataflowGen2Editor'),

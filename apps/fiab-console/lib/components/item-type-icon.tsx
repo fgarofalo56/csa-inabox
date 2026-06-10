@@ -91,6 +91,7 @@ export const NEUTRAL_COLOR = '#6b7280';
 const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   // Data Engineering
   'lakehouse':             (p) => <Database20Regular style={{ color: p.color }} />,
+  'materialized-lake-view': (p) => <Layer20Regular style={{ color: p.color }} />,
   'notebook':              (p) => <Notebook20Filled style={{ color: p.color }} />,
   'spark-job-definition':  (p) => <CodeBlock20Regular style={{ color: p.color }} />,
   'environment':           (p) => <Box20Regular style={{ color: p.color }} />,

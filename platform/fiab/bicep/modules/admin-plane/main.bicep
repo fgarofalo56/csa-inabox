@@ -344,6 +344,9 @@ param loomGitPatKvPrefix string = 'loom-git-pat'
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
+@description('Public base URL of the Console (e.g. https://csa-loom.contoso.ai). Used as the callback target baked into the "Refresh materialized lake view" ADF pipeline so a scheduled ADF run can reach the MLV refresh endpoint behind Front Door. Empty = the refresh route derives the origin from the request (works for editor-driven refreshes); set this to the vanity / Front Door URL to enable ADF-scheduled MLV refreshes.')
+param loomConsoleBaseUrl string = ''
+
 @description('Loom HDInsight cluster linked-service name (backs the four ADF HDInsight pipeline activities — Hive/Spark/MapReduce/Streaming). Empty leaves the editor honest-gated until an Azure HDInsight linked service is registered in the factory.')
 param loomHdinsightLinkedService string = ''
 
@@ -1528,6 +1531,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            // Public Console base URL baked into the materialized-lake-view
+            // "Refresh materialized lake view" ADF pipeline's callback activity.
+            // Empty = the refresh route derives the origin from the request.
+            { name: 'LOOM_CONSOLE_BASE_URL', value: loomConsoleBaseUrl }
             // Opt-in Azure Analysis Services semantic layer — backs the
             // semantic-model "Get data" (Power Query M) ingest refresh phase.
             // Empty values honestly gate the AAS phase (Delta still lands; query
