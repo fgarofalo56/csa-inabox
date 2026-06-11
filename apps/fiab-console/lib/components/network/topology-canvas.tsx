@@ -24,7 +24,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -95,7 +95,60 @@ const useStyles = makeStyles({
   },
   detailRow: { marginBottom: '10px' },
   mono: { fontFamily: 'Consolas, monospace', fontSize: '12px' },
+  legend: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    columnGap: '14px',
+    rowGap: '6px',
+    maxWidth: '420px',
+    padding: '8px 10px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow8,
+  },
+  legendItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '11px',
+    color: tokens.colorNeutralForeground2,
+    whiteSpace: 'nowrap',
+  },
+  legendSwatch: {
+    width: '12px',
+    height: '12px',
+    borderRadius: '3px',
+    flexShrink: 0,
+  },
+  empty: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    textAlign: 'center',
+    padding: '24px',
+  },
 });
+
+/** Legend rows — node kinds + the service-color key, derived from SERVICE_COLORS. */
+const NODE_LEGEND: { label: string; bg: string; border: string }[] = [
+  { label: 'Virtual network', bg: tokens.colorNeutralBackground3, border: tokens.colorBrandBackground },
+  { label: 'Subnet', bg: tokens.colorNeutralBackground2, border: tokens.colorNeutralStroke2 },
+  { label: 'Network security group', bg: '#FFF7ED', border: '#B45309' },
+  { label: 'Private DNS zone', bg: '#F0F9FF', border: tokens.colorBrandBackground2 },
+];
+const SERVICE_LEGEND: { label: string; key: keyof typeof SERVICE_COLORS }[] = [
+  { label: 'Synapse', key: 'synapse' },
+  { label: 'Storage', key: 'storage' },
+  { label: 'SQL', key: 'sql' },
+  { label: 'Databricks', key: 'databricks' },
+  { label: 'Key Vault', key: 'keyvault' },
+  { label: 'Event Grid', key: 'eventgrid' },
+];
 
 /**
  * Build React Flow nodes + edges from the real ARM data.
@@ -620,6 +673,21 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
     if (detail) setSelected(detail);
   }, []);
 
+  if (nodes.length === 0) {
+    return (
+      <div className={styles.shell}>
+        <div className={styles.empty}>
+          <Subtitle2>No network resources to map</Subtitle2>
+          <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 360 }}>
+            No virtual networks or private endpoints were returned for the readable subscription(s).
+            Once the network bicep module provisions the hub VNet and private endpoints, the live
+            topology renders here.
+          </Body1>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.shell}>
       <ReactFlowProvider>
@@ -632,6 +700,31 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
         >
           <Background variant={BackgroundVariant.Lines} gap={16} size={2} />
           <Controls showInteractive={false} />
+          <Panel position="top-left">
+            <div className={styles.legend} aria-label="Topology legend">
+              {NODE_LEGEND.map((n) => (
+                <span key={n.label} className={styles.legendItem}>
+                  <span
+                    className={styles.legendSwatch}
+                    style={{ backgroundColor: n.bg, border: `2px solid ${n.border}` }}
+                  />
+                  {n.label}
+                </span>
+              ))}
+              {SERVICE_LEGEND.map((s) => (
+                <span key={s.label} className={styles.legendItem}>
+                  <span
+                    className={styles.legendSwatch}
+                    style={{
+                      backgroundColor: SERVICE_COLORS[s.key].bg,
+                      border: `2px solid ${SERVICE_COLORS[s.key].border}`,
+                    }}
+                  />
+                  {s.label}
+                </span>
+              ))}
+            </div>
+          </Panel>
           <MiniMap
             position="bottom-right"
             pannable
