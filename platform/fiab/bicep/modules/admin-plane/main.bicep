@@ -228,7 +228,14 @@ param appImageTags object = {
   mirroring: 'v0.1'
   directLake: 'v0.1'
   maf: 'v0.1'
+  setupOrchestrator: 'v0.1'
 }
+
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Container Apps only (Commercial / GCC); on AKS boundaries deploy it via the cluster GitOps path. Requires the loom-setup-orchestrator image pushed to ACR + deployAppsEnabled. Off by default — flip on once the image + template are published. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
+param setupOrchestratorEnabled bool = false
+
+@description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
@@ -246,6 +253,11 @@ param mcpPersistenceEnabled bool = true
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
 var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
+
+// Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
+// when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
+// boundaries it is deployed via the cluster GitOps path instead.
+var setupOrchestratorActive = setupOrchestratorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 // MAF tier deploys only in Gov boundaries with Container Apps + app deploy on.
 var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5') && containerPlatform == 'containerApps' && deployAppsEnabled
@@ -1680,6 +1692,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // Setup Orchestrator URL — the Setup Wizard's Deploy POSTs the captured
+            // config here to run the real multi-sub az deployment sub create. Empty
+            // until the orchestrator Container App is deployed (setupOrchestratorActive);
+            // then the deploy BFF falls back to GitHub dispatch / copy-paste az.
+            { name: 'LOOM_SETUP_ORCHESTRATOR_URL', value: setupOrchestratorActive ? setupOrchestrator!.outputs.url : '' }
             // MCP catalog deploy (admin → Copilot & Agents → Deploy from catalog).
             // The deploy/status/delete BFF routes PUT/GET/DELETE
             // Microsoft.App/containerApps via ARM, binding each server to the MCP
@@ -2965,8 +2982,32 @@ module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
   }
 }
 
-// label-propagation timer Function (F15) — sensitivity-label downstream
-// propagation over the Loom Cosmos lineage graph. No-op without a Cosmos
+// Setup Orchestrator Container App (loom-setup-orchestrator) — submits the real
+// subscription-scoped ARM deployment of main.json (templateLink) for the Setup
+// Wizard's Deploy step. Runs AS the Console UAMI (identity.outputs.uamiConsole*),
+// which main.bicep grants Contributor per target subscription via
+// setup-orchestrator-rbac. Internal ingress; the Console reaches it at
+// LOOM_SETUP_ORCHESTRATOR_URL with the shared internal token. Azure-native
+// (Container Apps + ARM) — no Fabric dependency.
+module setupOrchestrator 'setup-orchestrator.bicep' = if (setupOrchestratorActive) {
+  name: 'setup-orchestrator'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-setup-orchestrator:${appImageTags.setupOrchestrator}'
+    targetPort: 8080
+    internalToken: loomInternalToken
+    armEndpoint: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com'
+    setupTemplateUri: setupTemplateUri
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+
 // account (loomCosmosEndpoint empty). The Function identity is granted Cosmos
 // DB Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
 module labelPropagation 'label-propagation-function.bicep' = if (labelPropagationEnabled) {

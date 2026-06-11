@@ -143,62 +143,124 @@ async def test_state_store_update_silently_skips_unknown_id():
     assert await store.get("unknown") is None
 
 
-# ----- run_bicep_deploy state machine -----------------------------------
+# ----- run_bicep_deploy state machine (real ARM path, SDK mocked) -------
+
+# The real driver imports azure.mgmt.resource models at call time; skip the
+# driver tests when the SDK isn't installed in this environment.
+pytest.importorskip("azure.mgmt.resource", reason="azure-mgmt-resource not installed")
+
+from types import SimpleNamespace  # noqa: E402
 
 
-@pytest.mark.asyncio
-async def test_run_bicep_deploy_walks_to_succeeded(monkeypatch):
-    """The deploy driver should progress through every stage and finish 'succeeded'."""
-    store = DeploymentStateStore()
-    req = {
+class _FakePoller:
+    """Stands in for the LRO poller begin_create_or_update returns."""
+
+    def __init__(self, provisioning_state: str) -> None:
+        self._state = provisioning_state
+
+    def done(self) -> bool:
+        return True
+
+    def result(self):
+        return SimpleNamespace(properties=SimpleNamespace(provisioning_state=self._state))
+
+
+class _FakeDeployments:
+    def __init__(self, provisioning_state: str) -> None:
+        self._state = provisioning_state
+        self.calls: list = []
+
+    def begin_create_or_update_at_subscription_scope(self, name, deployment):
+        self.calls.append((name, deployment))
+        return _FakePoller(self._state)
+
+
+class _FakeResourceClient:
+    def __init__(self, provisioning_state: str) -> None:
+        self.deployments = _FakeDeployments(provisioning_state)
+
+
+def _deploy_req() -> dict:
+    return {
         "boundary": "Commercial",
         "mode": "single-sub",
         "domain_name": "happy",
         "capacity_sku": "F2",
+        "subscription_id": "00000000-0000-0000-0000-000000000001",
+        "region": "eastus2",
     }
-    await store.create(deployment_id="d-3", request=req, caller_oid="oid-3")
 
-    # Skip the production sleep so the test stays fast and deterministic.
-    async def _no_sleep(_):
-        return None
 
-    monkeypatch.setattr(orchestrator.asyncio, "sleep", _no_sleep)
+@pytest.mark.asyncio
+async def test_run_bicep_deploy_succeeds_on_arm_succeeded(monkeypatch):
+    """A real subscription-scoped ARM submit that returns Succeeded → succeeded."""
+    store = DeploymentStateStore()
+    await store.create(deployment_id="d-3", request=_deploy_req(), caller_oid="oid-3")
 
-    await run_bicep_deploy(store, "d-3", req, "oid-3")
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+    fake = _FakeResourceClient("Succeeded")
+    monkeypatch.setattr(orchestrator, "make_resource_client", lambda *a, **k: fake)
+
+    await run_bicep_deploy(store, "d-3", _deploy_req(), "oid-3")
 
     state = await store.get("d-3")
     assert state["status"] == "succeeded"
     assert state["progress"] == 1.0
     assert state["completed_at"] is not None
     assert state["error"] is None
+    # The real ARM call was actually made with our deployment name.
+    assert fake.deployments.calls and fake.deployments.calls[0][0] == "loom-setup-d-3"
 
 
 @pytest.mark.asyncio
-async def test_run_bicep_deploy_records_failure(monkeypatch):
-    """If a stage transition raises, status flips to 'failed' with the error."""
+async def test_run_bicep_deploy_fails_when_arm_not_succeeded(monkeypatch):
+    """A terminal provisioning state other than Succeeded → failed (no fake success)."""
     store = DeploymentStateStore()
-    req = {
-        "boundary": "Commercial",
-        "mode": "single-sub",
-        "domain_name": "boom",
-        "capacity_sku": "F2",
-    }
-    await store.create(deployment_id="d-4", request=req, caller_oid="oid-4")
+    await store.create(deployment_id="d-4", request=_deploy_req(), caller_oid="oid-4")
 
-    call_count = {"n": 0}
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+    monkeypatch.setattr(orchestrator, "make_resource_client", lambda *a, **k: _FakeResourceClient("Failed"))
 
-    async def _explode_after_first(_):
-        call_count["n"] += 1
-        if call_count["n"] > 1:
-            raise RuntimeError("simulated MCP failure")
-
-    monkeypatch.setattr(orchestrator.asyncio, "sleep", _explode_after_first)
-
-    await run_bicep_deploy(store, "d-4", req, "oid-4")
+    await run_bicep_deploy(store, "d-4", _deploy_req(), "oid-4")
 
     state = await store.get("d-4")
     assert state["status"] == "failed"
-    assert "simulated MCP failure" in state["error"]
+    assert "Failed" in state["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_bicep_deploy_propagates_arm_exception(monkeypatch):
+    """If the ARM client raises, status flips to failed with the error."""
+    store = DeploymentStateStore()
+    await store.create(deployment_id="d-4b", request=_deploy_req(), caller_oid="oid-4b")
+
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("simulated ARM failure")
+
+    monkeypatch.setattr(orchestrator, "make_resource_client", _boom)
+
+    await run_bicep_deploy(store, "d-4b", _deploy_req(), "oid-4b")
+
+    state = await store.get("d-4b")
+    assert state["status"] == "failed"
+    assert "simulated ARM failure" in state["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_bicep_deploy_fails_honestly_without_template_uri(monkeypatch):
+    """No LOOM_SETUP_TEMPLATE_URI → honest failure, never a fake success."""
+    store = DeploymentStateStore()
+    await store.create(deployment_id="d-4c", request=_deploy_req(), caller_oid="oid-4c")
+
+    monkeypatch.delenv("LOOM_SETUP_TEMPLATE_URI", raising=False)
+
+    await run_bicep_deploy(store, "d-4c", _deploy_req(), "oid-4c")
+
+    state = await store.get("d-4c")
+    assert state["status"] == "failed"
+    assert "LOOM_SETUP_TEMPLATE_URI" in state["error"]
 
 
 # ----- Orchestrator backends dispatch -----------------------------------
