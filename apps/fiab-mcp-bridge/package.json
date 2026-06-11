@@ -1,0 +1,14 @@
+{
+  "name": "csa-loom-mcp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom stdio→HTTP/SSE bridge for npx/uvx MCP servers.",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

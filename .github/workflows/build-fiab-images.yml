@@ -107,6 +107,9 @@ jobs:
           - app: loom-mcp
             context: ./apps/fiab-mcp-config
             dockerfile: Dockerfile
+          - app: loom-mcp-bridge
+            context: ./apps/fiab-mcp-bridge
+            dockerfile: Dockerfile
           - app: loom-activator
             context: ./apps/fiab-activator-engine
             dockerfile: Dockerfile

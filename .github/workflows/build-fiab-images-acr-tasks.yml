@@ -73,7 +73,7 @@ jobs:
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'

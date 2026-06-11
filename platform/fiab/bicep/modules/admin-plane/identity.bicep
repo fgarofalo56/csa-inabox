@@ -26,6 +26,12 @@ resource uamiMcp 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' =
   tags: complianceTags
 }
 
+resource uamiMcpBridge 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: 'uami-loom-mcp-bridge-${location}'
+  location: location
+  tags: complianceTags
+}
+
 resource uamiOrchestrator 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: 'uami-loom-orchestrator-${location}'
   location: location
@@ -77,6 +83,10 @@ output uamiConsoleName string = uamiConsole.name
 output uamiMcpId string = uamiMcp.id
 output uamiMcpClientId string = uamiMcp.properties.clientId
 output uamiMcpPrincipalId string = uamiMcp.properties.principalId
+
+output uamiMcpBridgeId string = uamiMcpBridge.id
+output uamiMcpBridgeClientId string = uamiMcpBridge.properties.clientId
+output uamiMcpBridgePrincipalId string = uamiMcpBridge.properties.principalId
 
 output uamiOrchestratorId string = uamiOrchestrator.id
 output uamiOrchestratorClientId string = uamiOrchestrator.properties.clientId

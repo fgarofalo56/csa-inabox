@@ -206,10 +206,11 @@ param frontDoorEnabled bool = false
 
 // ---------- Container image tags + Loom Console env-var wiring ----------
 
-@description('Container image tag per app (loom-console, loom-mcp, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf). Default v0.1; override per release.')
+@description('Container image tag per app (loom-console, loom-mcp, loom-mcp-bridge, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf). Default v0.1; override per release.')
 param appImageTags object = {
   console: 'v0.1'
   mcp: 'v0.1'
+  mcpBridge: 'v0.1'
   orchestrator: 'v0.1'
   activator: 'v0.1'
   mirroring: 'v0.1'
@@ -2401,6 +2402,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // default IQ MCP Bearer secret (LOOM_IQ_MCP_TOKEN overrides if set).
           (copilotMafActive || loomIqMcpEnabled) ? [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
+          ] : [],
+          // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
+          // the other Loom apps; the External-MCP panel reads this to offer the
+          // bridged npx/uvx servers for one-click registration. Empty when the
+          // apps tier is off → the panel shows the honest gate.
+          deployAppsEnabled ? [
+            { name: 'LOOM_MCP_BRIDGE_URL', value: 'http://loom-mcp-bridge:8080' }
           ] : []
         )
         secrets: concat(
@@ -2444,6 +2452,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         tier: 'mcp'
         minReplicas: 1
         maxReplicas: 3
+      }
+      {
+        // stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Runs npx/uvx stdio MCP
+        // servers as HTTP endpoints the External-MCP panel registers one-click.
+        // AZURE_CLOUD drives the per-boundary catalog filter; AZURE_AUTHORITY_HOST
+        // points Gov children at the .us login authority. Internal ingress only.
+        name: 'loom-mcp-bridge'
+        image: 'loom-mcp-bridge:${appImageTags.mcpBridge}'
+        uamiId: identity.outputs.uamiMcpBridgeId
+        uamiClientId: identity.outputs.uamiMcpBridgeClientId
+        ingressPort: 8080
+        external: false
+        healthPath: '/.well-known/health'
+        tier: 'mcp'
+        minReplicas: 1
+        maxReplicas: 3
+        env: [
+          { name: 'AZURE_CLOUD', value: (boundary == 'GCC-High' || boundary == 'IL5') ? 'AzureUSGovernment' : 'AzureCloud' }
+          { name: 'AZURE_AUTHORITY_HOST', value: (boundary == 'GCC-High' || boundary == 'IL5') ? 'https://login.microsoftonline.us/' : 'https://login.microsoftonline.com/' }
+          { name: 'LOOM_MCP_BRIDGE_CONFIG', value: '/app/config/loom-mcp-bridge.json' }
+          { name: 'LOOM_MCP_BRIDGE_PORT', value: '8080' }
+        ]
       }
       {
         name: 'loom-setup-orchestrator'
@@ -2849,6 +2879,10 @@ output consoleUrl string = containerPlatform == 'containerApps'
 output mcpServerUrl string = containerPlatform == 'containerApps'
   ? 'https://loom-mcp.${containerPlatformModule.outputs.caeDefaultDomain}'
   : 'https://loom-mcp.${location}.csa-loom.internal'
+
+output mcpBridgeUrl string = containerPlatform == 'containerApps'
+  ? 'https://loom-mcp-bridge.${containerPlatformModule.outputs.caeDefaultDomain}'
+  : 'https://loom-mcp-bridge.${location}.csa-loom.internal'
 
 output catalogEndpoint string = catalogPrimary == 'purview'
   ? 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
