@@ -412,6 +412,9 @@ param loomAsaJobName string = 'asa-loom-default-${location}'
 @description('Azure region for Stream Analytics jobs created on demand from the Eventstream canvas (POST /api/items/eventstream/{id}/provision). Defaults to the deployment region; falls back to LOOM_LOCATION then eastus in the client.')
 param loomAsaLocation string = location
 
+@description('audit-T29 — release-environment (Palantir Apollo / Shuttle parity): the Azure Deployment Environments DevCenter project (resourceId or name) used for catalog-driven environment provisioning. Empty surfaces an honest infra-gate in the release-environment editor (ARM deployment history + promotions still work). Deploy modules/admin-plane/devcenter.bicep to provision one. No Microsoft Fabric required.')
+param loomDevCenterProject string = ''
+
 @description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
 param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
@@ -1453,6 +1456,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
+            // audit-T29 — release-environment (Apollo/Shuttle parity). Optional
+            // Azure Deployment Environments project; empty = honest infra-gate in
+            // the editor (ARM history + promotions still function). No Fabric.
+            { name: 'LOOM_DEVCENTER_PROJECT', value: loomDevCenterProject }
             // ADF Output-pane Log Analytics fallback — runs older than ADF's
             // 45-day native monitoring window are queried from the typed
             // ADFPipelineRun / ADFActivityRun tables in this workspace. Separate

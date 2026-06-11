@@ -242,5 +242,29 @@ This reference maps **65 Palantir Foundry features** across 10 capability domain
 
 ---
 
-**Last updated:** 2026-04-30
+## audit-T29 — built CSA Loom surfaces (supersedes the doc-only mappings above)
+
+The six Palantir surfaces below are no longer doc-only Azure mappings: each is a
+built CSA Loom **item type** with a focused editor, real BFF routes, and an
+Azure-native backend (no Microsoft Fabric / Power BI workspace required —
+`.claude/rules/no-fabric-dependency.md`). See
+`docs/fiab/parity/palantir-migration-surfaces.md` for the per-control parity
+matrix.
+
+| Foundry feature | Loom item type (slug) | Editor | Real backend |
+| --- | --- | --- | --- |
+| Workshop | `workshop-app` (Atelier) | `lib/editors/palantir-editors.tsx → WorkshopAppEditor` | Cosmos + ontology binding (`/bind-ontology`), Thread edge; hosts on Container Apps |
+| Slate | `slate-app` | `SlateAppEditor` | Deterministic Azure Static Web Apps bundle codegen (`/generate`) |
+| OSDK | `ontology-sdk` | `OntologySdkEditor` | Typed TS/Python + dab-config.json codegen over an ontology (`/generate`); DAB on Container Apps + APIM |
+| Apollo | `release-environment` (Shuttle) | `ReleaseEnvironmentEditor` | Real ARM deployment history (`/arm`) + promotions (`/promote`); optional Azure Deployment Environments (`LOOM_DEVCENTER_PROJECT`, `modules/admin-plane/devcenter.bicep`) |
+| Health Checks | `health-check` | `HealthCheckEditor` | Real Azure Monitor `scheduledQueryRules` (`/rule`) over Log Analytics |
+| AIP Logic | `aip-logic` (Spindle) | `AipLogicEditor` | Typed LLM function invoked against live Azure OpenAI (`/invoke`) |
+
+All six appear in the `+ New item` catalog under **Fabric IQ** (preview). Each
+defaults Azure-native and shows an honest infra-gate (MessageBar naming the env
+var / RBAC grant) when the backing Azure resource is not yet provisioned.
+
+---
+
+**Last updated:** 2026-06-10
 **Maintainers:** CSA-in-a-Box core team

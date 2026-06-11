@@ -181,6 +181,17 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // (real REST/GraphQL entity authoring, per-role permissions, relationships,
   // runtime/host; emits real dab-config.json + publishes via APIM).
   'data-api-builder':            reg(() => import('./data-api-builder-editor'), 'DataApiBuilderEditor'),
+
+  // audit-T29 / deep T50-T57 — Palantir-class migration surfaces. Doc-only
+  // mappings in docs/migrations/palantir-foundry/ are superseded by these built
+  // Azure-native editors (Workshop/Slate/OSDK/Apollo/Checks/AIP-Logic). All
+  // default Azure-native — no Fabric / Power BI workspace required.
+  'workshop-app':                reg(() => import('./palantir-editors'),       'WorkshopAppEditor'),
+  'slate-app':                   reg(() => import('./palantir-editors'),       'SlateAppEditor'),
+  'ontology-sdk':                reg(() => import('./palantir-editors'),       'OntologySdkEditor'),
+  'release-environment':         reg(() => import('./palantir-editors'),       'ReleaseEnvironmentEditor'),
+  'health-check':                reg(() => import('./palantir-editors'),       'HealthCheckEditor'),
+  'aip-logic':                   reg(() => import('./palantir-editors'),       'AipLogicEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {
