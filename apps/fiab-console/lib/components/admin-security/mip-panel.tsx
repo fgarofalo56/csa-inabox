@@ -27,7 +27,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Caption1, Subtitle2,
   Textarea, Field, Input, Switch, Checkbox,
-  Dropdown, Option,
+  Dropdown, Option, Radio, RadioGroup,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -55,6 +55,13 @@ const useStyles = makeStyles({
     display: 'inline-block', width: '12px', height: '12px', borderRadius: '2px',
     marginRight: '6px', verticalAlign: 'middle', backgroundColor: '#888',
   },
+  scopeBlock: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    padding: 10, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  scopeGrid: { display: 'flex', flexDirection: 'column', gap: 8 },
+  scopeTags: { display: 'flex', flexWrap: 'wrap', gap: 4 },
 });
 
 const LABEL_COLORS = [
@@ -110,6 +117,8 @@ interface LabelsPayload { ok: boolean; labels?: LabelRow[]; }
 interface PolicyRow {
   id: string; name?: string; displayName?: string; description?: string;
   isMandatory?: boolean; defaultLabelId?: string; scopes?: string[];
+  exchangeLocation?: string[]; sharePointLocation?: string[];
+  oneDriveLocation?: string[]; modernGroupLocation?: string[];
   labels?: string[]; enabled?: boolean;
 }
 interface PoliciesPayload { ok: boolean; policies?: PolicyRow[]; }
@@ -400,6 +409,40 @@ function LabelDialog({ mode, labels, onClose, onGate, onSaved }: {
 
 type PolicyDialogMode = { kind: 'create' } | { kind: 'edit'; policy: PolicyRow } | null;
 
+/** Workloads a label policy can be published to (1:1 with the New-/Set-LabelPolicy *Location params). */
+const POLICY_WORKLOADS = [
+  { key: 'exchangeLocation', label: 'Exchange mailboxes', short: 'Exchange', placeholder: 'user@contoso.com — one per line' },
+  { key: 'sharePointLocation', label: 'SharePoint sites', short: 'SharePoint', placeholder: 'https://contoso.sharepoint.com/sites/Team — one per line' },
+  { key: 'oneDriveLocation', label: 'OneDrive accounts', short: 'OneDrive', placeholder: 'https://contoso-my.sharepoint.com/personal/user_contoso_com — one per line' },
+  { key: 'modernGroupLocation', label: 'Microsoft 365 Groups', short: 'M365 Groups', placeholder: 'group@contoso.com — one per line' },
+] as const;
+type WorkloadKey = (typeof POLICY_WORKLOADS)[number]['key'];
+
+function parseIdentities(text: string): string[] {
+  return text.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+}
+function isAllScope(arr?: string[]): boolean {
+  return !!arr && arr.length > 0 && arr.every((x) => x.trim().toLowerCase() === 'all');
+}
+function hasSpecific(arr?: string[]): boolean {
+  return !!arr && arr.some((x) => x.trim() && x.trim().toLowerCase() !== 'all');
+}
+
+/** Compact, human-readable summary of a policy's publish scope for the table. */
+function policyScopeChips(p: PolicyRow): string[] {
+  const locs: [string, string[] | undefined][] = [
+    ['Exchange', p.exchangeLocation], ['SharePoint', p.sharePointLocation],
+    ['OneDrive', p.oneDriveLocation], ['M365 Groups', p.modernGroupLocation],
+  ];
+  if (locs.every(([, a]) => isAllScope(a)) && locs.some(([, a]) => isAllScope(a))) return ['All locations'];
+  const chips: string[] = [];
+  for (const [name, arr] of locs) {
+    if (isAllScope(arr)) chips.push(`${name}: All`);
+    else if (hasSpecific(arr)) chips.push(`${name}: ${arr!.filter((x) => x.trim().toLowerCase() !== 'all').length}`);
+  }
+  return chips;
+}
+
 function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload> }) {
   const s = useStyles();
   const [state, setState] = useState<ApiState<PoliciesPayload>>(emptyState());
@@ -464,16 +507,24 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
             <TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Published labels</TableHeaderCell>
+              <TableHeaderCell>Scope</TableHeaderCell>
               <TableHeaderCell>Mandatory</TableHeaderCell>
               <TableHeaderCell>Default label</TableHeaderCell>
               <TableHeaderCell>Actions</TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {state.data.policies!.map((p) => (
+            {state.data.policies!.map((p) => {
+              const chips = policyScopeChips(p);
+              return (
               <TableRow key={p.id}>
                 <TableCell><strong>{p.displayName || p.name}</strong></TableCell>
                 <TableCell>{(p.labels || []).map((id) => <Badge key={id} appearance="outline" style={{ marginRight: 4 }}>{lookupLabel(id) || id}</Badge>)}</TableCell>
+                <TableCell>
+                  {chips.length === 0
+                    ? <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Not published</Caption1>
+                    : <div className={s.scopeTags}>{chips.map((c) => <Badge key={c} appearance="tint" color={c === 'All locations' ? 'brand' : 'informative'}>{c}</Badge>)}</div>}
+                </TableCell>
                 <TableCell>{p.isMandatory ? <Badge color="warning">yes</Badge> : <Badge color="subtle">no</Badge>}</TableCell>
                 <TableCell>{lookupLabel(p.defaultLabelId) || p.defaultLabelId || '—'}</TableCell>
                 <TableCell>
@@ -485,7 +536,8 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
                   </div>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </Table>
       )}
@@ -535,19 +587,64 @@ function PolicyDialog({ mode, labels, onClose, onSaved, onError }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // --- Publish scope (who the policy targets) -------------------------------
+  const initialScopeText = (): Record<WorkloadKey, string> => ({
+    exchangeLocation: (editing?.exchangeLocation || []).join('\n'),
+    sharePointLocation: (editing?.sharePointLocation || []).join('\n'),
+    oneDriveLocation: (editing?.oneDriveLocation || []).join('\n'),
+    modernGroupLocation: (editing?.modernGroupLocation || []).join('\n'),
+  });
+  const allWorkloadsAll = editing
+    ? POLICY_WORKLOADS.every((w) => isAllScope(editing[w.key as WorkloadKey] as string[] | undefined))
+    : false;
+  // New policies default to "All locations" so they publish to everyone immediately
+  // (a policy with no scope is inert). Existing all-All policies keep that mode.
+  const [scopeMode, setScopeMode] = useState<'all' | 'specific'>(
+    mode.kind === 'create' ? 'all' : (allWorkloadsAll ? 'all' : 'specific'),
+  );
+  const [scopeText, setScopeText] = useState<Record<WorkloadKey, string>>(initialScopeText);
+
+  const specificAny = useMemo(
+    () => POLICY_WORKLOADS.some((w) => parseIdentities(scopeText[w.key as WorkloadKey]).length > 0),
+    [scopeText],
+  );
+  const scopeValid = scopeMode === 'all' || mode.kind === 'edit' || specificAny;
+
   const toggle = (id: string, checked: boolean) =>
     setSelected((prev) => checked ? Array.from(new Set([...prev, id])) : prev.filter((x) => x !== id));
+
+  const buildLocations = (): Record<WorkloadKey, string[]> => {
+    if (scopeMode === 'all') {
+      return {
+        exchangeLocation: ['All'], sharePointLocation: ['All'],
+        oneDriveLocation: ['All'], modernGroupLocation: ['All'],
+      };
+    }
+    return {
+      exchangeLocation: parseIdentities(scopeText.exchangeLocation),
+      sharePointLocation: parseIdentities(scopeText.sharePointLocation),
+      oneDriveLocation: parseIdentities(scopeText.oneDriveLocation),
+      modernGroupLocation: parseIdentities(scopeText.modernGroupLocation),
+    };
+  };
 
   const save = async () => {
     setBusy(true); setError(null);
     const url = mode.kind === 'create'
       ? '/api/admin/security/mip/policies'
       : `/api/admin/security/mip/policies/${encodeURIComponent(editing!.id)}`;
+    const locations = buildLocations();
     const payload: Record<string, unknown> = {
       comment: comment.trim() || undefined,
       labels: selected,
       mandatory,
       defaultLabelId: defaultLabelId || undefined,
+      // On create we omit empty workloads; on edit we send all four so the
+      // sidecar can clear a workload by diffing against the live policy.
+      exchangeLocation: mode.kind === 'edit' || locations.exchangeLocation.length ? locations.exchangeLocation : undefined,
+      sharePointLocation: mode.kind === 'edit' || locations.sharePointLocation.length ? locations.sharePointLocation : undefined,
+      oneDriveLocation: mode.kind === 'edit' || locations.oneDriveLocation.length ? locations.oneDriveLocation : undefined,
+      modernGroupLocation: mode.kind === 'edit' || locations.modernGroupLocation.length ? locations.modernGroupLocation : undefined,
     };
     if (mode.kind === 'create') payload.name = name.trim();
     const r = await fetchJson(url, {
@@ -596,12 +693,48 @@ function PolicyDialog({ mode, labels, onClose, onSaved, onError }: {
               </Field>
               <Switch label="Require users to apply a label (mandatory labeling)" checked={mandatory}
                 onChange={(_: unknown, d: any) => setMandatory(!!d.checked)} />
+
+              <Field
+                label="Publish to (scope)"
+                required
+                hint="Who receives this policy. A policy with no scope publishes to no one.">
+                <div className={s.scopeBlock}>
+                  <RadioGroup
+                    value={scopeMode}
+                    onChange={(_: unknown, d: any) => setScopeMode(d.value as 'all' | 'specific')}
+                  >
+                    <Radio value="all" label="All locations (every user, group & site)" />
+                    <Radio value="specific" label="Specific locations" />
+                  </RadioGroup>
+                  {scopeMode === 'specific' && (
+                    <div className={s.scopeGrid}>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Enter identities for the workloads you want to target — one per line (or comma-separated). Type <code>All</code> on its own line to scope an entire workload. Leave a box empty to exclude that workload.
+                      </Caption1>
+                      {POLICY_WORKLOADS.map((w) => (
+                        <Field key={w.key} label={w.label} size="small">
+                          <Textarea
+                            rows={2}
+                            value={scopeText[w.key as WorkloadKey]}
+                            placeholder={w.placeholder}
+                            onChange={(_: unknown, d: any) => setScopeText((prev) => ({ ...prev, [w.key]: d.value }))}
+                          />
+                        </Field>
+                      ))}
+                      {!specificAny && mode.kind === 'create' && (
+                        <MessageBar intent="warning"><MessageBarBody>Add at least one location, or choose <strong>All locations</strong> — otherwise the policy publishes to no one.</MessageBarBody></MessageBar>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </Field>
+
               {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button appearance="primary" onClick={save} disabled={busy || (mode.kind === 'create' && !name.trim()) || selected.length === 0}>
+            <Button appearance="primary" onClick={save} disabled={busy || (mode.kind === 'create' && !name.trim()) || selected.length === 0 || !scopeValid}>
               {busy ? 'Saving…' : (mode.kind === 'create' ? 'Create policy' : 'Save changes')}
             </Button>
           </DialogActions>

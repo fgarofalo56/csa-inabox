@@ -9,7 +9,7 @@
  *
  * POST → create a label policy (New-LabelPolicy) via the SCC sidecar.
  *        Body: { name, comment?, labels[], exchangeLocation?[], sharePointLocation?[],
- *                mandatory?, defaultLabelId? }
+ *                oneDriveLocation?[], modernGroupLocation?[], mandatory?, defaultLabelId? }
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -37,13 +37,17 @@ export async function POST(req: NextRequest) {
   const labels: string[] = Array.isArray(body?.labels) ? body.labels.filter((x: any) => typeof x === 'string' && x.trim()) : [];
   if (!name) return NextResponse.json({ ok: false, error: 'policy name is required' }, { status: 400 });
   if (labels.length === 0) return NextResponse.json({ ok: false, error: 'select at least one label to publish' }, { status: 400 });
+  const locArr = (v: any): string[] | undefined =>
+    Array.isArray(v) ? v.map((x: any) => String(x).trim()).filter(Boolean) : undefined;
   try {
     const result = await createLabelPolicy({
       name,
       comment: body?.comment?.toString().trim() || undefined,
       labels,
-      exchangeLocation: Array.isArray(body?.exchangeLocation) ? body.exchangeLocation : undefined,
-      sharePointLocation: Array.isArray(body?.sharePointLocation) ? body.sharePointLocation : undefined,
+      exchangeLocation: locArr(body?.exchangeLocation),
+      sharePointLocation: locArr(body?.sharePointLocation),
+      oneDriveLocation: locArr(body?.oneDriveLocation),
+      modernGroupLocation: locArr(body?.modernGroupLocation),
       mandatory: body?.mandatory === true,
       defaultLabelId: body?.defaultLabelId?.toString().trim() || undefined,
     });

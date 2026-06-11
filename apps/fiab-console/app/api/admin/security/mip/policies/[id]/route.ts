@@ -3,7 +3,10 @@
  *
  * PATCH  → edit a label policy (Set-LabelPolicy) via the SCC sidecar.
  *          Body: { comment?, labels?[], exchangeLocation?[], sharePointLocation?[],
- *                  mandatory?, defaultLabelId? }
+ *                  oneDriveLocation?[], modernGroupLocation?[], mandatory?, defaultLabelId? }
+ *          Location arrays are the FULL desired scope per workload — the sidecar
+ *          diffs them against the live policy and applies Add/Remove changes,
+ *          so an empty array clears that workload's scope. ['All'] = everyone.
  * DELETE → remove a label policy (Remove-LabelPolicy) via the SCC sidecar.
  *
  * 503 with code 'mip_admin_not_configured' when the SCC admin sidecar is unwired.
@@ -24,10 +27,13 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   const patch: Record<string, unknown> = {};
+  const locArr = (v: any): string[] => (Array.isArray(v) ? v.map((x: any) => String(x).trim()).filter(Boolean) : []);
   if (typeof body?.comment === 'string') patch.comment = body.comment.trim();
   if (Array.isArray(body?.labels)) patch.labels = body.labels.filter((x: any) => typeof x === 'string' && x.trim());
-  if (Array.isArray(body?.exchangeLocation)) patch.exchangeLocation = body.exchangeLocation;
-  if (Array.isArray(body?.sharePointLocation)) patch.sharePointLocation = body.sharePointLocation;
+  if (Array.isArray(body?.exchangeLocation)) patch.exchangeLocation = locArr(body.exchangeLocation);
+  if (Array.isArray(body?.sharePointLocation)) patch.sharePointLocation = locArr(body.sharePointLocation);
+  if (Array.isArray(body?.oneDriveLocation)) patch.oneDriveLocation = locArr(body.oneDriveLocation);
+  if (Array.isArray(body?.modernGroupLocation)) patch.modernGroupLocation = locArr(body.modernGroupLocation);
   if (typeof body?.mandatory === 'boolean') patch.mandatory = body.mandatory;
   if (typeof body?.defaultLabelId === 'string') patch.defaultLabelId = body.defaultLabelId.trim();
   if (Object.keys(patch).length === 0) {

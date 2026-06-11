@@ -84,4 +84,41 @@ describe('scc-labels-client', () => {
     const mod = await import('../scc-labels-client');
     await expect(mod.deleteLabel('missing')).rejects.toBeInstanceOf(mod.SccError);
   });
+
+  it('surfaces per-workload scope locations from Get-LabelPolicy', async () => {
+    process.env.LOOM_MIP_ADMIN_ENABLED = 'true';
+    process.env.LOOM_SCC_LABELS_ENDPOINT = 'https://scc.example.net';
+    process.env.LOOM_SCC_LABELS_KEY = 'k-123';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      data: [{
+        Guid: 'p-2', Name: 'Finance', Labels: ['lbl-a'],
+        ExchangeLocation: ['All'], SharePointLocation: ['https://x.sharepoint.com/sites/Fin'],
+        OneDriveLocation: [], ModernGroupLocation: ['finance@contoso.com'],
+      }],
+    }), { status: 200 }));
+    const mod = await import('../scc-labels-client');
+    const [p] = await mod.listLabelPolicies();
+    expect(p.exchangeLocation).toEqual(['All']);
+    expect(p.sharePointLocation).toEqual(['https://x.sharepoint.com/sites/Fin']);
+    expect(p.oneDriveLocation).toEqual([]);
+    expect(p.modernGroupLocation).toEqual(['finance@contoso.com']);
+    expect(p.scopes).toEqual(expect.arrayContaining(['Exchange', 'SharePoint', 'Microsoft 365 Groups']));
+  });
+
+  it('sends scope locations in a create-policy command', async () => {
+    process.env.LOOM_MIP_ADMIN_ENABLED = 'true';
+    process.env.LOOM_SCC_LABELS_ENDPOINT = 'https://scc.example.net';
+    process.env.LOOM_SCC_LABELS_KEY = 'k-123';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true, data: { id: 'p-9', raw: {} } }), { status: 200 }));
+    const mod = await import('../scc-labels-client');
+    await mod.createLabelPolicy({
+      name: 'All staff', labels: ['lbl-a'],
+      exchangeLocation: ['All'], modernGroupLocation: ['g@contoso.com'],
+    });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    expect(body.action).toBe('create-policy');
+    expect(body.policy.exchangeLocation).toEqual(['All']);
+    expect(body.policy.modernGroupLocation).toEqual(['g@contoso.com']);
+  });
 });

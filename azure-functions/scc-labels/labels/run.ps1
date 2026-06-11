@@ -22,7 +22,16 @@ using namespace System.Net
 #               | "create-policy" | "update-policy" | "delete-policy",
 #     "id": "<label/policy guid>",         # update/delete
 #     "label":  { displayName, tooltip, comment, color, parentId, encryptionEnabled },
-#     "policy": { name, comment, labels[], exchangeLocation[], sharePointLocation[], mandatory, defaultLabelId } }
+#     "policy": { name, comment, labels[], exchangeLocation[], sharePointLocation[],
+#                 oneDriveLocation[], modernGroupLocation[], mandatory, defaultLabelId } }
+#
+# Policy scope (locations): on create-policy each *Location[] maps 1:1 to the
+# New-LabelPolicy -ExchangeLocation/-SharePointLocation/-OneDriveLocation/
+# -ModernGroupLocation parameters ('All' or specific identities). On update-policy
+# the supplied arrays are the FULL desired scope; Set-LabelPolicy only exposes
+# Add*/Remove* (no plain set), so we diff each workload against the live policy
+# and apply the matching Add/Remove. The same diff is applied to Labels
+# (AddLabels/RemoveLabels) since Set-LabelPolicy has no -Labels parameter.
 #
 # Response: { "ok": true, "data": <result> } | { "ok": false, "error": "<msg>" }
 
@@ -37,6 +46,22 @@ function Send-Json([int]$Status, $Payload) {
 }
 
 $ErrorActionPreference = 'Stop'
+
+# Normalize an SCC MultiValuedProperty / array / scalar into a clean string array.
+function ConvertTo-StringArray($value) {
+    if ($null -eq $value) { return @() }
+    return @($value | ForEach-Object { [string]$_ } | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() })
+}
+
+# Compute Add/Remove deltas between the live scope and the full desired scope.
+# Returns @{ add = @(...); remove = @(...) }. Case-insensitive membership.
+function Get-ScopeDelta($current, $desired) {
+    $cur = ConvertTo-StringArray $current
+    $des = ConvertTo-StringArray $desired
+    $add    = @($des | Where-Object { $_ -and ($cur -notcontains $_) })
+    $remove = @($cur | Where-Object { $_ -and ($des -notcontains $_) })
+    return @{ add = $add; remove = $remove }
+}
 
 # --- Validate sidecar configuration ----------------------------------------
 $appId       = $env:SCC_APP_ID
@@ -90,8 +115,11 @@ try {
                     isMandatory  = [bool]$_.Mandatory
                     defaultLabelId = [string]$_.DefaultLabel
                     enabled      = [bool]$_.Enabled
-                    labels       = @($_.Labels)
-                    scopes       = @($_.Settings | Where-Object { $_ -like '*scope*' })
+                    labels       = @($_.Labels | ForEach-Object { [string]$_ })
+                    exchangeLocation   = ConvertTo-StringArray $_.ExchangeLocation
+                    sharePointLocation = ConvertTo-StringArray $_.SharePointLocation
+                    oneDriveLocation   = ConvertTo-StringArray $_.OneDriveLocation
+                    modernGroupLocation = ConvertTo-StringArray $_.ModernGroupLocation
                 }
             }
             Send-Json 200 @{ ok = $true; data = @($rows) }
@@ -100,8 +128,15 @@ try {
         'create-label' {
             $l = $body.label
             if (-not $l.displayName) { Send-Json 400 @{ ok = $false; error = 'label.displayName is required' }; return }
+            # Internal Name must be unique + stable; the display string can contain
+            # spaces/punctuation and may collide, so derive a sanitized unique Name
+            # (alphanumerics of the display name + a short GUID suffix).
+            $slug = ([string]$l.displayName -replace '[^a-zA-Z0-9]', '')
+            if (-not $slug) { $slug = 'Label' }
+            if ($slug.Length -gt 40) { $slug = $slug.Substring(0, 40) }
+            $uniqueName = "$slug-$([guid]::NewGuid().ToString('N').Substring(0,8))"
             $args = @{
-                Name        = ([string]$l.displayName)
+                Name        = $uniqueName
                 DisplayName = ([string]$l.displayName)
                 ErrorAction = 'Stop'
             }
@@ -140,8 +175,14 @@ try {
             if ($labels.Count -eq 0) { Send-Json 400 @{ ok = $false; error = 'a policy must publish at least one label' }; return }
             $args = @{ Name = ([string]$p.name); Labels = $labels; ErrorAction = 'Stop' }
             if ($p.comment) { $args['Comment'] = [string]$p.comment }
-            if ($p.exchangeLocation) { $args['ExchangeLocation'] = @($p.exchangeLocation) }
-            if ($p.sharePointLocation) { $args['SharePointLocation'] = @($p.sharePointLocation) }
+            $ex = ConvertTo-StringArray $p.exchangeLocation
+            $sp = ConvertTo-StringArray $p.sharePointLocation
+            $od = ConvertTo-StringArray $p.oneDriveLocation
+            $mg = ConvertTo-StringArray $p.modernGroupLocation
+            if ($ex.Count) { $args['ExchangeLocation']    = $ex }
+            if ($sp.Count) { $args['SharePointLocation']  = $sp }
+            if ($od.Count) { $args['OneDriveLocation']    = $od }
+            if ($mg.Count) { $args['ModernGroupLocation'] = $mg }
             $created = New-LabelPolicy @args
             $adv = @{}
             if ($p.mandatory -eq $true) { $adv['mandatory'] = 'true' }
@@ -153,11 +194,39 @@ try {
         'update-policy' {
             if (-not $body.id) { Send-Json 400 @{ ok = $false; error = 'id is required' }; return }
             $p = $body.policy
+            # Set-LabelPolicy only exposes Add*/Remove* (no plain set) for Labels and
+            # every location, so fetch the live policy and diff each managed field.
+            $existing = Get-LabelPolicy -Identity ([string]$body.id) -ErrorAction Stop
             $args = @{ Identity = ([string]$body.id); ErrorAction = 'Stop' }
             if ($p.comment) { $args['Comment'] = [string]$p.comment }
-            if ($p.labels) { $args['Labels'] = @($p.labels) }
-            if ($p.exchangeLocation) { $args['AddExchangeLocation'] = @($p.exchangeLocation) }
-            if ($p.sharePointLocation) { $args['AddSharePointLocation'] = @($p.sharePointLocation) }
+
+            if ($null -ne $p.labels) {
+                $d = Get-ScopeDelta $existing.Labels $p.labels
+                if ($d.add.Count)    { $args['AddLabels']    = $d.add }
+                if ($d.remove.Count) { $args['RemoveLabels'] = $d.remove }
+            }
+            # Locations: only diff the workloads the caller actually sent.
+            if ($null -ne $p.exchangeLocation) {
+                $d = Get-ScopeDelta $existing.ExchangeLocation $p.exchangeLocation
+                if ($d.add.Count)    { $args['AddExchangeLocation']    = $d.add }
+                if ($d.remove.Count) { $args['RemoveExchangeLocation'] = $d.remove }
+            }
+            if ($null -ne $p.sharePointLocation) {
+                $d = Get-ScopeDelta $existing.SharePointLocation $p.sharePointLocation
+                if ($d.add.Count)    { $args['AddSharePointLocation']    = $d.add }
+                if ($d.remove.Count) { $args['RemoveSharePointLocation'] = $d.remove }
+            }
+            if ($null -ne $p.oneDriveLocation) {
+                $d = Get-ScopeDelta $existing.OneDriveLocation $p.oneDriveLocation
+                if ($d.add.Count)    { $args['AddOneDriveLocation']    = $d.add }
+                if ($d.remove.Count) { $args['RemoveOneDriveLocation'] = $d.remove }
+            }
+            if ($null -ne $p.modernGroupLocation) {
+                $d = Get-ScopeDelta $existing.ModernGroupLocation $p.modernGroupLocation
+                if ($d.add.Count)    { $args['AddModernGroupLocation']    = $d.add }
+                if ($d.remove.Count) { $args['RemoveModernGroupLocation'] = $d.remove }
+            }
+
             $adv = @{}
             if ($null -ne $p.mandatory) { $adv['mandatory'] = ([bool]$p.mandatory).ToString().ToLower() }
             if ($p.defaultLabelId) { $adv['defaultlabelid'] = [string]$p.defaultLabelId }

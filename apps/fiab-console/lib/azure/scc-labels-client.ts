@@ -132,6 +132,11 @@ export interface SensitivityLabelPolicy {
   defaultLabelId?: string;
   /** Locations the policy is scoped to (Exchange / SharePoint / OneDrive / etc.). */
   scopes?: string[];
+  /** Per-workload scope identities (so the edit wizard can prefill who the policy targets). */
+  exchangeLocation?: string[];
+  sharePointLocation?: string[];
+  oneDriveLocation?: string[];
+  modernGroupLocation?: string[];
   /** Labels (GUIDs) published by this policy. */
   labels?: string[];
   enabled?: boolean;
@@ -160,9 +165,17 @@ export interface LabelPolicyInput {
   comment?: string;
   /** Label GUIDs to publish (order = display order). */
   labels: string[];
-  /** Locations: 'All' or specific Exchange/SharePoint/OneDrive identities. */
+  /**
+   * Scope locations per workload. Each accepts the literal 'All' or specific
+   * identities (mailbox / site URL / group). On create these map 1:1 to the
+   * New-LabelPolicy -*Location parameters; on edit the sidecar diffs them
+   * against the live policy and applies the matching Add/Remove changes, so
+   * an empty array clears that workload's scope.
+   */
   exchangeLocation?: string[];
   sharePointLocation?: string[];
+  oneDriveLocation?: string[];
+  modernGroupLocation?: string[];
   /** Make labeling mandatory in scoped apps. */
   mandatory?: boolean;
   /** Default label GUID applied to new content. */
@@ -243,18 +256,38 @@ async function callSidecar<T>(cmd: SccCommand): Promise<T> {
  */
 export async function listLabelPolicies(): Promise<SensitivityLabelPolicy[]> {
   const rows = await callSidecar<any[]>({ action: 'list-policies' });
-  return (rows || []).map((raw): SensitivityLabelPolicy => ({
-    id: raw?.id || raw?.Guid || raw?.ImmutableId,
-    name: raw?.name || raw?.Name,
-    displayName: raw?.displayName || raw?.Name,
-    description: raw?.description || raw?.Comment,
-    isMandatory: raw?.isMandatory ?? raw?.Mandatory,
-    defaultLabelId: raw?.defaultLabelId ?? raw?.DefaultLabel,
-    scopes: Array.isArray(raw?.scopes) ? raw.scopes : (Array.isArray(raw?.Settings) ? undefined : raw?.Workload ? [raw.Workload] : undefined),
-    labels: Array.isArray(raw?.labels) ? raw.labels : (Array.isArray(raw?.Labels) ? raw.Labels : undefined),
-    enabled: raw?.enabled ?? raw?.Enabled,
-    raw,
-  }));
+  const arr = (v: any): string[] | undefined =>
+    Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : undefined;
+  return (rows || []).map((raw): SensitivityLabelPolicy => {
+    const exchangeLocation = arr(raw?.exchangeLocation) ?? arr(raw?.ExchangeLocation);
+    const sharePointLocation = arr(raw?.sharePointLocation) ?? arr(raw?.SharePointLocation);
+    const oneDriveLocation = arr(raw?.oneDriveLocation) ?? arr(raw?.OneDriveLocation);
+    const modernGroupLocation = arr(raw?.modernGroupLocation) ?? arr(raw?.ModernGroupLocation);
+    const scopes = Array.isArray(raw?.scopes) && raw.scopes.length
+      ? raw.scopes.map((x: any) => String(x))
+      : [
+          ...(exchangeLocation?.length ? ['Exchange'] : []),
+          ...(sharePointLocation?.length ? ['SharePoint'] : []),
+          ...(oneDriveLocation?.length ? ['OneDrive'] : []),
+          ...(modernGroupLocation?.length ? ['Microsoft 365 Groups'] : []),
+        ];
+    return {
+      id: raw?.id || raw?.Guid || raw?.ImmutableId,
+      name: raw?.name || raw?.Name,
+      displayName: raw?.displayName || raw?.Name,
+      description: raw?.description || raw?.Comment,
+      isMandatory: raw?.isMandatory ?? raw?.Mandatory,
+      defaultLabelId: raw?.defaultLabelId ?? raw?.DefaultLabel,
+      scopes: scopes.length ? scopes : undefined,
+      exchangeLocation,
+      sharePointLocation,
+      oneDriveLocation,
+      modernGroupLocation,
+      labels: Array.isArray(raw?.labels) ? raw.labels : (Array.isArray(raw?.Labels) ? raw.Labels : undefined),
+      enabled: raw?.enabled ?? raw?.Enabled,
+      raw,
+    };
+  });
 }
 
 // ============================================================

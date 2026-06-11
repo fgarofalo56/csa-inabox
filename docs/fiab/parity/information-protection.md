@@ -37,13 +37,14 @@ exist app-only. Policy reads now go through `Get-LabelPolicy`.
 | Create label (name, tooltip, color, parent, encryption) | ✅ New label wizard (guided form) | `POST /api/admin/security/mip/labels` → `New-Label` |
 | Edit label (display name, tooltip, comment, color, encryption) | ✅ Edit label wizard | `PATCH /api/admin/security/mip/labels/[id]` → `Set-Label` |
 | Delete label | ✅ Delete (confirm dialog) | `DELETE /api/admin/security/mip/labels/[id]` → `Remove-Label` |
-| List label policies (published labels, mandatory, default) | ✅ Label policies tab table | `GET /api/admin/security/mip/policies` → `Get-LabelPolicy` |
-| Create label policy (labels, locations, mandatory, default) | ✅ New policy wizard (label checklist + toggles) | `POST /api/admin/security/mip/policies` → `New-LabelPolicy` (+ `Set-LabelPolicy` advanced settings) |
-| Edit label policy | ✅ Edit policy wizard | `PATCH /api/admin/security/mip/policies/[id]` → `Set-LabelPolicy` |
+| List label policies (published labels, mandatory, default, scope) | ✅ Label policies tab table (scope column shows All / per-workload counts) | `GET /api/admin/security/mip/policies` → `Get-LabelPolicy` (returns Exchange/SharePoint/OneDrive/ModernGroup locations) |
+| Create label policy (labels, **locations/scope**, mandatory, default) | ✅ New policy wizard — label checklist + **Publish-to scope** (All locations / Specific: Exchange, SharePoint, OneDrive, M365 Groups identity boxes) + toggles | `POST /api/admin/security/mip/policies` → `New-LabelPolicy -ExchangeLocation/-SharePointLocation/-OneDriveLocation/-ModernGroupLocation` (+ `Set-LabelPolicy` advanced settings) |
+| Edit label policy (labels, scope, mandatory, default) | ✅ Edit policy wizard (scope prefilled from live policy; edits diff to add/remove) | `PATCH /api/admin/security/mip/policies/[id]` → `Set-LabelPolicy` `Add*/Remove*Location` + `Add/RemoveLabels` (sidecar diffs against `Get-LabelPolicy`) |
 | Delete label policy | ✅ Delete (confirm dialog) | `DELETE /api/admin/security/mip/policies/[id]` → `Remove-LabelPolicy` |
 | Apply a label to content | ✅ Apply label wizard (pick item → pick label → apply) | `PUT /api/items/[type]/[id]/sensitivity-label` (validates taxonomy + policy, writes Cosmos + Purview Atlas) |
 | Auto-label recommendation | ✅ "Get recommendation" in Apply tab | `POST /api/admin/security/mip/evaluate` → `sensitivityLabels/evaluateApplication` |
 | Encryption / RMS template detail editor | ⚠️ encryption ON/OFF toggle only (full RMS template config is a Purview-portal deep surface) | `New-/Set-Label -EncryptionEnabled` |
+| Adaptive scopes + location exceptions (`*LocationException`, `ExchangeAdaptiveScopes`) | ⚠️ static locations only (All / explicit identities); adaptive scopes + exception lists are a Purview-portal deep surface, not yet built | `New-/Set-LabelPolicy` exception params (available, not wired) |
 
 All config is via **guided forms / wizards / checklists** — no raw JSON
 (per `loom-no-freeform-config`).
