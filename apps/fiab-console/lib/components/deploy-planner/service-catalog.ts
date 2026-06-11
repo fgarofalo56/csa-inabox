@@ -94,6 +94,31 @@ export interface ConfigField {
 
 export type ConfigValue = string | number;
 
+/**
+ * A representative meter on the public Azure Retail Prices API
+ * (https://prices.azure.com/api/retail/prices) used to compute a best-effort
+ * monthly estimate for a planned service. The cost-estimate route scopes the
+ * query by `serviceName` + region + Consumption price type (the values that are
+ * safe to pin case-sensitively per the 2023-01-01-preview contract), then
+ * refines the returned rows with the case-INSENSITIVE `match` / `exclude`
+ * substring hints and picks the lowest qualifying retail price. This is honest
+ * about being a single representative SKU — never an exact bill (see `unitNote`).
+ */
+export interface RetailMeter {
+  /** Exact, case-sensitive Azure Retail Prices `serviceName` (scopes the query). */
+  serviceName: string;
+  /** Optional exact ARM SKU name to pin (e.g. 'Standard_D2s_v5'). */
+  armSkuName?: string;
+  /** Case-insensitive substrings a candidate row's sku/meter/product must contain. */
+  match?: string[];
+  /** Case-insensitive substrings that disqualify a candidate row. */
+  exclude?: string[];
+  /** Quantity multiplier for the normalized monthly unit (default 1). */
+  defaultMonthlyQty?: number;
+  /** Honest note about the representative SKU/quantity the estimate assumes. */
+  unitNote: string;
+}
+
 export interface ServiceDef {
   key: string;
   label: string;
@@ -121,6 +146,14 @@ export interface ServiceDef {
    * none (a config knob there would be a fake — see no-vaporware.md).
    */
   config?: ConfigField[];
+  /**
+   * Representative public-retail-price meter for the cost estimator, or omitted
+   * when no single representative SKU is meaningful (usage-metered / abstract /
+   * tenant-gated services render as "not estimated" honestly).
+   */
+  retail?: RetailMeter;
+  /** azure.microsoft.com/pricing/details deep-link for this service's row. */
+  pricingDetailsUrl?: string;
 }
 
 export const SERVICE_CATEGORY_ORDER: Array<{ id: ServiceCategory; label: string; color: string }> = [
@@ -150,6 +183,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Managed Kubernetes — enables the optional Atlas-on-AKS workload.' },
   { key: 'appService', label: 'App Service', category: 'compute', bicepFlag: 'appServiceEnabled',
     glyph: Globe24Regular, icon: 'App-Services.png', color: '#0078d4',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/app-service/linux/',
+    retail: { serviceName: 'Azure App Service', match: ['B1'], exclude: ['Windows', 'Isolated', 'Premium'],
+      unitNote: 'Basic B1 Linux plan · 730 hrs/mo (1 instance)' },
     description: 'PaaS web app / API hosting (Linux B1 plan + web app, HTTPS-only).',
     config: [
       { key: 'planSku', label: 'Plan SKU', type: 'select', allowed: ['B1', 'B2', 'S1', 'P0v3', 'P1v3'],
@@ -160,6 +196,7 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     ] },
   { key: 'functions', label: 'Azure Functions', category: 'compute', bicepFlag: 'functionsEnabled',
     glyph: Code24Regular, icon: 'Function-Apps.png', color: '#0078d4',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/functions/',
     description: 'Serverless event-driven compute (Consumption Linux plan + backing storage).',
     config: [
       { key: 'workerRuntime', label: 'Worker runtime', type: 'select', allowed: ['node', 'python', 'dotnet-isolated', 'java'],
@@ -170,9 +207,14 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     ] },
   { key: 'containerInstances', label: 'Container Instances', category: 'compute', bicepFlag: 'containerInstancesEnabled',
     glyph: Box24Regular, icon: 'Container-Instances.png', color: '#0078d4',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/container-instances/',
     description: 'Single-shot serverless containers (sample image group, start/stop-able).' },
   { key: 'vm', label: 'Virtual Machines', category: 'compute', bicepFlag: 'vmEnabled',
     glyph: Server24Regular, icon: 'Virtual-Machine.png', color: '#0078d4',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/virtual-machines/linux/',
+    retail: { serviceName: 'Virtual Machines', armSkuName: 'Standard_D2s_v5',
+      exclude: ['Spot', 'Low Priority', 'Windows'],
+      unitNote: 'Standard_D2s_v5 Linux on-demand · 730 hrs/mo (excludes OS disk + egress)' },
     description: 'Linux IaaS VM (isolated VNet/subnet + NIC, no public IP, SSH-key auth, managed OS disk).' },
   { key: 'batch', label: 'Azure Batch', category: 'compute', bicepFlag: 'batchEnabled',
     glyph: AppsList24Regular, color: '#0078d4',
@@ -202,18 +244,27 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Serverless SQL warehouse on Databricks.' },
   { key: 'adx', label: 'Data Explorer (Eventhouse)', category: 'data', bicepFlag: 'adxEnabled',
     glyph: DataLine24Regular, color: '#117865',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/data-explorer/',
+    retail: { serviceName: 'Azure Data Explorer', match: ['Markup'], exclude: [],
+      unitNote: 'Standard engine cluster markup per vCore-hour · 730 hrs/mo (markup only — excludes the underlying VM + storage meters; a small dev cluster runs ~$80–320/mo all-in)' },
     description: 'Real-time analytics (KQL) for Eventstream + realtime hub.' },
   { key: 'cosmos', label: 'Cosmos DB', category: 'data', bicepFlag: null,
     glyph: Cube24Regular, icon: 'Azure-Cosmos-DB.png', color: '#117865',
     description: 'Loom item/state store. Core — always deployed.' },
   { key: 'sql', label: 'Azure SQL Database', category: 'data', bicepFlag: null,
     glyph: DatabaseLink24Regular, icon: 'Azure-SQL.png', color: '#117865',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/azure-sql-database/single/',
+    retail: { serviceName: 'SQL Database', match: ['S0'], exclude: ['Managed', 'Hyperscale', 'Elastic'],
+      unitNote: 'Single DB Standard S0 (10 DTU) · 730 hrs/mo' },
     description: 'Relational store for SQL-database items.' },
   { key: 'sqlMi', label: 'SQL Managed Instance', category: 'data', bicepFlag: null, planOnly: true,
     glyph: ServerLink24Regular, color: '#117865',
     description: 'Near-100% SQL Server compatibility, fully managed. Plan-only — needs a delegated subnet + ~hours-long provision, so it is not a single self-contained toggle.' },
   { key: 'postgres', label: 'PostgreSQL Flexible', category: 'data', bicepFlag: 'postgresEnabled',
     glyph: Database24Regular, color: '#117865',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/postgresql/flexible-server/',
+    retail: { serviceName: 'Azure Database for PostgreSQL', match: ['B1ms'], exclude: ['Windows'],
+      unitNote: 'Flexible Server Burstable B1ms compute · 730 hrs/mo (excludes storage + backup)' },
     description: 'Managed PostgreSQL (flexible server, Entra-only auth) + starter DB.',
     config: [
       { key: 'version', label: 'PostgreSQL version', type: 'select', allowed: ['13', '14', '15', '16'],
@@ -223,6 +274,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     ] },
   { key: 'mysql', label: 'MySQL Flexible', category: 'data', bicepFlag: 'mysqlEnabled',
     glyph: Database24Regular, color: '#117865',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/mysql/flexible-server/',
+    retail: { serviceName: 'Azure Database for MySQL', match: ['B1ms'], exclude: ['Windows'],
+      unitNote: 'Flexible Server Burstable B1ms compute · 730 hrs/mo (excludes storage + backup)' },
     description: 'Managed MySQL (flexible server) + starter DB.',
     config: [
       { key: 'version', label: 'MySQL version', type: 'select', allowed: ['5.7', '8.0.21'],
@@ -232,6 +286,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     ] },
   { key: 'redis', label: 'Cache for Redis', category: 'data', bicepFlag: 'redisEnabled',
     glyph: DataHistogram24Regular, color: '#117865',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/cache/',
+    retail: { serviceName: 'Redis Cache', match: ['C0'], exclude: ['Premium', 'Enterprise'],
+      unitNote: 'Basic C0 (250 MB) · 730 hrs/mo' },
     description: 'In-memory cache / session store (Basic C0, Entra auth enabled).',
     config: [
       { key: 'skuName', label: 'SKU', type: 'select', allowed: ['Basic', 'Standard', 'Premium'],
@@ -260,6 +317,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'AI Foundry portal experience (hub + projects UI).' },
   { key: 'aiSearch', label: 'AI Search', category: 'ai', bicepFlag: 'aiSearchEnabled',
     glyph: Search24Regular, color: '#7c3aed',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/search/',
+    retail: { serviceName: 'Azure Cognitive Search', match: ['Standard S1'], exclude: ['CC'],
+      unitNote: 'Standard S1 search unit · 730 hrs/mo (1 replica × 1 partition)' },
     description: 'Vector + keyword index for RAG over Loom items.' },
   { key: 'defenderForAI', label: 'Defender for AI', category: 'ai', bicepFlag: 'defenderForAIEnabled',
     glyph: ShieldCheckmark24Regular, color: '#7c3aed',
@@ -289,6 +349,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
   // ─────────────────────── integration ──────────────────────────────
   { key: 'apim', label: 'API Management', category: 'integration', bicepFlag: 'apimEnabled',
     glyph: PlugConnected24Regular, icon: 'API-Management-Services.png', color: '#e3008c',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/api-management/',
+    retail: { serviceName: 'API Management', match: ['Developer'], exclude: ['Self Hosted Gateway', 'Consumption'],
+      unitNote: 'Developer tier unit · 730 hrs/mo (non-production, no SLA)' },
     description: 'API gateway fronting data + AI APIs.' },
   { key: 'eventhubs', label: 'Event Hubs', category: 'integration', bicepFlag: null,
     glyph: Pulse24Regular, icon: 'Event-Hubs.png', color: '#e3008c',
@@ -347,6 +410,9 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Private DNS for Private Link resolution. Plan-only — zone name + VNet links are derived from the specific Private Endpoints being created, so it is provisioned alongside them rather than standalone.' },
   { key: 'appGateway', label: 'Application Gateway', category: 'networking', bicepFlag: 'appGatewayEnabled',
     glyph: Router24Regular, icon: 'Application-Gateways.png', color: '#004578',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/application-gateway/',
+    retail: { serviceName: 'Application Gateway', match: ['Standard', 'Fixed'], exclude: ['Basic', 'WAF'],
+      unitNote: 'Standard_v2 fixed gateway-hour · 730 hrs/mo (excludes per-capacity-unit + data processing)' },
     description: 'WAF + L7 ingress for the console.' },
   { key: 'frontDoor', label: 'Front Door', category: 'networking', bicepFlag: 'frontDoorEnabled',
     glyph: GlobeShield24Regular, icon: 'Front-Door-and-CDN-Profiles.png', color: '#004578',
@@ -356,12 +422,18 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Content delivery / edge cache (Standard Microsoft CDN profile; endpoints added from the navigator).' },
   { key: 'vpnGateway', label: 'VPN Gateway', category: 'networking', bicepFlag: 'vpnGatewayEnabled',
     glyph: ArrowBidirectionalUpDown24Regular, color: '#004578',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/vpn-gateway/',
+    retail: { serviceName: 'VPN Gateway', match: ['VpnGw1'], exclude: ['VpnGw1AZ', 'VpnGw2', 'VpnGw3', 'VpnGw4', 'VpnGw5', 'P2S', 'Connection'],
+      unitNote: 'VpnGw1 gateway-hour · 730 hrs/mo (excludes S2S/P2S connection + egress)' },
     description: 'Hybrid connectivity into the landing zone.' },
   { key: 'loadBalancer', label: 'Load Balancer', category: 'networking', bicepFlag: 'loadBalancerEnabled',
     glyph: ArrowRouting24Regular, icon: 'Load-Balancers.png', color: '#004578',
     description: 'Internal Standard L4 load balancer (isolated VNet/subnet + frontend/pool/probe/rule).' },
   { key: 'firewall', label: 'Azure Firewall', category: 'networking', bicepFlag: 'firewallEnabled',
     glyph: Shield24Regular, color: '#004578',
+    pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/azure-firewall/',
+    retail: { serviceName: 'Azure Firewall', match: ['Standard', 'Deployment'], exclude: ['Premium', 'Basic', 'Hub', 'Data Processed'],
+      unitNote: 'Standard deployment-hour · 730 hrs/mo (excludes per-GB data processing)' },
     description: 'Managed stateful firewall (Standard AZFW_VNet in its own VNet with AzureFirewallSubnet + static public IP).' },
 ];
 
@@ -384,6 +456,23 @@ export function flagsForServices(keys: string[]): Record<string, boolean> {
   for (const k of keys) {
     const def = BY_KEY.get(k);
     if (def?.bicepFlag) out[def.bicepFlag] = true;
+  }
+  return out;
+}
+
+/**
+ * Distinct retail meters for the given service keys — what the cost-estimate
+ * route queries against the public Azure Retail Prices API. Returns one entry
+ * per service-key that has a representative meter (deduped by key).
+ */
+export function metersForServices(keys: string[]): Array<{ key: string; label: string; category: ServiceCategory; meter: RetailMeter; pricingDetailsUrl?: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ key: string; label: string; category: ServiceCategory; meter: RetailMeter; pricingDetailsUrl?: string }> = [];
+  for (const k of keys) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const def = BY_KEY.get(k);
+    if (def?.retail) out.push({ key: def.key, label: def.label, category: def.category, meter: def.retail, pricingDetailsUrl: def.pricingDetailsUrl });
   }
   return out;
 }
