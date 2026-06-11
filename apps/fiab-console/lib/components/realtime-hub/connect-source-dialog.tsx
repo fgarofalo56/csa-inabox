@@ -41,9 +41,10 @@ const useStyles = makeStyles({
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: '8px',
   },
   catItem: {
-    textAlign: 'left', padding: '8px 12px', borderRadius: '4px', background: 'transparent',
+    textAlign: 'left', padding: '8px 12px', borderRadius: tokens.borderRadiusMedium, background: 'transparent',
     border: 'none', cursor: 'pointer', color: tokens.colorNeutralForeground1, fontSize: '14px',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   catItemActive: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, fontWeight: 600 },
   rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
@@ -71,8 +72,9 @@ const useStyles = makeStyles({
   cardTags: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
   formHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   emptyGrid: {
-    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL, textAlign: 'center',
-    color: tokens.colorNeutralForeground3,
+    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
+    textAlign: 'center', color: tokens.colorNeutralForeground3,
   },
   form: { display: 'flex', flexDirection: 'column', gap: '12px' },
   sectionHead: {
@@ -799,7 +801,11 @@ export function ConnectSourceDialog({
                       );
                     })}
                     {connectors.length === 0 && (
-                      <Body1 className={styles.emptyGrid}>No sources match &quot;{query}&quot;.</Body1>
+                      <div className={styles.emptyGrid}>
+                        <Search20Regular style={{ width: 32, height: 32, color: tokens.colorNeutralForeground4 }} aria-hidden />
+                        <Body1>No sources match &quot;{query}&quot;.</Body1>
+                        <Button appearance="subtle" size="small" onClick={() => setQuery('')}>Clear search</Button>
+                      </div>
                     )}
                   </div>
                 </div>
