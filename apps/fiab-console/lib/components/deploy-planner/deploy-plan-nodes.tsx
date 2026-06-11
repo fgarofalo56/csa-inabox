@@ -97,7 +97,9 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
   const def = serviceByKey(d.serviceKey);
   const vis = serviceVisual(d.serviceKey);
   const Glyph = vis.glyph;
-  const remote = iconUrl(d.serviceKey); // optional Atlas Diag enhancement
+  // Optional Atlas Diag enhancement — resolve via the canonical icon slug, NOT
+  // the camelCase key (which is not in the Atlas Diag / Azure-icon namespace).
+  const remote = iconUrl(def?.iconSlug ?? d.serviceKey);
   const handleStyle: React.CSSProperties = {
     width: 8, height: 8, background: tokens.colorBrandBackground,
     border: `1px solid ${tokens.colorNeutralBackground1}`,
@@ -155,6 +157,11 @@ function ServiceIconChip({
   remote: string | undefined;
   size: number; iconPx: number; radius: number;
 }) {
+  // If the optional Atlas Diag remote icon 404s (the slug isn't hosted, or the
+  // endpoint is unreachable in an air-gapped/sovereign boundary), drop to the
+  // bundled raster / Fluent glyph instead of leaving a broken-image box.
+  const [remoteOk, setRemoteOk] = React.useState(true);
+  const showRemote = !!remote && remoteOk;
   return (
     <span
       aria-hidden
@@ -164,9 +171,10 @@ function ServiceIconChip({
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
-      {remote ? (
+      {showRemote ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={remote} alt="" width={iconPx} height={iconPx} style={{ borderRadius: 3 }} />
+        <img src={remote} alt="" width={iconPx} height={iconPx} style={{ borderRadius: 3 }}
+          onError={() => setRemoteOk(false)} />
       ) : def?.icon ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={`/azure-icons/${def.icon}`} alt="" width={iconPx} height={iconPx} />

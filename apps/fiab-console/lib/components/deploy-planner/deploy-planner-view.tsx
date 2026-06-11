@@ -679,7 +679,7 @@ function PlannerInner() {
                         role="button" tabIndex={0}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); paletteAdd(def); } }}
                       >
-                        <ServiceIconChip def={def} vis={vis} Glyph={vis.glyph} remote={iconUrl(def.key)} size={28} iconPx={17} radius={6} />
+                        <ServiceIconChip def={def} vis={vis} Glyph={vis.glyph} remote={iconUrl(def.iconSlug ?? def.key)} size={28} iconPx={17} radius={6} />
                         <span className={s.pTileLabel}>{def.label}</span>
                         {!def.bicepFlag && !def.planOnly && (
                           <Badge size="tiny" appearance="outline" color="informative" title="Core — always deployed">core</Badge>
