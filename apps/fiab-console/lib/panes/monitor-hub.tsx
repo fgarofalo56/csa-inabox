@@ -141,10 +141,19 @@ export function MonitorHubPane() {
   const [q, setQ] = useState('');
   const [tick, setTick] = useState(0);
 
+  // Debounce the window dropdown so rapid changes don't each fire the heavy
+  // ADF+Synapse union KQL — only the settled value triggers a refetch. The
+  // dropdown + caption still reflect `days` instantly for a responsive UI.
+  const [debouncedDays, setDebouncedDays] = useState(days);
+  useEffect(() => {
+    const h = setTimeout(() => setDebouncedDays(days), 300);
+    return () => clearTimeout(h);
+  }, [days]);
+
   useEffect(() => {
     let alive = true;
     setData(null); setErr(null);
-    const params = new URLSearchParams({ days });
+    const params = new URLSearchParams({ days: debouncedDays });
     fetch(`/api/monitor/activities?${params.toString()}`)
       .then(async (r) => {
         if (!alive) return;
@@ -155,7 +164,7 @@ export function MonitorHubPane() {
       })
       .catch((e) => { if (alive) { setErr(String(e)); setData({ ok: false }); } });
     return () => { alive = false; };
-  }, [days, tick]);
+  }, [debouncedDays, tick]);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
