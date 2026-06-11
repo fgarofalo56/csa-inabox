@@ -410,28 +410,28 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/data-factory/use-existing-adf-in-fabric"
     } },
   { slug: 'dbt-job', displayName: 'dbt job', restType: 'DataBuildToolJob', category: 'Data Factory',
-    description: 'Run dbt Core projects against your warehouse with schedule + run history.',
+    description: 'Visually build a dbt project (sources, models, tests, materializations), generate real project files, and run them against Databricks or Synapse.',
     learnContent: {
-      "overview": "A dbt job runs a dbt Core project (models, tests, docs) against your warehouse or lakehouse. In Loom a run materializes a Databricks Job with a dbt_task and triggers run-now; the runs list comes from the Databricks jobs/runs API.",
+      "overview": "A dbt job is a visual dbt model/project builder. Draw a medallion DAG on a canvas — sources feed bronze/silver/gold models with materializations and tests — and Loom generates a real dbt Core project (dbt_project.yml, profiles.yml, models, schema.yml). Runs execute Azure-native: the Databricks target runs natively as a Databricks Job dbt_task; the Synapse dedicated SQL pool (and opt-in Fabric Warehouse) run in the loom-dbt-runner Container App (dbt-synapse + ODBC). No Microsoft Fabric dependency.",
       "steps": [
         {
-          "title": "Point at the dbt project",
-          "body": "Reference the dbt project location and the target warehouse/lakehouse connection."
+          "title": "Draw the model graph",
+          "body": "Add Source nodes, then Bronze/Silver/Gold model nodes. Wire ref()/source() lineage by selecting upstream models/sources; pick a materialization (view/table/incremental/ephemeral) and add column + model tests."
         },
         {
-          "title": "Configure the run",
-          "body": "Set the dbt command (run, test, build) and any selectors for the materialization."
+          "title": "Pick a target",
+          "body": "Choose the run target adapter: Databricks (Azure-native default), Synapse dedicated SQL pool, or opt-in Fabric Warehouse. The same project runs on any of them by swapping only the profiles.yml adapter."
         },
         {
-          "title": "Trigger a run",
-          "body": "Run materializes a Databricks Job with a dbt_task and calls run-now."
+          "title": "Generate project files",
+          "body": "Generate the real dbt project files from the graph and preview every file (dbt_project.yml, profiles.yml, per-layer model SQL, sources.yml, schema.yml) before running."
         },
         {
-          "title": "Inspect results",
-          "body": "The runs list reads real Databricks run records so you can see compiled SQL, materialized models, and test failures."
+          "title": "Run + inspect",
+          "body": "Run dbt. Databricks runs push the project to a workspace folder and trigger a Job dbt_task; Synapse/Fabric runs return the dbt log + per-node results. The runs list reads real Databricks run records."
         }
       ],
-      "docsUrl": "https://docs.getdbt.com/docs/introduction"
+      "docsUrl": "https://docs.getdbt.com/docs/build/projects"
     } },
   { slug: 'airflow-job', displayName: 'Apache Airflow job', restType: 'ApacheAirflowJob', category: 'Data Factory', preview: true,
     description: 'Managed Airflow DAGs synced from a Git repo (preview).',

@@ -224,6 +224,9 @@ param appImageTags object = {
 @description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
+@description('Deploy the loom-dbt-runner Container App (dbt-core + dbt-synapse + dbt-fabric + ODBC Driver 18) that executes generated dbt projects against the Synapse dedicated SQL pool / Fabric Warehouse. Synapse/Fabric have no native dbt task, so this runtime is required ONLY for those dbt-job targets — the Databricks target runs natively as a Databricks Job dbt_task with no extra infra. Requires the loom-dbt-runner image pushed to ACR first. Container Apps only.')
+param dbtRunnerEnabled bool = false
+
 @description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
 param loomIqMcpEnabled bool = false
 
@@ -240,6 +243,9 @@ var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
 
 // MAF tier deploys only in Gov boundaries with Container Apps + app deploy on.
 var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5') && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
+var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Loom version label shown in the UI (matches console image tag by convention).')
 param loomVersion string = 'v0.1'
@@ -1979,6 +1985,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (ALTER TABLE … CLUSTER BY). Blank → route auto-selects the first
             // RUNNING SQL Warehouse.
             { name: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID', value: loomDatabricksSqlWarehouseId }
+            // dbt visual builder (audit-t144) Synapse/Fabric execution runtime.
+            // The dbt-job item's Databricks target runs natively as a Databricks
+            // Job dbt_task (no extra infra). The Synapse / opt-in Fabric targets
+            // have no native dbt task, so they POST to the loom-dbt-runner
+            // Container App. Empty → the editor surfaces an honest gate naming
+            // this var; the Databricks target still works.
+            { name: 'LOOM_DBT_RUNNER_URL', value: dbtRunnerActive ? dbtRunner!.outputs.dbtRunnerInternalEndpoint : '' }
             // Notebook per-cell execution backend (F16). Empty/'synapse' → Azure-
             // native Synapse Spark Livy (default). 'databricks' opts into the
             // Databricks Execution Context API. LOOM_CLOUD_TIER=IL5 makes the BFF
@@ -2903,6 +2916,29 @@ module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
     consoleInternalEndpoint: 'http://loom-console'
     internalToken: loomInternalToken
     boundary: boundary == 'IL5' ? 'IL5' : 'GCC-High'
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// dbt visual builder (audit-t144) — Synapse / Fabric dbt execution runtime.
+// dbt-core + dbt-synapse + dbt-fabric + ODBC Driver 18 in a Container App.
+// The Console (dbt-runner.ts) POSTs generated dbt projects here for the
+// Synapse / opt-in Fabric targets (Databricks runs natively as a dbt_task and
+// does NOT use this). Reuses the Console UAMI — it already holds Synapse SQL
+// access; the runner authenticates with authentication=CLI. Scales to zero
+// between batch runs. When absent the editor surfaces an honest gate.
+// =====================================================================
+module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
+  name: 'dbt-runner'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    acrLoginServer: registry.outputs.acrLoginServer
+    imageTag: appImageTags.console
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

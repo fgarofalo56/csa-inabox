@@ -33,6 +33,10 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { DbtModelGraph } from '@/lib/components/dbt/dbt-model-graph';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
+import type { GeneratedFile } from '@/lib/dbt/dbt-codegen';
 
 const useStyles = makeStyles({
   form: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820 },
@@ -419,6 +423,14 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   // Phase 4.5 — see SparkJobDefinitionEditor for rationale.
   const [dirty, setDirty] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Visual builder graph (audit-t144). The default tab; the BYO-repo form
+  // becomes the "Advanced" tab. project is the source of truth for codegen.
+  const [tab, setTab] = useState('builder');
+  const [project, setProject] = useState<DbtProjectGraph>(() => emptyProjectGraph());
+  const [genFiles, setGenFiles] = useState<GeneratedFile[] | null>(null);
+  const [genErr, setGenErr] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [runLog, setRunLog] = useState<string | null>(null);
 
   useEffect(() => {
     const s: any = cosmosItem?.state || {};
@@ -431,6 +443,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     setCommandsText((s.commands || []).join('\n'));
     setClusterId(s.clusterId || '');
     setDatabricksJobId(s.databricksJobId ?? null);
+    setProject(s.project && Array.isArray(s.project.models) ? s.project : emptyProjectGraph(cosmosItem?.displayName || 'loom_dbt_project'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmosItem]);
 
@@ -454,8 +467,32 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     models: modelsText.split('\n').map((m) => m.trim()).filter(Boolean),
     commands: commandsText.split('\n').map((c) => c.trim()).filter(Boolean),
     clusterId,
+    // Visual builder graph — drives codegen + the default run path.
+    project,
     ...(databricksJobId !== null ? { databricksJobId } : {}),
   });
+
+  const onProjectChange = useCallback((next: DbtProjectGraph) => {
+    setProject(next);
+    setDirty(true);
+    setGenFiles(null); // invalidate stale preview
+  }, []);
+
+  const generate = async () => {
+    setBusy(true); setGenErr(null); setGenFiles(null);
+    try {
+      // Persist first so the BFF generates from the same graph the user sees.
+      await saveItem('dbt-job', id, buildState());
+      setDirty(false);
+      const r = await fetch(`/api/items/dbt-job/${encodeURIComponent(id)}/generate`);
+      const j = await r.json();
+      if (!j.ok) { setGenErr(j.error || 'generate failed'); return; }
+      setGenFiles(j.files || []);
+      setSelectedFile((j.files || [])[0]?.path || null);
+      setTab('files');
+    } catch (e: any) { setGenErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
 
   const save = async () => {
     setBusy(true); setErr(null); setSaveMsg('Saving dbt-job…');
@@ -469,7 +506,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   };
 
   const run = async () => {
-    setBusy(true); setErr(null); setLastRun(null);
+    setBusy(true); setErr(null); setLastRun(null); setRunLog(null);
     try {
       await saveItem('dbt-job', id, buildState());
       setDirty(false);
@@ -477,8 +514,12 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
       const j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'run failed');
-      setLastRun(j.run_id);
+      if (!j.ok) {
+        // Honest infra gate (e.g. Synapse runner not deployed) surfaces hint.
+        throw new Error(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'run failed'));
+      }
+      if (typeof j.run_id === 'number') setLastRun(j.run_id);
+      if (j.log) setRunLog(j.log); // synapse/fabric runner returns a dbt log
       if (j.databricksJobId) setDatabricksJobId(j.databricksJobId);
       setTimeout(loadRuns, 2000);
     } catch (e: any) { setErr(e?.message || String(e)); }
@@ -498,12 +539,23 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const hasProject = (project.models || []).length > 0;
+  const isDatabricksTarget = project.target?.adapter === 'databricks';
   const canSaveDbt = !busy && dirty;
-  const canRunDbt = !busy && !!repoUrl && !!clusterId;
+  // Run is enabled when: a visual project exists (Databricks needs a cluster;
+  // Synapse/Fabric run via the runner) OR the legacy BYO-repo path is set.
+  const canRunDbt = !busy && (
+    (hasProject && (!isDatabricksTarget || !!clusterId)) ||
+    (!!repoUrl && !!clusterId)
+  );
+  const canGenerate = !busy && hasProject;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
         { label: dirty ? 'Save' : 'Saved', onClick: canSaveDbt ? save : undefined, disabled: !canSaveDbt },
+      ]},
+      { label: 'Project', actions: [
+        { label: 'Generate files', onClick: canGenerate ? generate : undefined, disabled: !canGenerate },
       ]},
       { label: 'Run', actions: [
         { label: busy ? 'Running…' : 'Run dbt', onClick: canRunDbt ? run : undefined, disabled: !canRunDbt },
@@ -511,7 +563,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
       ]},
     ]},
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [busy, dirty, canSaveDbt, canRunDbt, loadRuns]);
+  ], [busy, dirty, canSaveDbt, canRunDbt, canGenerate, loadRuns]);
 
   if (id === 'new') {
     return (
@@ -522,139 +574,204 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={styles.form}>
-        <ErrBar error={err || loadError} />
-        {loading && <Spinner size="small" label="Loading dbt-job…" labelPosition="after" />}
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div className={styles.tabBar}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
+            <Tab value="builder">Builder</Tab>
+            <Tab value="files">Generated files</Tab>
+            <Tab value="advanced">Advanced (BYO repo)</Tab>
+            <Tab value="runs">Runs</Tab>
+          </TabList>
+        </div>
+        <div className={styles.tabBody}>
+          <ErrBar error={err || loadError} />
+          {loading && <Spinner size="small" label="Loading dbt-job…" labelPosition="after" />}
+          {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
 
-        <Subtitle2>Databricks workspace</Subtitle2>
-        {dbxWs.loading && <Spinner size="tiny" label="Loading workspace…" labelPosition="after" />}
-        {dbxWs.workspace && (
-          <div className={styles.field}>
-            <Caption1>Workspace (configured via <code>LOOM_DATABRICKS_HOSTNAME</code>)</Caption1>
-            <Input value={dbxWs.workspace.hostname} readOnly aria-readonly="true" />
-            <Caption1>
-              All dbt runs execute on a cluster in this workspace.
-              <a href={dbxWs.workspace.url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>Open in Databricks</a>
-            </Caption1>
-          </div>
-        )}
-        {dbxWs.error && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Databricks workspace not configured</MessageBarTitle>
-              {dbxWs.error}
-              {dbxWs.hint && <><br /><Caption1>{dbxWs.hint}</Caption1></>}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-
-        <Subtitle2>Project</Subtitle2>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <Caption1>Git repo URL</Caption1>
-            <Input value={repoUrl} onChange={(_, d) => { setRepoUrl(d.value); setDirty(true); }} placeholder="https://github.com/contoso/dbt-prod" />
-          </div>
-          <div className={styles.field}>
-            <Caption1>Branch</Caption1>
-            <Input value={branch} onChange={(_, d) => { setBranch(d.value); setDirty(true); }} />
-          </div>
-        </div>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <Caption1>Target profile</Caption1>
-            <Input value={target} onChange={(_, d) => { setTarget(d.value); setDirty(true); }} placeholder="prod" />
-          </div>
-          <div className={styles.field}>
-            {/*
-             * Replaced the free-text "paste cluster ID by hand" Input with the
-             * shared ComputePicker so users can (a) see live cluster state,
-             * (b) Start/Restart from inline, and (c) avoid typos. The picker
-             * emits ids like "databricks:<clusterId>"; we strip the prefix
-             * before persisting so the run BFF (which expects a bare cluster
-             * id) keeps working.
-             */}
-            <ComputePicker
-              label="Databricks cluster"
-              filter={['databricks-cluster']}
-              value={clusterId ? `databricks:${clusterId}` : ''}
-              onChange={(picked) => {
-                const bare = picked.startsWith('databricks:') ? picked.slice('databricks:'.length) : picked;
-                setClusterId(bare);
-                setDirty(true);
-              }}
-            />
-          </div>
-        </div>
-        <div className={styles.field}>
-          <Caption1>Model selection (--select, one per line; blank = all)</Caption1>
-          <Textarea value={modelsText} onChange={(_, d) => { setModelsText(d.value); setDirty(true); }} rows={3}
-            placeholder={'tag:nightly\nstg_orders+'} />
-        </div>
-        <div className={styles.field}>
-          <Caption1>Override commands (one per line; blank = default dbt deps + dbt run)</Caption1>
-          <Textarea value={commandsText} onChange={(_, d) => { setCommandsText(d.value); setDirty(true); }} rows={3}
-            placeholder={'dbt deps\ndbt seed\ndbt run\ndbt test'} />
-        </div>
-        <div className={styles.field}>
-          <Caption1>profiles.yml (informational — copy into your repo)</Caption1>
-          <Textarea value={profilesYaml} onChange={(_, d) => { setProfilesYaml(d.value); setDirty(true); }} rows={6}
-            placeholder={'prod:\n  target: prod\n  outputs:\n    prod:\n      type: databricks\n      ...'} />
-        </div>
-
-        {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
-        <div className={styles.toolbar}>
-          <Button appearance="primary" onClick={run} disabled={busy || !repoUrl || !clusterId}>Run dbt</Button>
-          <Button onClick={save} disabled={busy || !dirty}>{dirty ? 'Save' : 'Saved'}</Button>
-          <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>
-          {busy && <Spinner size="tiny" />}
-          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-          {databricksJobId !== null && (
-            <Badge appearance="outline">Databricks job_id {databricksJobId}</Badge>
+          {/* ── BUILDER ─────────────────────────────────────────────── */}
+          {tab === 'builder' && (
+            <>
+              {dbxWs.workspace && project.target?.adapter === 'databricks' && (
+                <Caption1>
+                  Databricks workspace <code>{dbxWs.workspace.hostname}</code> ·
+                  <a href={dbxWs.workspace.url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>open</a>
+                </Caption1>
+              )}
+              {project.target?.adapter === 'databricks' && (
+                <div className={styles.field}>
+                  <Caption1>Databricks cluster (runs the generated dbt project)</Caption1>
+                  <ComputePicker
+                    label="Databricks cluster"
+                    filter={['databricks-cluster']}
+                    value={clusterId ? `databricks:${clusterId}` : ''}
+                    onChange={(picked) => {
+                      const bare = picked.startsWith('databricks:') ? picked.slice('databricks:'.length) : picked;
+                      setClusterId(bare);
+                      setDirty(true);
+                    }}
+                  />
+                  {dbxWs.error && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Databricks workspace not configured</MessageBarTitle>
+                        {dbxWs.error}{dbxWs.hint && <><br /><Caption1>{dbxWs.hint}</Caption1></>}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              )}
+              <DbtModelGraph graph={project} onChange={onProjectChange} />
+            </>
           )}
-        </div>
 
-        {lastRun && (
-          <MessageBar intent="success">
-            <MessageBarBody>
-              <MessageBarTitle>dbt run started</MessageBarTitle>
-              run_id {lastRun}
-            </MessageBarBody>
-          </MessageBar>
-        )}
+          {/* ── GENERATED FILES ─────────────────────────────────────── */}
+          {tab === 'files' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={styles.toolbar}>
+                <Button appearance="primary" onClick={generate} disabled={!canGenerate}>Generate project files</Button>
+                {busy && <Spinner size="tiny" />}
+              </div>
+              {genErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not generate</MessageBarTitle>{genErr}</MessageBarBody></MessageBar>}
+              {!genFiles && !genErr && <Caption1>Click “Generate project files” to produce the dbt project (dbt_project.yml, profiles.yml, models, tests) from the builder graph.</Caption1>}
+              {genFiles && genFiles.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 12, minHeight: 360 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 8, overflowY: 'auto', maxHeight: 460 }}>
+                    {genFiles.map((f) => (
+                      <Button key={f.path} size="small"
+                        appearance={selectedFile === f.path ? 'primary' : 'subtle'}
+                        style={{ justifyContent: 'flex-start', fontFamily: 'monospace', fontSize: 12 }}
+                        onClick={() => setSelectedFile(f.path)}>
+                        {f.path}
+                      </Button>
+                    ))}
+                  </div>
+                  <div>
+                    <MonacoTextarea
+                      value={genFiles.find((f) => f.path === selectedFile)?.content || ''}
+                      onChange={() => {}}
+                      language={selectedFile?.endsWith('.sql') ? 'sql' : 'yaml'}
+                      height={440}
+                      readOnly
+                      ariaLabel="Generated file content"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
-        <div className={styles.resultBox}>
-          <Subtitle2>Recent runs</Subtitle2>
-          {runs.length === 0 ? (
-            <Caption1>No runs yet.</Caption1>
-          ) : (
-            <Table size="small" aria-label="dbt runs">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>run_id</TableHeaderCell>
-                  <TableHeaderCell>Lifecycle</TableHeaderCell>
-                  <TableHeaderCell>Result</TableHeaderCell>
-                  <TableHeaderCell>Started</TableHeaderCell>
-                  <TableHeaderCell>Ended</TableHeaderCell>
-                  <TableHeaderCell>Message</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {runs.map((r) => (
-                  <TableRow key={r.run_id}>
-                    <TableCell className={styles.mono}>{r.run_id}</TableCell>
-                    <TableCell><Badge appearance="outline">{r.state?.life_cycle_state || '—'}</Badge></TableCell>
-                    <TableCell>
-                      <Badge appearance="outline" color={r.state?.result_state === 'SUCCESS' ? 'success' : r.state?.result_state === 'FAILED' ? 'danger' : 'informative'}>
-                        {r.state?.result_state || '—'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{fmtTs(r.start_time)}</TableCell>
-                    <TableCell>{fmtTs(r.end_time)}</TableCell>
-                    <TableCell>{r.state?.state_message || '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {/* ── ADVANCED (legacy BYO-repo) ──────────────────────────── */}
+          {tab === 'advanced' && (
+            <div className={styles.form} style={{ padding: 0 }}>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  Advanced path: run an existing dbt project from a Git repo instead of the visual builder.
+                  When the Builder graph has models, the Builder path takes precedence.
+                </MessageBarBody>
+              </MessageBar>
+              <div className={styles.row}>
+                <div className={styles.field}>
+                  <Caption1>Git repo URL</Caption1>
+                  <Input value={repoUrl} onChange={(_, d) => { setRepoUrl(d.value); setDirty(true); }} placeholder="https://github.com/contoso/dbt-prod" />
+                </div>
+                <div className={styles.field}>
+                  <Caption1>Branch</Caption1>
+                  <Input value={branch} onChange={(_, d) => { setBranch(d.value); setDirty(true); }} />
+                </div>
+              </div>
+              <div className={styles.row}>
+                <div className={styles.field}>
+                  <Caption1>Target profile</Caption1>
+                  <Input value={target} onChange={(_, d) => { setTarget(d.value); setDirty(true); }} placeholder="prod" />
+                </div>
+                <div className={styles.field}>
+                  <ComputePicker
+                    label="Databricks cluster"
+                    filter={['databricks-cluster']}
+                    value={clusterId ? `databricks:${clusterId}` : ''}
+                    onChange={(picked) => {
+                      const bare = picked.startsWith('databricks:') ? picked.slice('databricks:'.length) : picked;
+                      setClusterId(bare);
+                      setDirty(true);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className={styles.field}>
+                <Caption1>Model selection (--select, one per line; blank = all)</Caption1>
+                <Textarea value={modelsText} onChange={(_, d) => { setModelsText(d.value); setDirty(true); }} rows={3}
+                  placeholder={'tag:nightly\nstg_orders+'} />
+              </div>
+              <div className={styles.field}>
+                <Caption1>Override commands (one per line; blank = default dbt deps + dbt build)</Caption1>
+                <Textarea value={commandsText} onChange={(_, d) => { setCommandsText(d.value); setDirty(true); }} rows={3}
+                  placeholder={'dbt deps\ndbt seed\ndbt run\ndbt test'} />
+              </div>
+              <div className={styles.field}>
+                <Caption1>profiles.yml (informational — the Builder path generates this automatically)</Caption1>
+                <Textarea value={profilesYaml} onChange={(_, d) => { setProfilesYaml(d.value); setDirty(true); }} rows={6}
+                  placeholder={'prod:\n  target: prod\n  outputs:\n    prod:\n      type: databricks\n      ...'} />
+              </div>
+            </div>
+          )}
+
+          {/* ── RUNS ────────────────────────────────────────────────── */}
+          {tab === 'runs' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={styles.toolbar}>
+                <Button appearance="primary" onClick={run} disabled={!canRunDbt}>Run dbt</Button>
+                <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>
+                {busy && <Spinner size="tiny" />}
+                {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+                {databricksJobId !== null && <Badge appearance="outline">Databricks job_id {databricksJobId}</Badge>}
+              </div>
+              {lastRun && (
+                <MessageBar intent="success">
+                  <MessageBarBody><MessageBarTitle>dbt run started</MessageBarTitle>run_id {lastRun}</MessageBarBody>
+                </MessageBar>
+              )}
+              {runLog && (
+                <div className={styles.field}>
+                  <Caption1>dbt run log (Synapse / Fabric runner)</Caption1>
+                  <MonacoTextarea value={runLog} onChange={() => {}} language="plaintext" height={200} readOnly ariaLabel="dbt run log" />
+                </div>
+              )}
+              <div className={styles.resultBox}>
+                <Subtitle2>Recent runs</Subtitle2>
+                {runs.length === 0 ? (
+                  <Caption1>No runs yet (Databricks job runs appear here; Synapse runs show their log above).</Caption1>
+                ) : (
+                  <Table size="small" aria-label="dbt runs">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>run_id</TableHeaderCell>
+                        <TableHeaderCell>Lifecycle</TableHeaderCell>
+                        <TableHeaderCell>Result</TableHeaderCell>
+                        <TableHeaderCell>Started</TableHeaderCell>
+                        <TableHeaderCell>Ended</TableHeaderCell>
+                        <TableHeaderCell>Message</TableHeaderCell>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {runs.map((r) => (
+                        <TableRow key={r.run_id}>
+                          <TableCell className={styles.mono}>{r.run_id}</TableCell>
+                          <TableCell><Badge appearance="outline">{r.state?.life_cycle_state || '—'}</Badge></TableCell>
+                          <TableCell>
+                            <Badge appearance="outline" color={r.state?.result_state === 'SUCCESS' ? 'success' : r.state?.result_state === 'FAILED' ? 'danger' : 'informative'}>
+                              {r.state?.result_state || '—'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{fmtTs(r.start_time)}</TableCell>
+                          <TableCell>{fmtTs(r.end_time)}</TableCell>
+                          <TableCell>{r.state?.state_message || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
