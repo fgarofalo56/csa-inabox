@@ -55,6 +55,9 @@ param capacitySku string
 @description('Databricks Unity Catalog managed availability')
 param databricksUnityCatalogEnabled bool
 
+@description('Databricks ACCOUNT id (GUID). Set this to configure Unity Catalog by DEFAULT: the deploy creates/assigns the regional UC metastore + a default catalog and grants the Console UAMI account_admin, so Browse > Unity Catalog shows a real configured catalog. Requires a one-time human step making the Console UAMI a Databricks account admin (docs/fiab/catalog/metastores.md). Empty = UC enabled later via the post-deploy bootstrap workflow (never a hard deploy blocker). Commercial + GCC only.')
+param databricksAccountId string = ''
+
 @description('Databricks SQL Warehouse availability')
 param databricksSqlWarehouseEnabled bool
 
@@ -732,6 +735,8 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
+    databricksAccountId: databricksAccountId
+    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -810,6 +815,8 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
+    databricksAccountId: databricksAccountId
+    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags

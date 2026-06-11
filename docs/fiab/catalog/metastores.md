@@ -26,6 +26,29 @@ per region by a **Databricks account admin** and assigned to the workspace. This
 is NOT an Azure ARM action, so the Loom bicep deploy cannot do it for you — it
 requires the Databricks **account console**.
 
+### Configured by DEFAULT (2026-06) — recommended
+
+As of 2026-06 the deploy configures Unity Catalog **by default** so that
+`Browse > Unity Catalog` shows a real configured metastore/catalog with no manual
+clicking. Two prerequisites, both one-time:
+
+1. **Set the Databricks account id.** In `params/{commercial,commercial-full,gcc}.bicepparam`
+   set `param databricksAccountId = '<account-guid>'` (account console → ⊙ menu →
+   *Account ID*).
+2. **Make the Console UAMI a Databricks account admin** (one-time human step — see
+   *Alternative — Account Admin* below; use the UAMI's **Application ID**,
+   `LOOM_UAMI_CLIENT_ID`).
+
+With both in place, `landing-zone/databricks-uc-bootstrap.bicep` (a one-shot
+`deploymentScript` running as the Console UAMI) creates/assigns the regional
+metastore, **creates a default catalog**, and grants the UAMI `account_admin` —
+running the same logic as `scripts/csa-loom/enable-unity-catalog.sh`. The
+post-deploy bootstrap workflow runs the identical script as a repair/re-run path.
+If the UAMI is not yet an account admin the script logs a warning and the deploy
+continues (UC enablement is never a hard deploy blocker); enable it later and
+re-run. The manual steps below remain valid for older deployments or when you
+prefer the least-privilege metastore-admin grant.
+
 ### Step 1 — create + assign a metastore (Databricks account admin)
 1. Open the Databricks **account** console: <https://accounts.azuredatabricks.net>.
 2. **Catalog** → **Create metastore**: pick the workspace region (e.g. `eastus2`),
@@ -67,10 +90,14 @@ If a metastore already exists for the region (e.g. `metastore_azure_eastus2`),
   DATABRICKS_ACCOUNT_ID=<account-guid> \
   scripts/csa-loom/enable-unity-catalog.sh \
     --region eastus2 --workspace-id <workspaceId> \
-    --uami-app-id <LOOM_UAMI_CLIENT_ID>
+    --uami-app-id <LOOM_UAMI_CLIENT_ID> \
+    --workspace-host <adb-xxxx.region.azuredatabricks.net> --default-catalog main
   ```
-  The script finds the existing regional metastore, assigns it, and sets the
-  Loom UAMI as metastore owner/admin — idempotent. Runs against the Databricks
-  **account API** (not the network-restricted workspace host), so it works even
-  when the workspace blocks public network access. Caller must be a Databricks
-  account admin (one-time; can be a service principal for unattended bootstrap).
+  The script finds the existing regional metastore, assigns it, sets the Loom
+  UAMI as account admin, and — when `--workspace-host` is reachable — **creates +
+  pins a default catalog** so Browse shows a real catalog (idempotent). Runs
+  against the Databricks **account API** (not the network-restricted workspace
+  host) for the metastore steps, so those work even when the workspace blocks
+  public network access; the default-catalog step is best-effort against the
+  workspace host. Caller must be a Databricks account admin (one-time; can be a
+  service principal for unattended bootstrap).
