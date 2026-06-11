@@ -1044,7 +1044,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
           ))}
           <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || steps.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : 'Invoke function'}</Button>
           {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
-          {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />
+          {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />}
         </div>
 
         <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
