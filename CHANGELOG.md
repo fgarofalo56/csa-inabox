@@ -25,6 +25,66 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.38.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.37.0...csa-inabox-v0.38.0) (2026-06-11)
+
+
+### Features
+
+* **csa-loom:** best-in-class Copilot chat console overhaul (audit-T121) ([#1224](https://github.com/fgarofalo56/csa-inabox/issues/1224)) ([7a00b87](https://github.com/fgarofalo56/csa-inabox/commit/7a00b873d7a39e76fb03c001760ba391f2b39912))
+* **csa-loom:** clarify RTI catalog vs Real-Time hub + make streams usable/testable (audit-t135) ([#1219](https://github.com/fgarofalo56/csa-inabox/issues/1219)) ([46c4120](https://github.com/fgarofalo56/csa-inabox/commit/46c4120d2c40bf2914d28bb1127b35ecfe37371d))
+* **csa-loom:** close Capacity & compute scale-UI gaps (audit-t107) ([#1196](https://github.com/fgarofalo56/csa-inabox/issues/1196)) ([8a2cf67](https://github.com/fgarofalo56/csa-inabox/commit/8a2cf674089a2085ebbcebb94a64dd118f46d7d4))
+* **csa-loom:** configure Unity Catalog by default (audit-t139) ([#1225](https://github.com/fgarofalo56/csa-inabox/issues/1225)) ([b16205c](https://github.com/fgarofalo56/csa-inabox/commit/b16205c10d05f40afd447375aa0361ea91628f6a))
+* **csa-loom:** data-agent page full lifecycle management (audit-t122) ([#1223](https://github.com/fgarofalo56/csa-inabox/issues/1223)) ([b2ab131](https://github.com/fgarofalo56/csa-inabox/commit/b2ab13138f63aed53d093ac3ce6151e167ff1337))
+* **csa-loom:** dbt visual model/project builder + Azure-native run (audit-t144) ([#1232](https://github.com/fgarofalo56/csa-inabox/issues/1232)) ([5fa99f6](https://github.com/fgarofalo56/csa-inabox/commit/5fa99f65b6aa79b2bb9af3b68229b446a87dd54e))
+* **csa-loom:** deploy-planner all-Azure-service nodes + Atlas Diag icon slugs (audit-T119) ([#1215](https://github.com/fgarofalo56/csa-inabox/issues/1215)) ([efa3b5f](https://github.com/fgarofalo56/csa-inabox/commit/efa3b5f92079e4bd7b1fdec3dd20d1b4850600e2))
+* **csa-loom:** deploy-planner architecture builder — per-resource config + connections + bicep-synced export (audit-T132) ([#1210](https://github.com/fgarofalo56/csa-inabox/issues/1210)) ([01c33d5](https://github.com/fgarofalo56/csa-inabox/commit/01c33d5780b6dcf0b315decbcc00b301987eccdb))
+* **csa-loom:** deploy-planner Estimate cost via Azure Retail Prices API (audit-t133) ([#1211](https://github.com/fgarofalo56/csa-inabox/issues/1211)) ([2c0f2db](https://github.com/fgarofalo56/csa-inabox/commit/2c0f2dbfbfceb845396df9563882979cc5515ef0))
+* **csa-loom:** finish Plan (preview) EPM/CPM editor (audit-T64) ([#1233](https://github.com/fgarofalo56/csa-inabox/issues/1233)) ([2b99314](https://github.com/fgarofalo56/csa-inabox/commit/2b99314adb08d72efc391e0ff519e91487098d34))
+* **csa-loom:** full MIP management — fix label-policy 400 + label/policy CRUD + apply-label wizard (audit-t126) ([#1201](https://github.com/fgarofalo56/csa-inabox/issues/1201)) ([e139be4](https://github.com/fgarofalo56/csa-inabox/commit/e139be4fb81f98c2cbba0b11353afb2257430585))
+* **csa-loom:** lineage auto-reconcile on delete + clickable Weave graph (audit-t137) ([#1217](https://github.com/fgarofalo56/csa-inabox/issues/1217)) ([f6b4980](https://github.com/fgarofalo56/csa-inabox/commit/f6b49807f68dcdeb70452011d2dbde915c16c298))
+* **csa-loom:** MDM + Data Quality governance surface (audit-T143) ([#1228](https://github.com/fgarofalo56/csa-inabox/issues/1228)) ([2cb069e](https://github.com/fgarofalo56/csa-inabox/commit/2cb069e3b08e0aa74e9b0ab0d25625fcd3575414))
+* **csa-loom:** Network & DNS visual topology — NSGs, real edges, clickable detail (audit-t131) ([#1208](https://github.com/fgarofalo56/csa-inabox/issues/1208)) ([d08e506](https://github.com/fgarofalo56/csa-inabox/commit/d08e5069172c9b2d46b40b3002f601db23fbe7d1))
+* **csa-loom:** Organizational visuals Description + Icon parity (audit-t129) ([#1207](https://github.com/fgarofalo56/csa-inabox/issues/1207)) ([6978bec](https://github.com/fgarofalo56/csa-inabox/commit/6978bec52c054422355bb03b12354b3646e16441))
+* **csa-loom:** persist Databricks metastore registration + UC attach + Purview scan (audit-t141) ([#1226](https://github.com/fgarofalo56/csa-inabox/issues/1226)) ([e52c98c](https://github.com/fgarofalo56/csa-inabox/commit/e52c98c3ed5b322f015bdc7ef64c6d3b6f381162))
+* **csa-loom:** Rayfin Fabric-Apps visual app builder + wizard (audit-T145) ([#1230](https://github.com/fgarofalo56/csa-inabox/issues/1230)) ([e82e021](https://github.com/fgarofalo56/csa-inabox/commit/e82e021600dd6bba777c7ce1fcc30bbd4973eada))
+* **csa-loom:** redesign /apps page onto Loom UI primitives (audit-t110) ([#1192](https://github.com/fgarofalo56/csa-inabox/issues/1192)) ([955b2da](https://github.com/fgarofalo56/csa-inabox/commit/955b2da52540c0181b6845963b13df2c53db5893))
+* **csa-loom:** registry-driven Workload hub create-by-workload launcher (audit-t123) ([#1222](https://github.com/fgarofalo56/csa-inabox/issues/1222)) ([c891d4a](https://github.com/fgarofalo56/csa-inabox/commit/c891d4aaf46cc69edd7be419f6a87b9ae4470517))
+* **csa-loom:** RTI hub source binding via real subscription dropdowns + create-if-missing (audit-t134) ([#1218](https://github.com/fgarofalo56/csa-inabox/issues/1218)) ([d8c8595](https://github.com/fgarofalo56/csa-inabox/commit/d8c8595ec7173f6f7b93a6a59e35dd22e757adcd))
+* **csa-loom:** setup wizard sub defaulting + full regions + visual review + deploy orchestrator (audit-t142) ([#1227](https://github.com/fgarofalo56/csa-inabox/issues/1227)) ([82db886](https://github.com/fgarofalo56/csa-inabox/commit/82db886d924625d340689d78c03f8d214b8de098))
+* **csa-loom:** tile view + ViewToggle on connections, thread, data-products (audit-t113) ([#1205](https://github.com/fgarofalo56/csa-inabox/issues/1205)) ([3dcb57c](https://github.com/fgarofalo56/csa-inabox/commit/3dcb57cb9b6c6658451eb286f2ca3a15b1166ba0))
+* **csa-loom:** true async app install with progress polling (audit-t108) ([#1199](https://github.com/fgarofalo56/csa-inabox/issues/1199)) ([ee4200b](https://github.com/fgarofalo56/csa-inabox/commit/ee4200b822f82d27476d07b011c5fcac0b5d2a71))
+* **csa-loom:** unified domain mapping — editable collections/subcollections + move + Purview⇄Unity Catalog (audit-t140) ([#1229](https://github.com/fgarofalo56/csa-inabox/issues/1229)) ([c4a0df2](https://github.com/fgarofalo56/csa-inabox/commit/c4a0df2f587ed1abd5abf2e32f037d6cad44e0bc))
+* **csa-loom:** unified lineage — Purview + Unity Catalog + Weave one graph (audit-t138) ([#1221](https://github.com/fgarofalo56/csa-inabox/issues/1221)) ([629eeab](https://github.com/fgarofalo56/csa-inabox/commit/629eeab55fbf6436fadc0767616f3f8fd0f1ab4d))
+
+
+### Bug Fixes
+
+* **csa-loom:** API marketplace subscription-key 401 + Try console + working curl (audit-t136) ([#1220](https://github.com/fgarofalo56/csa-inabox/issues/1220)) ([98c6469](https://github.com/fgarofalo56/csa-inabox/commit/98c646967caf499024470d75f2a3e187bddc9bfa))
+* **csa-loom:** bound server fetches + fast-fail client spinners; wire page-load timing harness (audit-t106) ([#1198](https://github.com/fgarofalo56/csa-inabox/issues/1198)) ([c77bc54](https://github.com/fgarofalo56/csa-inabox/commit/c77bc54904e56bb07a563a24a350da57415f1790))
+* **csa-loom:** Copilot usage panel "could not load" — robust read + ingestion enabled (audit-t130) ([#1206](https://github.com/fgarofalo56/csa-inabox/issues/1206)) ([3b46178](https://github.com/fgarofalo56/csa-inabox/commit/3b46178f84f23c1ff8928f49f6812cda1b868105))
+* **csa-loom:** fix APIM admin pane "Unexpected token" crash (audit-t124) ([#1197](https://github.com/fgarofalo56/csa-inabox/issues/1197)) ([ca7d5a8](https://github.com/fgarofalo56/csa-inabox/commit/ca7d5a8f9505e7fb96bf1f17e032188566b0c645))
+* **csa-loom:** pin data-agent composer so Send is always visible (audit-t118) ([#1212](https://github.com/fgarofalo56/csa-inabox/issues/1212)) ([ddb4124](https://github.com/fgarofalo56/csa-inabox/commit/ddb41241cc670dd5205158abebd99d0930b223f6))
+* **csa-loom:** Purview admin pane honors 403 as honest gate (audit-t125) ([#1193](https://github.com/fgarofalo56/csa-inabox/issues/1193)) ([041e245](https://github.com/fgarofalo56/csa-inabox/commit/041e24521dab35d488d83b298a144b973f8c4002))
+* **csa-loom:** resolve plan-editor type errors from audit-t146 merge ([#1238](https://github.com/fgarofalo56/csa-inabox/issues/1238)) ([57cd8c6](https://github.com/fgarofalo56/csa-inabox/commit/57cd8c616913b221af89d5ae86b74d4d6c43fbc5))
+* **csa-loom:** resolve type collisions surfaced by dbt merge (audit-t144) ([#1237](https://github.com/fgarofalo56/csa-inabox/issues/1237)) ([e5b15ad](https://github.com/fgarofalo56/csa-inabox/commit/e5b15ad30e3c2093d52363bb15cfa63098ad0380))
+* **csa-loom:** stop federated-search clipping the catalog sidebar rule ([#1213](https://github.com/fgarofalo56/csa-inabox/issues/1213)) ([a2b61f0](https://github.com/fgarofalo56/csa-inabox/commit/a2b61f02251a89e5a63cb1f13278896b31856ae7))
+* **csa-loom:** wire Admin DLP by default + fix bootstrap GUID & Graph segment (audit-T127) ([#1195](https://github.com/fgarofalo56/csa-inabox/issues/1195)) ([b21f595](https://github.com/fgarofalo56/csa-inabox/commit/b21f59574bd7589b113af1dcf2a35e44f04feeb1))
+* **csa-loom:** wire Embed codes backend by default + fix multi-sub phantom storage account (audit-T128) ([#1194](https://github.com/fgarofalo56/csa-inabox/issues/1194)) ([f2b692b](https://github.com/fgarofalo56/csa-inabox/commit/f2b692b79f902417bb1349fb19b66a8be3907449))
+
+
+### Code Refactoring
+
+* **csa-loom:** inline-style sweep on primitive-wired pages (audit-t115) ([#1209](https://github.com/fgarofalo56/csa-inabox/issues/1209)) ([4d02cf7](https://github.com/fgarofalo56/csa-inabox/commit/4d02cf73585ab881cae53314ef5182ac7a1f9920))
+* **csa-loom:** realtime-hub-view makeStyles + Tile/List view + icon-quality (audit-t114) ([#1203](https://github.com/fgarofalo56/csa-inabox/issues/1203)) ([37fba73](https://github.com/fgarofalo56/csa-inabox/commit/37fba731876e5ba553e01f66dd8d5ed2cfef2238))
+* **csa-loom:** rebuild /admin/scaling with Fluent Card + LoomDataTable (audit-t111) ([#1204](https://github.com/fgarofalo56/csa-inabox/issues/1204)) ([383e6e8](https://github.com/fgarofalo56/csa-inabox/commit/383e6e8fbb719414bfe5665fcc2fbff36b7e04a6))
+* **csa-loom:** rebuild /workspaces on Loom UI primitives (audit-t109) ([#1200](https://github.com/fgarofalo56/csa-inabox/issues/1200)) ([9ebcb77](https://github.com/fgarofalo56/csa-inabox/commit/9ebcb776526e68eb4ea2245346c87972709dd3fa))
+* **csa-loom:** redesign catalog/metastores page with Loom primitives (audit-t112) ([#1202](https://github.com/fgarofalo56/csa-inabox/issues/1202)) ([fabab96](https://github.com/fgarofalo56/csa-inabox/commit/fabab9671fa9c40bb9ee002fb3b8be801d95ea18))
+
+
+### Performance Improvements
+
+* **csa-loom:** speed up Monitor load — TTL memo + ARG health fast path + activities debounce (audit-t117) ([#1214](https://github.com/fgarofalo56/csa-inabox/issues/1214)) ([091f68d](https://github.com/fgarofalo56/csa-inabox/commit/091f68d119f04197da17f8e1fded7cb182e3380f))
+
 ## [0.37.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.36.0...csa-inabox-v0.37.0) (2026-06-11)
 
 
